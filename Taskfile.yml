@@ -110,11 +110,7 @@ tasks:
         img_archive="$(nix build .#dockerImage --no-link --print-out-paths)"
         
         echo "==> loading the image into docker"
-        tag="$(docker load <"$img_archive" | sed -n 's/^Loaded image: //p' | head -1)"
-        if [ -z "$tag" ]; then
-          echo "could not determine the loaded image tag from 'docker load'" >&2
-          exit 1
-        fi
+        tag="$(bash scripts/docker-load.sh "$img_archive")"
         echo "==> image: $tag"
         
         echo "==> running ecluse-e2e"
@@ -354,6 +350,7 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/ci-build-diagnostics.test.sh
+      - bash scripts/ci-classify-change.test.sh
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/docs-open.test.sh

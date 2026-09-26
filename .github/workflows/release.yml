@@ -20,12 +20,8 @@ permissions:
   contents: read
 
 jobs:
-  # The single source of truth for the version is ecluse.cabal's `version:` field.
-  # A pushed tag (or the workflow_dispatch `tag` input) must match it. On any drift
-  # the release fails fast HERE, before the expensive multi-arch build. The comparison
-  # strips a pre-release suffix (e.g. -rc1) first, so v0.1.0-rc1 still matches 0.1.0.
-  # `task version` reads the field via `cabal info`, so this job needs the toolchain:
-  # cheap insurance on the infrequent release path.
+  # The tag (or the dispatch `tag` input) must match ecluse.cabal's `version:` field
+  # before the multi-arch build starts. A pre-release suffix (-rc1) is stripped first.
   verify-version:
     name: Verify tag matches cabal version
     runs-on: ubuntu-latest
@@ -50,74 +46,16 @@ jobs:
           base="${tag%%-*}" # strip any -rc / -pre suffix
           want="$(nix develop .#ci --command task version)"
           if [ "$base" != "$want" ]; then
-            echo "::error::release tag '$tag' (base '$base') != ecluse.cabal version '$want' — bump the cabal version or fix the tag"
+            echo "::error::release tag '$tag' (base '$base') != ecluse.cabal version '$want': bump the cabal version or fix the tag"
             exit 1
           fi
           echo "OK: tag base '$base' == ecluse.cabal version '$want'"
 
   build:
-    name: Build image (${{ matrix.platform.arch }})
     needs: verify-version
-    # Native per-arch builds: amd64 on the standard runner, arm64 on GitHub's free
-    # public-repo arm64 runner. GHC therefore compiles natively on each target, and
-    # cross-compilation never enters the picture. The fail-fast setting is off, so one
-    # failing arch still leaves the other's logs. No secrets here: the build legs are
-    # credential-free, and only the `publish` job below carries privileges.
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.platform.runner }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Cold on purpose: no Actions-cache restore, because a store out of that unsigned
-      # cache skips substituter signature checks. See docs/architecture/release-supply-chain.md.
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-        with:
-          # Determinate Nix offers the job's OIDC token to FlakeHub, which this project
-          # has no account with. The empty endpoint turns installer diagnostics off too.
-          determinate: false
-          diagnostic-endpoint: ""
-
-      - name: Build image
-        run: nix develop .#ci --command task docker-build
-
-      # Dereference the ./result symlink (it points into /nix/store) so the
-      # uploaded artifact carries the archive's bytes, not a dangling link.
-      - name: Stage image archive
-        env:
-          ARCH: ${{ matrix.platform.arch }}
-        run: cp -L result "image-${ARCH}.tar"
-
-      # Per-platform SBOM: .#ecluse-bin is THIS arch's binary, so its closure (and
-      # thus the SBOM) is arch-specific. Attested to the platform digest below.
-      - name: Generate SBOM
-        run: nix develop .#ci --command task sbom
-
-      - name: Upload image archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: image-${{ matrix.platform.arch }}
-          path: image-${{ matrix.platform.arch }}.tar
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Upload SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: sbom-${{ matrix.platform.arch }}
-          path: sbom/ecluse.spdx.json
-          retention-days: 7
-          if-no-files-found: error
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
 
   publish:
     name: Assemble multi-arch image, attest & release

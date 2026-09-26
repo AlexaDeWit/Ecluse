@@ -31,14 +31,15 @@ jobs:
       pull-requests: read # read the PR's changed-file list
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
+      release-build: ${{ steps.classify.outputs.release-build }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # The allow-list of documentation paths lives in the script, which fails closed:
-      # an unlisted path, an unreadable file list, or any non-PR event runs every job.
+      # The path lists live in the script, which fails closed: an unlisted path, an
+      # unreadable file list, or any non-PR event runs every job.
       - name: Classify the change
         id: classify
         env:
@@ -458,11 +459,98 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # release.yml's build, without publishing: an architecture's image never builds or
+  # starts for the first time during a release. No job here logs in to a registry.
+  release-dry-run:
+    name: Release dry-run
+    needs: changes
+    if: ${{ needs.changes.outputs.release-build == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      retention-days: 1
+
+  release-dry-run-assemble:
+    name: Release dry-run (multi-arch index)
+    needs: release-dry-run
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Download the image archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-*
+          path: artifacts
+
+      - name: Assemble the multi-arch index (no push)
+        run: >-
+          nix develop .#ci --command bash scripts/assemble-multiarch.sh "$RUNNER_TEMP/layout"
+          artifacts/image-amd64/image-amd64.tar
+          artifacts/image-arm64/image-arm64.tar
+
+  release-dry-run-boot:
+    name: Release dry-run (start ${{ matrix.arch }})
+    needs: release-dry-run
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # Each image starts on its own architecture, so the amd64 leg needs an amd64 runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the image archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-${{ matrix.arch }}
+          path: artifacts
+
+      - name: Start the image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          tag="$(bash scripts/docker-load.sh "artifacts/image-${ARCH}.tar")"
+          docker run --rm --network none "$tag" --version
+
   gate:
     name: CI gate
     # The single Required check. Wire a new one in by adding it to `needs` here AND to
     # scripts/ci-gate-verdict.sh. The smoke job is absent on purpose: it is non-gating.
-    needs: [changes, build, coverage, codecov-notify, static-checks, docs, e2e, weeder, stan]
+    needs:
+      - changes
+      - build
+      - coverage
+      - codecov-notify
+      - static-checks
+      - docs
+      - e2e
+      - weeder
+      - stan
+      - release-dry-run
+      - release-dry-run-assemble
+      - release-dry-run-boot
     if: always()
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
@@ -477,6 +565,7 @@ jobs:
       - name: Require every gating job
         env:
           DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
+          RELEASE_BUILD: ${{ needs.changes.outputs.release-build }}
           CHANGES: ${{ needs.changes.result }}
           STATIC_CHECKS: ${{ needs.static-checks.result }}
           BUILD: ${{ needs.build.result }}
@@ -486,4 +575,7 @@ jobs:
           E2E: ${{ needs.e2e.result }}
           WEEDER: ${{ needs.weeder.result }}
           STAN: ${{ needs.stan.result }}
+          RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}
+          RELEASE_DRY_RUN_ASSEMBLE: ${{ needs.release-dry-run-assemble.result }}
+          RELEASE_DRY_RUN_BOOT: ${{ needs.release-dry-run-boot.result }}
         run: bash scripts/ci-gate-verdict.sh

@@ -1,0 +1,81 @@
+name: Release build
+
+# The image build release.yml publishes from and ci.yml's release dry-run runs. It holds
+# no credential and pushes nothing: publishing stays in release.yml's `publish` job.
+on:
+  workflow_call:
+    inputs:
+      retention-days:
+        description: "Days to keep the image and SBOM artifacts"
+        type: number
+        default: 7
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build image (${{ matrix.platform.arch }})
+    # GHC compiles natively on each target, so cross-compilation never enters the
+    # picture. With fail-fast off, one failing architecture still leaves the other's logs.
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Cold on purpose: no Actions-cache restore, because a store out of that unsigned
+      # cache skips substituter signature checks. See docs/architecture/release-supply-chain.md.
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          # Determinate Nix offers the job's OIDC token to FlakeHub, which this project
+          # has no account with. The empty endpoint turns installer diagnostics off too.
+          determinate: false
+          diagnostic-endpoint: ""
+
+      - name: Build image
+        run: nix develop .#ci --command task docker-build
+
+      # Dereference the ./result symlink (it points into /nix/store) so the
+      # uploaded artifact carries the archive's bytes, not a dangling link.
+      - name: Stage image archive
+        env:
+          ARCH: ${{ matrix.platform.arch }}
+        run: cp -L result "image-${ARCH}.tar"
+
+      # .#ecluse-bin is this architecture's binary, so its closure and its SBOM are
+      # architecture-specific. release.yml attests the SPDX document to the platform
+      # digest, and ci.yml's nightly grype scan reads the CycloneDX one.
+      - name: Generate SBOM
+        run: nix develop .#ci --command task sbom
+
+      - name: Upload image archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.platform.arch }}
+          path: image-${{ matrix.platform.arch }}.tar
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ matrix.platform.arch }}
+          path: |
+            sbom/ecluse.spdx.json
+            sbom/ecluse.cdx.json
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error

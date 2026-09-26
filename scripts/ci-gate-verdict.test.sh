@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deterministic unit test for ci-gate-verdict.sh, the CI gate's verdict. The gate is the
 # branch-protection authority, so the one case that must never pass is a job that never
-# ran without the documentation-only filter behind it. Run via `task test-scripts`.
+# ran without a classifier filter behind it. Run via `task test-scripts`.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,8 @@ check() {
   fi
 }
 
-all_pass="CHANGES=success STATIC_CHECKS=success BUILD=success COVERAGE=success CODECOV_NOTIFY=success DOCS=success E2E=success WEEDER=success STAN=success"
+all_pass="CHANGES=success STATIC_CHECKS=success BUILD=success COVERAGE=success CODECOV_NOTIFY=success DOCS=success E2E=success WEEDER=success STAN=success RELEASE_DRY_RUN=success RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_BUILD=true"
+dry_run_skipped="RELEASE_DRY_RUN=skipped RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped"
 
 # shellcheck disable=SC2086 # the shared result set is a deliberate word-split list
 check "a code PR with every job green passes" 0 \
@@ -48,11 +49,12 @@ check "an unsent Codecov status fails behind green coverage" 1 \
 check "a skipped Codecov notify fails behind green coverage" 1 \
   $all_pass CODECOV_NOTIFY=skipped DOCS_ONLY=false
 
-check "a documentation-only PR passes with the six Haskell jobs and notify skipped" 0 \
+# shellcheck disable=SC2086
+check "a documentation-only PR passes with the Haskell jobs, notify, and the dry-run skipped" 0 \
   CHANGES=success STATIC_CHECKS=success \
   BUILD=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
   DOCS=skipped E2E=skipped WEEDER=skipped STAN=skipped \
-  DOCS_ONLY=true
+  $dry_run_skipped DOCS_ONLY=true RELEASE_BUILD=false
 
 # shellcheck disable=SC2086
 check "a failed classifier fails, so a broken filter never waves a PR through" 1 \
@@ -65,5 +67,37 @@ check "static-checks is never skippable, even on a documentation-only PR" 1 \
 # shellcheck disable=SC2086
 check "a cancelled job fails" 1 \
   $all_pass STAN=cancelled DOCS_ONLY=false
+
+# shellcheck disable=SC2086
+check "a source-only PR passes with the release dry-run skipped" 0 \
+  $all_pass $dry_run_skipped DOCS_ONLY=false RELEASE_BUILD=false
+
+# shellcheck disable=SC2086
+check "a skipped dry-run fails when the change reaches the release build" 1 \
+  $all_pass $dry_run_skipped DOCS_ONLY=false RELEASE_BUILD=true
+
+# shellcheck disable=SC2086
+check "a skipped dry-run fails when the classifier output is missing" 1 \
+  $all_pass $dry_run_skipped DOCS_ONLY=false RELEASE_BUILD=
+
+# shellcheck disable=SC2086
+check "the documentation-only filter never skips the dry-run on its own" 1 \
+  $all_pass $dry_run_skipped DOCS_ONLY=true RELEASE_BUILD=true
+
+# shellcheck disable=SC2086
+check "a failed dry-run fails" 1 \
+  $all_pass RELEASE_DRY_RUN=failure RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped
+
+# shellcheck disable=SC2086
+check "a failed multi-arch assembly fails" 1 \
+  $all_pass RELEASE_DRY_RUN_ASSEMBLE=failure
+
+# shellcheck disable=SC2086
+check "an image that fails to start fails" 1 \
+  $all_pass RELEASE_DRY_RUN_BOOT=failure
+
+# shellcheck disable=SC2086
+check "a skipped boot behind a green dry-run fails whatever the filter says" 1 \
+  $all_pass RELEASE_DRY_RUN_BOOT=skipped RELEASE_BUILD=false
 
 exit "$fail"
