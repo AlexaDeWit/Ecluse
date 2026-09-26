@@ -4,6 +4,7 @@
 
 {- | Budgets and reports for live registry performance acceptance.
 Each ecosystem keeps its own package budgets, while either processing leg can fail the run.
+Budgets hold only on the CPU architecture they were calibrated on.
 -}
 module Ecluse.Acceptance (
     -- * Acceptance criteria
@@ -14,6 +15,7 @@ module Ecluse.Acceptance (
     decodeCriteria,
     budgetFor,
     singleVersionBudgetFor,
+    hostArch,
 
     -- * Measurements and verdicts
     Sample (..),
@@ -36,6 +38,7 @@ import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), 
 import Data.Aeson.Types (Parser)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName, parseEcosystem)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+import System.Info qualified as Info
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -51,6 +54,8 @@ data Criteria = Criteria
     -- ^ The single-version overhead budget applied to any package without an override.
     , critPerPackageSingleVersionBudgetMs :: Map Text Double
     -- ^ Per-package single-version budget overrides, keyed by the package name.
+    , critCalibrationArch :: Text
+    -- ^ The CPU architecture the budgets were measured on, as 'Info.arch' names it.
     }
     deriving stock (Eq, Show)
 
@@ -62,6 +67,9 @@ instance FromJSON Criteria where
                 <*> o .:? "perPackageBudgetMs" .!= mempty
                 <*> o .: "defaultSingleVersionBudgetMs"
                 <*> o .:? "perPackageSingleVersionBudgetMs" .!= mempty
+                <*> o .: "arch"
+        when (T.null (critCalibrationArch crit)) $
+            fail "acceptance criteria must name their calibration architecture"
         let budgets =
                 [critDefaultBudgetMs crit, critDefaultSingleVersionBudgetMs crit]
                     <> Map.elems (critPerPackageBudgetMs crit)
@@ -114,6 +122,13 @@ singleVersionBudgetFor :: Criteria -> Text -> Double
 singleVersionBudgetFor crit name =
     Map.findWithDefault (critDefaultSingleVersionBudgetMs crit) name (critPerPackageSingleVersionBudgetMs crit)
 
+-- | The CPU architecture this process runs on, named as 'critCalibrationArch' names it.
+hostArch :: Text
+hostArch = toText Info.arch
+
+calibratedHere :: Text -> Bool
+calibratedHere = (== hostArch)
+
 -- | One package's live measurements, with each duration in milliseconds.
 data Sample = Sample
     { sampleName :: Text
@@ -126,10 +141,13 @@ data Sample = Sample
     }
     deriving stock (Eq, Show)
 
--- | The verdict for a measured leg: within its budget, or over it by a margin (in milliseconds).
+{- | The verdict for a measured leg: within its budget, over it by a margin (in milliseconds),
+or not assessed because the budget was calibrated on another architecture.
+-}
 data Verdict
     = Within
     | Breached Double
+    | Uncalibrated
     deriving stock (Eq, Show)
 
 -- | One measured leg assessed against its budget: the budget it was held to and the verdict.
@@ -150,27 +168,34 @@ data PackageOutcome
 -- | One ecosystem's outcomes, in catalogue order.
 data Report = Report
     { reportEcosystem :: Ecosystem
+    , reportCalibrationArch :: Text
+    -- ^ The architecture the ecosystem's budgets were calibrated on.
     , reportOutcomes :: [PackageOutcome]
     }
     deriving stock (Eq, Show)
 
--- | Evaluate each package's raw input against the criteria.
+{- | Evaluate each package's raw input against the criteria. On an architecture other than
+the criteria's calibration architecture, every measured leg is 'Uncalibrated'.
+-}
 evaluate :: Ecosystem -> Criteria -> [Either (Text, Text) Sample] -> Report
-evaluate eco crit = Report eco . map outcome
+evaluate eco crit = Report eco (critCalibrationArch crit) . map outcome
   where
+    assessLeg
+        | calibratedHere (critCalibrationArch crit) = assess
+        | otherwise = \budget _ -> Assessment budget Uncalibrated
     outcome (Left (name, reason)) = Unavailable name reason
     outcome (Right sample) =
         Measured
             sample
-            (assess (budgetFor crit (sampleName sample)) (sampleFullOverheadMs sample))
-            (assess (singleVersionBudgetFor crit (sampleName sample)) (sampleSingleVersionOverheadMs sample))
+            (assessLeg (budgetFor crit (sampleName sample)) (sampleFullOverheadMs sample))
+            (assessLeg (singleVersionBudgetFor crit (sampleName sample)) (sampleSingleVersionOverheadMs sample))
 
 assess :: Double -> Double -> Assessment
 assess budget overheadMs =
     let margin = overheadMs - budget
      in Assessment budget (if margin > 0 then Breached margin else Within)
 
--- | Whether any measured leg breached its budget: the run's red condition.
+-- | Whether any measured leg breached its budget: the run's red condition. An uncalibrated leg never does.
 reportBreached :: Report -> Bool
 reportBreached = any isBreach . reportOutcomes
   where
@@ -210,6 +235,7 @@ watching :: Assessment -> Double -> Bool
 watching a observed = case assessVerdict a of
     Within -> assessBudgetMs a > 0 && observed / assessBudgetMs a >= watchFraction
     Breached _ -> False
+    Uncalibrated -> False
 
 -- | Render one table per ecosystem, separating upstream latency from processing overhead.
 renderReport :: OperatingPoint -> [Report] -> Text
@@ -249,6 +275,13 @@ renderSection op report =
     overall
         | breaches > 0 =
             "Result: BREACH: " <> show breaches <> " package(s) over budget" <> incompleteSuffix
+        | not (calibratedHere (reportCalibrationArch report)) =
+            "Result: uncalibrated: the budgets were calibrated on "
+                <> reportCalibrationArch report
+                <> ", and this run is on "
+                <> hostArch
+                <> ", so no leg is assessed"
+                <> incompleteSuffix
         | otherwise =
             "Result: within budget" <> incompleteSuffix
     incompleteSuffix
@@ -310,13 +343,16 @@ sampleCells s =
     ]
 
 renderVerdicts :: Sample -> Assessment -> Assessment -> Text
-renderVerdicts s full single =
-    case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of
-        [] -> "within"
-        marks -> T.intercalate ", " marks
+renderVerdicts s full single
+    | any ((== Uncalibrated) . assessVerdict) [full, single] = "uncalibrated"
+    | otherwise =
+        case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of
+            [] -> "within"
+            marks -> T.intercalate ", " marks
   where
     tag label a observed = case assessVerdict a of
         Breached margin -> Just ("BREACH " <> label <> " +" <> fmt 1 margin <> " ms")
+        Uncalibrated -> Nothing
         Within
             | watching a observed ->
                 Just ("watch: " <> label <> " at " <> fmt 0 (observed / assessBudgetMs a * 100) <> "% of budget")

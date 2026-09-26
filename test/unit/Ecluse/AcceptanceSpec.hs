@@ -21,6 +21,7 @@ import Ecluse.Acceptance (
     Assessment (Assessment),
     Criteria (
         Criteria,
+        critCalibrationArch,
         critDefaultBudgetMs,
         critDefaultSingleVersionBudgetMs,
         critPerPackageBudgetMs,
@@ -31,10 +32,11 @@ import Ecluse.Acceptance (
     PackageOutcome (Measured, Unavailable),
     Report (reportOutcomes),
     Sample (Sample),
-    Verdict (Breached, Within),
+    Verdict (Breached, Uncalibrated, Within),
     budgetFor,
     decodeCriteria,
     headroom,
+    hostArch,
     loadCriteria,
     renderReport,
     reportBreached,
@@ -46,17 +48,21 @@ import Ecluse.Acceptance (
 spec :: Spec
 spec = do
     describe "Criteria JSON" $ do
-        it "decodes the full and single-version defaults and per-package overrides" $
+        it "decodes the full and single-version defaults, per-package overrides, and the calibration architecture" $
             eitherDecode
-                "{\"defaultBudgetMs\":100,\"perPackageBudgetMs\":{\"a\":5},\"defaultSingleVersionBudgetMs\":30,\"perPackageSingleVersionBudgetMs\":{\"a\":2}}"
-                `shouldBe` Right (Criteria 100 (Map.fromList [("a", 5)]) 30 (Map.fromList [("a", 2)]))
+                "{\"arch\":\"x86_64\",\"defaultBudgetMs\":100,\"perPackageBudgetMs\":{\"a\":5},\"defaultSingleVersionBudgetMs\":30,\"perPackageSingleVersionBudgetMs\":{\"a\":2}}"
+                `shouldBe` Right (Criteria 100 (Map.fromList [("a", 5)]) 30 (Map.fromList [("a", 2)]) "x86_64")
         it "defaults the per-package maps to empty when absent" $
-            eitherDecode "{\"defaultBudgetMs\":100,\"defaultSingleVersionBudgetMs\":30}"
-                `shouldBe` Right (Criteria 100 mempty 30 mempty)
+            eitherDecode "{\"arch\":\"aarch64\",\"defaultBudgetMs\":100,\"defaultSingleVersionBudgetMs\":30}"
+                `shouldBe` Right (Criteria 100 mempty 30 mempty "aarch64")
         it "rejects criteria missing the required full default budget" $
-            (eitherDecode "{\"defaultSingleVersionBudgetMs\":30}" :: Either String Criteria) `shouldSatisfy` isLeft
+            (eitherDecode "{\"arch\":\"x86_64\",\"defaultSingleVersionBudgetMs\":30}" :: Either String Criteria) `shouldSatisfy` isLeft
         it "rejects criteria missing the required single-version default budget" $
-            (eitherDecode "{\"defaultBudgetMs\":100}" :: Either String Criteria) `shouldSatisfy` isLeft
+            (eitherDecode "{\"arch\":\"x86_64\",\"defaultBudgetMs\":100}" :: Either String Criteria) `shouldSatisfy` isLeft
+        it "rejects criteria missing the calibration architecture" $
+            (eitherDecode "{\"defaultBudgetMs\":100,\"defaultSingleVersionBudgetMs\":30}" :: Either String Criteria) `shouldSatisfy` isLeft
+        it "rejects an empty calibration architecture" $
+            (eitherDecode "{\"arch\":\"\",\"defaultBudgetMs\":100,\"defaultSingleVersionBudgetMs\":30}" :: Either String Criteria) `shouldSatisfy` isLeft
 
     describe "budgetFor" $ do
         it "uses a per-package override when present" $
@@ -92,6 +98,28 @@ spec = do
                 let report = Acceptance.evaluate Npm crit samples
                 reportBreached report `shouldBe` breached
                 reportExitCode [report] `shouldBe` code
+
+    describe "calibration architecture" $ do
+        let elsewhere = crit{critCalibrationArch = "not-" <> hostArch}
+            report = Acceptance.evaluate Npm elsewhere [Right within, Right overFull, Left ("webpack", "unreachable")]
+        it "marks every measured leg uncalibrated on another architecture, keeping its budget" $
+            reportOutcomes report
+                `shouldBe` [ Measured within (Assessment 100 Uncalibrated) (Assessment 30 Uncalibrated)
+                           , Measured overFull (Assessment 100 Uncalibrated) (Assessment 30 Uncalibrated)
+                           , Unavailable "webpack" "unreachable"
+                           ]
+        it "never breaches, so an over-budget sample exits 0" $ do
+            reportBreached report `shouldBe` False
+            reportExitCode [report] `shouldBe` ExitSuccess
+        it "names both architectures in the result and marks each row uncalibrated" $ do
+            let rendered = renderOne (OperatingPoint 5 3) report
+            ("Result: uncalibrated: the budgets were calibrated on not-" <> hostArch) `shouldSatisfy` (`T.isInfixOf` rendered)
+            (", and this run is on " <> hostArch) `shouldSatisfy` (`T.isInfixOf` rendered)
+            ("| uncalibrated |" `T.isInfixOf` rendered) `shouldBe` True
+            ("BREACH" `T.isInfixOf` rendered) `shouldBe` False
+            ("watch" `T.isInfixOf` rendered) `shouldBe` False
+        it "assesses as usual on the calibration architecture" $
+            reportBreached (Acceptance.evaluate Npm crit [Right overFull]) `shouldBe` True
 
     describe "headroom" $ do
         it "is the budget-to-observed multiple" $
@@ -144,7 +172,7 @@ spec = do
                 `shouldBe` False
 
     describe "ecosystem criteria" $ do
-        let budgets = object ["defaultBudgetMs" .= (100 :: Int), "defaultSingleVersionBudgetMs" .= (25 :: Int)]
+        let budgets = object ["arch" .= ("x86_64" :: Text), "defaultBudgetMs" .= (100 :: Int), "defaultSingleVersionBudgetMs" .= (25 :: Int)]
             document :: [(Text, Value)] -> LByteString
             document entries = encode (object ["ecosystems" .= Map.fromList entries])
         it "decodes separately named ecosystem sections" $
@@ -157,10 +185,10 @@ spec = do
         it "rejects a null budget section" $
             decodeCriteria (document [("npm", budgets), ("pypi", Null)]) `shouldSatisfy` isLeft
         it "rejects a missing selective budget in the PyPI section" $
-            decodeCriteria (document [("npm", budgets), ("pypi", object ["defaultBudgetMs" .= (1 :: Int)])])
+            decodeCriteria (document [("npm", budgets), ("pypi", object ["arch" .= ("x86_64" :: Text), "defaultBudgetMs" .= (1 :: Int)])])
                 `shouldSatisfy` isLeft
         it "rejects a non-positive PyPI budget" $
-            decodeCriteria (document [("npm", budgets), ("pypi", object ["defaultBudgetMs" .= (0 :: Int), "defaultSingleVersionBudgetMs" .= (1 :: Int)])])
+            decodeCriteria (document [("npm", budgets), ("pypi", object ["arch" .= ("x86_64" :: Text), "defaultBudgetMs" .= (0 :: Int), "defaultSingleVersionBudgetMs" .= (1 :: Int)])])
                 `shouldSatisfy` isLeft
         it "loads positive budgets and the three calibrated PyPI package overrides" $ do
             sections <- catalogueCriteria <$> loadCriteria
@@ -178,7 +206,7 @@ spec = do
     describe "ecosystem exit decisions" $
         it "keeps the same package name's budgets separate across ecosystems" $ do
             let npm = Acceptance.evaluate Npm crit [Right within]
-                pypi = Acceptance.evaluate PyPI (Criteria 10 mempty 2 mempty) [Right within]
+                pypi = Acceptance.evaluate PyPI (Criteria 10 mempty 2 mempty hostArch) [Right within]
             reportBreached npm `shouldBe` False
             reportBreached pypi `shouldBe` True
             reportExitCode [npm, pypi] `shouldBe` ExitFailure 1
@@ -210,6 +238,7 @@ crit =
         , critPerPackageBudgetMs = Map.fromList [("@types/node", 500)]
         , critDefaultSingleVersionBudgetMs = 30
         , critPerPackageSingleVersionBudgetMs = Map.fromList [("@types/node", 60)]
+        , critCalibrationArch = hostArch
         }
 
 within :: Sample
