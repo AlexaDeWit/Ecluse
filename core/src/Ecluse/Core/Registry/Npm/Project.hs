@@ -54,6 +54,7 @@ import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.VersionList (VersionListItem (..))
 import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
+    strictElements,
     withinNameLimit,
  )
 import Ecluse.Core.Security (Limits, maxNestingDepth)
@@ -85,6 +86,7 @@ versionListParser limits = J.objectFound VersionListObject VersionListObject (J.
     candidate _ = Nothing
     usable raw = isJust (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry))
 
+-- Every field is evaluated here, so a retained release never keeps its decoded manifest alive.
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
 projectDetails name version publishedAt entry =
     PackageDetails
@@ -94,9 +96,9 @@ projectDetails name version publishedAt entry =
         , pkgInstallCode = installCode vm
         , pkgTrust = TrustUnknown
         , pkgAvailability = availability vm
-        , pkgArtifacts = projectArtifact version (vmDist vm) :| []
-        , pkgLicenses = maybe [] (one . licenseText) (vmLicense vm)
-        , pkgPublisher = projectPerson <$> vePublisher entry
+        , pkgArtifacts = (:| []) $! projectArtifact version (vmDist vm)
+        , pkgLicenses = maybeToList (licenseText <$!> vmLicense vm)
+        , pkgPublisher = projectPerson <$!> vePublisher entry
         }
   where
     vm = veManifest entry
@@ -134,7 +136,7 @@ projectArtifact version dist =
         , artFilename = tarballFilename (distTarball dist) version
         , artUrl = distTarball dist
         , artKind = Tarball
-        , artHashes = sriHashes <> maybeToList sha1Hash
+        , artHashes = strictElements (sriHashes <> maybeToList sha1Hash)
         , artSize = distUnpackedSize dist
         , artInterpreter = Nothing
         , artYanked = False

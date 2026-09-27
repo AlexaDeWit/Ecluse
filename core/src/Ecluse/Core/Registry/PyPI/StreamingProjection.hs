@@ -17,6 +17,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
@@ -102,9 +103,12 @@ finishProjection requested acc = do
     _ <- projectionResult (checkNameAgreement requested reported ())
     unless (projectedShape acc) (Left MetadataUndecodable)
     traverse_ (Left . MetadataBoundExceeded) (projectedBound acc)
-    let files = reverse (projectedFiles acc)
-        invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
+    let invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
     pure
-        ( projectSimpleIndex reported invalid [(file, coordinate) | (file, coordinate, _) <- files]
-        , simpleDocument (projectedEnvelope acc) [(ifEntryKey file, value) | (file, _, value) <- files]
+        ( projectSimpleIndex reported invalid [(file, coordinate) | (file, coordinate, _) <- reverse (projectedFiles acc)]
+        , simpleDocument (projectedEnvelope acc) (servedFiles (projectedFiles acc))
         )
+
+-- Restore source order with every key evaluated, so the served list holds no decoded file.
+servedFiles :: [(IndexFile, Maybe FileCoordinate, Value)] -> [(EntryKey, Value)]
+servedFiles = foldl' (\served (file, _, value) -> let !key = ifEntryKey file in (key, value) : served) []

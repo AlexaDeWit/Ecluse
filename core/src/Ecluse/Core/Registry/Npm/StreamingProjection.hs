@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
+import Ecluse.Core.Registry.WireSupport (checkNameAgreement, strictElements)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, mkVersion)
 
@@ -129,9 +129,11 @@ finishProjection limits requested authorPointer acc = do
             , infoVersions = Map.mapWithKey stamp versions
             , infoDistTags = tags
             , infoInvalidEntries =
-                lefts (map fst (Map.elems (projectedVersions acc)))
-                    <> drops (projectedTags acc)
-                    <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
+                strictElements
+                    ( lefts (map fst (Map.elems (projectedVersions acc)))
+                        <> drops (projectedTags acc)
+                        <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
+                    )
             }
     document =
         Object

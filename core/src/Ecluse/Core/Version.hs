@@ -52,11 +52,13 @@ data Version = Version
     }
     deriving stock (Eq, Show)
 
-{- | Build a 'Version', parsing the raw text into a canonical key when possible. Total: an
+{- | Build a 'Version', parsing and evaluating a canonical key when possible. Total: an
 unparseable version is still represented, keyless, so a proxy never drops one over a parser gap.
 -}
 mkVersion :: Ecosystem -> Text -> Version
-mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
+mkVersion eco raw = Version raw $ case parseVersionKey eco raw of
+    Right key -> Just $! key
+    Left _ -> Nothing
 
 -- | Render a version in wire form: the raw text, verbatim as published.
 renderVersion :: Version -> Text
