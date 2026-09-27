@@ -430,9 +430,10 @@ Each scenario reports:
   second, and every admission series at the end of the window
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
-seconds later. That failure is a task limit reached outside the harness, which sets none. The
-harness prints the failure with the process limits, the task counts, and the proxy cgroup's state
-as it read them, and the report counts the boot attempts. Any other boot failure fails the scenario.
+seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That
+failure is a task limit reached outside the harness, which sets none. The harness prints the
+failure with the process limits, the task counts, and the failed attempt's cgroup as it read them,
+and the report counts the boot attempts. Any other boot failure fails the scenario.
 
 Four scenarios stress admission under memory pressure. `npm/heavy-private` has the private stub
 return the complete public capture, so every request decodes its own private copy.

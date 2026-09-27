@@ -61,6 +61,7 @@ import Ecluse.BenchLoad.ProxyProcess (
     proxyIdleRts,
     proxyScrape,
     proxySnapshot,
+    proxyTasksNow,
     stopProxy,
  )
 import Ecluse.BenchLoad.Replay (Replay (..), ReplayReport (..), runReplay)
@@ -359,9 +360,8 @@ settle = traverse_ $ \p -> void (pollUntil 300 200_000 (== Just 0) (inFlightNow 
 cgroupOf :: Maybe ProxyProcess -> IO (Maybe CgroupReading)
 cgroupOf = fmap join . traverse proxyCgroupNow
 
--- Sample the in-flight gauge and the proxy's thread count once a second while the load runs. A
--- failed scrape is a miss, and a scrape with no series yet reads zero, because the gauge appears
--- on its first admission.
+-- Sample the in-flight gauge and thread count each second. A failed scrape is a miss, and a gauge
+-- not yet created reads zero, since it appears on the first admission.
 sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double]))
 sampling proxy load = case proxy of
     Nothing -> (,([], [])) <$> load
@@ -369,7 +369,7 @@ sampling proxy load = case proxy of
         readings <- newIORef []
         let sampleOnce = do
                 scraped <- proxyScrape p
-                tasks <- (crTasks =<<) <$> proxyCgroupNow p
+                tasks <- proxyTasksNow p
                 modifyIORef' readings ((fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks) :)
         result <- withAsync (forever (sampleOnce >> threadDelay 1_000_000)) (const load)
         (result,) . unzip . reverse <$> readIORef readings

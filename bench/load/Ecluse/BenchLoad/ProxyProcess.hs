@@ -27,6 +27,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     proxyBootRetries,
     proxySnapshot,
     proxyCgroupNow,
+    proxyTasksNow,
     proxyScrape,
 
     -- * Stopping
@@ -39,6 +40,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     BootFailure (..),
     retryingBoot,
     bootDiagnostic,
+    guardDiagnostic,
 ) where
 
 import Control.Concurrent (modifyMVar, threadDelay)
@@ -90,7 +92,7 @@ import System.Process.Typed (
     unsafeProcessHandle,
     waitExitCode,
  )
-import UnliftIO (bracket, onException, try, tryIO)
+import UnliftIO (bracket, onException, try, tryAny, tryIO)
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -180,25 +182,27 @@ data ProxyEnd = ProxyEnd
     , peCgroup :: Maybe CgroupReading
     }
 
-{- | Boot a proxy in front of the stub upstreams, run the action, then stop it. A boot that
-exits or does not become ready within two minutes fails the harness with the proxy's stderr.
+{- | Boot a proxy in front of the stub upstreams, run the action, then stop it. A failed boot fails
+the harness with the proxy's output, after one retry when the RTS could not start a thread.
 -}
 withProxyProcess :: ProxySettings -> Int -> Maybe Int -> (ProxyProcess -> IO a) -> IO a
 withProxyProcess settings publicPort privatePort body = do
     shape <- podShapeFromEnv
     root <- lookupEnv "BENCH_LOAD_CGROUP"
     withSystemTempDirectory "ecluse-bench-proxy" $ \dir ->
-        bracket (acquireCgroup shape root) (traverse_ retireCgroup) $ \cgroup ->
-            bracket (launch settings shape dir cgroup publicPort privatePort) (void . stopProxy) body
+        bracket (launch settings shape root dir publicPort privatePort) release body
+  where
+    release proxy = stopProxy proxy >> traverse_ retireCgroup (ppCgroup proxy)
 
-acquireCgroup :: PodShape -> Maybe FilePath -> IO (Maybe FilePath)
-acquireCgroup shape root = case (shape, root) of
+-- Each boot attempt gets a cgroup of its own, so a retried boot's counters start from zero.
+acquireCgroup :: PodShape -> Maybe FilePath -> Int -> IO (Maybe FilePath)
+acquireCgroup shape root attempt = case (shape, root) of
     (Unlimited, Nothing) -> pure Nothing
     (Limited _ _, Nothing) ->
         benchFail ("pod shape " <> renderPodShape shape <> " needs BENCH_LOAD_CGROUP: a cgroup v2 directory delegated to this user, with the cpu, memory, and pids controllers enabled")
     (_, Just base) -> do
         pid <- getProcessID
-        let dir = base </> ("proxy-" <> show pid)
+        let dir = base </> ("proxy-" <> show pid <> "-" <> show attempt)
         createDirectory dir
         case shape of
             Unlimited -> pass
@@ -229,20 +233,30 @@ sweepProxyCgroups =
         entries <- if present then listDirectory base else pure []
         traverse_ (retireCgroup . (base </>)) (filter ("proxy-" `isPrefixOf`) entries)
 
-launch :: ProxySettings -> PodShape -> FilePath -> Maybe FilePath -> Int -> Maybe Int -> IO ProxyProcess
-launch settings shape dir cgroup publicPort privatePort = do
+launch :: ProxySettings -> PodShape -> Maybe FilePath -> FilePath -> Int -> Maybe Int -> IO ProxyProcess
+launch settings shape root dir publicPort privatePort = do
     (port, controlPort, scrapePort) <- distinctPorts
     self <- getExecutablePath
     cores <- getNumCapabilities
     base <- getEnvironment
+    manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
     let environment = proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) publicPort privatePort base
-        command = case cgroup of
+        commandIn = \case
             Nothing -> proc self [serveProxyFlag]
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
             Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
-    manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
-    (retries, booting) <- retryingBoot (bootDiagnostic cgroup) (bootDrained manager 1200 port (setEnv environment command))
-    drained <- either (const (benchFail ("bench-load: the proxy did not boot\n" <> T.intercalate "\n\n" retries))) pure booting
+        bootAttempt attempt = do
+            cgroup <- acquireCgroup shape root attempt
+            outcome <- bootDrained manager 1200 port (setEnv environment (commandIn cgroup)) `onException` traverse_ retireCgroup cgroup
+            case outcome of
+                Right drained -> pure (Right (drained, cgroup))
+                Left failure -> do
+                    -- Read the failed attempt's cgroup before it goes.
+                    diagnostic <- guardDiagnostic (bootDiagnostic cgroup)
+                    traverse_ retireCgroup cgroup
+                    pure (Left (failure, diagnostic))
+    (retries, booting) <- retryingBoot 2_000_000 (TIO.hPutStrLn stderr) bootAttempt
+    (drained, cgroup) <- either (const (benchFail ("bench-load: the proxy did not boot\n" <> T.intercalate "\n\n" retries))) pure booting
     endVar <- newMVar Nothing
     let booted =
             ProxyProcess
@@ -258,7 +272,7 @@ launch settings shape dir cgroup publicPort privatePort = do
                 , ppBootRetries = retries
                 , ppEnd = endVar
                 }
-    (`onException` stopProxy booted) $ do
+    (`onException` (stopProxy booted >> traverse_ retireCgroup cgroup)) $ do
         -- The boot logged its plan before it listened. Give the drain a moment to catch up.
         bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines . capturedHead <$> readIORef (drStdout drained))
         idle <- proxySnapshot booted MajorCollection
@@ -323,6 +337,12 @@ proxySnapshot proxy collection = do
 proxyCgroupNow :: ProxyProcess -> IO (Maybe CgroupReading)
 proxyCgroupNow = traverse readCgroup . ppCgroup
 
+-- | The proxy's thread count from @pids.current@ alone, cheap enough to read every second.
+proxyTasksNow :: ProxyProcess -> IO (Maybe Int)
+proxyTasksNow proxy = case ppCgroup proxy of
+    Nothing -> pure Nothing
+    Just dir -> (readMaybe . toString . T.strip =<<) <$> readIfExists (dir </> "pids.current")
+
 -- | One scrape of the proxy's metrics. 'Nothing' when it fails, which a sampler counts as a miss.
 proxyScrape :: ProxyProcess -> IO (Maybe [Sample])
 proxyScrape proxy = fmap (parseExposition . decodeUtf8) <$> getOk proxy (ppScrapePort proxy) "/metrics"
@@ -348,8 +368,7 @@ readCgroup dir = do
     events <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.events")
     stat <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.stat")
     cpu <- maybe mempty keyedCounters <$> readIfExists (dir </> "cpu.stat")
-    tasks <- (readMaybe . toString . T.strip =<<) <$> readIfExists (dir </> "pids.current")
-    pure (CgroupReading maxBytes peak current events stat cpu tasks)
+    pure (CgroupReading maxBytes peak current events stat cpu)
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
 
@@ -435,25 +454,29 @@ bootDrained manager attempts port command = do
         void (stopDrained drained)
         BootFailure reason <$> capturedTailText (drStderr drained) <*> capturedTailText (drStdout drained)
 
-{- | Run a boot, and once more two seconds later when the RTS could not start an OS thread: a task
-limit outside the harness. Each failed attempt comes back with the diagnostic taken right after it.
+{- | Run boot attempt 1, and attempt 2 after the delay when the RTS could not start an OS thread: a
+task limit outside the harness. Each failure carries its diagnostic, and the notes keep them all.
 -}
-retryingBoot :: IO Text -> IO (Either BootFailure a) -> IO ([Text], Either BootFailure a)
-retryingBoot diagnose boot = attempt (2 :: Int) []
+retryingBoot :: Int -> (Text -> IO ()) -> (Int -> IO (Either (BootFailure, Text) a)) -> IO ([Text], Either BootFailure a)
+retryingBoot delayMicros announce boot = attempt 1 []
   where
-    attempt remaining notes =
-        boot >>= \case
+    attempt number notes =
+        boot number >>= \case
             Right booted -> pure (reverse notes, Right booted)
-            Left failure -> do
-                diagnostic <- diagnose
+            Left (failure, diagnostic) -> do
                 let note = renderBootFailure failure <> "\n" <> diagnostic
-                    retry = remaining > 1 && "failed to create OS thread" `T.isInfixOf` bfStderr failure
+                    retry = number < 2 && "failed to create OS thread" `T.isInfixOf` bfStderr failure
                 if retry
                     then do
-                        TIO.hPutStrLn stderr ("bench-load: retrying a proxy boot once\n" <> note)
-                        threadDelay 2_000_000
-                        attempt (remaining - 1) (note : notes)
+                        announce ("bench-load: retrying a proxy boot once\n" <> note)
+                        threadDelay delayMicros
+                        attempt (number + 1) (note : notes)
                     else pure (reverse (note : notes), Left failure)
+
+-- | A diagnostic that cannot fail: an error reading it becomes a line of its text.
+guardDiagnostic :: IO Text -> IO Text
+guardDiagnostic diagnose =
+    either (\err -> "diagnostic: could not be read: " <> toText (displayException err)) id <$> tryAny diagnose
 
 {- | The task and memory limits a thread start meets, read just after a failed boot: the process
 limits, this user's tasks, the system's, and the proxy cgroup with any sibling left behind.

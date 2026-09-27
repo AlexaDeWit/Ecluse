@@ -11,13 +11,15 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import System.Directory (createDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
+import System.IO.Error (mkIOError, permissionErrorType)
 import System.Process.Typed (proc)
 import Test.Hspec
+import UnliftIO (throwIO)
 import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
-import Ecluse.BenchLoad.ProxyProcess (BootFailure (..), ProxySettings (..), bootDiagnostic, bootDrained, proxyEnvironment, proxySettings, retryingBoot)
+import Ecluse.BenchLoad.ProxyProcess (BootFailure (..), ProxySettings (..), bootDiagnostic, bootDrained, guardDiagnostic, proxyEnvironment, proxySettings, retryingBoot)
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (loadConfig, renderConfigError)
@@ -60,42 +62,49 @@ bootSpec = do
             outcome <- bootDrained manager 50 port (proc "/bin/sh" ["-c", "echo last words; echo refused >&2; exit 2"])
             failedWith [(bfReason, "exited during boot"), (bfLog, "last words"), (bfStderr, "refused")] outcome
     describe "retryingBoot" $ do
-        let threadStart = BootFailure "exited during boot" "bench-load: failed to create OS thread: Resource temporarily unavailable" ""
+        let threadStart = (BootFailure "exited during boot" "bench-load: failed to create OS thread: Resource temporarily unavailable" "", "diagnostic: counts")
             scripted outcomes = do
                 remaining <- newIORef outcomes
-                calls <- newIORef (0 :: Int)
-                let boot = do
-                        modifyIORef' calls (+ 1)
+                attempts <- newIORef []
+                let boot number = do
+                        modifyIORef' attempts (number :)
                         atomicModifyIORef' remaining $ \case
                             next : rest -> (rest, next)
-                            [] -> ([], Left (BootFailure "ran out of scripted boots" "" ""))
-                pure (boot, readIORef calls)
+                            [] -> ([], Left (BootFailure "ran out of scripted boots" "" "", ""))
+                pure (boot, reverse <$> readIORef attempts)
+            retrying = retryingBoot 0 (const pass)
         it "boots again once when the RTS could not start an OS thread, and keeps the diagnostic" $ do
-            (boot, calls) <- scripted [Left threadStart, Right ()]
-            (retries, outcome) <- retryingBoot (pure "diagnostic: counts") boot
+            (boot, attempts) <- scripted [Left threadStart, Right ()]
+            (notes, outcome) <- retrying boot
             isRight outcome `shouldBe` True
-            calls `shouldReturn` 2
-            retries `shouldSatisfy` \case
+            attempts `shouldReturn` [1, 2]
+            notes `shouldSatisfy` \case
                 [note] -> all (`T.isInfixOf` note) ["failed to create OS thread", "diagnostic: counts"]
                 _ -> False
         it "retries at most once" $ do
-            (boot, calls) <- scripted [Left threadStart, Left threadStart, Right ()]
-            (retries, outcome) <- retryingBoot (pure "diagnostic") boot
+            (boot, attempts) <- scripted [Left threadStart, Left threadStart, Right ()]
+            (notes, outcome) <- retrying boot
             isLeft outcome `shouldBe` True
-            calls `shouldReturn` 2
-            length retries `shouldBe` 2
+            attempts `shouldReturn` [1, 2]
+            length notes `shouldBe` 2
         it "does not retry any other boot failure" $ do
-            (boot, calls) <- scripted [Left (BootFailure "exited during boot" "configuration refused" ""), Right ()]
-            (_, outcome) <- retryingBoot (pure "diagnostic") boot
+            (boot, attempts) <- scripted [Left (BootFailure "exited during boot" "configuration refused" "", ""), Right ()]
+            (_, outcome) <- retrying boot
             isLeft outcome `shouldBe` True
-            calls `shouldReturn` 1
-    describe "bootDiagnostic" $
-        it "names the process limits, the user's tasks, and the proxy cgroup's leftover siblings" $
+            attempts `shouldReturn` [1]
+    describe "bootDiagnostic" $ do
+        it "names the process limits, the user's task count, and the proxy cgroup's leftover siblings" $
             withSystemTempDirectory "ecluse-diagnostic" $ \root -> do
-                traverse_ (createDirectory . (root </>)) ["proxy-1", "proxy-2", "harness"]
-                diagnostic <- bootDiagnostic (Just (root </> "proxy-1"))
-                for_ ["Max processes", "tasks of this user: ", "proxy cgroup pids.max: absent", "other proxy cgroups still present: 1"] $ \expected ->
+                traverse_ (createDirectory . (root </>)) ["proxy-1-1", "proxy-2-1", "harness"]
+                diagnostic <- bootDiagnostic (Just (root </> "proxy-1-1"))
+                for_ ["Max processes", "proxy cgroup pids.max: absent", "other proxy cgroups still present: 1"] $ \expected ->
                     diagnostic `shouldSatisfy` T.isInfixOf expected
+                let taskCount = readMaybe . toString =<< listToMaybe (mapMaybe (T.stripPrefix "tasks of this user: ") (lines diagnostic))
+                (taskCount :: Maybe Int) `shouldSatisfy` maybe False (> 0)
+        it "turns an error reading the diagnostic into a line of it" $ do
+            diagnostic <- guardDiagnostic (throwIO (mkIOError permissionErrorType "listDirectory" Nothing (Just "/proc")))
+            diagnostic `shouldSatisfy` T.isInfixOf "diagnostic: could not be read"
+            diagnostic `shouldSatisfy` T.isInfixOf "/proc"
 
 environmentSpec :: Spec
 environmentSpec = describe "proxyEnvironment" $ do

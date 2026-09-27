@@ -76,8 +76,6 @@ data CgroupReading = CgroupReading
     -- ^ @memory.stat@: @anon@, the memory an OOM kill follows, beside @file@, @kernel@, and @sock@.
     , crCpuStat :: Map Text Int
     -- ^ @cpu.stat@: @usage_usec@, @nr_throttled@, @throttled_usec@ and the rest.
-    , crTasks :: Maybe Int
-    -- ^ @pids.current@: the proxy's threads, present when the pids controller is enabled.
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
