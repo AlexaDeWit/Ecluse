@@ -7,7 +7,7 @@ Each committed corpus generation is served as its own osv.dev-shaped archive, be
 one EPSS slice every generation joins onto.
 -}
 module Ecluse.E2E.Fixtures.Advisories (
-    advisoryExportPath,
+    advisoryExportBase,
     advisoryEpssPath,
     buildAdvisoryFixtures,
 ) where
@@ -18,11 +18,11 @@ import System.FilePath (takeDirectory, (</>))
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 
-{- | The stub-relative path one advisory generation's OSV export archive is served at. Pilot's
-@--source@ names it, so a scenario picks the generation it compiles.
+{- | The stub-relative base one advisory generation's OSV exports sit under, in osv.dev's layout.
+Pilot's configured @osvExportBaseUrl@ names it, so a scenario picks the generation it compiles.
 -}
-advisoryExportPath :: CorpusVersion -> Text
-advisoryExportPath generation = "advisories/" <> tag <> "/all.zip"
+advisoryExportBase :: CorpusVersion -> Text
+advisoryExportBase generation = "advisories/" <> tag
   where
     tag = case generation of
         CorpusV1 -> "v1"
@@ -38,7 +38,7 @@ document root, so Pilot compiles from a local upstream rather than the public fe
 buildAdvisoryFixtures :: FilePath -> IO ()
 buildAdvisoryFixtures root = do
     for_ [minBound .. maxBound] $ \generation ->
-        osvCorpusZip generation >>= writeUnder (advisoryExportPath generation)
+        osvCorpusZip generation >>= writeUnder (advisoryExportBase generation <> "/npm/all.zip")
     readFileLBS epssFixtureFile >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do

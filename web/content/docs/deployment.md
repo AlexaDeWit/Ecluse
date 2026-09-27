@@ -229,9 +229,12 @@ advisory export and the EPSS feed, and writes `<ecosystem>-osv-schema4.db` into 
 |---|---|
 | `--out DIR` | Required. The directory the artifact is written into |
 | `--ecosystem ECOSYSTEM` | The export to compile. Default `npm` |
-| `--source URL` | The complete export URL, in place of the one derived from `advisories.osvExportBaseUrl` |
-| `--epss-source URL` | Overrides `advisories.epssFeedUrl` |
 | `--upload` | Also publishes the artifact to the advisory store, a full sync cycle in one run. Aborts before compiling when no store is configured |
+
+Both feeds come from the configuration keys the scheduled loop reads, `advisories.osvExportBaseUrl`
+and `advisories.epssFeedUrl`. To point one run at a mirror or a moved feed, set
+`ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` or `ECLUSE_ADVISORIES__EPSS_FEED_URL` in its environment.
+Neither URL may carry a credential ([Secrets](@/docs/configuration.md#secrets)).
 
 The loaded configuration decides what a failed EPSS feed means, as it does for the scheduled loop
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). An ecosystem the

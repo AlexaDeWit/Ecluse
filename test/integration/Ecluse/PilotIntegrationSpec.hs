@@ -53,25 +53,15 @@ spec = aroundAll withMinistack $ do
                         let endpoint = endpointFor container
                             bucket = "pilot-" <> toText label <> if hasPrevious then "-replacement" else "-first"
                         aws <- createStore endpoint bucket
-                        config <- either (fail . show) pure (loadConfig [("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))] Nothing)
                         logEnv <- quietLogEnv
                         epssData <- LBS.readFile epssFixtureFile
                         goodZip <- osvCorpusZip CorpusV1
                         badZip <- rejectedZip
-                        let compile target zipData = withStub status200 zipData $ \stub ->
-                                withStub status200 epssData $ \epssStub ->
-                                    runPilotCompile
-                                        logEnv
-                                        telemetryDisabled
-                                        (Just target)
-                                        config
-                                        PilotCompileOptions
-                                            { pcoEcosystem = "pypi"
-                                            , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
-                                            , pcoEpssSource = Just (toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
-                                            , pcoOutDir = outDir
-                                            , pcoUpload = True
-                                            }
+                        let compile target zipData = withStub status200 zipData $ \osvStub ->
+                                withStub status200 epssData $ \epssStub -> do
+                                    let env = ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket)) : stubSourceEnv osvStub epssStub
+                                    config <- either (fail . show) pure (loadConfig env Nothing)
+                                    runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir){pcoEcosystem = "pypi"}
                         when hasPrevious (void (compile endpoint goodZip))
                         before <- snapshot aws bucket
                         length before `shouldBe` if hasPrevious then 1 else 0
@@ -175,14 +165,7 @@ scheduledEnv bucket dataDir osvStub epssStub =
         <> stubSourceEnv osvStub epssStub
 
 uploadOptions :: FilePath -> PilotCompileOptions
-uploadOptions outDir =
-    PilotCompileOptions
-        { pcoEcosystem = "npm"
-        , pcoSource = Nothing
-        , pcoEpssSource = Nothing
-        , pcoOutDir = outDir
-        , pcoUpload = True
-        }
+uploadOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = True}
 
 -- Publish a qualified npm artifact ahead of the scheduled loop, from a feed that answers.
 seedNpm :: AwsEndpoint -> Text -> FilePath -> Stub -> IO ()

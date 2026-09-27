@@ -257,9 +257,9 @@ fail-loud boot error.
 
 A registry URL never carries a token either. Écluse refuses an endpoint written with userinfo
 (`https://user:token@host/`), a query string, or a fragment at boot, and the error names the key.
-The same refusal covers `server.publicUrl`, `advisories.osvExportBaseUrl`, and `queue.url`, and it
-is why the `config:` boot echo and `ecluse check-config` print each endpoint in full. What Écluse
-does with a client's own token is under
+The same refusal covers `server.publicUrl`, `advisories.osvExportBaseUrl`, `advisories.epssFeedUrl`,
+and `queue.url`, and it is why the `config:` boot echo and `ecluse check-config` print each endpoint
+in full. What Écluse does with a client's own token is under
 [Edge authentication](@/docs/deployment.md#edge-authentication-and-client-credentials). The credential model is in
 [Credential flow and authority](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#credential-flow-and-authority) and
 [Outbound registry credentials](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#outbound-registry-credentials).

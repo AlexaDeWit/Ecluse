@@ -26,7 +26,7 @@ import Network.HTTP.Client (
 import Network.HTTP.Types (hAuthorization, statusCode)
 import UnliftIO (handleAny)
 
-import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportPath)
+import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportBase)
 import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
 import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
 import Ecluse.Test.Osv (CorpusVersion)
@@ -83,19 +83,15 @@ publishAdvisoryGeneration :: GlobalDataPlane -> CorpusVersion -> IO RoleRun
 publishAdvisoryGeneration gdp generation =
     runRoleOnce
         gdp
-        pilotEnv
-        [ "pilot"
-        , "compile"
-        , "--ecosystem"
-        , "npm"
-        , "--source"
-        , toString (stubUrl (advisoryExportPath generation))
-        , "--epss-source"
-        , toString (stubUrl advisoryEpssPath)
-        , "--out"
-        , advisoryDataDir
-        , "--upload"
-        ]
+        (pilotEnv <> advisorySourceEnv generation)
+        ["pilot", "compile", "--ecosystem", "npm", "--out", advisoryDataDir, "--upload"]
+
+-- Both feeds, pointed at the stub's copy of this generation and the shared EPSS slice.
+advisorySourceEnv :: CorpusVersion -> [(Text, Text)]
+advisorySourceEnv generation =
+    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", stubUrl (advisoryExportBase generation))
+    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", stubUrl advisoryEpssPath)
+    ]
 
 -- The public-upstream stub serves the advisory exports beside the package fixtures.
 stubUrl :: Text -> Text

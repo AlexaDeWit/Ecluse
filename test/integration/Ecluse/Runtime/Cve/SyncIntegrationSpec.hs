@@ -23,7 +23,7 @@ import UnliftIO.Async (withAsync)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
-import Ecluse.Config (Config, loadConfig)
+import Ecluse.Config (loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -44,7 +44,7 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
-import Ecluse.Test.OsvDb (epssFixtureFile)
+import Ecluse.Test.OsvDb (epssFixtureFile, stubSourceEnv)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
@@ -52,7 +52,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Server.Mount (npmServeDeps)
-import Ecluse.Test.Stub (Captured (capHeaders), stubBaseUrl, stubLocalhostUrl, withRoutedStub, withStub)
+import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
 
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
@@ -70,9 +70,6 @@ spec =
                             let endpoint = endpointFor container
                                 endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
                                 bucket = "cve-sync-spec"
-                            config <-
-                                either (fail . ("CveSyncSpec fixture env: " <>) . show) pure $
-                                    loadConfig (s3EnvVars endpointUrl bucket) Nothing
                             awsEnv <- buildS3Env (Just endpoint)
                             createBucketWithRetry awsEnv bucket 30
                             cveSource <- newS3CveSource (Just endpoint)
@@ -110,7 +107,7 @@ spec =
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
-                                publishViaPilot (Just endpoint) config CorpusV1
+                                publishViaPilot (Just endpoint) (s3EnvVars endpointUrl bucket) CorpusV1
 
                                 -- Phase 2: the proxy admits the identical request, and
                                 -- the served document carries the fixed version.
@@ -150,15 +147,18 @@ createBucketWithRetry awsEnv bucket attempts =
   where
     attempt = tryAny (runResourceT (AWS.send awsEnv (S3.newCreateBucket (S3.BucketName bucket))))
 
--- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject. The
--- compile output lands in its own temp dir, apart from the proxy's sync data dir.
-publishViaPilot :: Maybe AwsEndpoint -> Config -> CorpusVersion -> IO ()
-publishViaPilot s3Endpoint config v = do
+{- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject, under @env@
+with the feeds pointed at stubs. The output lands in its own temp dir, apart from the sync's. -}
+publishViaPilot :: Maybe AwsEndpoint -> [(String, String)] -> CorpusVersion -> IO ()
+publishViaPilot s3Endpoint env v = do
     zipBytes <- osvCorpusZip v
     epssBytes <- readFileLBS epssFixtureFile
     logEnv <- quietLogEnv
-    withStub status200 zipBytes $ \stub ->
-        withStub status200 epssBytes $ \epssStub ->
+    withStub status200 zipBytes $ \osvStub ->
+        withStub status200 epssBytes $ \epssStub -> do
+            config <-
+                either (fail . ("CveSyncSpec fixture env: " <>) . show) pure $
+                    loadConfig (env <> stubSourceEnv osvStub epssStub) Nothing
             withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
                 void $
                     runPilotCompile
@@ -166,13 +166,7 @@ publishViaPilot s3Endpoint config v = do
                         telemetryDisabled
                         s3Endpoint
                         config
-                        PilotCompileOptions
-                            { pcoEcosystem = "npm"
-                            , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
-                            , pcoEpssSource = Just (toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
-                            , pcoOutDir = pilotDir
-                            , pcoUpload = True
-                            }
+                        PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
 
 -- The real serve application over the shipped fast-lane policy: the quarantine plus
 -- AllowIfRemediatesCve, with the packument stub as the public origin.

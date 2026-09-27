@@ -36,13 +36,7 @@ spec = describe "osv.dev npm export (live oracle)" $
                         telemetryDisabled
                         Nothing
                         config
-                        PilotCompileOptions
-                            { pcoEcosystem = "npm"
-                            , pcoSource = Nothing
-                            , pcoEpssSource = Nothing
-                            , pcoOutDir = outDir
-                            , pcoUpload = False
-                            }
+                        PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = False}
             case outcome of
                 Left (e :: HttpException) ->
                     pendingWith ("osv.dev unreachable: " <> show e)

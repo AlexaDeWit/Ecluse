@@ -19,7 +19,6 @@ module Ecluse.Pilot.Plan (
 
     -- * The upstreams a compile reads
     configuredSources,
-    compileSources,
     quietTimeFor,
     epssAttemptLine,
 
@@ -50,7 +49,7 @@ import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
-import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory))
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
@@ -91,8 +90,8 @@ added store only takes effect on the next boot, so the sleep is deliberately lon
 idleCadenceMicros :: Int
 idleCadenceMicros = secondsToMicros (24 * 60 * 60)
 
-{- | The upstreams a scheduled cycle reads, both configured keys so a moved or mirrored feed
-never needs a new binary.
+{- | The upstreams a compile reads, scheduled or one-shot. Both are configured keys, so a moved or
+mirrored feed never needs a new binary.
 -}
 configuredSources :: AdvisoriesSettings -> OsvEcosystem -> CompileSources
 configuredSources advisories eco =
@@ -120,27 +119,9 @@ quietTimeFor advisories mEco =
   where
     configured eco = Map.findWithDefault defaultQuietTime eco (advQuietTime advisories)
 
-{- | The upstreams a one-shot run reads: its own overrides over 'configuredSources'. Each feed
-overrides on its own, so pinning one leaves the other configured.
--}
-compileSources :: AdvisoriesSettings -> PilotCompileOptions -> CompileSources
-compileSources advisories opts =
-    CompileSources
-        { csOsvExportUrl = fromMaybe (csOsvExportUrl configured) (pcoSource opts)
-        , csEpssFeedUrl = fromMaybe (csEpssFeedUrl configured) (pcoEpssSource opts)
-        }
-  where
-    configured = configuredSources advisories (osvEcosystemNamed (pcoEcosystem opts))
-
 -- | Options for the one-shot @ecluse pilot compile@ mode.
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
-    , pcoSource :: Maybe String
-    {- ^ Overrides the export URL. 'Nothing' takes @osvExportBaseUrl@ under osv.dev's spelling of
-    the ecosystem ('osvExportUrl').
-    -}
-    , pcoEpssSource :: Maybe String
-    -- ^ Overrides the EPSS feed URL. 'Nothing' selects the configured @epssFeedUrl@.
     , pcoOutDir :: FilePath
     , pcoUpload :: Bool
     -- ^ Upload the compiled artifact to the configured advisory store.
