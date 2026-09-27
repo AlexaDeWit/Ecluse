@@ -204,9 +204,11 @@ advisories:
 #   # limit set). It never caps an explicit cores, a CPU quota, or the memory-derived
 #   # count. Prefer setting cores over raising this.
 #   coresCeiling: 8
-#   # Heap ceiling in bytes: the cgroup memory limit less the nursery budget and 10%
-#   # slack, floored at half the limit. Enforcing it re-executes the binary once. A
-#   # breach is a clean heap-overflow error, not a kernel OOM kill.
+#   # Heap ceiling in bytes: the cgroup memory limit less one allocation area and 10%
+#   # slack, floored at half the limit. The nursery (cores x allocation area) counts
+#   # inside it. Enforcing it re-executes the binary once. A heap breach is a
+#   # heap-overflow error. Memory outside the heap (connection buffers, decoder state,
+#   # socket buffers, stacks) does not count against it.
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations, computed from cores independently of memory.
 #   # A positive explicit value stays exact. A separate material estimate budget

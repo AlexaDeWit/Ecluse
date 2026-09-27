@@ -117,8 +117,8 @@ solvedPlan inputs h =
   where
     demands = tenantDemands inputs h
     outcomes = shedToFit demands
-    -- The nursery (capabilities x allocation area) lives outside the heap ceiling, so
-    -- the tenant sum cannot see it. The capability count sheds on its own.
+    -- The nursery (capabilities x allocation area) counts inside the heap ceiling, but the
+    -- tenant sum does not charge it. The capability count sheds on its own.
     shedCaps = shedCapabilityCount inputs h
 
 {- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.

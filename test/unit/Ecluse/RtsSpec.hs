@@ -92,14 +92,19 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planCapabilities plan `shouldBe` (2, FromConfig)
         planMaxHeapBytes plan `shouldBe` (Just (400 * mib), FromConfig)
 
-    it "derives from the cgroup when config is omitted, sizing the heap from the planned capabilities" $ do
-        -- The cgroup grants 2 cores while the RTS claimed 4, so the nursery the process
-        -- runs with is 2 x the allocation area, not 4 x.
+    it "derives both axes from the cgroup when config is omitted" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
         planCapabilities plan `shouldBe` (2, FromCgroup)
         planMaxHeapBytes plan
-            `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) 2 (64 * mib)), FromCgroup)
+            `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) (64 * mib)), FromCgroup)
+
+    it "counts the nursery once, inside the derived heap ceiling" $ do
+        -- 4 CPU / 1 GiB at -A64m: the 256 MiB nursery stays inside -M, so the ceiling is
+        -- 857.6 MiB (the limit less one area and the slack), not 665.6 MiB.
+        let cgroup = CgroupLimits{cgCpuCores = Just 4, cgMemoryMaxBytes = Just (1024 * mib)}
+        planMaxHeapBytes (resolveRuntimePlan noOverrides cgroup unpinned)
+            `shouldBe` (Just 899256320, FromCgroup)
 
     it "floors a fractional cpu quota, so capabilities never exceed the CFS budget" $ do
         let cgroup = noCgroup{cgCpuCores = Just 3.5}
@@ -165,16 +170,16 @@ ladderSpec = describe "the capability ladder below the cgroup CPU quota" $ do
 
 derivationSpec :: Spec
 derivationSpec = describe "deriveMaxHeapBytes" $ do
-    it "subtracts the nursery budget and ten percent slack, aligned to the RTS's 4 KiB blocks" $ do
+    it "subtracts one allocation area and ten percent slack, aligned to the RTS's 4 KiB blocks" $ do
         -- The result rounds down to a whole 4 KiB block, so the ceiling reads back exactly
         -- after the re-exec.
-        let raw = 512 * mib - 2 * 64 * mib - (512 * mib) `div` 10
-        deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+        let raw = 512 * mib - 64 * mib - (512 * mib) `div` 10
+        deriveMaxHeapBytes (512 * mib) (64 * mib)
             `shouldBe` (raw - raw `mod` 4096)
 
-    it "floors at half the memory limit when the nursery would swallow a tiny pod" $
-        -- 128 MiB with a 4 x 64 MiB nursery would go negative, so half the limit stands.
-        deriveMaxHeapBytes (128 * mib) 4 (64 * mib) `shouldBe` (64 * mib)
+    it "floors at half the memory limit when the allowance would swallow a tiny pod" $
+        -- 128 MiB less a 64 MiB area and the slack is under half, so half the limit stands.
+        deriveMaxHeapBytes (128 * mib) (64 * mib) `shouldBe` (64 * mib)
 
 flagsSpec :: Spec
 flagsSpec = describe "requiredRtsFlags" $ do
@@ -195,7 +200,7 @@ flagsSpec = describe "requiredRtsFlags" $ do
     it "asks for both flags when both differ" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
         requiredRtsFlags unpinned plan `shouldBe` ["-N2", "-M" <> show derived]
 
     it "never asks to change a posture the live RTS already matches" $ do
@@ -210,7 +215,7 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
     it "reads an exactly-applied plan as enforced on both axes" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
             applied = unpinned{rpCapabilities = 2, rpMaxHeapBytes = Just derived}
             effective = reconcileRuntimePlan cgroup plan applied
         axEnforced (erpCapabilities effective) `shouldBe` True
@@ -222,7 +227,7 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
         -- Partial application: the capability change took, the -M did not.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
             partial = unpinned{rpCapabilities = 2}
             effective = reconcileRuntimePlan cgroup plan partial
         axEnforced (erpMaxHeapBytes effective) `shouldBe` False
@@ -247,7 +252,7 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
     it "predicts a successful application (appliedRuntimePlan): both axes enforced at the desire" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) 2 (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
             effective = appliedRuntimePlan cgroup plan unpinned
         effectiveCapabilities effective `shouldBe` (2, FromCgroup)
         effectiveHeapCeiling effective `shouldBe` (Just derived, FromCgroup)
