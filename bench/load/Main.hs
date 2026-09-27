@@ -39,6 +39,7 @@ import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProx
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiFixture, pypiLoadNotes)
 import Ecluse.BenchLoad.Report (renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
+import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey, selectScenario)
 import Ecluse.BenchLoad.Verdict (runViolations)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -77,7 +78,6 @@ runPasses :: LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
 runPasses knobs shape selected = do
     npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
-    -- The parent consumes argv RTS flags. Children need the same capability count through GHCRTS.
     capabilities <- getNumCapabilities
     processors <- getNumProcessors
     sections <- forM fixtures $ \fixture -> do
@@ -85,7 +85,7 @@ runPasses knobs shape selected = do
             chosen = filter (runsHere eco) (fixtureScenarios fixture)
             baseline = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) npmBaseline
             injMs = baselineInjectedMs baseline
-            pinChildren = ("GHCRTS", "-N" <> show capabilities)
+            pinChildren = childRts capabilities
             loadOverrides = [latencyOverride injMs, pinChildren]
             c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), pinChildren]
             loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
@@ -130,11 +130,16 @@ runThrashProbe knobs limitsMib = do
     let shapes = [Limited (max 1 cpus) (mib * 1024 * 1024) | mib <- limitsMib]
         overrides shape =
             [ ("BENCH_LOAD_POD", toString (renderPodShape shape))
-            , ("GHCRTS", "-N" <> show capabilities)
+            , childRts capabilities
             , latencyOverride (lkUpstreamLatencyMicros knobs `div` 1_000)
             ]
     steps <- traverse (\shape -> (renderPodShape shape,) <$> runScenarioChild self (overrides shape) key) shapes
     pure ([renderThrash key steps], ["the GC-thrash probe produced no report at any memory limit" | null (rights (map snd steps))])
+
+-- The parent's argv RTS flags do not reach a child, so each child gets the statistics flag and the
+-- parent's capability count through GHCRTS.
+childRts :: Int -> (String, String)
+childRts capabilities = ("GHCRTS", rtsStatsFlag <> " -N" <> show capabilities)
 
 -- The scenario keys in BENCH_LOAD_SCENARIOS, or every scenario when it is unset or blank.
 selectedKeys :: IO (Maybe [Text])

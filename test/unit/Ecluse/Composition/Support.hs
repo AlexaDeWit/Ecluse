@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Shared fixtures for the specs that load a real configuration: the minimal valid
-environment layers, their targeted mutations, and the expect-helpers that load them.
+environment layers, their targeted mutations, the expect-helpers that load them, and the capture of
+a whole boot's refusal.
 -}
 module Ecluse.Composition.Support (
     NoCredentials (NoCredentials),
@@ -15,6 +16,7 @@ module Ecluse.Composition.Support (
     noCeiling,
     staticEnvVars,
     pubUrlEnv,
+    publicGateEnv,
     privateUpstreamUrl,
     collapsingMirrorTarget,
     collapsedMirrorRefusal,
@@ -44,10 +46,14 @@ module Ecluse.Composition.Support (
     bootInputsFor,
     expectPlan,
     expectPlanFor,
+    captureBoot,
+    reportLines,
 ) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import System.Exit (ExitCode)
+import UnliftIO (timeout, try)
 
 import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
@@ -68,6 +74,7 @@ import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
+import Ecluse.Test.Log (captureStderrWith)
 
 {- | The typed stand-in for amazonka's credential-discovery failure, which a boot folds into a
 refusal naming this constructor. A case that drives a build to throw throws this.
@@ -124,6 +131,10 @@ staticEnvVars =
 -- | The one environment entry every document fixture needs: the public URL a mount derives from.
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- | The npm public gate alone: the smallest environment that boots and serves.
+publicGateEnv :: [(String, String)]
+publicGateEnv = ("ECLUSE_MOUNTS__NPM__ENABLED", "true") : pubUrlEnv <> [("ECLUSE_SERVER__PORT", "0")]
 
 -- | The private upstream the composition fixtures declare.
 privateUpstreamUrl :: (IsString s) => s
@@ -291,3 +302,15 @@ expectPlanFor role envVars docBlob config effective =
         (\errs -> fail ("boot plan refused: " <> show errs))
         pure
         (brOutcome (resolveBootPlan role (bootInputsFor envVars docBlob config effective)))
+
+{- | The status a whole boot took and the lines it reported on standard error. The timeout guards
+against a hung boot, without requiring refusal within a boot-speed deadline.
+-}
+captureBoot :: IO () -> IO (Either ExitCode (Maybe ()), [Text])
+captureBoot boot = do
+    (outcome, report) <- captureStderrWith (try (timeout 5_000_000 boot))
+    pure (outcome, reportLines report)
+
+-- | The non-blank lines of a report.
+reportLines :: Text -> [Text]
+reportLines = filter (not . T.null) . lines

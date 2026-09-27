@@ -76,6 +76,12 @@ common shared
     base hiding (Prelude),
     relude (Relude as Prelude)
 
+-- The shipped server's RTS options. The OpenTelemetry batch processor requires the threaded RTS.
+-- The load harness links them too, so the proxy it measures boots with the posture a pod gets
+-- before its cgroup reshapes it. Tuning and overrides: https://ecluse-proxy.com/docs/operations/.
+common shipped-rts
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
+
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
 -- holds the agnostic server layer (Route, Response, Conditional, Stream) and the
@@ -341,6 +347,7 @@ library
   exposed-modules:
     Ecluse
     Ecluse.Internal
+    Ecluse.Startup
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Mirror
@@ -540,9 +547,7 @@ library ecluse-runtime
 
 executable ecluse
   import:         shared
-  -- The OpenTelemetry batch processor requires the threaded RTS.
-  -- Runtime tuning and overrides: https://ecluse-proxy.com/docs/operations/.
-  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
+  import:         shipped-rts
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:  ecluse
@@ -974,6 +979,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyProcessSpec
     Ecluse.BenchLoad.RtsProbe
+    Ecluse.BenchLoad.RtsProbeSpec
     Ecluse.BenchLoad.RtsWindowSpec
     Ecluse.BenchLoad.SelectionSpec
     Ecluse.BenchLoad.Error
@@ -988,6 +994,7 @@ test-suite ecluse-unit
     Ecluse.BootSpec
     Ecluse.CLISpec
     Ecluse.InternalSpec
+    Ecluse.StartupSpec
     Ecluse.DredgerSpec
     Ecluse.Dredger.PlanSpec
     Ecluse.Composition.BootErrorSpec
@@ -1421,6 +1428,9 @@ benchmark ecluse-bench
 -- It is both the harness and, under --serve-proxy, the proxy process each scenario measures.
 executable bench-load
   import:          shared
+  -- A second -with-rtsopts would replace the shipped options rather than extend them, so each
+  -- scenario child and each proxy gets -T for the RTS statistics through GHCRTS at launch.
+  import:          shipped-rts
   main-is:         Main.hs
   hs-source-dirs:  bench/load
 
@@ -1430,9 +1440,6 @@ executable bench-load
   -- It carries no such module by design, so this dev-only tool does not build there.
   if !flag(dev-http-egress)
     buildable: False
-  -- The shipped server's RTS options (see `executable ecluse`), so the measured proxy boots
-  -- with the posture a pod gets before its cgroup reshapes it. -T exposes the RTS stats.
-  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N -A64m -n4m"
   other-modules:
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
@@ -1462,8 +1469,10 @@ executable bench-load
     , http-client-tls  >=0.3.6 && <0.5
     , http-types       ^>=0.12
     , katip            ^>=0.8.8
+    , network          ^>=3.2
     , process          ^>=1.6
     , sqlite-simple    ^>=0.4
+    , streaming-commons ^>=0.2.3
     , text             ^>=2.1
     , time             ^>=1.12
     , typed-process    ^>=0.2.13

@@ -100,6 +100,7 @@ import Ecluse.BenchLoad.BootLines (bootMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, parseExposition)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -288,7 +289,7 @@ distinctPorts = do
     if a /= b && b /= c && a /= c then pure (a, b, c) else distinctPorts
 
 {- | The proxy's environment: the harness's own, less its RTS flags and any proxy configuration,
-plus the scenario's. The upstreams are named over https for the configuration to accept them.
+plus the RTS statistics flag and the scenario's.
 -}
 proxyEnvironment :: ProxySettings -> PodShape -> Int -> FilePath -> (Int, Int, Int) -> Int -> Maybe Int -> [(String, String)] -> [(String, String)]
 proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) publicPort privatePort base =
@@ -297,6 +298,7 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
     -- The proxy reads its whole configuration from here, so nothing of the harness's own leaks in.
     inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
+    -- The upstreams are named over https for the configuration to accept them.
     upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://localhost:" <> show p)
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
@@ -311,6 +313,7 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
         , ("OTEL_TRACES_EXPORTER", "none")
         , ("OTEL_LOGS_EXPORTER", "none")
         , ("BENCH_PROXY_CONTROL_PORT", show controlPort)
+        , ("GHCRTS", toText rtsStatsFlag)
         , upstream "PUBLIC_UPSTREAM" publicPort
         ]
     pinned =

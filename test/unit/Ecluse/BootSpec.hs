@@ -24,7 +24,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Support (captureBoot, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -126,12 +126,7 @@ spec = do
             serves ["proxy"] runEnv
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $
-            serves
-                ["proxy"]
-                [ ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-                , ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-                , ("ECLUSE_SERVER__PORT", "0")
-                ]
+            serves ["proxy"] publicGateEnv
 
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $
             withDocument "server:\n  helpMessage: booted from the override document\n" $ \path ->
@@ -429,11 +424,7 @@ checkConfigRefusal envVars = withEnvVars caseKeys envVars $ do
 
 -- | The status a boot took and the lines it reported on standard error.
 bootRefusal :: [String] -> [(String, String)] -> IO (Either ExitCode (Maybe ()), [Text])
-bootRefusal args envVars = withEnvVars caseKeys envVars $ do
-    -- The timeout guards against a hung boot, without requiring refusal within a boot-speed
-    -- deadline.
-    (outcome, report) <- captureStderrWith (try (timeout 5_000_000 (withArgs args run)))
-    pure (outcome, reportLines report)
+bootRefusal args envVars = withEnvVars caseKeys envVars (captureBoot (withArgs args run))
 
 -- | Write a configuration document to a temporary path and hand the path to the case.
 withDocument :: Text -> (FilePath -> IO a) -> IO a
@@ -499,9 +490,6 @@ malformedSecret = mkSecret (toText malformedAwsEndpoint)
 
 endpointRefusal :: Text
 endpointRefusal = renderBootError (AwsEndpointMalformed malformedSecret)
-
-reportLines :: Text -> [Text]
-reportLines = filter (not . T.null) . lines
 
 newtype SimulatedServiceFault = SimulatedServiceFault Text
     deriving stock (Eq, Show)
