@@ -20,7 +20,6 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheBytesFloor,
     cacheSharePercent,
     fixedBufferBytes,
-    materialSharePercent,
     memoryQueueCharged,
     mirrorArtifactBytesCap,
     mirrorArtifactEnvelopeMultiplier,
@@ -54,7 +53,6 @@ tenantDemands inputs h =
         , tdPins = pins
         , tdCacheDesired = fromMaybe (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100)) (opCache pins)
         , tdCacheEntriesExplicit = csMaxEntries (piCache inputs)
-        , tdMaterialDesired = max 1 (appHeap * materialSharePercent `div` 100)
         , tdAdmissionDesired = piCpuAdmission inputs
         , tdResponseFinal = fromMaybe responseBytesFallback (limMaxResponseBytes (piLimits inputs))
         , tdPublishConfigured = piPublishConfigured inputs

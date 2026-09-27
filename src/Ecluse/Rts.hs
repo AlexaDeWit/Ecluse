@@ -25,6 +25,7 @@ module Ecluse.Rts (
     resolveRuntimePlan,
     currentRtsPosture,
     readCgroupLimits,
+    cgroupMemoryLimits,
     deriveMaxHeapBytes,
     nurseryFittedCapabilities,
     requiredRtsFlags,
@@ -463,9 +464,7 @@ rtsBlockBytes = 4096
 root, each axis taking the tightest. The leaf alone would miss a limit sitting on a parent slice. -}
 readCgroupLimits :: IO CgroupLimits
 readCgroupLimits = do
-    selfCgroup <- readIfExists "/proc/self/cgroup"
-    let relative = fromMaybe "/" (selfCgroup >>= parseCgroupSelfPath)
-        dirs = [cgroupRoot <> toString suffix | suffix <- ancestorPaths relative]
+    dirs <- cgroupDirectories
     cpus <- traverse (limitAt parseCpuMax "/cpu.max") dirs
     memories <- traverse (limitAt parseMemoryMax "/memory.max") dirs
     pure
@@ -473,6 +472,22 @@ readCgroupLimits = do
             { cgCpuCores = tightest cpus
             , cgMemoryMaxBytes = tightest memories
             }
+
+{- | Every cgroup-v2 directory that sets a memory limit on this process, leaf first, with that
+limit in bytes. A memory sampler reads each one's usage against its own limit.
+-}
+cgroupMemoryLimits :: IO [(FilePath, Int)]
+cgroupMemoryLimits = do
+    dirs <- cgroupDirectories
+    limits <- traverse (limitAt parseMemoryMax "/memory.max") dirs
+    pure [(dir, limit) | (dir, Just limit) <- zip dirs limits]
+
+-- This process's cgroup directory and its ancestors, leaf first, ending at the mount root.
+cgroupDirectories :: IO [FilePath]
+cgroupDirectories = do
+    selfCgroup <- readIfExists "/proc/self/cgroup"
+    let relative = fromMaybe "/" (selfCgroup >>= parseCgroupSelfPath)
+    pure [cgroupRoot <> toString suffix | suffix <- ancestorPaths relative]
 
 cgroupRoot :: FilePath
 cgroupRoot = "/sys/fs/cgroup"

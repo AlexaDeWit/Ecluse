@@ -477,14 +477,13 @@ the document, so removing a document pin alone does not restore the automatic va
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
 | Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
-| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins | Review it against the separate materialisation capacity and concurrent workload |
+| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins | Review it against the memory gate and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 
 Response and CPU pins are not silently clamped. Read the override warnings before rollout.
 The `memory plan: metadata ingest ceiling` line names the effective body limit.
-The `memory plan: material estimate budget` and `runtime: serve admission` lines name the two
-admission controls. The `metadata admission estimates` line reports each static workload allowance.
-A smaller material estimate budget does not reduce the body ceiling or CPU pin.
+The `runtime: serve admission` and `memory admission` lines name the two admission controls. The
+memory gate reads measured memory, so it does not reduce the body ceiling or CPU pin.
 Raising the ingest ceiling admits more input, not more memory. A formerly refused package can now
 reach parsing, policy and assembly work, so repeat your install and latency checks without widening
 performance budgets to hide a regression.

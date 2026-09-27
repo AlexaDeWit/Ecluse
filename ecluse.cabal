@@ -210,7 +210,7 @@ library ecluse-core
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Bytes
-    Ecluse.Core.Server.Admission.Material
+    Ecluse.Core.Server.Admission.Memory
     Ecluse.Core.Server.Admission.Memory.Brake
     Ecluse.Core.Server.Admission.Memory.Gate
     Ecluse.Core.Server.Admission.Weighted
@@ -395,6 +395,7 @@ library
     Ecluse.Config.Target
     Ecluse.Config.Types
     Ecluse.Rts
+    Ecluse.Rts.Sampler
 
   build-depends:
     , ecluse:ecluse-core
@@ -849,9 +850,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
     Ecluse.Core.Server.Admission.BytesSpec
-    Ecluse.Core.Server.Admission.MaterialSpec
     Ecluse.Core.Server.Admission.Memory.BrakeSpec
     Ecluse.Core.Server.Admission.Memory.GateSpec
+    Ecluse.Core.Server.Admission.MemorySpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
@@ -1037,6 +1038,7 @@ test-suite ecluse-unit
     Ecluse.MirrorSpec
     Ecluse.Pilot.PlanSpec
     Ecluse.PilotSpec
+    Ecluse.Rts.SamplerSpec
     Ecluse.RtsSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec

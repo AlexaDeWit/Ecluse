@@ -101,7 +101,6 @@ spec = do
             , tdPins = noOverridePins
             , tdCacheDesired = 0
             , tdCacheEntriesExplicit = Nothing
-            , tdMaterialDesired = 0
             , tdResponseFinal = 12582912
             , tdAdmissionDesired = 1
             , tdPublishConfigured = False

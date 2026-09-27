@@ -45,15 +45,16 @@ import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialAllowances (..), MaterialWork (..), newMaterialAdmissionTuned, withMaterialAdmission)
+import Ecluse.Core.Server.Admission.Memory (MemoryWork (ColdSelectedRead), newMemoryAdmissionTuned, publishReading, withMemoryAdmission)
+import Ecluse.Core.Server.Admission.Memory.Brake (BrakeState (BrakeEngaged, BrakeReleased))
+import Ecluse.Core.Server.Admission.Memory.Gate (Reading (Reading, rdBrake), defaultGateThresholds, mkMemoryView, selectedReservationBytes)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
-import Ecluse.Core.Server.Cache.Store (MaterialReuse (..))
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
-    ServeRuntime (ServeRuntime, srMaterialAdmission, srMetadataCache, srMetrics),
+    ServeRuntime (ServeRuntime, srMemoryAdmission, srMetadataCache, srMetrics),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
     runHandler,
@@ -84,20 +85,21 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
-import Ecluse.Test.Support (testMaterialAdmission)
+import Ecluse.Test.Support (awaitMemoryWaiters, closedMemoryGate, idleMemoryReading, testMemoryAdmission)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
-import Network.HTTP.Types.Header (RequestHeaders, hETag, hHost, hIfNoneMatch)
+import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
 import Test.Hspec
+import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
 -- | Pin client responses and metrics, including trusted reads after a policy change.
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
     admissionLifetimeSpec
-    materialAdmissionSpec
+    memoryAdmissionSpec
     cacheRetentionSpec
     divergenceEvidenceSpec
     skippedCheckAuditSpec
@@ -264,10 +266,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
-materialAdmissionSpec :: Spec
-materialAdmissionSpec = describe "material admission on live request paths" $ do
+memoryAdmissionSpec :: Spec
+memoryAdmissionSpec = describe "memory admission on live request paths" $ do
     for_ [("1.0.0", 200), ("9.0.0", 404)] $ \(version, expectedStatus) ->
-        it ("admits pinned selected reuse under pressure, including absence: " <> toString version) $ do
+        it ("serves retained selected reads while the gate is closed, including absence: " <> toString version) $ do
             lookupCalls <- newIORef (0 :: Int)
             let upstream req respond = do
                     when (rawPathInfo req == "/leftpad") (modifyIORef' lookupCalls (+ 1))
@@ -284,100 +286,89 @@ materialAdmissionSpec = describe "material admission on live request paths" $ do
                 warm <- serve rt version
                 statusCode (responseStatus warm) `shouldBe` expectedStatus
                 readIORef lookupCalls `shouldReturn` 1
-                material <- newMaterialAdmissionTuned 5 0 0 (MaterialAllowances 4 1 4 2)
-                let constrained = rt{srMaterialAdmission = material}
-                held <- withMaterialAdmission material (SelectedMaterial NeedsMaterialisation) $ do
-                    retained <- serve constrained version
-                    statusCode (responseStatus retained) `shouldBe` expectedStatus
-                    when (expectedStatus == 200) $ do
-                        denied <-
-                            captureServe
-                                npmTarballContract
-                                constrained
-                                (mountWith deps{pdRules = []})
-                                (serveTarball npmTarballReplies leftpadName (npmVersion version) (unsafeFilename ("leftpad-" <> version <> ".tgz")) defaultRequest)
-                        statusCode (responseStatus denied) `shouldBe` 403
-                    cold <- serve constrained "2.0.0"
-                    statusCode (responseStatus cold) `shouldBe` 503
-                    (snd <$> find ((== hRetryAfter) . fst) (responseHeaders cold)) `shouldBe` Just "1"
-                held `shouldBe` Just ()
+                gate <- closedMemoryGate 8 0
+                let constrained = rt{srMemoryAdmission = gate}
+                retained <- serve constrained version
+                statusCode (responseStatus retained) `shouldBe` expectedStatus
+                cold <- serve constrained "2.0.0"
+                statusCode (responseStatus cold) `shouldBe` 503
+                (snd <$> find ((== hRetryAfter) . fst) (responseHeaders cold)) `shouldBe` Just "1"
                 readIORef lookupCalls `shouldReturn` 1
 
-    it "rejects listing work before either origin starts" $ do
-        lookupCalls <- newIORef (0 :: Int)
-        testWithApplication (pure (countingUpstream lookupCalls upstreamApp)) $ \port -> do
-            rt <- mkRuntime noopMetricsPort
-            base <- depsFor port
-            material <- newMaterialAdmissionTuned 4 0 0 (MaterialAllowances 4 1 4 2)
-            let runtime = rt{srMaterialAdmission = material}
-                deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
-            held <-
-                withMaterialAdmission material (SelectedMaterial NeedsMaterialisation) $
-                    captureServe npmPackumentContract runtime (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-            (statusCode . responseStatus <$> held) `shouldBe` Just 503
-            readIORef lookupCalls `shouldReturn` 0
-
-    for_ [(True, True, 200, 1, 0), (False, False, 200, 0, 1), (False, True, 503, 0, 0)] $ \(firstParty, configuredPrivate, expectedStatus, expectedPrivate, expectedPublic) ->
-        it ("charges only permitted configured origins: " <> show (firstParty, configuredPrivate)) $ do
+    for_ [(True, True), (False, False), (False, True)] $ \(firstParty, configuredPrivate) ->
+        it ("sheds a listing before any origin starts while the gate is closed: " <> show (firstParty, configuredPrivate)) $ do
             privateCalls <- newIORef (0 :: Int)
             publicCalls <- newIORef (0 :: Int)
             testWithApplication (pure (countingUpstream privateCalls upstreamApp)) $ \privatePort ->
                 testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> do
                     rt <- mkRuntime noopMetricsPort
                     base <- depsFor publicPort
-                    material <- newMaterialAdmissionTuned 8 0 0 (MaterialAllowances 4 1 3 1)
+                    gate <- closedMemoryGate 8 0
                     let privateBase = loopbackRegistryUrl ("http://localhost:" <> show privatePort) <$ guard configuredPrivate
                         deps = (withPrivateBaseUrl privateBase base){pdFirstParty = const firstParty}
-                    held <-
-                        withMaterialAdmission material (SelectedMaterial NeedsMaterialisation) $
-                            captureServe
-                                npmPackumentContract
-                                rt{srMaterialAdmission = material}
-                                (mountWith deps)
-                                (servePackument npmPackumentReplies leftpadName defaultRequest)
-                    (statusCode . responseStatus <$> held) `shouldBe` Just expectedStatus
-                    readIORef privateCalls `shouldReturn` expectedPrivate
-                    readIORef publicCalls `shouldReturn` expectedPublic
+                    response <- captureServe npmPackumentContract rt{srMemoryAdmission = gate} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+                    statusCode (responseStatus response) `shouldBe` 503
+                    readIORef privateCalls `shouldReturn` 0
+                    readIORef publicCalls `shouldReturn` 0
 
-    it "keeps origin reads inside admission for assembled hits and conditional responses" $ do
-        privateCalls <- newIORef (0 :: Int)
-        publicCalls <- newIORef (0 :: Int)
-        testWithApplication (pure (countingUpstream privateCalls upstreamApp)) $ \privatePort ->
-            testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> do
-                rt <- mkRuntime noopMetricsPort
-                base <- depsFor publicPort
-                material <- newMaterialAdmissionTuned 8 0 0 (MaterialAllowances 4 1 3 1)
-                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
-                    serve request =
-                        captureServe
-                            npmPackumentContract
-                            rt{srMaterialAdmission = material}
-                            (mountWith deps)
-                            (servePackument npmPackumentReplies leftpadName request)
-                initial <- serve defaultRequest
-                statusCode (responseStatus initial) `shouldBe` 200
-                validator <- maybe (throwIO MissingFixtureResponse) pure (lookup hETag (responseHeaders initial))
-                let conditional = requestWith [(hIfNoneMatch, validator)]
-                refused <- withMaterialAdmission material (ListingMaterial 2) (serve conditional)
-                (statusCode . responseStatus <$> refused) `shouldBe` Just 503
-                readIORef privateCalls `shouldReturn` 1
-                readIORef publicCalls `shouldReturn` 1
-                reused <- serve defaultRequest
-                statusCode (responseStatus reused) `shouldBe` 200
-                unchanged <- serve conditional
-                statusCode (responseStatus unchanged) `shouldBe` 304
-                readIORef privateCalls `shouldReturn` 3
-                readIORef publicCalls `shouldReturn` 3
+    it "never holds a first-party listing that reads no origin" $ do
+        rt <- mkRuntime noopMetricsPort
+        base <- depsFor 1
+        gate <- closedMemoryGate 8 0
+        let deps = (withPrivateBaseUrl Nothing base){pdFirstParty = const True}
+        response <- captureServe npmPackumentContract rt{srMemoryAdmission = gate} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+        statusCode (responseStatus response) `shouldNotBe` 503
+
+    it "sheds a listing while the collector brake is engaged, whatever memory reads" $ do
+        rt <- mkRuntime noopMetricsPort
+        deps <- depsFor 1
+        gate <- newMemoryAdmissionTuned defaultGateThresholds 8 0
+        _ <- publishReading gate idleMemoryReading{rdBrake = BrakeEngaged}
+        response <- captureServe npmPackumentContract rt{srMemoryAdmission = gate} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+        statusCode (responseStatus response) `shouldBe` 503
+
+    it "admits a waiting listing once measured memory falls" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            rt <- mkRuntime noopMetricsPort
+            deps <- depsFor port
+            gate <- closedMemoryGate 8 5_000_000
+            let serve = captureServe npmPackumentContract rt{srMemoryAdmission = gate} (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+            withAsync serve $ \inFlight -> do
+                awaitMemoryWaiters gate 1
+                _ <- publishReading gate idleMemoryReading
+                response <- wait inFlight
+                statusCode (responseStatus response) `shouldBe` 200
+
+    it "holds no CPU slot while a listing waits for memory" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            admission <- newServeAdmissionTuned 1 0 0
+            rt <- mkRuntimeWith admission noopMetricsPort
+            deps <- depsFor port
+            gate <- closedMemoryGate 8 5_000_000
+            let constrained = rt{srMemoryAdmission = gate}
+                listing = captureServe npmPackumentContract constrained (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+            warm <- captureServe npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+            statusCode (responseStatus warm) `shouldBe` 200
+            withAsync listing $ \inFlight -> do
+                awaitMemoryWaiters gate 1
+                -- The only CPU slot is free, so a retained selected read runs while the listing waits.
+                retained <- captureServe npmTarballContract constrained (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                statusCode (responseStatus retained) `shouldBe` 200
+                _ <- publishReading gate idleMemoryReading
+                response <- wait inFlight
+                statusCode (responseStatus response) `shouldBe` 200
 
     it "releases both capacities before public artifact relay starts" $ do
         admission <- newServeAdmissionTuned 1 0 0
-        material <- newMaterialAdmissionTuned 4 0 0 (MaterialAllowances 4 1 4 2)
+        -- One reservation fills this ceiling, so a second heavy admission fits only once the first releases.
+        gate <- newMemoryAdmissionTuned defaultGateThresholds 0 0
+        _ <- publishReading gate (Reading (maybeToList (mkMemoryView 0 selectedReservationBytes)) BrakeReleased)
         released <- newIORef Nothing
         let upstream req respond = do
                 when ("/leftpad/-/" `BS.isPrefixOf` rawPathInfo req) $ do
                     available <-
-                        withServeAdmission noopMetricsPort admission $
-                            withMaterialAdmission material (SelectedMaterial NeedsMaterialisation) (pure ())
+                        withMemoryAdmission noopMetricsPort gate ColdSelectedRead $
+                            withServeAdmission noopMetricsPort admission (pure ())
                     writeIORef released (Just available)
                 upstreamApp req respond
         testWithApplication (pure upstream) $ \port -> do
@@ -386,7 +377,7 @@ materialAdmissionSpec = describe "material admission on live request paths" $ do
             response <-
                 captureServe
                     npmTarballContract
-                    rt{srMaterialAdmission = material}
+                    rt{srMemoryAdmission = gate}
                     (mountWith deps)
                     (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus response) `shouldBe` 200
@@ -871,11 +862,11 @@ mkRuntime metricsPort = do
 
 mkRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
 mkRuntimeWith admission metricsPort = do
-    materialAdmission <- testMaterialAdmission
+    memoryAdmission <- testMemoryAdmission
     manager <- newManager defaultManagerSettings
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
-    pure (ServeRuntime admission materialAdmission manager manager cache queue metricsPort passthroughTracingPort)
+    pure (ServeRuntime admission memoryAdmission manager manager cache queue metricsPort passthroughTracingPort)
 
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential

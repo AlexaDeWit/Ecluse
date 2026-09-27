@@ -33,7 +33,6 @@ spec = describe "resolveMemoryPlan" $ do
     it "falls back to the shipped bounds with no heap-ceiling datapoint" $ do
         let (plan, lines') = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) MemoryQueueTenant False
         mpMaxResponseBytes plan `shouldBe` 134217728
-        mpMaterialAggregateBytes plan `shouldBe` 178257920
         mpMaxRequestBytes plan `shouldBe` 26214400
         mpCacheAggregateBytes plan `shouldBe` 268435456
         mpQueueMemoryMaxDepth plan `shouldBe` 50000
@@ -51,7 +50,7 @@ spec = describe "resolveMemoryPlan" $ do
         mpAdmissionCapacity plan `shouldSatisfy` (>= 1)
         mpMaxResponseBytes plan `shouldBe` 134217728
 
-    it "keeps CPU admission independent of the material share" $ do
+    it "keeps CPU admission independent of the heap ceiling" $ do
         for_ [64, 256, 512, 1024, 4096] $ \memoryMiB -> do
             let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (memoryMiB * mib))) NoQueueTenant False
             mpAdmissionCapacity plan `shouldBe` 40
@@ -62,7 +61,6 @@ spec = describe "resolveMemoryPlan" $ do
             plans = [fst (resolve bareCache bareLimits bareQueue Nothing ((planWith (Just (memoryMiB * mib))){erpCapabilities = enforcedAxis caps}) NoQueueTenant False) | memoryMiB <- ceilings, caps <- cpus]
             (fallback, _) = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) NoQueueTenant False
         map mpMaxResponseBytes plans `shouldSatisfy` all (== mpMaxResponseBytes fallback)
-        map mpMaterialAggregateBytes plans `shouldSatisfy` all (> 0)
 
     it "preserves every positive explicit CPU and ingest pin on small and large plans" $ do
         for_ [Nothing, Just (64 * mib), Just (4 * gib)] $ \heapCeiling ->
@@ -212,10 +210,8 @@ spec = describe "resolveMemoryPlan" $ do
         lines'
             `shouldBe` [ "memory plan: runtime reserve 214748364" <> ceilingClause
                        , "runtime: serve admission 40 (computed from 4 capabilities)"
-                       , "memory plan: material estimate budget 386547057" <> ceilingClause
                        , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
-                       , "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
-                       , "metadata admission estimates: cold selected 9437184, retained selected 262144, full origin 38797312, listing output 11534336 bytes"
+                       , "memory admission: cold listings and cold selected reads wait while measured memory reaches 85% of the tightest ceiling, and resume at 75%"
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "memory plan: cache byte bound 257698038" <> ceilingClause
@@ -242,9 +238,6 @@ spec = describe "resolveMemoryPlan" $ do
                     ( tenantSum plan <= h
                         || any (T.isInfixOf "irreducible minimum") (mpDegradations plan)
                     )
-                -- The material budget gives way only after the cache.
-                when (any (T.isInfixOf "material estimate budget shed") (mpDegradations plan)) $
-                    assert (any (T.isInfixOf "cache aggregate shed") (mpDegradations plan))
 
     describe "planCacheConfig" $ do
         it "uses one aggregate byte and entry bound with no reserved store shares" $ do
@@ -264,7 +257,6 @@ spec = describe "resolveMemoryPlan" $ do
     tenantSum plan =
         mpRuntimeReserveBytes plan
             + mpCacheAggregateBytes plan
-            + mpMaterialAggregateBytes plan
             + maybe 0 ptAggregateBytes (mpPublishTenant plan)
             + mpQueueTenantBytes plan
             + mpFixedBufferBytes plan

@@ -58,6 +58,24 @@ data MetricsPort = MetricsPort
     -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpServeAdmissionQueued :: IO ()
     -- ^ Record one admission that waited for a slot (@ecluse.serve.admission.queued@).
+    , mpMemoryAdmissionWait :: IO ()
+    -- ^ Record one heavy request that waited at the memory gate (@ecluse.serve.admission.memory.waits@).
+    , mpMemoryAdmissionShed :: IO ()
+    -- ^ Record one heavy request the memory gate shed (@ecluse.serve.admission.memory.sheds@).
+    , mpMemoryAdmissionMeasuredBytes :: Int -> IO ()
+    -- ^ The measured bytes of the view closest to its ceiling (@ecluse.serve.admission.memory.measured_bytes@).
+    , mpMemoryAdmissionReservedBytes :: Int -> IO ()
+    -- ^ The bytes reserved for admitted, unmeasured work (@ecluse.serve.admission.memory.reserved_bytes@).
+    , mpMemoryAdmissionGateClosed :: Bool -> IO ()
+    -- ^ Whether the memory gate is closed (@ecluse.serve.admission.memory.gate_closed@).
+    , mpMemoryAdmissionBrakeEngaged :: Bool -> IO ()
+    -- ^ Whether the collector brake is engaged (@ecluse.serve.admission.memory.brake_engaged@).
+    , mpMemoryAdmissionGcCpuPermille :: Int -> IO ()
+    -- ^ The collector's share of process CPU in permille (@ecluse.serve.admission.memory.gc_cpu_share@).
+    , mpMemoryAdmissionLiveBytes :: Int -> IO ()
+    -- ^ Mean live bytes at the latest major collections (@ecluse.serve.admission.memory.live_bytes@).
+    , mpMemoryAdmissionReclaimPermille :: Int -> IO ()
+    -- ^ The modelled share of the old generation a major frees, in permille (@ecluse.serve.admission.memory.reclaim_share@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()
     {- ^ Record a change in the bytes held for buffered publish bodies, the reserved weight
     signed (@ecluse.publish.body.in_flight_bytes@).

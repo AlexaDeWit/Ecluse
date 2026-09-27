@@ -73,7 +73,7 @@ limits:
   # stream to disk rather than a heap tenant, which is why the plan does not size it.
   maxAdvisoryDatabaseBytes: 536870912
   # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
-  # concurrency and the material estimate budget. Reads fail closed past this limit.
+  # concurrency and the memory gate. Reads fail closed past this limit.
   # A positive explicit value stays exact. Boot and check-config warn that accepting
   # a body does not guarantee its materialisation fits the heap.
   # maxRequestBytes bounds a publish body. The memory plan sizes it from the heap,
@@ -193,10 +193,11 @@ advisories:
 #   # breach is a clean heap-overflow error, not a kernel OOM kill.
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations, computed from cores independently of memory.
-#   # A positive explicit value stays exact. A separate material estimate budget
-#   # controls fresh work and known local reuse. Either gate waits up to 1 s before
-#   # returning 503 with Retry-After: 1. Treat these responses as backpressure.
-#   # Estimates reduce concurrency pressure without bounding worst-case heap use.
+#   # A positive explicit value stays exact. A separate memory gate holds cold listings
+#   # and cold selected reads while measured memory reaches 85% of the heap ceiling or
+#   # the cgroup limit, or while garbage collection takes half the CPU. Either gate
+#   # waits up to 1 s before returning 503 with Retry-After: 1. Treat these responses
+#   # as backpressure.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.

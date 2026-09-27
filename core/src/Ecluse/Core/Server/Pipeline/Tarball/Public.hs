@@ -50,7 +50,7 @@ import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkE
 import Ecluse.Core.Security (Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialWork (SelectedMaterial), withMaterialAdmission)
+import Ecluse.Core.Server.Admission.Memory (selectedMemoryWork, withMemoryAdmission)
 import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared, preparedReuse)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -103,21 +103,24 @@ import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Version (renderVersion)
 import UnliftIO (withRunInIO)
 
--- | Gate the requested version under the mount's admission budget, then relay it.
+{- | Gate the requested version under the mount's admission budget, then relay it. The local
+retention probe runs first and contacts nothing, so a cold read waits for memory before it takes
+a CPU slot and a retained one never waits.
+-}
 servePublicArtifact :: ArtifactRequest response -> Handler ResponseReceived
 servePublicArtifact ctx = do
     let metrics = srMetrics (arRuntime ctx)
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
+    prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
     withAdmissionResultOrShed
         metrics
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
         ( fmap
             join
-            ( withServeAdmission metrics (srAdmission rt) $ do
-                prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
-                withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
+            ( withMemoryAdmission metrics (srMemoryAdmission rt) (selectedMemoryWork (preparedReuse prepared)) $
+                withServeAdmission metrics (srAdmission rt) $
                     gatePublicVersion ctx advisoryEtag prepared
             )
         )
@@ -152,7 +155,7 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
--- Execute the captured read and fresh policy while both admission brackets are held.
+-- Execute the captured read and fresh policy while the admission brackets are held.
 gatePublicVersion :: ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
 gatePublicVersion ctx advisoryEtag prepared = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))

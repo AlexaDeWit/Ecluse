@@ -23,9 +23,10 @@ module Ecluse.Service (
 ) where
 
 import GHC.Conc (setNumCapabilities)
-import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
+import Katip (LogEnv, Severity (InfoS), SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import UnliftIO.Async (withAsync)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning, logRuleBootOrder)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
@@ -34,11 +35,10 @@ import Ecluse.Composition.Executable (
     MirrorWiring (mwBootWiring, mwCveSync, mwDeferredMetrics, mwQueue, mwRole),
  )
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMaterialAggregateBytes, mpMirrorArtifactTenant, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     mirrorArtifactBytesCap,
  )
-import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances)
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.Plan (
@@ -63,7 +63,7 @@ import Ecluse.Core.Registry.Adapter (
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Admission.Material (newMaterialAdmission)
+import Ecluse.Core.Server.Admission.Memory (MemoryAdmission, newMemoryAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Server.Readiness (Readiness)
@@ -76,10 +76,13 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
+import Ecluse.Rts.Sampler (runMemorySampler)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
+import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredMirrorEnqueueFailure,
@@ -130,7 +133,7 @@ withServiceRuntime bootEnv plan mirror action = do
     -- gate, so a refused boot never reshapes the process it is about to abandon.
     whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
-    materialAdmission <- newMaterialAdmission (mpMaterialAggregateBytes memoryPlan) (mpAdmissionCapacity memoryPlan) materialAllowances
+    memoryAdmission <- newMemoryAdmission (mpAdmissionCapacity memoryPlan)
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
@@ -140,7 +143,7 @@ withServiceRuntime bootEnv plan mirror action = do
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
     (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
-    withEnvWithAdmission serveAdmission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    withEnvWithAdmission serveAdmission memoryAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> withAsync (superviseMemorySampler builtEnv memoryAdmission) $ \_ -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
@@ -176,6 +179,15 @@ dataPlaneManagers telemetry bootPlan = do
     manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
     privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
     pure (manager, privateManager)
+
+{- The sampler feeding the memory gate lives as long as the runtime scope. A stopped sampler
+would freeze the gate on its last reading, so a fault restarts it. -}
+superviseMemorySampler :: Env -> MemoryAdmission -> IO ()
+superviseMemorySampler builtEnv gate =
+    void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "memory-sampler" $
+        superviseLoop (transientPolicy "memory-sampler" backgroundLoopBackoff) (liftIO (runMemorySampler logLine (metricsPortOf (envMetrics builtEnv)) gate))
+  where
+    logLine = moduleLog (envLogEnv builtEnv) "Ecluse.Rts.Sampler" InfoS
 
 {- | The @\/livez@ arm a process answers from, given whether it runs the worker
 ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.

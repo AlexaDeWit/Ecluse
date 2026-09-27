@@ -41,7 +41,7 @@ newSingleFlightWithBackend backend = SingleFlight backend <$> newTVarIO Map.empt
 data MaterialReuse = KnownLocalReuse | NeedsMaterialisation
     deriving stock (Eq, Show)
 
--- | A request-scoped read. Execute once inside the matching material allowance.
+-- | A request-scoped read. Execute once, inside the admission its reuse class selects.
 data PreparedStore e v = PreparedStore
     { preparedReuse :: MaterialReuse
     -- ^ The selected value's reuse class, determined without external lookup.

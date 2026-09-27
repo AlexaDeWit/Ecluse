@@ -71,7 +71,6 @@ overrideMinShedSum d pins =
     tdReserve d
         + tdFixedBuffers d
         + fromMaybe 0 (opCache pins)
-        + 1
         + (if tdPublishConfigured d then fromMaybe (tdRequestComputed d) (opRequest pins) else 0)
         + (if tdMemoryBacked d then fromMaybe queueDepthFloor (opDepth pins) * mirrorJobEstimatedBytes else 0)
         + (if tdMirrors d then maybe 0 (* mirrorArtifactEnvelopeMultiplier) (opArtifact pins) else 0)

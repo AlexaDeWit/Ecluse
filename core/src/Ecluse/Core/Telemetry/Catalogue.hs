@@ -41,6 +41,24 @@ data MetricName
       ServeAdmissionInFlight
     | -- | @ecluse.serve.admission.queued@: admissions that waited for a slot (counter).
       ServeAdmissionQueued
+    | -- | @ecluse.serve.admission.memory.waits@: heavy requests that waited at the memory gate (counter).
+      MemoryAdmissionWaits
+    | -- | @ecluse.serve.admission.memory.sheds@: heavy requests the memory gate shed (counter).
+      MemoryAdmissionSheds
+    | -- | @ecluse.serve.admission.memory.measured_bytes@: measured bytes of the view closest to its ceiling (gauge).
+      MemoryAdmissionMeasuredBytes
+    | -- | @ecluse.serve.admission.memory.reserved_bytes@: bytes reserved for admitted, unmeasured work (gauge).
+      MemoryAdmissionReservedBytes
+    | -- | @ecluse.serve.admission.memory.gate_closed@: 1 while the memory gate is closed (gauge).
+      MemoryAdmissionGateClosed
+    | -- | @ecluse.serve.admission.memory.brake_engaged@: 1 while the collector brake is engaged (gauge).
+      MemoryAdmissionBrakeEngaged
+    | -- | @ecluse.serve.admission.memory.gc_cpu_share@: the collector's share of process CPU in permille (gauge).
+      MemoryAdmissionGcCpuShare
+    | -- | @ecluse.serve.admission.memory.live_bytes@: mean live bytes at the latest major collections (gauge).
+      MemoryAdmissionLiveBytes
+    | -- | @ecluse.serve.admission.memory.reclaim_share@: modelled share of the old generation a major frees, in permille (gauge).
+      MemoryAdmissionReclaimShare
     | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
       PublishBodyInFlightBytes
     | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
@@ -118,6 +136,15 @@ metricName = \case
     RuleBreakerState -> "ecluse.rule.breaker.state"
     ServeAdmissionInFlight -> "ecluse.serve.admission.in_flight"
     ServeAdmissionQueued -> "ecluse.serve.admission.queued"
+    MemoryAdmissionWaits -> "ecluse.serve.admission.memory.waits"
+    MemoryAdmissionSheds -> "ecluse.serve.admission.memory.sheds"
+    MemoryAdmissionMeasuredBytes -> "ecluse.serve.admission.memory.measured_bytes"
+    MemoryAdmissionReservedBytes -> "ecluse.serve.admission.memory.reserved_bytes"
+    MemoryAdmissionGateClosed -> "ecluse.serve.admission.memory.gate_closed"
+    MemoryAdmissionBrakeEngaged -> "ecluse.serve.admission.memory.brake_engaged"
+    MemoryAdmissionGcCpuShare -> "ecluse.serve.admission.memory.gc_cpu_share"
+    MemoryAdmissionLiveBytes -> "ecluse.serve.admission.memory.live_bytes"
+    MemoryAdmissionReclaimShare -> "ecluse.serve.admission.memory.reclaim_share"
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"

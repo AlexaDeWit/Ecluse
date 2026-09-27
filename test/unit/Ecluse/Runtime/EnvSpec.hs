@@ -21,7 +21,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue, sampleJob)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Support (testMaterialAdmission, testServeAdmission)
+import Ecluse.Test.Support (testMemoryAdmission, testServeAdmission)
 
 {- | A single npm mount with inert packument-serve dependencies and no publish target,
 resolved the way the composition root resolves it.
@@ -74,8 +74,8 @@ spec = do
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
-            materialAdmission <- testMaterialAdmission
-            withEnvWithAdmission admission materialAdmission queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
+            memoryAdmission <- testMemoryAdmission
+            withEnvWithAdmission admission memoryAdmission queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (the Env scopes the action, nothing swallows it)" $ do
             queue <- newTestMemoryQueue
@@ -84,10 +84,10 @@ spec = do
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
-            materialAdmission <- testMaterialAdmission
+            memoryAdmission <- testMemoryAdmission
             let body :: Env -> IO ()
                 body _ = throwIO BodyEscape
-            outcome <- try (withEnvWithAdmission admission materialAdmission queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
+            outcome <- try (withEnvWithAdmission admission memoryAdmission queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
             outcome `shouldBe` Left BodyEscape
 
     describe "split-ready services" $ do

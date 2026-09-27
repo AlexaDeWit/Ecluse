@@ -121,6 +121,15 @@ data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
     , mServeAdmissionQueued :: Counter Int64
+    , mMemoryAdmissionWaits :: Counter Int64
+    , mMemoryAdmissionSheds :: Counter Int64
+    , mMemoryAdmissionMeasuredBytes :: Gauge Int64
+    , mMemoryAdmissionReservedBytes :: Gauge Int64
+    , mMemoryAdmissionGateClosed :: Gauge Int64
+    , mMemoryAdmissionBrakeEngaged :: Gauge Int64
+    , mMemoryAdmissionGcCpuShare :: Gauge Int64
+    , mMemoryAdmissionLiveBytes :: Gauge Int64
+    , mMemoryAdmissionReclaimShare :: Gauge Int64
     , mPublishBodyInFlightBytes :: UpDownCounter Int64
     , mPublishBodyShed :: Counter Int64
     , mMergeDivergence :: Counter Int64
@@ -166,6 +175,15 @@ newMetrics telemetry = do
         <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
         <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
         <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
+        <*> counter meter MemoryAdmissionWaits "{request}" "heavy requests that waited at the memory gate"
+        <*> counter meter MemoryAdmissionSheds "{request}" "heavy requests the memory gate shed"
+        <*> gauge meter MemoryAdmissionMeasuredBytes "measured bytes of the memory view closest to its ceiling"
+        <*> gauge meter MemoryAdmissionReservedBytes "bytes reserved for admitted, unmeasured heavy work"
+        <*> gauge meter MemoryAdmissionGateClosed "1 while the memory gate is closed"
+        <*> gauge meter MemoryAdmissionBrakeEngaged "1 while the collector brake is engaged"
+        <*> gauge meter MemoryAdmissionGcCpuShare "the collector's share of process CPU, in permille"
+        <*> gauge meter MemoryAdmissionLiveBytes "mean live bytes at the latest major collections"
+        <*> gauge meter MemoryAdmissionReclaimShare "modelled share of the old generation a major collection frees, in permille"
         <*> upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
         <*> counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
         <*> counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
@@ -230,6 +248,15 @@ metricsPortOf m =
         { mpServeDecision = recordServeDecision m
         , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
+        , mpMemoryAdmissionWait = addOne (mMemoryAdmissionWaits m) []
+        , mpMemoryAdmissionShed = addOne (mMemoryAdmissionSheds m) []
+        , mpMemoryAdmissionMeasuredBytes = \bytes -> set (mMemoryAdmissionMeasuredBytes m) (fromIntegral bytes) []
+        , mpMemoryAdmissionReservedBytes = \bytes -> set (mMemoryAdmissionReservedBytes m) (fromIntegral bytes) []
+        , mpMemoryAdmissionGateClosed = \closed -> set (mMemoryAdmissionGateClosed m) (bool 0 1 closed) []
+        , mpMemoryAdmissionBrakeEngaged = \engaged -> set (mMemoryAdmissionBrakeEngaged m) (bool 0 1 engaged) []
+        , mpMemoryAdmissionGcCpuPermille = \permille -> set (mMemoryAdmissionGcCpuShare m) (fromIntegral permille) []
+        , mpMemoryAdmissionLiveBytes = \bytes -> set (mMemoryAdmissionLiveBytes m) (fromIntegral bytes) []
+        , mpMemoryAdmissionReclaimPermille = \permille -> set (mMemoryAdmissionReclaimShare m) (fromIntegral permille) []
         , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
         , mpPublishBodyShed = addOne (mPublishBodyShed m) []
         , mpMergeDivergence = recordMergeDivergence m
