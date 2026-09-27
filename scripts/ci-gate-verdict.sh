@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 # Decide the CI gate from its dependencies' results, for .github/workflows/ci.yml.
 #
-# A skip counts as a pass from exactly one source: the documentation-only filter, and
-# only for the jobs that filter may skip. Every other skip, failure, or cancellation
-# fails the gate, so a job that silently never ran can never read as green.
+# A skip counts as a pass only when the change classifier skipped the job: the
+# documentation-only filter for the Haskell jobs, and the release-build filter for the
+# release dry-run. Every other skip, failure, or cancellation fails the gate, so a job
+# that silently never ran can never read as green.
 set -euo pipefail
 
 verdict=0
 
+# $3 names the classifier filter that may skip the job: docs, release, or none.
 require() {
-  local job="$1" result="$2" skippable="${3:-no}"
+  local job="$1" result="$2" filter="${3:-none}"
   if [ "$result" = "success" ]; then
     echo "ok      $job"
     return 0
   fi
-  if [ "$result" = "skipped" ] && [ "$skippable" = "yes" ] && [ "${DOCS_ONLY:-}" = "true" ]; then
-    echo "ok      $job: skipped by the documentation-only filter"
-    return 0
+  if [ "$result" = "skipped" ]; then
+    if [ "$filter" = "docs" ] && [ "${DOCS_ONLY:-}" = "true" ]; then
+      echo "ok      $job: skipped by the documentation-only filter"
+      return 0
+    fi
+    if [ "$filter" = "release" ] && [ "${RELEASE_BUILD:-}" = "false" ]; then
+      echo "ok      $job: skipped, the change cannot reach the release build"
+      return 0
+    fi
   fi
   echo "FAILED  $job: $result"
   verdict=1
@@ -25,8 +33,8 @@ require() {
 
 require changes "${CHANGES:-missing}"
 require static-checks "${STATIC_CHECKS:-missing}"
-require build "${BUILD:-missing}" yes
-require coverage "${COVERAGE:-missing}" yes
+require build "${BUILD:-missing}" docs
+require coverage "${COVERAGE:-missing}" docs
 
 # codecov-notify posts the Codecov statuses once every coverage leg has uploaded, so it
 # runs only behind a green coverage job. Any other coverage result already decided the
@@ -36,9 +44,18 @@ if [ "${COVERAGE:-missing}" = "success" ]; then
 else
   echo "ok      codecov-notify: not run, coverage did not succeed"
 fi
-require docs "${DOCS:-missing}" yes
-require e2e "${E2E:-missing}" yes
-require weeder "${WEEDER:-missing}" yes
-require stan "${STAN:-missing}" yes
+require docs "${DOCS:-missing}" docs
+require e2e "${E2E:-missing}" docs
+require weeder "${WEEDER:-missing}" docs
+require stan "${STAN:-missing}" docs
+
+# The assemble and boot jobs need the dry-run's images, so the same reasoning applies.
+require release-dry-run "${RELEASE_DRY_RUN:-missing}" release
+if [ "${RELEASE_DRY_RUN:-missing}" = "success" ]; then
+  require release-dry-run-assemble "${RELEASE_DRY_RUN_ASSEMBLE:-missing}"
+  require release-dry-run-boot "${RELEASE_DRY_RUN_BOOT:-missing}"
+else
+  echo "ok      release-dry-run-assemble, release-dry-run-boot: not run, release-dry-run did not succeed"
+fi
 
 exit "$verdict"

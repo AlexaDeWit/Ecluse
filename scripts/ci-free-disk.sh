@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Remove the runner's preinstalled toolchains, but only when the root filesystem is
-# actually short of space. The removal costs about a minute and frees ~24 GB, while
-# the current runner image starts with 87 GB free of 145 GB. The threshold clears the
+# short of space, because the removal costs about a minute. The threshold clears the
 # ~30 GB the heaviest job adds: the Nix store, the Docker data-root, the cabal store,
 # and the e2e image.
 set -euo pipefail

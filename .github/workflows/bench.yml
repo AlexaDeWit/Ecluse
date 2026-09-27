@@ -22,7 +22,7 @@ permissions:
 jobs:
   bench:
     name: Work-per-request benchmarks (inform-only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       # Pin the cabal store to a deterministic, cacheable location, as the other
@@ -41,10 +41,7 @@ jobs:
           # Restore the warm cabal store (this job compiles the benchmark).
           cabal-cache: "true"
 
-      # Skipped on an exact cabal-store cache hit: the restored index already covers
-      # cabal.project's pinned index-state. `cabal update` otherwise hits Hackage's
-      # TUF metadata over the network every run, including its occasional
-      # dead-mirror fallback.
+      # An exact cabal-store hit already covers cabal.project's pinned index-state.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
@@ -65,7 +62,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-results-${{ github.sha }}
+          name: bench-results-${{ runner.arch }}-${{ github.sha }}
           path: |
             bench-results.csv
             bench-output.txt

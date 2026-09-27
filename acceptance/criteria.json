@@ -1,7 +1,8 @@
 {
-  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 for feature head b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. The first run used a PR merge checkout, as detailed in _checkoutProvenance. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule.",
+  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 for feature head b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. The first run used a PR merge checkout, as detailed in _checkoutProvenance. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule. Each ecosystem names the CPU architecture its budgets were calibrated on in arch, as GHC's System.Info.arch names it. On another architecture the harness reports every leg as uncalibrated and exits 0.",
   "ecosystems": {
     "npm": {
+      "arch": "x86_64",
       "defaultBudgetMs": 100,
       "perPackageBudgetMs": {
         "@types/node": 300,
@@ -20,6 +21,7 @@
       }
     },
     "pypi": {
+      "arch": "x86_64",
       "_calibration": {
         "date": "2026-09-12",
         "head": "b821206aadad083b7751f94d5d24f58851986719",

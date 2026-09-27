@@ -21,6 +21,12 @@ must match `ecluse.cabal`'s `version:` field, or the release fails fast at a ver
 a match the workflow builds the image natively for `linux/amd64` and `linux/arm64` (see
 [Multi-architecture image](#multi-architecture-image)).
 
+The build is the reusable workflow
+[`release-build.yml`](../../.github/workflows/release-build.yml), and CI's release dry-run runs the
+same definition. Every commit on `main`, and every pull request that can change the build, builds
+both images, assembles the multi-arch index, and starts each image on its own architecture, without
+a registry login or a push. A release is therefore never the first build of an architecture.
+
 The workflow assembles the two into one multi-arch index and pushes it to GitHub Container Registry
 under a single immutable tag. It attaches keyless provenance and SBOM attestations. It then
 publishes a GitHub Release carrying the image digest, the `gh attestation verify` recipe, the
@@ -54,7 +60,8 @@ The environment carries no secrets and no variables, and needs none. The only cr
 uses is the ephemeral `GITHUB_TOKEN` that GitHub issues to the job. There is no registry password to
 store and nothing to rotate.
 
-The workflow retains both image archives and both SBOMs for seven days from each upload.
+The workflow retains both image archives and both SBOMs for seven days from each upload. The
+dry-run keeps its copies for one day.
 That covers the three-day wait and a nominal four-day approval margin.
 Uneven build completion, runner queues, and publish setup consume part of that margin.
 Before approval, check the run's artifact expiry times and leave enough time for `publish` to download all four inputs.
@@ -64,8 +71,10 @@ Keep retention and the environment wait timer aligned if either changes.
 
 `ecluse:X.Y.Z` is an OCI index over a `linux/amd64` and a `linux/arm64` image, so a consumer pulls
 one tag and the registry serves the right architecture. Each architecture builds natively on its
-own runner, and one publish job assembles the index
-([`push-multiarch.sh`](../../scripts/push-multiarch.sh)).
+own runner. [`assemble-multiarch.sh`](../../scripts/assemble-multiarch.sh) assembles the index and
+checks that it lists exactly those two platforms, and the publish job pushes it
+([`push-multiarch.sh`](../../scripts/push-multiarch.sh)). The release dry-run runs the same assembly
+and stops before the push.
 
 **The image builds take no cache.** Both build jobs install Nix with the plain installer and restore
 nothing from the GitHub Actions cache, unlike the rest of CI, which sets up through
@@ -136,20 +145,23 @@ Three arms keep the shipped closure honest: C-closure detection, Haskell-closure
 dependency updates.
 
 **Detection, `grype` (the C-closure authority).** `task scan` builds the sbomnix SBOM of the
-application closure into `sbom/` and runs `grype`. It writes the severity-rated findings as
-`grype.sarif`, with a table in the log. `task scan-vulnix` is a secondary
+application closure into `sbom/` and runs `grype` over it (`task scan-sbom`). It writes the
+severity-rated findings as `grype.sarif`, with a table in the log. `task scan-vulnix` is a secondary
 [vulnix](https://github.com/flyingcircusio/vulnix) cross-check: broader and Nix-patch-aware, but
 un-graded, so not the authority. A naive closure scan with distro-advisory matchers reports about a
 thousand mostly-irrelevant CVEs. The grype-over-SBOM view is the curated one. Both scanners come from
 the single pinned nixpkgs (26.05).
 
-The [`security.yml`](../../.github/workflows/security.yml) workflow is report-only and never gates a
-PR, because a `flake.lock` bump fixes the closure, not an in-PR change. Both of its jobs upload SARIF
-to GitHub code scanning (categories `grype` and `osv-hsec`). Triage therefore happens in the Security
-tab alongside Semgrep and Scorecard, so the issue tracker holds only human-filed work. An alert
-closes itself once a later scan no longer reports it. On a PR the workflow runs only when the
-dependency plan changes. On a daily schedule it scans `main`, so CVEs disclosed after a release still
-surface.
+The grype scan and the OSV/HSEC scan below are report-only and never gate a PR, because a
+`flake.lock` bump fixes the closure, not an in-PR change. The `grype` job in
+[`ci.yml`](../../.github/workflows/ci.yml) runs in the nightly run and on a manual dispatch. It
+scans each architecture's CycloneDX SBOM from that run's release dry-run, because each architecture
+has its own C closure. The `osv-freeze` job in [`security.yml`](../../.github/workflows/security.yml)
+runs daily on `main` and on a PR that changes the dependency plan. The daily runs mean CVEs
+disclosed after a release still surface. Both jobs upload SARIF to GitHub code scanning, under the
+categories `grype` (arm64), `grype-amd64`, and `osv-hsec`. Triage happens in the Security tab
+alongside Semgrep and Scorecard, so the issue tracker holds only human-filed work. An alert closes
+itself once a later scan no longer reports it.
 
 **Dependency updates, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across the
 ecosystems the repo automates: flake inputs, GitHub Actions, and Hackage cabal dependencies.

@@ -110,11 +110,7 @@ tasks:
         img_archive="$(nix build .#dockerImage --no-link --print-out-paths)"
         
         echo "==> loading the image into docker"
-        tag="$(docker load <"$img_archive" | sed -n 's/^Loaded image: //p' | head -1)"
-        if [ -z "$tag" ]; then
-          echo "could not determine the loaded image tag from 'docker load'" >&2
-          exit 1
-        fi
+        tag="$(bash scripts/docker-load.sh "$img_archive")"
         echo "==> image: $tag"
         
         echo "==> running ecluse-e2e"
@@ -305,13 +301,18 @@ tasks:
       - |
         out=$(cabal check 2>&1); printf "%s\n" "$out"; case "$out" in *Warning:*|*Error:*) exit 1 ;; esac
   lint-workflows:
-    desc: Lint GitHub Actions workflows
+    desc: Lint GitHub Actions workflows and check their runners
     sources:
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
+      - '.github/workflows/.*.yml'
+      - '.github/workflows/.*.yaml'
+      - 'scripts/ci-runner-policy.sh'
       - 'flake.lock'
     cmds:
       - actionlint
       - zizmor .github/workflows/
+      - bash scripts/ci-runner-policy.sh
   lint-scripts:
     desc: Lint shell scripts
     vars:
@@ -354,7 +355,9 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/ci-build-diagnostics.test.sh
+      - bash scripts/ci-classify-change.test.sh
       - bash scripts/ci-gate-verdict.test.sh
+      - bash scripts/ci-runner-policy.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
@@ -558,8 +561,15 @@ tasks:
     cmds:
       - mkdir -p sbom
       - sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
-      - grype sbom:sbom/ecluse.cdx.json -o table -o sarif=grype.sarif
-      - bash scripts/sarif-locations.sh grype.sarif flake.lock
+      - task: scan-sbom
+  scan-sbom:
+    desc: Scan a CycloneDX SBOM for CVEs (SCAN_SBOM= and SCAN_SARIF= override the paths)
+    vars:
+      SCAN_SBOM: '{{.SCAN_SBOM | default "sbom/ecluse.cdx.json"}}'
+      SCAN_SARIF: '{{.SCAN_SARIF | default "grype.sarif"}}'
+    cmds:
+      - grype 'sbom:{{.SCAN_SBOM}}' -o table -o 'sarif={{.SCAN_SARIF}}'
+      - bash scripts/sarif-locations.sh '{{.SCAN_SARIF}}' flake.lock
   scan-vulnix:
     desc: Secondary Nix-native cross-check (vulnix)
     ignore_error: true
