@@ -1,7 +1,9 @@
 <!--
 One to three sentences per section, readable in seconds. Never restate the diff; the reviewer
 has it. Never paste inventories, counts, or per-round appendices; that audit trail lives in
-commit messages. CONTRIBUTING.md -> "Pull requests" carries the rules and a worked example.
+the branch's commit messages, which the PR keeps. The squash commit on main takes this title and
+description as its message. CONTRIBUTING.md -> "Pull requests" carries the rules and a worked
+example.
 For a security fix, coordinate privately first. See SECURITY.md.
 -->
 

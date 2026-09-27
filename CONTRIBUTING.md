@@ -70,9 +70,10 @@ Signed-off-by: Your Name <you@example.com>
 - **Every commit in a PR** needs a `Signed-off-by` that matches its author.
 - It is **separate from the GPG signature**. `-S` proves who committed. `-s` certifies your right
   to contribute. Use both: `git commit -S -s`.
-- **We squash-merge, so sign off every commit**. The DCO check verifies each branch commit, and
-  GitHub assembles the squash message from those commits. Editing the PR description does not sign
-  your commits.
+- **We squash-merge, and the squash commit's message is the PR title and description**, so write
+  the description for main's history. Sign off every branch commit all the same: the DCO check
+  verifies each one, and GitHub adds the merger's `Signed-off-by` to the squash commit. Editing the
+  PR description does not sign your commits.
 - **Let `-s` write the trailer.** It derives the name and email from your git identity, and the
   DCO check compares the trailer against the commit author. A hand-written line drifts.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit.
