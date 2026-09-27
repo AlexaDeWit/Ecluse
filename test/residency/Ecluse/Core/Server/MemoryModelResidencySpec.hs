@@ -54,15 +54,17 @@ checkMeasurement ecosystem shape size result = do
     (10 * residual) `shouldSatisfy` (<= retained)
     (1000 * retained) `shouldSatisfy` (<= envelopePermille ecosystem shape * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
-    -- A listing holds its encoded output and a strict copy of it, which the output charge covers.
-    when (shape == Shared) $ for_ (chargeFactors ecosystem) $ \factors ->
+    -- A listing's full read holds a shared entry, and its output holds the encoding and a strict copy.
+    when (shape == Shared) $ for_ (chargeFactors ecosystem) $ \factors -> do
+        (1000 * retained) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         (2000 * toInteger (compactBytes result)) `shouldSatisfy` (<= toInteger (cfOutputPermille factors) * toInteger size)
 
-{- A shared entry is what a listing's full read holds, so its gate is the memory gate's full-read
-charge: a representation that retains more fails here before it can outgrow the charge. -}
+{- A shared entry's gate is a regression limit above its measured maximum. Separately, it must stay
+within the memory gate's full-read charge, so a representation cannot outgrow what admission charges. -}
 envelopePermille :: Ecosystem -> Shape -> Integer
-envelopePermille ecosystem Shared | Just factors <- chargeFactors ecosystem = toInteger (cfFullReadPermille factors)
 envelopePermille Npm Typed = 750
+envelopePermille Npm Shared = 1750
+envelopePermille PyPI Shared = 3750
 envelopePermille _ shape = case shape of
     Wire -> 1250
     Raw -> 7000
