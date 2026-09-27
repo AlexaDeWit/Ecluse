@@ -53,9 +53,11 @@ therefore resolves the exact dependency closure the shipped artifact is built fr
 flake check fails CI whenever the committed freeze drifts from the set. The `index-state` in
 `cabal.project` caps the Hackage snapshot the solver may see. It only needs to contain every pinned
 version, so advance it with `task bump-index-state` only when cabal reports a pinned version as
-unknown. The one source pin held in two places is amazonka: `amazonkaRev` in `flake.nix`, and the
-`source-repository-package` tag in `cabal.project`. The `amazonka-lockstep` flake check keeps them
-equal.
+unknown. Two source pins are held in two places. amazonka's are `amazonkaRev` in `flake.nix` and
+its `source-repository-package` tag in `cabal.project`, and the `amazonka-lockstep` flake check
+keeps them equal. json-stream builds from a fork, and its are the `jsonStreamOverlay` rev in
+`flake.nix` and its `source-repository-package` tag. No check compares those two, so move them
+together.
 
 Move the pins deliberately: run `nix flake update` (or merge Renovate's weekly `flake.lock` refresh),
 then `task freeze`, and commit both together. When the weekly Renovate PR moves Haskell versions,
