@@ -133,8 +133,8 @@ captured large-package corpus. They express bounded policy headroom, not measure
 
 The boot sizes the allocation area and the heap ceiling together from the cgroup memory limit, and
 keeps every core the ladder resolved. A smaller nursery costs some collector time, where shedding a
-core would cost that core's throughput. With no memory limit, a configured heap ceiling takes the
-limit's place, so the nursery still fits. Since GHC 9.6 the nursery counts inside `-M`, so the
+core would cost that core's throughput. A configured heap ceiling tighter than the memory limit, or
+set with no memory limit, takes the limit's place, so the nursery still fits. Since GHC 9.6 the nursery counts inside `-M`, so the
 ceiling reserves only what the heap does not cover: native and kernel memory, and one allocation
 area of growth between collections. The collector keeps its default compaction threshold, 30% of
 `-M`, which switches to compaction before copying would overflow and above the live budget.
@@ -151,7 +151,7 @@ inviting a retry storm. Only one request at a time may run past the budget, unti
 shared work it waits on runs with it, so the overshoot stays within about one request and a pause
 never deadlocks.
 
-The per-byte charges are the retained-byte gate's measured maxima, rounded up: 4.5 bytes held per
+The per-byte charges sit at or above the retained-byte gate's measured maxima: 4.5 bytes held per
 source byte of a full read, and 1.6 for a listing's encoding with its strict copy. The residency
 tier in [`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating) fails when a
 package retains more, so a representation change cannot silently outgrow the charge. A charge above

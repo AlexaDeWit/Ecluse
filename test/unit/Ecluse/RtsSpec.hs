@@ -163,6 +163,19 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planAllocAreaBytes plan `shouldBe` (8 * mib, FromHeapCeiling)
         requiredRtsFlags wide plan `shouldBe` ["-A" <> show (8 * mib), "-M" <> show (1024 * mib)]
 
+    it "fits the nursery to a configured heap ceiling tighter than the cgroup limit" $ do
+        -- 16 CPU / 8 GiB with a 1 GiB ceiling: the limit would give 64 MiB each and a nursery the size of -M.
+        let wide = unpinned{rpCapabilities = 16, rpProcessors = 16}
+            cgroup = CgroupLimits{cgCpuCores = Just 16, cgMemoryMaxBytes = Just (8192 * mib)}
+            plan = resolveRuntimePlan noOverrides{roMaxHeapBytes = Just (1024 * mib)} cgroup wide
+        planAllocAreaBytes plan `shouldBe` (8 * mib, FromHeapCeiling)
+        planMaxHeapBytes plan `shouldBe` (Just (1024 * mib), FromConfig)
+
+    it "fits the nursery to the cgroup limit when a configured heap ceiling is looser" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 4, cgMemoryMaxBytes = Just (1024 * mib)}
+            plan = resolveRuntimePlan noOverrides{roMaxHeapBytes = Just (4096 * mib)} cgroup unpinned
+        planAllocAreaBytes plan `shouldBe` (32 * mib, FromCgroup)
+
     it "keeps the shipped area when nothing bounds the heap" $
         planAllocAreaBytes (resolveRuntimePlan noOverrides noCgroup unpinned) `shouldBe` (64 * mib, FromRts)
 

@@ -119,20 +119,21 @@ These are regression limits for authenticated fixtures, not a universal metadata
 | npm | Wire bytes | 1.001106275 | lodash | 1.25 | 24.9% |
 | npm | Raw `Value` | 6.479086061 | express | 7 | 8.0% |
 | npm | Typed projection | 0.584934090 | react | 0.75 | 28.2% |
-| npm | Shared cache entry | 4.428914846 | typescript | 4.5 | 1.6% |
+| npm | Shared cache entry | 4.036971423 | typescript | 4.5 | 11.5% |
 | PyPI | Wire bytes | 1.079997401 | requests | 1.25 | 15.7% |
 | PyPI | Raw `Value` | 4.120672117 | boto3 | 7 | 69.9% |
 | PyPI | Typed projection | 1.821159345 | requests | 2.25 | 23.5% |
-| PyPI | Shared cache entry | 4.367559137 | requests | 4.5 | 2.9% |
+| PyPI | Shared cache entry | 3.310826618 | requests | 4.5 | 35.9% |
 
 The npm typed gate changed with its compact representation. A shared cache entry is what a
 listing's full read holds, so its gate is the memory gate's full-read charge, 4.5 bytes per source
 byte, read from each ecosystem's adapter. The same test checks the listing output charge: twice a
 shared entry's encoded size, for the lazy encoding and its strict copy, must stay within the 1.6
-output charge. Raise a charge in the adapter, not here, when a representation outgrows it.
+output charge. That check covers the encoding, not the working set while the merged document is
+built. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
-For example, the TypeScript shared shape retains 69,507,208 heap bytes from 15,693,959 source bytes.
-Its re-encoded serving document is 10,363,033 bytes. That encoded size and the source probe's
+For example, the TypeScript shared shape retains 63,356,064 heap bytes from 15,693,959 source bytes.
+Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
 `compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
 
 The 48 calibration rows left -8,976 to 11,752 bytes above their warmed baselines after release.
@@ -149,7 +150,9 @@ These residency measurements do not determine the shared entry-count allowance.
 
 These rows came from [CI run 35534647795](https://github.com/AlexaDeWit/Ecluse/actions/runs/35534647795/job/106141404819).
 Its merge checkout `98a03cd9289041b5a2106f333f27ac32596c2aea` has the same source tree as the
-feature head above. The later digest-helper move changes no read or projection behaviour.
+feature head above. The two shared-entry rows and the TypeScript example come from
+[CI run 36354802667](https://github.com/AlexaDeWit/Ecluse/actions/runs/36354802667/job/108720336136)
+at `104cb3de`, after metadata documents began sharing their fixed field names. The later digest-helper move changes no read or projection behaviour.
 Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6.4900 and 6.4389.
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.

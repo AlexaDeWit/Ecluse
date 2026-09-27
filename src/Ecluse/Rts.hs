@@ -104,7 +104,7 @@ data Provenance
       FromCgroupMemory
     | -- | Capped at @coresCeiling@, with no cgroup limit of either kind in force.
       FromCoresCeiling
-    | -- | Fitted to a heap ceiling from config or @GHCRTS@, with no cgroup memory limit in force.
+    | -- | Fitted to a heap ceiling from config, or from @GHCRTS@ with no cgroup memory limit in force.
       FromHeapCeiling
     | -- | Left as the RTS resolved it (baked defaults plus any operator @GHCRTS@).
       FromRts
@@ -145,12 +145,12 @@ resolveRuntimePlan overrides cgroup rts =
     -- Every derived rung floors at one capability and ceilings at the visible processors.
     visible = clamp (1, rpProcessors rts)
 
-    -- The area fits the pod's memory limit, else a configured heap ceiling. Any live area other than
-    -- the shipped or the derived one is an operator's GHCRTS choice, and stands.
-    allocArea = case (cgMemoryMaxBytes cgroup, roMaxHeapBytes overrides <|> rpMaxHeapBytes rts) of
+    -- The area fits the tighter of the memory limit and a configured heap ceiling, or a GHCRTS -M with no
+    -- limit. Any live area other than the shipped or the derived one is an operator's choice, and stands.
+    allocArea = case (cgMemoryMaxBytes cgroup, roMaxHeapBytes overrides) of
+        (Just memMax, Just ceiling') | ceiling' < memMax -> fitted ceiling' FromHeapCeiling
         (Just memMax, _) -> fitted memMax FromCgroup
-        (Nothing, Just ceiling') -> fitted ceiling' FromHeapCeiling
-        (Nothing, Nothing) -> (rpAllocAreaBytes rts, FromRts)
+        (Nothing, configured) -> maybe (rpAllocAreaBytes rts, FromRts) (`fitted` FromHeapCeiling) (configured <|> rpMaxHeapBytes rts)
     fitted bound provenance
         | rpAllocAreaBytes rts `elem` [shippedAllocAreaBytes, derivedArea] = (derivedArea, provenance)
         | otherwise = (rpAllocAreaBytes rts, FromRts)
@@ -413,7 +413,7 @@ provenanceClause = \case
     FromCgroup -> "derived from the cgroup limit"
     FromCgroupMemory -> "bounded by the cgroup memory limit, no CPU quota set"
     FromCoresCeiling -> "no cgroup CPU or memory limit found, capped at runtime.coresCeiling"
-    FromHeapCeiling -> "fitted to the heap ceiling, no cgroup memory limit set"
+    FromHeapCeiling -> "fitted to the configured heap ceiling"
     FromRts -> "as the RTS resolved it"
 
 -- A byte count in MiB: whole when exact, else to one decimal place.

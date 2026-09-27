@@ -38,7 +38,7 @@ spec = describe "resolveMemoryPlan" $ do
         mpQueueMemoryMaxDepth plan `shouldBe` 50000
         mpDegradations plan `shouldBe` []
         mpOverrideViolations plan `shouldBe` []
-        lines' `shouldSatisfy` any (T.isInfixOf "built-in default; no heap-ceiling datapoint")
+        lines' `shouldSatisfy` any (T.isInfixOf "built-in default, no heap-ceiling datapoint")
 
     it "partitions a roomy ceiling into tenants whose sum stays within it" $ do
         let h = 4 * gib
@@ -49,6 +49,12 @@ spec = describe "resolveMemoryPlan" $ do
         mpRuntimeReserveBytes plan `shouldSatisfy` (> 0)
         mpAdmissionCapacity plan `shouldSatisfy` (>= 1)
         mpMaxResponseBytes plan `shouldBe` 134217728
+
+    it "keeps the cache bound at its 64 MiB floor on a 4 CPU / 1 GiB pod" $ do
+        -- 864 MiB of heap less a 4 x 32 MiB nursery leaves a 184 MiB live target, and 30% of it is 55.2 MiB.
+        let runtime = (planWith (Just (864 * mib))){erpAllocAreaBytes = 32 * mib}
+            (plan, _) = resolve bareCache bareLimits bareQueue Nothing runtime NoQueueTenant False
+        mpCacheAggregateBytes plan `shouldBe` 64 * mib
 
     it "keeps CPU admission independent of the heap ceiling" $ do
         for_ [64, 256, 512, 1024, 4096] $ \memoryMiB -> do

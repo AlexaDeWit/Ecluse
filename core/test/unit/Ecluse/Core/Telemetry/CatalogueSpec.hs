@@ -32,7 +32,7 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.serve.admission.memory.charged_bytes"
                             , "ecluse.serve.admission.memory.brake_level"
                             , "ecluse.serve.admission.memory.waiting"
-                            , "ecluse.serve.admission.memory.paused"
+                            , "ecluse.serve.admission.memory.paused_now"
                             , "ecluse.serve.admission.memory.queued"
                             , "ecluse.serve.admission.memory.shed"
                             , "ecluse.serve.admission.memory.pauses"

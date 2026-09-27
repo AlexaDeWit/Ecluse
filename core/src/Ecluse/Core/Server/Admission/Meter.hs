@@ -7,8 +7,8 @@
 A request takes a small entry step before its CPU slot and is shed, as a value, when that step does
 not fit within the admission wait. A started request pays for what it reads one step at a time, and
 pauses instead of failing when the budget is spent. One ticket at a time holds the overdraw token
-until its request ends, so the budget holds within one request's worth. Work another request waits
-on, a shared fetch or render, moves with the priority of that request, so a pause never deadlocks.
+until its request ends. Work that request waits on, a shared fetch or render, may overdraw on the
+same token, so the overshoot stays near one request with its shared work, and a pause never deadlocks.
 -}
 module Ecluse.Core.Server.Admission.Meter (
     -- * The meter

@@ -459,16 +459,17 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
-The per-byte charges are the largest the residency tests measure on the captured package corpus,
-rounded up: what a full read holds, and a response's encoding with its copy. The tests fail when a
-package would hold more, so the charges stay above the measured retention.
+The per-byte charges sit at or above the largest the residency tests measure on the captured
+package corpus: what a full read holds, and a response's encoding with its copy. The tests fail
+when a package would hold more, so the charges stay above the measured retention.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until
-memory frees, and fails only if the pause outlives the 50-second cap on a served upstream exchange.
-Only one request at a time may run past the budget. It keeps that right until it ends, so the
-budget holds within one request's worth. Work that request waits on, a public fetch or a render
-another request leads, runs past the budget with it, so a pause always leaves a request that
+memory frees. A pause during an upstream read fails when it outlives the 50-second cap on that
+exchange, and a pause before a render fails at the 60-second request timeout. Only one request at a
+time may run past the budget, and it keeps that right until it ends. Work that request waits on, a
+public fetch or a render another request leads, runs past the budget with it. So the overshoot stays
+near one request and the shared work it waits on, and a pause always leaves a request that
 finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
 artifact relay pay nothing.
 
@@ -477,9 +478,9 @@ tenants and the idle process. That is the live data at which the copying collect
 normally. A sampler reads the collector and the cgroup ten times a second and moves the budget:
 
 - It halves the budget when the collector takes more than half the CPU over the last second, when
-  live data after a major collection passes 80% of the point where the heap overflows, or when the
-  cgroup's memory use, less reclaimable page cache, passes 90% of its limit. It halves at most once
-  a second, so a sustained surge still drives the budget down, one step each second.
+  live data after a major collection passes 80% of the point where copying would overflow the heap,
+  or when the cgroup's memory use, less reclaimable page cache, passes 90% of its limit. It halves
+  at most once a second, so a sustained surge still drives the budget down, one step each second.
 - After each major collection it measures the live data outside the charges: the cache, the idle
   process and any error in the charges. The budget may grow until the charges and that remainder
   reach a third of the heap the nursery leaves, and it drops at once when a larger remainder lowers
@@ -499,7 +500,7 @@ only the collector's share moves it.
 | `ecluse.serve.admission.memory.charged_bytes` | What the requests in flight hold against it |
 | `ecluse.serve.admission.memory.brake_level` | `0` calm, `1` holding, `2` braking |
 | `ecluse.serve.admission.memory.waiting` | New requests waiting at the memory gate now |
-| `ecluse.serve.admission.memory.paused` | Started requests paused for memory now |
+| `ecluse.serve.admission.memory.paused_now` | Started requests paused for memory now |
 | `ecluse.serve.admission.memory.queued` | Requests that waited for their entry step |
 | `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
 | `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
@@ -699,8 +700,8 @@ the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, o
 
 **Size a proxy pod from measured process usage as well as the RTS numbers.** The boot sizes the
 per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
-whole MiB from 4 to 64. With no cgroup memory limit, a heap ceiling you set takes the limit's place,
-so the nursery still fits. The heap ceiling (`-M`) is the limit less an eighth of it (at least
+whole MiB from 4 to 64. A heap ceiling you set that is tighter than the memory limit, or set with
+no memory limit, takes the limit's place, so the nursery still fits. The heap ceiling (`-M`) is the limit less an eighth of it (at least
 32 MiB) for memory outside the heap, and less one allocation area for the growth between
 collections. The nursery sits inside that ceiling. An allocation area you set through `GHCRTS`
 stands, unless it equals the shipped `-A64m`. The binary also ships `-T` for the memory sampler,

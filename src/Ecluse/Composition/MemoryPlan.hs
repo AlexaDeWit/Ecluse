@@ -162,7 +162,7 @@ fallbackPlan inputs =
 
 fallbackOr :: Text -> Maybe Int -> Int -> (Int, Text)
 fallbackOr name explicit fallback =
-    resolveSized ("memory plan: " <> name) explicit fallback "built-in default; no heap-ceiling datapoint"
+    resolveSized ("memory plan: " <> name) explicit fallback "built-in default, no heap-ceiling datapoint"
 
 publishTenantOf :: TenantDemands -> ShedOutcomes -> Maybe PublishTenant
 publishTenantOf d o = PublishTenant{ptAggregateBytes = soPublishFinal o} <$ guard (tdPublishConfigured d)

@@ -205,8 +205,8 @@ Once admitted, a listing pays for its full reads chunk by chunk and for its resp
 builds it. A request that joins another's public fetch or render pays nothing for it, and an
 assembled hit or a conditional `304` pays for its reads alone. A public artifact decision reads one
 selected release, so its entry step is its whole charge. A started request that runs out of budget
-pauses at its next charge, keeping its CPU slot, and fails only if the pause outlives the serve-path
-cap. Both gates stay held through metadata evaluation and the listing response. Public artifact
+pauses at its next charge, keeping its CPU slot. A pause during an upstream read ends at the
+serve-path cap, and a pause before a render at the request timeout. Both gates stay held through metadata evaluation and the listing response. Public artifact
 requests release both after the metadata decision, before streaming the admitted artifact.
 
 Each gate has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait

@@ -49,7 +49,7 @@ data MetricName
       MemoryAdmissionBrakeLevel
     | -- | @ecluse.serve.admission.memory.waiting@: new requests waiting at the memory gate (observable gauge).
       MemoryAdmissionWaiting
-    | -- | @ecluse.serve.admission.memory.paused@: started requests paused for memory (observable gauge).
+    | -- | @ecluse.serve.admission.memory.paused_now@: started requests paused for memory (observable gauge).
       MemoryAdmissionPausedNow
     | -- | @ecluse.serve.admission.memory.queued@: requests that waited for their entry step (counter).
       MemoryAdmissionQueued
@@ -140,7 +140,7 @@ metricName = \case
     MemoryAdmissionChargedBytes -> "ecluse.serve.admission.memory.charged_bytes"
     MemoryAdmissionBrakeLevel -> "ecluse.serve.admission.memory.brake_level"
     MemoryAdmissionWaiting -> "ecluse.serve.admission.memory.waiting"
-    MemoryAdmissionPausedNow -> "ecluse.serve.admission.memory.paused"
+    MemoryAdmissionPausedNow -> "ecluse.serve.admission.memory.paused_now"
     MemoryAdmissionQueued -> "ecluse.serve.admission.memory.queued"
     MemoryAdmissionShed -> "ecluse.serve.admission.memory.shed"
     MemoryAdmissionPauses -> "ecluse.serve.admission.memory.pauses"
