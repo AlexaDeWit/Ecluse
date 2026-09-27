@@ -17,22 +17,26 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath)
+import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
@@ -55,6 +59,13 @@ spec = describe "npmFields" $ do
             let limits = defaultLimits{maxMetadataBytes = BS.length bytes}
             (actual, _) <- expectRight (projectNpmManifest limits (cpPackage package) bytes)
             Projected actual `shouldBe` expected
+
+    forM_ corpusPackages $ \package ->
+        it ("reproduces the recorded outputs of the complete capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            actual <- expectRight (captureOutputs (corpusRead bytes) package bytes)
+            recorded <- recordedOutputs package
+            actual `shouldBe` recorded
 
     it "preserves installation maps and skips unknown top-level, release and publisher fields" $ do
         (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)
@@ -455,6 +466,22 @@ nestedRelease mode = do
 
 nestedValue :: Value
 nestedValue = object ["nested" .= object ["deeper" .= True]]
+
+-- The full and selected reads of one capture, with limits wide enough for its whole body.
+corpusRead :: ByteString -> CorpusRead
+corpusRead bytes =
+    CorpusRead
+        { crProject = \package -> fmap (second (fst npmCached)) . projectNpmManifest limits package
+        , crOrigin = "https://registry.npmjs.org"
+        , crAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
+        , crMetadata = adapterMetadata npmAdapter
+        , crVersionReads = \package raw document key ->
+            let version = mkVersion Npm key
+             in [("selected", rendered (projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
+        , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionList (RegistryResponse 200 (BS.length raw) raw)))]
+        }
+  where
+    limits = defaultLimits{maxMetadataBytes = BS.length bytes}
 
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())
 extractFields levels mode source =

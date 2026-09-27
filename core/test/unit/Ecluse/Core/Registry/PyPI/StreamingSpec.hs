@@ -10,18 +10,26 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
+import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), pypiFields)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Corpus (cpPath, pypiCorpusPackages)
+import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -31,6 +39,27 @@ spec = do
     positionSpec
     chunkSpec
     firstContainerSpec
+    corpusSpec
+
+corpusSpec :: Spec
+corpusSpec = describe "the corpus captures" $
+    for_ pypiCorpusPackages $ \package ->
+        it ("reproduces the recorded outputs of the complete capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            actual <- expectRight (captureOutputs corpusRead package bytes)
+            recorded <- recordedOutputs package
+            actual `shouldBe` recorded
+
+corpusRead :: CorpusRead
+corpusRead =
+    CorpusRead
+        { crProject = \package -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits package
+        , crOrigin = "https://pypi.org/simple"
+        , crAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
+        , crMetadata = adapterMetadata pypiAdapter
+        , crVersionReads = \package raw _ key -> [("selected", rendered (projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]
+        , crDocumentReads = \_ _ -> []
+        }
 
 retainedSpec :: Spec
 retainedSpec = describe "supported PyPI fields" $ do

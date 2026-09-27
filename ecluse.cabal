@@ -643,6 +643,7 @@ library ecluse-test-support
     Ecluse.Test.Corpus
     Ecluse.Test.Corpus.Advisories
     Ecluse.Test.Corpus.Npm
+    Ecluse.Test.Corpus.Outputs
     Ecluse.Test.Corpus.PyPI
     Ecluse.Test.Credential
     Ecluse.Test.Cve
