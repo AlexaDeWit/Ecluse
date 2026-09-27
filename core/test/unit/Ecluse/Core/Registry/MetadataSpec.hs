@@ -23,7 +23,7 @@ import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
  )
 import Ecluse.Core.Registry.Metadata (
-    Manifest (manifestBodyBytes),
+    Manifest (manifestBodyBytes, manifestDigest),
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
@@ -40,7 +40,7 @@ import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadata
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, thingName, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
-import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Snapshot (digestOf, versionDocOf, versionReadOf)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | Exercise error preservation and projection through the adapters' shared read step.
@@ -72,6 +72,7 @@ rawReadersSpec = describe "raw metadata readers" $
                     readIORef events `shouldReturn` concat (replicate 2 ([("fetch", name)] <> [("decode", name) | isRight expected]))
                     when (isRight expected) $ do
                         fmap manifestBodyBytes full `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
+                        fmap manifestDigest full `shouldBe` Right (digestOf (toStrict (bodyFor ecosystem)))
                         fmap vrBodyBytes single `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
   where
     bodyFor PyPI = "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"thing\",\"files\":[]}"

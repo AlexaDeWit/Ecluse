@@ -27,18 +27,18 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), isAuthorisationFailure)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Exchange (boundedJsonFetchWith, formThen)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataFetchError)
+import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -59,52 +59,43 @@ newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name = do
-    result <- fetchNpmStream tracing origin name FullRead
+    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name FullRead))
     pure $ do
-        streamed <- result
+        (streamed, digest) <- result
         (info, raw) <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
         pure
             Manifest
                 { manifestInfo = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin) info
                 , manifestRaw = fst npmCached raw
                 , manifestBodyBytes = streamBytes streamed
-                , manifestDigest = streamDigest streamed
+                , manifestDigest = digest
                 }
 
-fetchNpmStream :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO (Either MetadataError (StreamResult NpmProjection))
-fetchNpmStream tracing origin name mode =
-    spanMetadataFetch tracing name fetch <&> \case
-        Left fault -> Left (metadataFetchError fault)
-        Right (404, _) -> Left MetadataAbsent
-        Right (code, result)
-            | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
-            | Just parsed <- result -> Right parsed
-            | otherwise -> Left (MetadataHttpFailure code)
+fetchNpmBody :: TracingPort -> OriginClient -> PackageName -> (IO ByteString -> IO (Either LimitError r)) -> IO (Either MetadataError r)
+fetchNpmBody tracing origin name consume =
+    metadataResponse
+        <$> spanMetadataFetch
+            tracing
+            name
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
+
+decodeNpm :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
+decodeNpm tracing origin name mode =
+    spanMetadataDecode tracing name
+        . readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (npmFields (maxNestingDepth limits) mode) (collectField limits name) emptyProjection
   where
     limits = ocLimits origin
-    fetch =
-        formThen
-            FetchUrlUnformable
-            ( boundedJsonFetchWith
-                (spanMetadataDecode tracing name)
-                (ocManager origin)
-                (MetadataBodyLimit (maxMetadataBytes limits))
-                (npmFields (maxNestingDepth limits) mode)
-                (collectField limits name)
-                emptyProjection
-            )
-            (metadataRequest (originBaseUrl origin) (ocToken origin) Full name)
 
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version = do
-    result <- fetchNpmStream tracing origin name (SelectedRead (renderVersion version))
+    result <- fetchNpmBody tracing origin name (decodeNpm tracing origin name (SelectedRead (renderVersion version)))
     pure $ do
         streamed <- result
         projected <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
         let selected = selectNpmRead version (streamBytes streamed) projected
         pure selected{vrVersion = vrVersion selected >>= locationCheckedDoc (originBaseUrl origin)}
 
--- | Finish a streamed source while preserving its original identity and typed error classification.
+-- | Finish a streamed source, keeping its typed error classification.
 projectNpmStream :: Limits -> PackageName -> Text -> StreamResult NpmProjection -> Either MetadataError (PackageInfo, Value)
 projectNpmStream limits name base streamed =
     first (streamError limits) (streamValue streamed) >>= finishProjection limits name (authorPointer base name)

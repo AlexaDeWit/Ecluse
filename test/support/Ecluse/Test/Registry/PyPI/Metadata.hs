@@ -37,7 +37,7 @@ projectPyPIVersion limits name version body = do
     (info, _) <- projectPyPIStream limits name streamed
     pure (Map.lookup (renderVersion version) (infoVersions info))
 
--- | Exercise explicit chunk boundaries with the production byte counter and source digest.
+-- | Exercise explicit chunk boundaries with the production byte counter.
 projectPyPIChunks :: Limits -> PackageName -> PyPIRead -> [ByteString] -> Either MetadataError (StreamResult PyPIProjection)
 projectPyPIChunks limits name mode =
     first MetadataBoundExceeded

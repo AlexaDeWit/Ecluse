@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Incremental registry extraction with a complete-source digest and bounded input chunks.
+{- | Incremental registry extraction within a decompressed body ceiling.
 With json-stream 0.4.6.1 and text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
 See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
 -}
@@ -17,7 +17,6 @@ module Ecluse.Core.Registry.JsonStream (
     retainedArrayWith,
 ) where
 
-import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -27,43 +26,41 @@ import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Security (BodyLimit, LimitError (BodyTooLarge), bodyLimitBytes)
-import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 
--- | Extracted data and identity of the complete decompressed source, including ignored fields.
+-- | Extracted data and the size of the complete decompressed source, including ignored fields.
 data StreamResult a = StreamResult
     { streamValue :: Either ParseError a
     , streamBytes :: Int
-    , streamDigest :: ContentDigest
     }
     deriving stock (Eq, Show)
 
 -- | Drain successful bodies even when extraction ends early. An empty chunk ends the response.
 readJsonStream :: (Monad m) => BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonStream bound parser step initial readChunk = go 0 hashInit initial (J.runParser parser)
+readJsonStream bound parser step initial readChunk = go 0 initial (J.runParser parser)
   where
-    go !seen !digest !acc output = case output of
+    go !seen !acc output = case output of
         J.ParseYield value next -> case step acc value of
             Left fault -> pure (Left fault)
-            Right updated -> go seen digest updated next
-        J.ParseFailed err -> pure (Right (StreamResult (Left (ParseError (toText err))) seen (digestFromContext digest)))
+            Right updated -> go seen updated next
+        J.ParseFailed err -> pure (Right (StreamResult (Left (ParseError (toText err))) seen))
         _ -> do
             chunk <- readChunk
             if BS.null chunk
-                then pure . Right $ StreamResult (finish acc output) seen (digestFromContext digest)
+                then pure . Right $ StreamResult (finish acc output) seen
                 else
                     if BS.length chunk > bodyLimitBytes bound - seen
                         then pure (Left (BodyTooLarge bound))
-                        else feed (seen + BS.length chunk) (hashUpdate digest chunk) acc output chunk
-    feed seen digest acc output chunk = case output of
+                        else feed (seen + BS.length chunk) acc output chunk
+    feed seen acc output chunk = case output of
         J.ParseYield value next -> case step acc value of
             Left fault -> pure (Left fault)
-            Right updated -> feed seen digest updated next chunk
+            Right updated -> feed seen updated next chunk
         J.ParseNeedData next
             | not (BS.null chunk) ->
                 let (piece, remaining) = BS.splitAt 32768 chunk
-                 in feed seen digest acc (next piece) remaining
-        J.ParseDone _ -> go seen digest acc (J.ParseDone BS.empty)
-        _ -> go seen digest acc output
+                 in feed seen acc (next piece) remaining
+        J.ParseDone _ -> go seen acc (J.ParseDone BS.empty)
+        _ -> go seen acc output
     finish acc = \case
         J.ParseDone _ -> Right acc
         _ -> Left (ParseError "incomplete registry JSON")

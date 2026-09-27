@@ -36,6 +36,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
 
+import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmStream, selectNpmRead)
@@ -293,46 +294,48 @@ readNpmSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString
 readNpmSource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
     BufferedCompact -> buffered $ \_ body ->
-        first show (parseJsonChunks bound parser step emptyProjection [body]) >>= fullResult
-    StreamedFull -> fmap (first show) (readJsonStream bound parser step emptyProjection next) <&> (>>= fullResult)
-    StreamedSelected -> fmap (first show) (readJsonStream bound (npmFields (maxNestingDepth limits) (SelectedRead (renderVersion version))) step emptyProjection next) <&> (>>= selectedResult)
-    StreamedVersions -> fmap (first show) (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList next) <&> (>>= versionsResult)
+        first show (parseJsonChunks bound parser step emptyProjection [body]) >>= fullResult . (,digestOf body)
+    StreamedFull -> digested (readJsonStream bound parser step emptyProjection) fullResult
+    StreamedSelected -> digested (readJsonStream bound (npmFields (maxNestingDepth limits) (SelectedRead (renderVersion version))) step emptyProjection) selectedResult
+    StreamedVersions -> digested (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList) versionsResult
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
     parser = npmFields (maxNestingDepth limits) FullRead
     step = collectField limits name
     buffered projectBody = boundedRead bound next <&> (first show >=> uncurry projectBody)
-    fullResult streamed = do
+    digested consume result = digestingRead consume next <&> (first show >=> result)
+    fullResult (streamed, digest) = do
         (info, raw) <- first show (projectNpmStream limits name "https://registry.npmjs.org" streamed)
-        pure (HeldShared (CacheEntry info (fst npmCached raw) (streamBytes streamed) (streamDigest streamed)), streamBytes streamed, streamDigest streamed)
-    selectedResult streamed = do
+        pure (HeldShared (CacheEntry info (fst npmCached raw) (streamBytes streamed) digest), streamBytes streamed, digest)
+    selectedResult (streamed, digest) = do
         projected <- first show (projectNpmStream limits name "https://registry.npmjs.org" streamed)
         let selected = selectNpmRead version (streamBytes streamed) projected
-        pure (HeldSelected selected, streamBytes streamed, streamDigest streamed)
-    versionsResult streamed = do
+        pure (HeldSelected selected, streamBytes streamed, digest)
+    versionsResult (streamed, digest) = do
         selected <- first show (streamValue streamed >>= finishVersionList)
-        pure (HeldVersions selected, streamBytes streamed, streamDigest streamed)
+        pure (HeldVersions selected, streamBytes streamed, digest)
 
 readPyPISource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readPyPISource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (parseJsonChunks bound parser step (PyPIProjection.emptyProjection name) [body]) >>= fullResult)
-    StreamedFull -> fmap (first show) (readJsonStream bound parser step (PyPIProjection.emptyProjection name) next) <&> (>>= fullResult)
+    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (parseJsonChunks bound parser step (PyPIProjection.emptyProjection name) [body]) >>= fullResult . (,digestOf body))
+    StreamedFull -> digested (readJsonStream bound parser step (PyPIProjection.emptyProjection name)) fullResult
     StreamedSelected ->
         let selectedMode = PyPIStream.SelectedRead name (renderVersion version)
-         in fmap (first show) (readJsonStream bound (PyPIStream.pypiFields (maxNestingDepth limits) selectedMode) (PyPIProjection.collectField limits selectedMode) (PyPIProjection.emptyProjection name) next) <&> (>>= selectedResult)
+         in digested (readJsonStream bound (PyPIStream.pypiFields (maxNestingDepth limits) selectedMode) (PyPIProjection.collectField limits selectedMode) (PyPIProjection.emptyProjection name)) selectedResult
     StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
     parser = PyPIStream.pypiFields (maxNestingDepth limits) PyPIStream.FullRead
     step = PyPIProjection.collectField limits PyPIStream.FullRead
-    fullResult streamed = do
+    digested consume result = digestingRead consume next <&> (first show >=> result)
+    fullResult (streamed, digest) = do
         (info, document) <- first show (projectPyPIStream limits name streamed)
-        pure (HeldShared (CacheEntry info (fst pypiSimpleCached document) (streamBytes streamed) (streamDigest streamed)), streamBytes streamed, streamDigest streamed)
-    selectedResult streamed = do
+        pure (HeldShared (CacheEntry info (fst pypiSimpleCached document) (streamBytes streamed) digest), streamBytes streamed, digest)
+    selectedResult (streamed, digest) = do
         (info, _) <- first show (projectPyPIStream limits name streamed)
         let selected = (untaggedRead (Map.lookup (renderVersion version) (infoVersions info))){vrBodyBytes = streamBytes streamed}
-        pure (HeldSelected selected, streamBytes streamed, streamDigest streamed)
+        pure (HeldSelected selected, streamBytes streamed, digest)
 
 readLegacySource :: Limits -> PackageName -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readLegacySource limits name next = boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next <&> (first show >=> projectBody)

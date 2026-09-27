@@ -23,7 +23,8 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    ParseError (ParseError, parseErrorMessage),
+    BodyOutcome (SuccessBody, UnreadStatus),
+    ParseError (parseErrorMessage),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
     isSuccessStatus,
@@ -73,7 +74,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), VersionListResponse (..), fetchVersionList)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), fetchVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -177,9 +178,9 @@ listPackages :: ProtocolRead -> IO (Either StoreFault [PackageName])
 listPackages store =
     formThen unformableFault fetch (listingRequest (prListing store) origin) <&> \case
         Left fault -> Left fault
-        Right (status, result)
-            | status == 200 -> first (parseFault "package listing") (maybe (Left (ParseError "missing package listing")) streamValue result)
-            | otherwise -> Left (listingUnavailable status)
+        Right (SuccessBody 200 streamed) -> first (parseFault "package listing") (streamValue streamed)
+        Right (SuccessBody status _) -> Left (listingUnavailable status)
+        Right (UnreadStatus status) -> Left (listingUnavailable status)
   where
     origin = prOrigin store
     fetch request =
@@ -208,10 +209,9 @@ listVersions :: ProtocolRead -> PackageName -> IO (Either StoreFault [StoredVers
 listVersions store name =
     formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
-        Right response
-            | versionListStatus response == 404 -> Right []
-            | isSuccessStatus (versionListStatus response) -> first (parseFault "version list") (map stored <$> versionListResult response)
-            | otherwise -> Left (readFault "version list" (versionListStatus response))
+        Right (SuccessBody _ listed) -> first (parseFault "version list") (map stored <$> listed)
+        Right (UnreadStatus 404) -> Right []
+        Right (UnreadStatus status) -> Left (readFault "version list" status)
   where
     origin = prOrigin store
     codec = prCodec store

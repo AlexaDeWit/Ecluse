@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Full and selected Simple-index reads share incremental extraction and source identity.
+-- | Full and selected Simple-index reads share incremental extraction. Only full reads hash the source.
 module Ecluse.Core.Registry.PyPI.Metadata (
     newPyPIMetadataReads,
     fetchPyPIManifest,
@@ -13,18 +13,18 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), isAuthorisationFailure)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (boundedJsonFetchWith, formThen)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataFetchError)
+import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -45,45 +45,36 @@ newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchPyPIManifest tracing origin name = do
-    result <- fetchPyPIStream tracing origin name FullRead
+    result <- fetchPyPIBody tracing origin name (digestingRead (decodePyPI tracing origin name FullRead))
     pure $ do
-        streamed <- result
+        (streamed, digest) <- result
         (info, document) <- projectPyPIStream (ocLimits origin) name streamed
         pure
             Manifest
                 { manifestInfo = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin) info
                 , manifestRaw = fst pypiSimpleCached document
                 , manifestBodyBytes = streamBytes streamed
-                , manifestDigest = streamDigest streamed
+                , manifestDigest = digest
                 }
 
-fetchPyPIStream :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO (Either MetadataError (StreamResult PyPIProjection))
-fetchPyPIStream tracing origin name mode =
-    spanMetadataFetch tracing name fetch <&> \case
-        Left fault -> Left (metadataFetchError fault)
-        Right (404, _) -> Left MetadataAbsent
-        Right (code, result)
-            | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
-            | Just streamed <- result -> Right streamed
-            | otherwise -> Left (MetadataHttpFailure code)
+fetchPyPIBody :: TracingPort -> OriginClient -> PackageName -> (IO ByteString -> IO (Either LimitError r)) -> IO (Either MetadataError r)
+fetchPyPIBody tracing origin name consume =
+    metadataResponse
+        <$> spanMetadataFetch
+            tracing
+            name
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
+
+decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
+decodePyPI tracing origin name mode =
+    spanMetadataDecode tracing name
+        . readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (pypiFields (maxNestingDepth limits) mode) (collectField limits mode) (emptyProjection name)
   where
     limits = ocLimits origin
-    fetch =
-        formThen
-            FetchUrlUnformable
-            ( boundedJsonFetchWith
-                (spanMetadataDecode tracing name)
-                (ocManager origin)
-                (MetadataBodyLimit (maxMetadataBytes limits))
-                (pypiFields (maxNestingDepth limits) mode)
-                (collectField limits mode)
-                (emptyProjection name)
-            )
-            (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version = do
-    result <- fetchPyPIStream tracing origin name (SelectedRead name (renderVersion version))
+    result <- fetchPyPIBody tracing origin name (decodePyPI tracing origin name (SelectedRead name (renderVersion version)))
     pure $ do
         streamed <- result
         (info, _) <- projectPyPIStream (ocLimits origin) name streamed

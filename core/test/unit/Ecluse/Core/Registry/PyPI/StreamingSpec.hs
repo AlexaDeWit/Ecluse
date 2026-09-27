@@ -22,7 +22,6 @@ import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex)
-import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -65,7 +64,6 @@ retainedSpec = describe "supported PyPI fields" $ do
         map fst (simpleFiles document) `shouldBe` [ArrayEntry 0]
         fieldAt "project-status" (simpleValue document) `shouldBe` Nothing
         streamBytes streamed `shouldBe` BS.length body
-        streamDigest streamed `shouldBe` digestOf body
 
 selectedFieldSpec :: Spec
 selectedFieldSpec = describe "selected file fields" $ do
@@ -93,7 +91,6 @@ selectedFieldSpec = describe "selected file fields" $ do
                 split <- expectRight (projectPyPIChunks defaultLimits requestsName selected [left, right])
                 projectPyPIStream defaultLimits requestsName split `shouldBe` projectPyPIStream defaultLimits requestsName streamed
                 streamBytes split `shouldBe` BS.length body
-                streamDigest split `shouldBe` digestOf body
 
     it "keeps every selected wheel and source distribution after skipped and malformed files" $ do
         let file name = rawObject [("hashes", object []), ("url", String ("https://files.pythonhosted.org/" <> name)), ("filename", String name)]
@@ -155,7 +152,7 @@ positionSpec = describe "original file positions" $
         map fst (simpleFiles document) `shouldBe` [ArrayEntry 4, ArrayEntry 5]
 
 chunkSpec :: Spec
-chunkSpec = describe "chunk-independent projection and source identity" $ do
+chunkSpec = describe "chunk-independent projection and source size" $ do
     it "handles split UTF-8, escapes and numbers at every byte boundary" $ do
         let file = withFileKeys [("yanked", String "retiré \"quoted\" \\ newline\n"), ("size", Number 123456)] (simpleFile filename)
             body = encodeStrict (simpleIndex "requests" [file])
@@ -165,19 +162,11 @@ chunkSpec = describe "chunk-independent projection and source identity" $ do
             streamed <- expectRight (projectPyPIChunks defaultLimits requestsName FullRead [left, right])
             projectPyPIStream defaultLimits requestsName streamed `shouldBe` Right expected
             streamBytes streamed `shouldBe` BS.length body
-            streamDigest streamed `shouldBe` digestOf body
 
     it "joins files before the reported name and ignores omitted deeply nested values" $ do
         let body = "{\"ignored\":" <> BS.replicate 100 91 <> "0" <> BS.replicate 100 93 <> ",\"files\":[" <> encodeStrict (simpleFile filename) <> "],\"name\":\"requests\"}"
         (info, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
         Map.keys (infoVersions info) `shouldBe` ["1"]
-
-    it "hashes omitted data even when retained output stays equal" $ do
-        let body suffix = "{\"name\":\"requests\",\"ignored\":\"" <> suffix <> "\"}"
-        firstRead <- expectRight (projectPyPIChunks defaultLimits requestsName FullRead [body "one"])
-        secondRead <- expectRight (projectPyPIChunks defaultLimits requestsName FullRead [body "two"])
-        projectPyPIStream defaultLimits requestsName firstRead `shouldBe` projectPyPIStream defaultLimits requestsName secondRead
-        streamDigest firstRead `shouldNotBe` streamDigest secondRead
 
 firstContainerSpec :: Spec
 firstContainerSpec = describe "first declared containers" $ do

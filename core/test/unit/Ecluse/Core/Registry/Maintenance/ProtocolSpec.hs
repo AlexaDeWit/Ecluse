@@ -131,19 +131,18 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
             listBucketOf handle "l" `shouldReturn` Right [unscopedNpm "leftpad"]
             listBucketOf handle "r" `shouldReturn` Right [unscopedNpm "rightpad"]
 
-    forM_ [status404, status408, status429, status503] $ \listingStatus ->
+    -- A 201 carries a parseable listing: only a 200 listing is read.
+    forM_ [(status201, RetryFutile), (status404, RetryFutile), (status408, RetryWorthwhile), (status429, RetryWorthwhile), (status503, RetryWorthwhile)] $ \(listingStatus, retry) ->
         it ("preserves HTTP " <> show (statusCode listingStatus) <> " in a listing fault without replaying the read") $
             withStore True (answerAll listingStatus "{}") $ \handle stub -> do
                 outcome <- listWholeStore handle
-                let unsupported = listingStatus == status404
-                    diagnostic =
+                let diagnostic =
                         "the store answered the package listing with HTTP "
                             <> show (statusCode listingStatus)
-                            <> if unsupported then ": it serves no enumeration this sweep can walk" else ""
+                            <> if listingStatus == status404 then ": it serves no enumeration this sweep can walk" else ""
                 fmap (tfDetail . faultTransport) (leftToMaybe outcome) `shouldBe` Just diagnostic
                 fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportProtocol
-                fmap faultRetry (leftToMaybe outcome)
-                    `shouldBe` Just (if unsupported then RetryFutile else RetryWorthwhile)
+                fmap faultRetry (leftToMaybe outcome) `shouldBe` Just retry
                 calls stub `shouldReturn` [("GET", "/-/all")]
 
     it "reads a package's versions through the presence probe, all served" $
