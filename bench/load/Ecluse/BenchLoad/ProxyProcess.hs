@@ -84,8 +84,8 @@ import System.Process.Typed (
     unsafeProcessHandle,
     waitExitCode,
  )
-import UnliftIO (bracket, onException, timeout, try, tryIO)
-import UnliftIO.Async (Async, async, cancel, link, waitCatch)
+import UnliftIO (bracket, onException, try, tryIO)
+import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.BootLines (bootMessages)
@@ -386,7 +386,9 @@ bootDrained manager attempts port command = do
     err <- newIORef emptyCaptured
     drains <- traverse startDrain [("stdout", getStdout process, out), ("stderr", getStderr process, err)]
     let drained = Drained process out err drains
-    pollUntil attempts 100_000 settled (probe drained) >>= \case
+    -- A drain failure or an interrupt during the wait must not leave the process behind.
+    readiness <- pollUntil attempts 100_000 settled (probe drained) `onException` stopDrained drained
+    case readiness of
         Ready -> pure drained
         ExitedDuringBoot code -> failBoot drained ("exited during boot with " <> show code)
         Booting -> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
@@ -412,7 +414,9 @@ bootDrained manager attempts port command = do
 data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
 
 {- Stop the process and wait for the drains to reach the end of its output. SIGTERM starts the
-proxy's graceful drain, and a process still alive after thirty seconds is killed. -}
+proxy's graceful drain, and a process still alive after thirty seconds is killed. The waits poll
+rather than use 'timeout', because a cleanup handler runs uninterruptibly masked and a timeout
+could not fire there. -}
 stopDrained :: Drained -> IO (ExitCode, Bool)
 stopDrained drained = do
     let process = drProcess drained
@@ -421,14 +425,14 @@ stopDrained drained = do
             Just code -> pure (code, False)
             Nothing -> do
                 terminateProcess (unsafeProcessHandle process)
-                timeout 30_000_000 (waitExitCode process) >>= \case
+                pollUntil 300 100_000 isJust (getExitCode process) >>= \case
                     Just code -> pure (code, False)
                     Nothing -> do
                         getPid (unsafeProcessHandle process) >>= traverse_ (signalProcess sigKILL)
                         code <- waitExitCode process
                         pure (code, True)
     for_ (drDrains drained) $ \worker -> do
-        finished <- timeout 10_000_000 (waitCatch worker)
+        finished <- pollUntil 100 100_000 isJust (poll worker)
         when (isNothing finished) (cancel worker)
     -- The process has exited, so this only releases what typed-process holds for it.
     stopProcess process
@@ -455,7 +459,8 @@ data Captured = Captured
 emptyCaptured :: Captured
 emptyCaptured = Captured [] 0 mempty
 
--- Copies at most the head's remaining room and one tail's worth per chunk.
+-- Per chunk, copies the head's remaining room at most, and for the tail appends up to 8 KiB and
+-- then copies 4 KiB, about 12 KiB in all.
 capture :: ByteString -> Captured -> Captured
 capture chunk held =
     Captured

@@ -9,8 +9,12 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
+import System.Directory (doesDirectoryExist)
+import System.FilePath ((</>))
 import System.Process.Typed (proc)
 import Test.Hspec
+import UnliftIO.Async (cancel, withAsync)
+import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
@@ -19,6 +23,8 @@ import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Rts (readIfExists)
+import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
 
 spec :: Spec
@@ -34,6 +40,18 @@ bootSpec = describe "bootDrained" $ do
         port <- freePort
         void (bootDrained manager 5 port (proc "/bin/sh" ["-c", "echo boot line; echo boot fault >&2; exec sleep 60"]))
             `shouldThrow` bootFailure ["did not become ready", "boot line", "boot fault"]
+    it "stops the process when the readiness wait is interrupted" $
+        withSystemTempDirectory "ecluse-boot-interrupt" $ \dir -> do
+            manager <- newManager defaultManagerSettings
+            port <- freePort
+            let pidFile = dir </> "pid"
+                command = proc "/bin/sh" ["-c", "echo $$ > \"$0\"; exec sleep 60", pidFile]
+            pid <- withAsync (bootDrained manager 600 port command) $ \booting -> do
+                started <- pollUntil 50 100_000 isJust ((readMaybe . toString . T.strip =<<) <$> readIfExists pidFile)
+                cancel booting
+                pure (started :: Maybe Int)
+            pid `shouldSatisfy` isJust
+            traverse (\p -> doesDirectoryExist ("/proc/" <> show p)) pid `shouldReturn` Just False
     it "fails with the tails of a process that exits during boot" $ do
         manager <- newManager defaultManagerSettings
         port <- freePort
