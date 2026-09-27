@@ -8,6 +8,7 @@ import Prelude hiding (get)
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
+import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (
     defaultManagerSettings,
     httpLbs,
@@ -22,9 +23,12 @@ import Network.Wai (Application, Response, ResponseReceived, responseLBS, respon
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
+import UnliftIO.Exception (tryAny)
 
+import Ecluse.Core.Security (Limits (progressFloor), ProgressFloor, defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamBody (NoBody, StreamBody), pumpBody, withUpstreamWhen)
+import Ecluse.Test.Wai (pacedBody)
 
 spec :: Spec
 spec = do
@@ -109,6 +113,15 @@ spec = do
             responseBody resp `shouldBe` ""
             headerOf hETag resp `shouldBe` Just "\"v1\""
 
+    describe "withUpstreamWhen -- the progress floor, with no cap" $
+        it "aborts a relay whose upstream stops mid-body within about one window" $ do
+            progress <- either (fail . show) pure (mkProgressFloor 30 0.5 1024)
+            started <- getMonotonicTime
+            outcome <- tryAny (throughProxy (pacedBody [(0, "partial"), (20_000_000, "rest")]) (relayProxy progress StreamBody statusIsSuccessful methodGet))
+            finished <- getMonotonicTime
+            outcome `shouldSatisfy` isLeft
+            (finished - started) `shouldSatisfy` (\seconds -> seconds >= 0.5 && seconds < 10)
+
     describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
@@ -123,12 +136,13 @@ type ProxyApp = HTTP.Manager -> Int -> Application
 {- | The proxy under test: relay the upstream when its status passes @accept@, and answer the
 fall-through marker when the helper commits nothing, so a miss is observable as a body.
 -}
-relayProxy :: UpstreamBody -> (Status -> Bool) -> Method -> ProxyApp
-relayProxy body accept method manager upPort _req respond = do
+relayProxy :: ProgressFloor -> UpstreamBody -> (Status -> Bool) -> Method -> ProxyApp
+relayProxy progress body accept method manager upPort _req respond = do
     upstream <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
     outcome <-
         withUpstreamWhen
             manager
+            progress
             upstream{HTTP.method = method}
             body
             accept
@@ -140,15 +154,15 @@ relayProxy body accept method manager upPort _req respond = do
 
 -- A hit is observable as the relayed upstream body.
 conditionalProxy :: ProxyApp
-conditionalProxy = relayProxy StreamBody statusIsSuccessful methodGet
+conditionalProxy = relayProxy (progressFloor defaultLimits) StreamBody statusIsSuccessful methodGet
 
 -- The artifact relay's own accept predicate: a 2xx or a 304.
 notModifiedProxy :: ProxyApp
-notModifiedProxy = relayProxy StreamBody (\status -> statusIsSuccessful status || isNotModified status) methodGet
+notModifiedProxy = relayProxy (progressFloor defaultLimits) StreamBody (\status -> statusIsSuccessful status || isNotModified status) methodGet
 
 -- The probe: a HEAD upstream, answered with no body, so a hit is observable as the headers alone.
 probeProxy :: ProxyApp
-probeProxy = relayProxy NoBody statusIsSuccessful methodHead
+probeProxy = relayProxy (progressFloor defaultLimits) NoBody statusIsSuccessful methodHead
 
 -- | One request through the proxy under test, standing in front of this upstream.
 throughProxy :: Application -> ProxyApp -> IO (HTTP.Response LByteString)

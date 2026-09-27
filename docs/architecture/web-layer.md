@@ -102,7 +102,9 @@ version collision before assembly.
 ## Streaming and resource lifetime
 
 The proxy pulls from upstream only as fast as the client drains: constant memory regardless of
-artifact size, with backpressure for free.
+artifact size, with backpressure for free. Only the time spent waiting on upstream counts toward the
+progress floor (`limits.progressWindow`, `limits.minProgressBytes`), so a slow client never trips it.
+An upstream that falls below it aborts the stream, and the client sees an incomplete download.
 
 The proxy streams artifact responses without hashing their bodies. Integrity on this path depends
 on the client checking the preserved metadata hashes. npm documents integrity checking on cache

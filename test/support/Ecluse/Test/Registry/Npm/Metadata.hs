@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 
@@ -57,5 +57,5 @@ fetchMetadataFormBounded ::
 fetchMetadataFormBounded origin form name =
     formThen
         FetchUrlUnformable
-        (boundedFetch (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+        (boundedFetch (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (metadataRequest (originBaseUrl origin) (ocToken origin) form name)

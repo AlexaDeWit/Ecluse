@@ -13,9 +13,12 @@ import Ecluse.Composition.BootError (
         DredgerChunkPauseBeneathFloor,
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
+        MinProgressBytesNotPositive,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
         MissingAdapter,
+        ProgressWindowNotBelowServeCap,
+        ProgressWindowNotPositive,
         PublicationTargetOnMountEndpoint,
         PublicationTargetOnPublicUpstream,
         PublicationTargetWithoutPublish,
@@ -38,7 +41,7 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
+    ValidatedPlan (vpMirrorStores, vpMounts, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
     VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
     vetBoot,
@@ -55,6 +58,7 @@ import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
@@ -174,6 +178,10 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         plan <- expectVetted MirrorWriter codeArtifactEnvVars
         Map.keys (vpMirrorStores plan) `shouldBe` []
 
+    it "clears the progress floor the configured window and byte count make under the serve-path cap" $ do
+        plan <- expectVetted MirrorWriter (withProgressFloor "5" "4096" staticEnvVars)
+        Right (vpProgressFloor plan) `shouldBe` mkProgressFloor (fromIntegral serveCapSeconds) 5 4096
+
     it "clears a writing role a mirror target this build cannot sweep, and says nothing of it" $ do
         config <- expectConfig staticEnvVars Nothing
         let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
@@ -225,6 +233,20 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorPruner (beneathThePauseFloor codeArtifactEnvVars)
             `shouldReturn` [DredgerChunkPauseBeneathFloor 1 minimumChunkPause]
 
+    forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe ("the progress floor under " <> show role) $ do
+        it "refuses a window that is not below the serve-path cap" $
+            forM_ [serveCapSeconds, serveCapSeconds + 1] $ \window ->
+                refusalsFor role (withProgressFloor (show window) "1048576" codeArtifactEnvVars)
+                    `shouldReturn` [ProgressWindowNotBelowServeCap window serveCapSeconds]
+
+        it "reports a zero window and a zero byte count together" $
+            refusalsFor role (withProgressFloor "0" "0" codeArtifactEnvVars)
+                `shouldReturn` [ProgressWindowNotPositive 0, MinProgressBytesNotPositive 0]
+
+        it "refuses a negative window and a negative byte count" $
+            refusalsFor role (withProgressFloor "-5" "-1" codeArtifactEnvVars)
+                `shouldReturn` [ProgressWindowNotPositive (-5), MinProgressBytesNotPositive (-1)]
+
     it "clears a writing role that same pause, because no writing role sweeps" $
         refusalsFor MirrorWriter (beneathThePauseFloor codeArtifactEnvVars) `shouldReturn` []
 
@@ -255,6 +277,10 @@ publishingAtTag tag url env =
 
 staticPublishEnv :: [(String, String)]
 staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token" publishingEnv
+
+withProgressFloor :: String -> String -> [(String, String)] -> [(String, String)]
+withProgressFloor window minBytes =
+    overrideEnv "ECLUSE_LIMITS__MIN_PROGRESS_BYTES" minBytes . overrideEnv "ECLUSE_LIMITS__PROGRESS_WINDOW" window
 
 beneathThePauseFloor :: [(String, String)] -> [(String, String)]
 beneathThePauseFloor = overrideEnv "ECLUSE_DREDGER__CHUNK_PAUSE" "1"

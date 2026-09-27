@@ -7,7 +7,7 @@ The composition root builds only from 'ValidatedPlan'. Unvetted settings remain 
 -}
 module Ecluse.Composition.Validate (
     -- * The validate phase
-    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpSettings),
+    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpProgressFloor, vpSettings),
     vetBoot,
 
     -- * What it clears
@@ -25,8 +25,11 @@ import Ecluse.Composition.BootError (
         DredgerQuotaScopeConflict,
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
+        MinProgressBytesNotPositive,
         MirrorTargetWithoutPublish,
         MissingAdapter,
+        ProgressWindowNotBelowServeCap,
+        ProgressWindowNotPositive,
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge
     ),
@@ -37,13 +40,14 @@ import Ecluse.Composition.Endpoints (
     vetEndpoints,
  )
 import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
-import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, rule)
+import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (
     AdvisoriesSettings (advUrl),
-    AppConfig (cfgAdvisories, cfgDredger, cfgMounts, cfgServer),
+    AppConfig (cfgAdvisories, cfgDredger, cfgLimits, cfgMounts, cfgServer),
     Config (configApp, configMounts),
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
+    LimitsSettings (limMinProgressBytes, limProgressWindow),
     MirrorTarget (mtUrl),
     Mount,
     MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
@@ -62,6 +66,12 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Security (
+    ProgressFloor,
+    ProgressFloorError (MinBytesNotPositive, WindowNotBelowServeCap, WindowNotPositive),
+    mkProgressFloor,
+    serveCapSeconds,
+ )
 import Ecluse.Core.Security.Egress (registryUrlText)
 
 {- | What the pure boot pass cleared: the mounts a role may serve, the endpoints it may use, and
@@ -76,6 +86,8 @@ data ValidatedPlan = ValidatedPlan
     -- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass clears one.
     , vpPrivateCaches :: Map Ecosystem (Maybe StoreBackend, ClearedBackend)
     -- ^ Private caches cleared for this role with their own credential plans.
+    , vpProgressFloor :: ProgressFloor
+    -- ^ The upstream progress floor the configured window and byte count make under the serve-path cap.
     , vpSettings :: AppConfig
     {- ^ The settings no rule vets. The mounts it carries are the raw declarations, and 'vpMounts'
     holds the vetted ones the runtime reads.
@@ -108,6 +120,7 @@ vetBoot config =
         <*> vetEndpoints (cfgMounts app)
         <*> vetStoreBackends adapterFor (configMounts config)
         <*> vetPrivateCaches adapterFor (cfgMounts app) (configMounts config)
+        <*> vetProgressFloor app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
         <* vetQuotaOverrides config
@@ -115,16 +128,29 @@ vetBoot config =
   where
     app = configApp config
 
-    assemble mounts policies endpoints backends caches =
+    assemble mounts policies endpoints backends caches progress =
         ValidatedPlan
             { vpMounts = mounts
             , vpPublications = Map.intersectionWith cleared (vePublicationTargets endpoints) policies
             , vpMirrorStores = backends
             , vpPrivateCaches = caches
+            , vpProgressFloor = progress
             , vpSettings = app
             }
 
     cleared target (firstParty, staticToken) = VettedPublication target firstParty staticToken
+
+-- Every role dials upstreams, so every role refuses a floor the window and byte count cannot make.
+vetProgressFloor :: AppConfig -> Vet ProgressFloor
+vetProgressFloor app =
+    decided (first (map refusal . toList) (mkProgressFloor (fromIntegral serveCapSeconds) (fromIntegral window) minBytes))
+  where
+    window = limProgressWindow (cfgLimits app)
+    minBytes = limMinProgressBytes (cfgLimits app)
+    refusal = \case
+        WindowNotPositive -> ProgressWindowNotPositive window
+        WindowNotBelowServeCap -> ProgressWindowNotBelowServeCap window serveCapSeconds
+        MinBytesNotPositive -> MinProgressBytesNotPositive minBytes
 
 {- The floor under the sweep's own pace. Deletion is permanent, so both store roles refuse a
 pause that would sweep faster than an operator can stop it, and every other role reads none. -}

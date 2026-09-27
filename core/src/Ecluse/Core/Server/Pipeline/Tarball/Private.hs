@@ -41,6 +41,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Security (
     HostPort,
+    Limits (progressFloor),
     Origin (TrustedOrigin),
     artifactAuthorityHonoured,
     hostPortAddress,
@@ -94,7 +95,7 @@ streamPrivateArtifact ctx token =
         PrivateRequest req ->
             liftIO $
                 maybe (PrivateMissed MissAbsent) (uncurry PrivateAnswered . snd)
-                    <$> relayUpstreamWhen (arMode ctx) (srPrivateManager (arRuntime ctx)) (shaped req) acceptPrivate relayUnjudged privateResponder
+                    <$> relayUpstreamWhen (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivate relayUnjudged privateResponder
   where
     replies = arReplies ctx
     respond = arRespond ctx

@@ -368,6 +368,10 @@ data LimitsSettings = LimitsSettings
     {- ^ The mirror worker's per-artifact fetch byte cap. Computed from the memory
     plan's mirror-artifact tenant when unset, a configured value winning.
     -}
+    , limProgressWindow :: Int
+    -- ^ Seconds of waiting within which an upstream body must deliver 'limMinProgressBytes'.
+    , limMinProgressBytes :: Int
+    -- ^ Body bytes an upstream exchange must receive within each progress window.
     }
     deriving stock (Eq, Show)
 

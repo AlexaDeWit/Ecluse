@@ -287,6 +287,17 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"cache\":{\"ttl\":\"" <> spelling <> "\"}}")))
                 `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
+    it "ships a floor of 1 MiB per 10-second progress window, each overridable from the environment" $ do
+        let floorOf = fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits)
+        floorOf (expectAppConfig [] Nothing) `shouldReturn` (10, 1048576)
+        floorOf (expectAppConfig [("ECLUSE_LIMITS__PROGRESS_WINDOW", "5"), ("ECLUSE_LIMITS__MIN_PROGRESS_BYTES", "4096")] Nothing)
+            `shouldReturn` (5, 4096)
+
+    -- The boot vet refuses a zero or negative value with every other refusal, so the load keeps it.
+    it "loads a zero or negative progress window and byte count for the boot vet to refuse" $
+        fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits) (expectAppConfig [] (Just "{\"limits\":{\"progressWindow\":0,\"minProgressBytes\":-1}}"))
+            `shouldReturn` (0, -1)
+
     it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"

@@ -62,6 +62,7 @@ import Ecluse.Composition.Types (
 import Ecluse.Config (AppConfig (cfgAdvisories), Config (configApp), advisoryAgeLines, advisoryEpssLines, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
+import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor, serveCapSeconds)
 import Ecluse.Pilot.Plan (epssAttemptLine)
 import Ecluse.Rts (
     CgroupLimits (..),
@@ -104,6 +105,12 @@ spec = describe "resolveBootPlan" $ do
                 <> advisoryEpssLines config
                 <> [epssAttemptLine (cfgAdvisories (configApp config))]
         bpWarnings plan `shouldBe` []
+
+    it "holds every upstream exchange to the configured progress floor" $ do
+        let envVars = overrideEnv "ECLUSE_LIMITS__MIN_PROGRESS_BYTES" "4096" (overrideEnv "ECLUSE_LIMITS__PROGRESS_WINDOW" "5" staticEnvVars)
+        config <- expectConfig envVars Nothing
+        plan <- expectPlan envVars Nothing config noCeiling
+        Right (progressFloor (bpLimits plan)) `shouldBe` mkProgressFloor (fromIntegral serveCapSeconds) 5 4096
 
     it "reports the EPSS feed every compile attempts to the role that compiles, and to no other" $ do
         -- check-config vets under the Pilot's role, so this is the line it prints.

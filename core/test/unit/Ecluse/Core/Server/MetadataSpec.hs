@@ -16,7 +16,7 @@ import Test.Hspec
 import UnliftIO (concurrently, mapConcurrently)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
@@ -39,13 +39,13 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (defaultLimits, mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), newMetadataCache, newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
+import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion, withinRequestCap)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
@@ -260,6 +260,16 @@ spec = do
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
 
+    describe "withinRequestCap" $
+        it "fails a read that outlives the serve-path cap with the transport timeout" $ do
+            -- A 0.5 s cap, far below the 20 s read.
+            progress <- either (fail . show) pure (mkProgressFloor 0.5 0.25 1)
+            let stalled = threadDelay 20_000_000 $> Left MetadataAbsent
+                client = privateMetadataClient (withinRequestCap progress (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (\_ _ -> stalled) (\_ _ _ -> stalled) perCaller))
+            full <- fetchFullManifest client name
+            single <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            map timeoutCause [void full, void single] `shouldBe` replicate 2 (Just TransportTimeout)
+
     describe "metadata read handles -- failure propagation" $ do
         for_ httpFailures $ \(refusal, expectedCause) ->
             it ("records and preserves " <> show refusal <> " on every read") $ do
@@ -462,3 +472,8 @@ details who rawVer =
             , artYanked = False
             , artProvenance = Nothing
             }
+
+timeoutCause :: Either MetadataError () -> Maybe TransportCause
+timeoutCause = \case
+    Left (MetadataFetch (FetchTransport fault)) -> Just (tfCause fault)
+    _ -> Nothing

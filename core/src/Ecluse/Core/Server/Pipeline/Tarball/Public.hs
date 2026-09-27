@@ -47,7 +47,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
-import Ecluse.Core.Security (Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
+import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Admission.Material (MaterialWork (SelectedMaterial), withMaterialAdmission)
@@ -209,7 +209,7 @@ streamPublicArtifact ctx artifact observeVerdict
     | otherwise = case publicRequest of
         Left _ -> respond (internalArtifactError replies)
         Right req ->
-            relayUpstreamWhen (arMode ctx) (srPublicManager (arRuntime ctx)) req (const True) relayJudged (relayResponder replies respond) >>= \case
+            relayUpstreamWhen (arMode ctx) (srPublicManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) req (const True) relayJudged (relayResponder replies respond) >>= \case
                 Just (verdict, received) -> do
                     observeVerdict verdict
                     mirrorOnAdmit ctx artifact verdict

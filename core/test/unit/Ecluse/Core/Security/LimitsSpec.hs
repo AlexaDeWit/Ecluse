@@ -31,10 +31,18 @@ import Ecluse.Core.Security (
     BodyLimit (..),
     LimitError (..),
     Limits (..),
+    ProgressFloorError (..),
     boundedRead,
     checkArtifactCount,
     checkVersionCountOf,
     defaultLimits,
+    floorMinBytes,
+    floorServeCapMicros,
+    floorWindowMicros,
+    mkProgressFloor,
+    requestTimeoutSeconds,
+    serveCapMarginSeconds,
+    serveCapSeconds,
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
@@ -59,6 +67,7 @@ runBounded limits = evalState (boundedRead (MetadataBodyLimit (maxMetadataBytes 
 spec :: Spec
 spec = do
     defaultLimitsSpec
+    progressFloorSpec
     boundedReadSpec
     versionCountSpec
     artifactCountSpec
@@ -78,6 +87,31 @@ defaultLimitsSpec =
             , maxNestingDepth defaultLimits
             )
                 `shouldBe` (128 * 1024 * 1024, 1_000_000, 1_000_000, 64)
+
+progressFloorSpec :: Spec
+progressFloorSpec = describe "mkProgressFloor" $ do
+    let parts progress = (floorWindowMicros progress, floorMinBytes progress, floorServeCapMicros progress)
+
+    it "keeps the window, the byte count, and the serve-path cap" $
+        parts <$> mkProgressFloor 50 10 1048576 `shouldBe` Right (10_000_000, 1048576, 50_000_000)
+
+    it "keeps a sub-second window exact" $
+        parts <$> mkProgressFloor 1.5 0.25 64 `shouldBe` Right (250_000, 64, 1_500_000)
+
+    it "refuses a window that is not positive or not below the serve-path cap" $ do
+        forM_ [0, -1] $ \window ->
+            mkProgressFloor 50 window 1 `shouldBe` Left (WindowNotPositive :| [])
+        forM_ [50, 51] $ \window ->
+            mkProgressFloor 50 window 1 `shouldBe` Left (WindowNotBelowServeCap :| [])
+
+    it "reports a byte count that is not positive beside a bad window" $
+        mkProgressFloor 50 0 0 `shouldBe` Left (WindowNotPositive :| [MinBytesNotPositive])
+
+    it "leaves the serve-path cap the request timeout less a fixed margin, whatever the window" $
+        (serveCapSeconds, requestTimeoutSeconds - serveCapMarginSeconds) `shouldBe` (50, 50)
+
+    it "ships 1 MiB per 10-second window under the 50-second serve-path cap by default" $
+        parts (progressFloor defaultLimits) `shouldBe` (10_000_000, 1048576, 50_000_000)
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do
