@@ -185,7 +185,7 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
--- The request's ticket pays for each full-read chunk at the ecosystem's factor. Zero passes through as the end of a read.
+-- The ticket pays for each full-read chunk at the ecosystem's factor. Zero passes through as a read's end.
 fullReadCharge :: PackumentDeps -> MemoryTicket -> Int -> IO ()
 fullReadCharge deps ticket = chargeRead ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))
 

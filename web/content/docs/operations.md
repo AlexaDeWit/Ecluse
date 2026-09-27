@@ -480,8 +480,8 @@ the collector and the cgroup ten times a second and moves the budget:
   toward that ceiling.
 
 The `memory plan: transient budget` boot line names the starting budget, its live target, the
-deductions, the floor and the live ceiling. Without a heap ceiling the budget starts at 1 GiB, and only the
-collector's share moves it.
+deductions, the floor and the live ceiling. Without a heap ceiling the budget starts at 1 GiB, and
+only the collector's share moves it.
 
 | Metric | What it reports |
 |---|---|
