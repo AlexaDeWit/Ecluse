@@ -6,18 +6,42 @@
 module Ecluse.BenchLoad.ProxyProcessSpec (spec) where
 
 import Data.List (lookup)
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import System.Process.Typed (proc)
 import Test.Hspec
 
+import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
-import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), proxyEnvironment, proxySettings)
+import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), bootDrained, proxyEnvironment, proxySettings)
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Test.Wai (freePort)
 
 spec :: Spec
-spec = describe "proxyEnvironment" $ do
+spec = do
+    environmentSpec
+    bootSpec
+
+bootSpec :: Spec
+bootSpec = describe "bootDrained" $ do
+    let bootFailure expected (BenchLoadError message) = all (`T.isInfixOf` message) expected
+    it "stops a process that never answers and fails with the tails of both streams" $ do
+        manager <- newManager defaultManagerSettings
+        port <- freePort
+        void (bootDrained manager 5 port (proc "/bin/sh" ["-c", "echo boot line; echo boot fault >&2; exec sleep 60"]))
+            `shouldThrow` bootFailure ["did not become ready", "boot line", "boot fault"]
+    it "fails with the tails of a process that exits during boot" $ do
+        manager <- newManager defaultManagerSettings
+        port <- freePort
+        void (bootDrained manager 50 port (proc "/bin/sh" ["-c", "echo last words; echo refused >&2; exit 2"]))
+            `shouldThrow` bootFailure ["exited during boot", "last words", "refused"]
+
+environmentSpec :: Spec
+environmentSpec = describe "proxyEnvironment" $ do
     let settings = (proxySettings Npm 0){psCacheMaxEntries = Just 3, psServeMaxInFlight = Just 12}
         base =
             [ ("PATH", "/bin")
@@ -44,7 +68,7 @@ spec = describe "proxyEnvironment" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
     it "names only keys the proxy's configuration loads, and a boot plan the serve role accepts" $
-        for_ [Npm, PyPI] $ \ecosystem -> do
+        for_ [(ecosystem, shape) | ecosystem <- [Npm, PyPI], shape <- [Limited 2 (512 * 1024 * 1024), Unlimited]] $ \(ecosystem, shape) -> do
             let everyPin =
                     (proxySettings ecosystem 60)
                         { psCacheMaxEntries = Just 64
@@ -55,7 +79,7 @@ spec = describe "proxyEnvironment" $ do
                         , psPrivateConnections = Just 64
                         , psClock = Just (UTCTime (fromGregorian 2026 9 22) 0)
                         }
-                environment = proxyEnvironment everyPin (Limited 2 (512 * 1024 * 1024)) 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+                environment = proxyEnvironment everyPin shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
             case loadConfig environment Nothing of
                 Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
                 Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)

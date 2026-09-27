@@ -6,7 +6,7 @@
 under 'serveProxyFlag', configured through @ECLUSE_*@ variables as a deployment would be. Under a
 pod shape it runs in its own child of the cgroup named by @BENCH_LOAD_CGROUP@, so the limit bounds
 it alone. The cgroup outlives the process, so an OOM kill stays readable after it. The proxy logs
-into pipes the harness drains, so log pages are charged to the harness, not to the limit.
+into pipes the harness drains into bounded memory, so no log page is charged to the limit.
 -}
 module Ecluse.BenchLoad.ProxyProcess (
     -- * Configuration
@@ -31,6 +31,10 @@ module Ecluse.BenchLoad.ProxyProcess (
     -- * Stopping
     ProxyEnd (..),
     stopProxy,
+
+    -- * A drained process
+    Drained,
+    bootDrained,
 ) where
 
 import Control.Concurrent (modifyMVar)
@@ -58,13 +62,13 @@ import Network.HTTP.Types (statusCode)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectory)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.FilePath ((</>))
-import System.IO (SeekMode (SeekFromEnd), hFileSize, hSeek)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (getPid, terminateProcess)
 import System.Process.Typed (
     ExitCode (ExitFailure, ExitSuccess),
     Process,
+    ProcessConfig,
     createPipe,
     getExitCode,
     getStderr,
@@ -81,7 +85,7 @@ import System.Process.Typed (
     waitExitCode,
  )
 import UnliftIO (bracket, onException, timeout, try, tryIO)
-import UnliftIO.Async (Async, async, cancel, waitCatch)
+import UnliftIO.Async (Async, async, cancel, link, waitCatch)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.BootLines (bootMessages)
@@ -131,10 +135,7 @@ data ProxyProcess = ProxyProcess
     { ppPort :: Int
     , ppControlPort :: Int
     , ppScrapePort :: Int
-    , ppProcess :: Process () Handle Handle
-    , ppDrains :: [Async ()]
-    , ppLogHead :: IORef ByteString
-    , ppDirectory :: FilePath
+    , ppDrained :: Drained
     , ppCgroup :: Maybe FilePath
     , ppManager :: Manager
     , ppBootLines :: [Text]
@@ -228,24 +229,15 @@ launch settings shape dir cgroup publicPort privatePort = do
             Nothing -> proc self [serveProxyFlag]
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
             Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
-    process <- startProcess (setEnv environment (setStdin nullStream (setStdout createPipe (setStderr createPipe command))))
-    logHead <- newIORef mempty
-    drains <-
-        sequence
-            [ async (drain (getStdout process) (dir </> "proxy.log") (Just logHead))
-            , async (drain (getStderr process) (dir </> "proxy.err") Nothing)
-            ]
     manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
+    drained <- bootDrained manager 1200 port (setEnv environment command)
     endVar <- newMVar Nothing
-    let booting =
+    let booted =
             ProxyProcess
                 { ppPort = port
                 , ppControlPort = controlPort
                 , ppScrapePort = scrapePort
-                , ppProcess = process
-                , ppDrains = drains
-                , ppLogHead = logHead
-                , ppDirectory = dir
+                , ppDrained = drained
                 , ppCgroup = cgroup
                 , ppManager = manager
                 , ppBootLines = []
@@ -253,13 +245,12 @@ launch settings shape dir cgroup publicPort privatePort = do
                 , ppIdleCgroupBytes = Nothing
                 , ppEnd = endVar
                 }
-    (`onException` stopProxy booting) $ do
-        awaitReady booting
+    (`onException` stopProxy booted) $ do
         -- The boot logged its plan before it listened. Give the drain a moment to catch up.
-        bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines <$> readIORef logHead)
-        idle <- proxySnapshot booting MajorCollection
-        idleCgroup <- proxyCgroupNow booting
-        pure booting{ppBootLines = bootLines, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
+        bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines . capturedHead <$> readIORef (drStdout drained))
+        idle <- proxySnapshot booted MajorCollection
+        idleCgroup <- proxyCgroupNow booted
+        pure booted{ppBootLines = bootLines, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
 
 -- Three distinct free ports: the proxy, its RTS control listener, and its scrape listener.
 distinctPorts :: IO (Int, Int, Int)
@@ -309,30 +300,6 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
               ("ECLUSE_RUNTIME__CORES", show cores) <$ guard (shape == Unlimited)
             ]
 
-data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
-
-awaitReady :: ProxyProcess -> IO ()
-awaitReady proxy =
-    pollUntil 1200 100_000 settled probe >>= \case
-        Ready -> pass
-        ExitedDuringBoot code -> failBoot ("exited during boot with " <> show code)
-        Booting -> failBoot "did not become ready within two minutes"
-  where
-    settled = \case
-        Booting -> False
-        _ -> True
-    probe =
-        getExitCode (ppProcess proxy) >>= \case
-            Just code -> pure (ExitedDuringBoot code)
-            Nothing -> do
-                answered <- getOk proxy (ppPort proxy) "/readyz"
-                pure (if isJust answered then Ready else Booting)
-    failBoot reason = do
-        whenJustM (getExitCode (ppProcess proxy)) (const (finishDrains proxy))
-        errText <- tailOf (ppDirectory proxy </> "proxy.err") 4_096
-        logText <- tailOf (ppDirectory proxy </> "proxy.log") 4_096
-        benchFail ("bench-load: the proxy " <> reason <> "\nstderr:\n" <> errText <> "\nlog tail:\n" <> logText)
-
 -- | RTS counters from the proxy after the given collection. 'Nothing' once it has gone.
 proxySnapshot :: ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)
 proxySnapshot proxy collection = do
@@ -348,9 +315,12 @@ proxyScrape :: ProxyProcess -> IO (Maybe [Sample])
 proxyScrape proxy = fmap (parseExposition . decodeUtf8) <$> getOk proxy (ppScrapePort proxy) "/metrics"
 
 getOk :: ProxyProcess -> Int -> String -> IO (Maybe LByteString)
-getOk proxy port path = do
+getOk = getFrom . ppManager
+
+getFrom :: Manager -> Int -> String -> IO (Maybe LByteString)
+getFrom manager port path = do
     request <- parseRequest ("http://127.0.0.1:" <> show port <> path)
-    outcome <- try (httpLbs request (ppManager proxy))
+    outcome <- try (httpLbs request manager)
     pure $ case outcome of
         Left (_ :: HttpException) -> Nothing
         Right response
@@ -381,22 +351,10 @@ stopProxy proxy = modifyMVar (ppEnd proxy) $ \case
 
 terminate :: ProxyProcess -> IO ProxyEnd
 terminate proxy = do
-    let process = ppProcess proxy
-    alreadyExited <- getExitCode process
-    (code, harnessKilled) <- case alreadyExited of
-        Just code -> pure (code, False)
-        Nothing -> do
-            terminateProcess (unsafeProcessHandle process)
-            timeout 30_000_000 (waitExitCode process) >>= \case
-                Just code -> pure (code, False)
-                Nothing -> do
-                    getPid (unsafeProcessHandle process) >>= traverse_ (signalProcess sigKILL)
-                    code <- waitExitCode process
-                    pure (code, True)
-    finishDrains proxy
-    -- The process has exited, so this only releases what typed-process holds for it.
-    stopProcess process
-    errText <- tailOf (ppDirectory proxy </> "proxy.err") 4_096
+    let drained = ppDrained proxy
+    alreadyExited <- isJust <$> getExitCode (drProcess drained)
+    (code, harnessKilled) <- stopDrained drained
+    errText <- capturedTailText (drStderr drained)
     reading <- proxyCgroupNow proxy
     let oomKills = maybe 0 (counter "oom_kill" . crMemoryEvents) reading
         status = case code of
@@ -405,33 +363,112 @@ terminate proxy = do
     pure
         ProxyEnd
             { peEnding = classifyEnding status errText oomKills harnessKilled
-            , peExitedEarly = isJust alreadyExited
+            , peExitedEarly = alreadyExited
             , peStderrTail = errText
             , peCgroup = reading
             }
 
--- Copy a pipe into a file until the proxy closes it, keeping the first mebibyte when asked:
--- the boot lines precede any served request.
-drain :: Handle -> FilePath -> Maybe (IORef ByteString) -> IO ()
-drain source path logHead = withFile path WriteMode copy
+-- | A process whose stdout and stderr the harness drains, keeping each stream's head and tail.
+data Drained = Drained
+    { drProcess :: Process () Handle Handle
+    , drStdout :: IORef Captured
+    , drStderr :: IORef Captured
+    , drDrains :: [Async ()]
+    }
+
+{- | Start a process on drained pipes and wait, 100 ms per attempt, for @/readyz@ on the port. A
+process that exits or never answers is stopped, and the harness fails with both streams' tails.
+-}
+bootDrained :: Manager -> Int -> Int -> ProcessConfig () () () -> IO Drained
+bootDrained manager attempts port command = do
+    process <- startProcess (setStdin nullStream (setStdout createPipe (setStderr createPipe command)))
+    out <- newIORef emptyCaptured
+    err <- newIORef emptyCaptured
+    drains <- traverse startDrain [("stdout", getStdout process, out), ("stderr", getStderr process, err)]
+    let drained = Drained process out err drains
+    pollUntil attempts 100_000 settled (probe drained) >>= \case
+        Ready -> pure drained
+        ExitedDuringBoot code -> failBoot drained ("exited during boot with " <> show code)
+        Booting -> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
   where
-    copy sink = do
+    -- A failed read would leave the pipe full and stall the proxy, so it fails the scenario at once.
+    startDrain (stream, source, captured) = do
+        worker <- async (drain stream source captured)
+        link worker
+        pure worker
+    settled = \case
+        Booting -> False
+        _ -> True
+    probe drained =
+        getExitCode (drProcess drained) >>= \case
+            Just code -> pure (ExitedDuringBoot code)
+            Nothing -> bool Booting Ready . isJust <$> getFrom manager port "/readyz"
+    failBoot drained reason = do
+        void (stopDrained drained)
+        errText <- capturedTailText (drStderr drained)
+        logText <- capturedTailText (drStdout drained)
+        benchFail ("bench-load: the proxy " <> reason <> "\nstderr:\n" <> errText <> "\nlog tail:\n" <> logText)
+
+data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
+
+{- Stop the process and wait for the drains to reach the end of its output. SIGTERM starts the
+proxy's graceful drain, and a process still alive after thirty seconds is killed. -}
+stopDrained :: Drained -> IO (ExitCode, Bool)
+stopDrained drained = do
+    let process = drProcess drained
+    stopped <-
+        getExitCode process >>= \case
+            Just code -> pure (code, False)
+            Nothing -> do
+                terminateProcess (unsafeProcessHandle process)
+                timeout 30_000_000 (waitExitCode process) >>= \case
+                    Just code -> pure (code, False)
+                    Nothing -> do
+                        getPid (unsafeProcessHandle process) >>= traverse_ (signalProcess sigKILL)
+                        code <- waitExitCode process
+                        pure (code, True)
+    for_ (drDrains drained) $ \worker -> do
+        finished <- timeout 10_000_000 (waitCatch worker)
+        when (isNothing finished) (cancel worker)
+    -- The process has exited, so this only releases what typed-process holds for it.
+    stopProcess process
+    pure stopped
+
+-- Read a pipe until the process closes it, keeping its head and tail and dropping the rest.
+drain :: Text -> Handle -> IORef Captured -> IO ()
+drain stream source captured = tryIO copy >>= either failed pure
+  where
+    copy = do
         chunk <- BS.hGetSome source 65_536
         unless (BS.null chunk) $ do
-            BS.hPut sink chunk
-            for_ logHead $ \ref -> modifyIORef' ref (\held -> held <> BS.take (1_048_576 - BS.length held) chunk)
-            copy sink
+            atomicModifyIORef' captured (\held -> (capture chunk held, ()))
+            copy
+    failed err = benchFail ("bench-load: reading the proxy's " <> stream <> " failed: " <> show err)
 
--- Wait for the drains to reach the end of the exited proxy's output, then stop any that hang.
-finishDrains :: ProxyProcess -> IO ()
-finishDrains proxy = for_ (ppDrains proxy) $ \worker -> do
-    finished <- timeout 10_000_000 (waitCatch worker)
-    when (isNothing finished) (cancel worker)
+-- The first mebibyte of a stream, in reverse chunks, and its last four kibibytes.
+data Captured = Captured
+    { cHead :: [ByteString]
+    , cHeadBytes :: Int
+    , cTail :: ByteString
+    }
 
--- The last bytes of a file as text, for a failure report.
-tailOf :: FilePath -> Integer -> IO Text
-tailOf path bytes =
-    fmap (fromRight "") . tryIO . withFile path ReadMode $ \handle -> do
-        size <- hFileSize handle
-        when (size > bytes) (hSeek handle SeekFromEnd (negate bytes))
-        decodeUtf8 <$> BS.hGetContents handle
+emptyCaptured :: Captured
+emptyCaptured = Captured [] 0 mempty
+
+-- Copies at most the head's remaining room and one tail's worth per chunk.
+capture :: ByteString -> Captured -> Captured
+capture chunk held =
+    Captured
+        { cHead = if room > 0 then BS.copy (BS.take room chunk) : cHead held else cHead held
+        , cHeadBytes = cHeadBytes held + min room (BS.length chunk)
+        , cTail = BS.copy (BS.takeEnd tailBytes (cTail held <> BS.takeEnd tailBytes chunk))
+        }
+  where
+    room = 1_048_576 - cHeadBytes held
+    tailBytes = 4_096
+
+capturedHead :: Captured -> ByteString
+capturedHead = BS.concat . reverse . cHead
+
+capturedTailText :: IORef Captured -> IO Text
+capturedTailText = fmap (decodeUtf8 . cTail) . readIORef

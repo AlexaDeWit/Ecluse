@@ -390,7 +390,8 @@ path as `ecluse proxy` and reads its configuration from `ECLUSE_*` variables. Th
 stubs over plain HTTP on loopback, which the `dev-http-egress` build allows, and serves RTS
 statistics on a loopback control port. Telemetry is on, with the Prometheus scrape as its only
 exporter, so the harness can sample the admission gauges. The proxy logs into pipes that the
-harness drains to disk, so its cgroup is not charged for the log's page cache.
+harness drains, keeping only the head and tail of each stream, so its cgroup is not charged for
+the log's page cache.
 
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
 `2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
