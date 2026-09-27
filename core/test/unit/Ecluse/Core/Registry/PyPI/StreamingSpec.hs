@@ -13,7 +13,7 @@ import Test.Hspec
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.PyPI.Document (simpleFiles, simpleValue)
+import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), pypiFields)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
@@ -21,7 +21,7 @@ import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec

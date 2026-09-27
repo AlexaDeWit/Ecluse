@@ -24,7 +24,6 @@ import Data.Time (NominalDiffTime)
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
-import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
@@ -33,6 +32,7 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
 
 -- | A 60-second TTL and 256 MiB shared by locally eligible stores.
 defaultCacheConfig :: CacheConfig

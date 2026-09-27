@@ -16,7 +16,7 @@ module Ecluse.Core.Registry.Npm.Filter (
     serialiseMergedDocument,
 ) where
 
-import Data.Aeson (Value (Object, String))
+import Data.Aeson (Value (Object, String), toEncoding)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -122,7 +122,7 @@ assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = serialiseAcross (snd npmCached)
+serialiseMergedDocument = serialiseAcross (fmap toEncoding . snd npmCached)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject

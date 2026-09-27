@@ -2,12 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Caller-owned byte fixtures use the production PyPI extraction and projection.
+-- | PyPI fixtures pass through the production extraction and projection, and documents convert to and from JSON.
 module Ecluse.Test.Registry.PyPI.Metadata (
     projectPyPIIndex,
     projectPyPIVersion,
     projectPyPIChunks,
     documentFromValue,
+    simpleValue,
 ) where
 
 import Data.Aeson (Value (Array, Object))
@@ -18,7 +19,7 @@ import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageN
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection)
@@ -54,3 +55,8 @@ documentFromValue = \case
         Just (Array files) -> zipWith (\position value -> (ArrayEntry position, value)) [0 ..] (toList files)
         _ -> []
     _ -> simpleDocument mempty []
+
+-- | Render a document as the JSON object its encoder writes, for field-level assertions.
+simpleValue :: SimpleDocument -> Value
+simpleValue document =
+    Object (KeyMap.insert "files" (Array (fromList (map snd (simpleFiles document)))) (simpleEnvelope document))

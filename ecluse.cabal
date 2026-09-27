@@ -823,6 +823,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PublishSpec
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
+    Ecluse.Core.Registry.PyPI.DocumentSpec
     Ecluse.Core.Registry.PyPI.FilterSpec
     Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.PyPI.MetadataSpec

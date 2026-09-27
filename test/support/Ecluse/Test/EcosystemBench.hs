@@ -10,8 +10,6 @@ module Ecluse.Test.EcosystemBench (
     ecosystemBenches,
 ) where
 
-import Ecluse.Test.Security.Limits (checkNestingDepth)
-
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -24,12 +22,8 @@ import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
-
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Registry.PyPI.Project (fileProject, fileVersionKey)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
@@ -40,9 +34,11 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPack
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIVersion)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIVersion, simpleValue)
+import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
 -- | Load every registered corpus, failing on missing, malformed, or empty metadata.

@@ -22,7 +22,6 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
-import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
@@ -33,7 +32,7 @@ import Ecluse.Core.Security (
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
 
