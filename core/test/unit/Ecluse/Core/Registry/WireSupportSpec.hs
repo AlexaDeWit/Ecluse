@@ -7,8 +7,7 @@ module Ecluse.Core.Registry.WireSupportSpec (spec) where
 import Data.Aeson (Value (Number, String), parseJSON)
 import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
-import Test.Hspec (Spec, describe, it, shouldBe, shouldThrow)
-import UnliftIO.Exception (evaluate, impureThrow)
+import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Package (
     InvalidEntry (invalidKey, invalidKind, invalidValue),
@@ -20,7 +19,6 @@ import Ecluse.Core.Registry.WireSupport (
     checkNameAgreement,
     parseNameComponent,
     partitionLenientList,
-    strictElements,
  )
 import Ecluse.Test.Package (scopedNpm, unscopedNpm)
 import Ecluse.Test.Registry.WireSupport (partitionLenient)
@@ -32,7 +30,6 @@ spec :: Spec
 spec = do
     partitionLenientSpec
     partitionLenientListSpec
-    strictElementsSpec
     checkNameAgreementSpec
     parseNameComponentSpec
 
@@ -74,13 +71,6 @@ partitionLenientListSpec = describe "partitionLenientList" $ do
 
     it "reads an empty list as no entries either way" $
         partitionLenientList InvalidDistTag decodeInt [] `shouldBe` ([] :: [(Text, Int)], [])
-
-strictElementsSpec :: Spec
-strictElementsSpec = describe "strictElements" $
-    it "evaluates every element when the container is evaluated" $ do
-        let elements = [1, 2, impureThrow LaterElement] :: [Int]
-        void (evaluate elements)
-        evaluate (strictElements elements) `shouldThrow` (== LaterElement)
 
 checkNameAgreementSpec :: Spec
 checkNameAgreementSpec = describe "checkNameAgreement" $ do
@@ -125,14 +115,9 @@ parseNameComponentSpec = describe "parseNameComponent" $ do
         parseNameComponent "." `shouldBe` Left NameUnsafeComponent
         parseNameComponent ".." `shouldBe` Left NameUnsafeComponent
 
+-- | Decode a JSON value as an 'Int', the per-entry decode the partition drives.
 decodeInt :: Value -> Either String Int
 decodeInt = parseEither parseJSON
-
--- | Thrown by an element that only element-wise evaluation reaches.
-data LaterElement = LaterElement
-    deriving stock (Eq, Show)
-
-instance Exception LaterElement
 
 -- | A raw entry map with a healthy pair and one undecodable (string) entry between them.
 mixed :: Map Text Value

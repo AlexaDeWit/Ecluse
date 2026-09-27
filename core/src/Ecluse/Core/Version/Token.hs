@@ -27,7 +27,9 @@ import Ecluse.Core.Text (readDecimalText)
 numerics compare numerically, and text compares lexically.
 -}
 data VToken = VNum Integer | VStr Text
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Show, Generic)
+
+instance NFData VToken
 
 instance Ord VToken where
     compare (VNum m) (VNum n) = compare m n

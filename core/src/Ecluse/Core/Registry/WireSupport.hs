@@ -3,8 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The floor every ecosystem's projection of an untrusted registry document sits on: per-entry
-lenient degradation, strict element evaluation, the shared name checks, and the upstream
-name-agreement test.
+lenient degradation, the shared name checks, and the upstream name-agreement test.
 
 The three name checks travel together because skipping any one of them reaches an interpolated
 upstream URL. An ecosystem's grammar layers its own rules on top and never replaces them.
@@ -12,9 +11,6 @@ upstream URL. An ecosystem's grammar layers its own rules on top and never repla
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation
     partitionLenientList,
-
-    -- * Strict projection
-    strictElements,
 
     -- * Name agreement
     Projection (..),
@@ -51,10 +47,6 @@ partitionLenientList kind decode =
     step (key, value) (kept, dropped) = case decode value of
         Right a -> ((key, a) : kept, dropped)
         Left err -> (kept, mkInvalidEntry kind key value (toText err) : dropped)
-
--- | Evaluate every element with the container, so a retained projection holds no decoder state.
-strictElements :: (Foldable t) => t a -> t a
-strictElements elements = foldr seq elements elements
 
 {- | What an upstream document projected into, once its self-reported name has been checked.
 A mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.

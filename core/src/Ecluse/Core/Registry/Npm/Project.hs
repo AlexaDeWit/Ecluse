@@ -54,10 +54,10 @@ import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.VersionList (VersionListItem (..))
 import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
-    strictElements,
     withinNameLimit,
  )
 import Ecluse.Core.Security (Limits, maxNestingDepth)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 

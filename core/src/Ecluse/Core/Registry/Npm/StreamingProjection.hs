@@ -24,8 +24,9 @@ import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement, strictElements)
+import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Independent source maps. Typed releases are built as each retained version finishes.

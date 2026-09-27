@@ -38,7 +38,9 @@ data Pep440Key = Pep440Key
     -- ^ @(0, n)@ when present and @(1, 0)@ when absent, so a dev release sorts below its sibling.
     , p440Local :: [VToken]
     }
-    deriving stock (Eq, Ord, Show)
+    deriving stock (Eq, Ord, Show, Generic)
+
+instance NFData Pep440Key
 
 {- | Parse a PEP 440 version, canonicalising non-normalised spellings. Fails on anything that
 is not one: no release, or unrecognised trailing text.
@@ -54,7 +56,8 @@ parsePep440 raw = do
     (release, suffix) <- parseRelease afterEpoch
     suffixParts <- parsePep440Suffix suffix
     localToks <- parseLocal localRaw
-    pure (assembleKey epoch release suffixParts localToks)
+    -- Evaluated in full, so a retained key holds none of the parser's intermediate state.
+    pure (force (assembleKey epoch release suffixParts localToks))
   where
     isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
 

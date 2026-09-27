@@ -61,9 +61,9 @@ import Ecluse.Core.Registry.PyPI.Wire (
  )
 import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
-    strictElements,
     withinNameLimit,
  )
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
 
 -- | A filename's canonical release and artifact kind.
