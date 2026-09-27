@@ -826,8 +826,8 @@ Tests are documentation too, so keep them as readable as the code.
   ```haskell
   describe "evalRule" $ do
       it "AllowScope allows a matching scope" $
-          evalRule ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
-              `shouldSatisfy` isAllow
+          evalRule inertRuleDeps ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
+              >>= (`shouldSatisfy` isAllow)
   ```
 
 - **Name fixtures and helpers, and give them signatures** (`now :: UTCTime`,

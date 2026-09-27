@@ -20,7 +20,6 @@ import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, identityDenyNames, inCandidates)
-import Ecluse.Core.Rules (evalRule)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams, dicMinCvss, dicOnUnavailable),
     EvalContext (EvalContext),
@@ -31,7 +30,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
-import Ecluse.Test.Rules (servingRuleDeps)
+import Ecluse.Test.Rules (evalRule, servingRuleDeps)
 
 spec :: Spec
 spec = do

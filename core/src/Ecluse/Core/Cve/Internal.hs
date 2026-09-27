@@ -12,7 +12,6 @@ module Ecluse.Core.Cve.Internal (
     AdvisoryRange (..),
     CveDbRejected (..),
     openHardenedConnection,
-    probeQuery,
     advisoriesQuery,
     coveredNamesQuery,
     toRange,
@@ -149,14 +148,6 @@ readMetaValue :: Connection -> MetaKey -> IO (Maybe Text)
 readMetaValue conn key = do
     result <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey key))) :: IO (Either SQLError [Only Text])
     pure (either (const Nothing) (fmap fromOnly . listToMaybe) result)
-
-{- | Does any advisory for this package name carry this exact version string as a fixed
-bound? Deliberately string equality, under the artifact contract's canonical-semver expectation.
--}
-probeQuery :: Connection -> Text -> Text -> IO Bool
-probeQuery conn name version = do
-    hits <- query conn "SELECT 1 FROM package_vulnerability_ranges WHERE package_name = ? AND fixed_version = ? LIMIT 1" (name, version) :: IO [Only Int]
-    pure (not (null hits))
 
 {- | Every package name this artifact records an advisory against, each once. The name index
 covers the scan, and the result is what a store sweep intersects its listing with.

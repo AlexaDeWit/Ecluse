@@ -7,29 +7,40 @@ Advisory regressions preserve ecosystem identity and display spelling.
 -}
 module Ecluse.Core.RulesSpec (spec) where
 
+import Data.Aeson (Value (String))
 import Data.Text qualified as T
+import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
+import Database.SQLite.Simple (Connection, Only, query, withConnection)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (finally, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, initialBreaker, recordFailure)
-import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), insideAffectedRange, openCveDb, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Package
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
-import Ecluse.Test.Package (sampleDetails, v1_0_0)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
+import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
+import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
+import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
     atDefaultPrecedence,
     blockedBy,
+    evalRule,
     inertRuleDeps,
     isAllow,
     isBlockedByDefault,
@@ -37,6 +48,7 @@ import Ecluse.Test.Rules (
     isDeny,
     isNoDecision,
     isUndecidable,
+    mapResilience,
     servingRuleDeps,
     withInstallScripts,
  )
@@ -142,7 +154,7 @@ openBreakerOn rule = case prepResilience rule of
     Nothing -> pure rule
     Just res -> do
         tripped <- newTVarIO (trippedBreaker (resConfig res))
-        pure rule{prepResilience = Just res{resBreaker = tripped, resClock = pure now}}
+        pure (mapResilience (\held -> held{resBreaker = tripped, resClock = pure now}) rule)
 
 trippedBreaker :: EffectfulConfig -> Breaker
 trippedBreaker cfg = foldl' recordOne initialBreaker [1 .. ecBreakerThreshold cfg]
@@ -352,6 +364,15 @@ noDatabaseVerdicts =
     , ("DenyIfEpss set to skip", DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), CannotVet FailNoDecision "DenyIfEpss: no advisory database loaded")
     ]
 
+-- | The decision a policy of one rule reaches from that rule's verdict.
+soleDecision :: Text -> RuleVerdict -> Decision
+soleDecision name = \case
+    Allow reason -> Admitted name reason []
+    Deny etag reason -> Blocked name etag reason
+    NoDecision reason -> BlockedByDefault [reason]
+    CannotVet FailDeny reason -> Undecidable (WillResolve Nothing) reason
+    CannotVet FailNoDecision reason -> BlockedByDefault [reason]
+
 noDatabaseSpec :: Spec
 noDatabaseSpec = describe "an advisory rule with no database configured" $ do
     it "is prepared to run directly, with no timeout, retry, or breaker" $ do
@@ -361,8 +382,8 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
     for_ noDatabaseVerdicts $ \(label, rule, verdict) ->
         it (toString (label <> " keeps the verdict it reaches before the first sync")) $
             for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
-                prepared <- prepare deps [atDefaultPrecedence rule]
-                traverse (\r -> runEffectfulRule ctx r (pkg Nothing 0)) prepared >>= (`shouldBe` [Decided verdict])
+                evalRule deps ctx rule (pkg Nothing 0) `shouldReturn` verdict
+                decideWith deps [atDefaultPrecedence rule] (pkg Nothing 0) `shouldReturn` soleDecision (ruleName rule) verdict
 
     it "decides the shipped policy as it does before the first sync" $ do
         let shipped = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
@@ -370,12 +391,189 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
             unconfigured <- decideWith inertRuleDeps shipped ev
             decideWith unloadedDeps shipped ev >>= (`shouldBe` unconfigured)
 
+{- | The reference: an SQL fix probe and a range read for every version, the per-version form one
+read per request must reproduce verdict for verdict.
+-}
+perVersionVerdict :: DbEtag -> (Text -> Text -> IO Bool) -> CveLookup -> Rule -> RuleEvidence -> IO RuleVerdict
+perVersionVerdict etag probe cve rule ev = case rule of
+    AllowIfRemediatesCve ->
+        probe name version >>= \case
+            False -> pure (NoDecision "no advisory names this version as its fix")
+            True -> remediation <$> cveAdvisoriesFor cve name
+    DenyIfCve params -> deny DenyMissingScore "CVSS" (dicMinCvss params) arSeverity <$> cveAdvisoriesFor cve name
+    DenyIfEpss params -> deny AbstainMissingScore "EPSS" (dieMinEpss params) arEpss <$> cveAdvisoriesFor cve name
+    other -> fail ("not an advisory rule: " <> show other)
+  where
+    eco = pkgEcosystem (evName ev)
+    name = TS.toText (pkgCanonical (evName ev))
+    version = renderVersion (evVersion ev)
+    remediation ranges =
+        let remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
+            stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
+         in case (remediated, stillOpen) of
+                (_, _ : _) -> NoDecision ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
+                ([], []) -> NoDecision "no advisory names this version as its fix"
+                (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
+    deny missing metric threshold scoreOf ranges =
+        case ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar, scoreAtLeast missing threshold (scoreOf ar)] of
+            [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
+            ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
+
+-- | The exact @fixed_version@ match the reference probes with, in SQL on the artifact.
+sqlFixProbe :: Connection -> Text -> Text -> IO Bool
+sqlFixProbe conn name version =
+    not . null <$> (query conn "SELECT 1 FROM package_vulnerability_ranges WHERE package_name = ? AND fixed_version = ? LIMIT 1" (name, version) :: IO [Only Int])
+
+-- | Each version's verdict from the one read a prepared advisory rule makes for its package.
+perRequestVerdicts :: RuleDeps -> Rule -> PackageName -> [RuleEvidence] -> IO [RuleVerdict]
+perRequestVerdicts deps rule name versions =
+    prepare deps [atDefaultPrecedence rule] >>= \case
+        [PreparedRule{prepEval = PerPackage packageRead}] -> (\rows -> map (prVerdict packageRead rows) versions) <$> prRows packageRead name
+        _ -> fail "expected one prepared package read"
+
+-- | Every advisory rule, at thresholds on, between, and past the fixtures' scores.
+differentialRules :: [Rule]
+differentialRules =
+    AllowIfRemediatesCve
+        : [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
+            <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.25, 0.5, 0.95, 1]]
+
+{- | Rows covering every bound shape the reader decodes: segment pairs, both bound columns on one row,
+exact and unorderable points, prereleases, unparseable and oddly spelt fixes, and missing scores.
+-}
+edgeCaseRows :: [RangeRow]
+edgeCaseRows =
+    [ ("range-pkg", "GHSA-r-0001", Just "1.0.0", Just "1.2.0", Nothing, Just 9.8, Just 0.9)
+    , ("range-pkg", "GHSA-r-0001", Just "1.5.0", Just "1.6.0", Nothing, Just 9.8, Just 0.9)
+    , ("range-pkg", "GHSA-r-0002", Nothing, Just "2.0.0", Nothing, Just 5.0, Just 0.1)
+    , ("range-pkg", "GHSA-r-0003", Just "0", Just "1.2.0", Nothing, Just 7.0, Just 0.5)
+    , ("range-pkg", "GHSA-r-0004", Just "2.1.0", Nothing, Just "2.3.0", Nothing, Nothing)
+    , ("range-pkg", "GHSA-r-0005", Just "3.0.0", Just "3.0.1", Just "3.0.0", Just 8.0, Just 0.7)
+    , ("range-pkg", "MAL-r-0006", Just "4.0.0", Nothing, Just "4.0.0", Nothing, Nothing)
+    , ("range-pkg", "MAL-r-0007", Just "weird", Nothing, Just "weird", Nothing, Nothing)
+    , ("range-pkg", "GHSA-r-0008", Just "5.0.0-alpha.1", Just "5.0.0-rc.1", Nothing, Just 6.9, Nothing)
+    , ("fix-pkg", "GHSA-f-0001", Nothing, Just "1.0.0", Nothing, Just 9.8, Just 0.95)
+    , ("fix-pkg", "GHSA-f-0002", Nothing, Just "v2.0.0", Nothing, Just 4.0, Nothing)
+    , ("fix-pkg", "GHSA-f-0003", Nothing, Just "3.0.0+build.7", Nothing, Nothing, Just 0.2)
+    , ("fix-pkg", "GHSA-f-0004", Just "4.0.0", Just "not.a.version", Nothing, Just 9.0, Nothing)
+    , ("fix-pkg", "GHSA-f-0005", Just "1.0.0", Just "1.0.0", Nothing, Just 2.0, Just 0.01)
+    , ("unfixed-pkg", "GHSA-u-0001", Just "1.0.0", Nothing, Nothing, Just 10.0, Just 0.5)
+    , ("@scope/pkg", "GHSA-s-0001", Nothing, Just "1.0.0", Nothing, Just 3.9, Just 0.25)
+    ]
+
+-- | Versions around every fixture bound, plus spellings only an exact text match tells apart.
+spreadVersions :: [Text]
+spreadVersions =
+    [ "0"
+    , "0.0.1"
+    , "0.9.9"
+    , "1.0.0"
+    , "1.0.1"
+    , "1.1.0"
+    , "1.2.0"
+    , "1.2.1"
+    , "1.5.0"
+    , "1.5.9"
+    , "1.6.0"
+    , "2.0.0"
+    , "v2.0.0"
+    , "2.0.1"
+    , "2.2.0"
+    , "2.3.0"
+    , "2.3.1"
+    , "2.5.0"
+    , "3.0.0"
+    , "3.0.1"
+    , "3.0.0+build.7"
+    , "3.9.9"
+    , "4.0.0"
+    , "4.0.1"
+    , "5.0.0-alpha.1"
+    , "5.0.0-beta"
+    , "5.0.0-rc.1"
+    , "5.0.0"
+    , "weird"
+    , "not.a.version"
+    , "10.0.0"
+    ]
+
+-- | The versions to decide for one package: the spread, and every bound its rows carry.
+versionsFor :: CveLookup -> PackageName -> IO [Text]
+versionsFor cve name = do
+    ranges <- cveAdvisoriesFor cve (TS.toText (pkgCanonical name))
+    pure (ordNub (spreadVersions <> concatMap bounds ranges))
+  where
+    bounds ar =
+        maybeToList (arIntroduced ar) <> case arUpperBound ar of
+            FixedBefore fixed -> [fixed]
+            LastAffected lastAffected -> [lastAffected]
+            Unbounded -> []
+
+{- | Every rule decides each version from one read as it does from a read per version, and a mixed
+policy's shared evaluator matches a fresh one per version. Returns the verdicts compared.
+-}
+agreesOn :: (Text -> Text -> IO Bool) -> CveLookup -> [PackageName] -> IO [RuleVerdict]
+agreesOn probe cve names =
+    fmap (concat . concat) . forM (names <> [unscopedNpm "no-such-package"]) $ \name -> do
+        versions <- versionsFor cve name
+        let evidence = [completeEvidence (sampleDetails name (mkVersion Npm v)) | v <- versions]
+        compared <- forM differentialRules $ \rule -> do
+            perVersion <- traverse (perVersionVerdict etag probe cve rule) evidence
+            perRequest <- perRequestVerdicts deps rule name evidence
+            zip versions perRequest `shouldBe` zip versions perVersion
+            pure perVersion
+        rules <- prepare deps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve, denyCveAt 7.0, denyEpssAt 0.5])
+        shared <- newEvaluator ctx rules >>= \decideShared -> traverse decideShared evidence
+        fresh <- traverse (evalRules ctx rules) evidence
+        zip versions shared `shouldBe` zip versions fresh
+        pure compared
+  where
+    etag = DbEtag "differential"
+    deps = servingRuleDeps etag cve
+
+-- | Open an accepted artifact and lend the reference's fix probe and the lookup, then close both.
+withOpened :: FilePath -> ((Text -> Text -> IO Bool) -> CveLookup -> IO a) -> IO a
+withOpened path use =
+    openCveDb Npm EpssOptional path >>= \case
+        Left rejection -> fail ("differential artifact rejected: " <> show rejection)
+        Right db -> withConnection path (\conn -> use (sqlFixProbe conn) (cveDbLookup db)) `finally` cveDbClose db
+
+-- | The names an artifact holds rows for, as npm packages.
+coveredPackages :: CveLookup -> IO [PackageName]
+coveredPackages cve = map unscopedNpm <$> cveCoveredNames cve
+
+differentialSpec :: Spec
+differentialSpec = describe "one read per request against a read per version, over a real artifact" $ do
+    it "agrees on hand-built rows covering every bound shape and fix spelling" $
+        withSystemTempDirectory "ecluse-rules-differential" $ \dir -> do
+            let path = dir </> "osv.db"
+            mkValidDbWithRows path [] edgeCaseRows
+            verdicts <- withOpened path $ \probe cve -> do
+                names <- coveredPackages cve
+                agreesOn probe cve (scopedNpm "scope" "pkg" : names)
+            -- The rows reach an admission, a denial, a still-affected fix, and a version no advisory fixes.
+            verdicts `shouldSatisfy` any isAllow
+            verdicts `shouldSatisfy` any isDeny
+            verdicts `shouldSatisfy` any (\case NoDecision reason -> "but is still affected by" `T.isInfixOf` reason; _ -> False)
+            verdicts `shouldSatisfy` elem (NoDecision "no advisory names this version as its fix")
+
+    it "agrees on the compiled corpus" $
+        withFixtureOsvDb CorpusV2 $
+            \path -> withOpened path $ \probe cve -> void (coveredPackages cve >>= agreesOn probe cve)
+
+    for_ [("active", Nothing), ("withdrawn", Just (String "2024-05-14T20:15:44Z"))] $ \(label, withdrawn) ->
+        it ("agrees on a compiled archive whose advisory is " <> label) $ do
+            archive <- withdrawalZip withdrawn
+            withOsvZipDb Npm archive $ \path ->
+                withOpened path (\probe cve -> void (agreesOn probe cve (map unscopedNpm ["withdrawal-only", "withdrawal-overlap", "corpus-vuln"])))
+
 spec :: Spec
 spec = do
     expirySpec
     evidenceSpec
     sourceHealthSpec
     noDatabaseSpec
+    differentialSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
@@ -638,12 +836,14 @@ spec = do
                 `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
 
     describe "prepare" $ do
-        it "attaches the fail-open resilience (and its breaker) to AllowIfRemediatesCve" $
+        it "attaches a resilience and fail-open alignments to AllowIfRemediatesCve" $
             -- The one thing a reviewer must check on the remediation lane: an
             -- uncomputable lookup abstains (FailNoDecision) and never admits or 503s.
             prepare unloadedDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
-                [r] -> fmap resAlignment (prepResilience r) `shouldBe` Just FailNoDecision
-                other -> expectationFailure ("expected one prepared rule, got " <> show (length other))
+                [r@PreparedRule{prepEval = PerPackage packageRead}] -> do
+                    isJust (prepResilience r) `shouldBe` True
+                    (onExpiredPush (prAlignment packageRead), onFaultedRead (prAlignment packageRead)) `shouldBe` (FailNoDecision, FailNoDecision)
+                other -> expectationFailure ("expected one prepared package read, got " <> show (length other))
         it "prepares every pure built-in to run directly, with no resilience, database or not" $
             for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
                 rules <-

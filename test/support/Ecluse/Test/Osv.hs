@@ -24,6 +24,10 @@ module Ecluse.Test.Osv (
     mkMinimalValidDb,
     mkMinimalValidDbWithMeta,
 
+    -- * Accepted artifacts from rows
+    RangeRow,
+    mkValidDbWithRows,
+
     -- * The monad the OSV pipeline runs in
     OsvTestM,
     runOsvTestM,
@@ -235,12 +239,21 @@ mkMinimalValidDb path pkg = mkMinimalValidDbWithMeta path pkg [("source_url", pk
 
 -- | A minimal accepted artifact with caller-supplied provenance, apart from its fixed npm ecosystem.
 mkMinimalValidDbWithMeta :: FilePath -> Text -> [(Text, Text)] -> IO ()
-mkMinimalValidDbWithMeta path pkg meta = withConnection path $ \conn -> do
+mkMinimalValidDbWithMeta path pkg meta = mkValidDbWithRows path meta [(pkg, "GHSA-minimal", Just "0", Just "1.0.0", Nothing, Nothing, Nothing)]
+
+{- | One ranges-table row in column order: package, advisory, introduced, fixed, last affected,
+CVSS, and EPSS.
+-}
+type RangeRow = (Text, Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double, Maybe Double)
+
+-- | An accepted npm artifact holding the given provenance and ranges rows as written.
+mkValidDbWithRows :: FilePath -> [(Text, Text)] -> [RangeRow] -> IO ()
+mkValidDbWithRows path meta rows = withConnection path $ \conn -> do
     createRangesTable conn
     createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     executeMany conn "INSERT INTO meta (key, value) VALUES (?, ?)" meta
-    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', NULL, NULL, NULL)" (Only pkg)
+    executeMany conn "INSERT INTO package_vulnerability_ranges VALUES (?, ?, ?, ?, ?, ?, ?)" rows
     setEpoch conn osvSchemaEpoch
 
 -- The canonical tables, verbatim from the schema contract, so a builder here

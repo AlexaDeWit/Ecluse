@@ -258,10 +258,10 @@ inline.
 
 **9.2 Prefer pure and total.** Keep the core logic pure and push `IO` to the edges. Annotate a
 purity or totality guarantee **only where it is surprising or load-bearing**. Two examples: a
-boundary parser a reader would expect to throw, and `evalRule` never crashing the gate on hostile
-metadata. Never annotate reflexively. On a signature with no `IO` and a total return type,
-`-- Pure and total.` only restates the type. In a module whose header already says it is pure, it
-restates the header too ([`docs/haddock.md`](haddock.md)). The effectful parts run in
+boundary parser a reader would expect to throw, and `verdictSource`'s verdicts never crashing the
+gate on hostile metadata. Never annotate reflexively. On a signature with no `IO` and a total return
+type, `-- Pure and total.` only restates the type. In a module whose header already says it is pure,
+it restates the header too ([`docs/haddock.md`](haddock.md)). The effectful parts run in
 `ReaderT Env IO`. Handlers take `Env` and run in plain `IO`.
 
 **9.3 Use `where` helpers, and lift them when they stop earning the nesting.** Name sub-steps with

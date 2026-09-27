@@ -37,6 +37,7 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), newS3CveSource, s3CveFetchFor)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
 import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv, withSourceStubs)
@@ -104,7 +105,7 @@ spec = aroundAll withMinistack $ do
                             after <- snapshot aws bucket
                             map objectTag after `shouldNotBe` map objectTag before
                             withPublished endpoint bucket Npm EpssOptional path $ \lookup' -> do
-                                cveRemediationProbe lookup' "corpus-revoked" "1.2.0" `shouldReturn` True
+                                namesFix lookup' "corpus-revoked" "1.2.0" `shouldReturn` True
                                 map arEpss <$> cveAdvisoriesFor lookup' "corpus-revoked" `shouldReturn` [Nothing]
 
     describe "scheduled EPSS enrichment per ecosystem" $

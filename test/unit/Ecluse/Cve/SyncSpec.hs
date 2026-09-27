@@ -30,7 +30,7 @@ import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
-import Ecluse.Core.Rules (PreparedRule (prepResilience), RuleDeps (rdAdvisoryFreshness), evalRules, prepare, withCveLookup)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, prepResilience, prepare, withCveLookup)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (AdvisoryAge),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),

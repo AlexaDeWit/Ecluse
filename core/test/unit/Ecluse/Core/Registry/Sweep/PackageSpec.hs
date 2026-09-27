@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepStore (ssExecute, ssObserve),
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness), RuleEval (PerVersion), prepare)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
@@ -523,7 +523,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
             -- hands the batch over, and each pass acquires the same evidence in the same order.
             let deciding =
                     denyRule
-                        { prepEval = \_ _ -> do
+                        { prepEval = PerVersion $ \_ _ -> do
                             etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest <> [item], item))
                             pure (Deny etag "acquired advisory evidence")
                         }

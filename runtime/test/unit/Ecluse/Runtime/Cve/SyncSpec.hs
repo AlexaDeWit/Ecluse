@@ -37,7 +37,7 @@ import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (Pi
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (..), evalRule, prepare)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
@@ -58,7 +58,7 @@ import Ecluse.Runtime.Cve.Sync.Internal (
     syncStep,
  )
 import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveLookup, namesFix)
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvCorpusZip, osvZipOf)
@@ -72,7 +72,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, isAllow, isDeny, isNoDecision)
+import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, inertRuleDeps, isAllow, isDeny, isNoDecision)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -127,7 +127,7 @@ installedSource slot =
     currentAdvisorySource slot >>= maybe (throwIO (TestContractEscape "no generation installed")) pure
 
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
-probesFor slot pkg = withSlotGeneration slot (traverse (\(_, l) -> cveRemediationProbe l pkg "1.0.0"))
+probesFor slot pkg = withSlotGeneration slot (traverse (\(_, l) -> namesFix l pkg "1.0.0"))
 
 pollInterval :: Int
 pollInterval = 25_000
@@ -223,7 +223,7 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                 withSlotGeneration slot $ \case
                     Nothing -> expectationFailure "withdrawal refusal lost the synced database"
                     Just (_, lookup') -> do
-                        cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` True
+                        namesFix lookup' "withdrawal-only" "2.0.0" `shouldReturn` True
                         rows <- cveAdvisoriesFor lookup' "withdrawal-only"
                         map arCveId rows `shouldBe` replicate 2 "GHSA-withdrawal"
 
@@ -245,10 +245,10 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                 withSlotGeneration slot $ \case
                     Nothing -> expectationFailure "withdrawal test has no synced database"
                     Just (_, lookup') -> do
-                        cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` active
-                        cveRemediationProbe lookup' "withdrawal-overlap" "2.0.0" `shouldReturn` active
-                        cveRemediationProbe lookup' "withdrawal-overlap" "3.0.0" `shouldReturn` True
-                        cveRemediationProbe lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
+                        namesFix lookup' "withdrawal-only" "2.0.0" `shouldReturn` active
+                        namesFix lookup' "withdrawal-overlap" "2.0.0" `shouldReturn` active
+                        namesFix lookup' "withdrawal-overlap" "3.0.0" `shouldReturn` True
+                        namesFix lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
                         rows <- cveAdvisoriesFor lookup' "withdrawal-only"
                         map arCveId rows `shouldBe` replicate (if active then 2 else 0) "GHSA-withdrawal"
                         overlapping <- cveAdvisoriesFor lookup' "withdrawal-overlap"
@@ -323,7 +323,7 @@ unavailableEnrichmentSpec = describe "an artifact published with unavailable EPS
             withSlotGeneration slot $ \case
                 Nothing -> expectationFailure "the refusal lost the qualified generation"
                 Just (_, lookup') -> do
-                    cveRemediationProbe lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
+                    namesFix lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
                     cveAdvisoriesFor lookup' "corpus-revoked" `shouldReturn` []
             available <- osvCorpusZip CorpusV2 >>= \archive -> compileOsvZipDbTo Npm archive (dir </> "available")
             syncStep (required "available" 120 available) (Just (DbEtag "unavailable")) >>= expectSwap "available"
@@ -727,7 +727,7 @@ spec = do
                 withSlotGeneration slot $ \case
                     Nothing -> expectationFailure "optional artifact was not installed"
                     Just (_, lookup') -> do
-                        cveRemediationProbe lookup' "pkg-a" "1.0.0" `shouldReturn` True
+                        namesFix lookup' "pkg-a" "1.0.0" `shouldReturn` True
                         cveAdvisoriesFor lookup' "pkg-a" >>= (`shouldSatisfy` not . null)
 
     describe "runCveSync" $ do

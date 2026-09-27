@@ -196,7 +196,7 @@ ways:
 | Line | Level | When |
 |---|---|---|
 | `advisory source outage began` | `error` | The first evaluation that cannot consult the database. It names the ecosystem, the rule, and the cause. |
-| `advisory source outage continues` | `error` | At most every 15 minutes while any rule still cannot, listing every such rule and its latest cause. |
+| `advisory source outage continues` | `error` | At most every 15 minutes while any rule still cannot, listing each rule that last reported it could not, with its latest cause. |
 | `advisory source outage recovered` | `info` | Once every rule consults the database again. |
 
 The causes are no database loaded, a push past its maximum age, a lookup fault with its detail, and
@@ -205,7 +205,9 @@ an open circuit breaker. The report covers the rules that deny on advisories, `D
 advisory rule is `AllowIfRemediatesCve` abstains without a database and reports no outage. A
 request never adds a line, so an outage costs the log the same whatever the traffic. The report
 fires only on traffic that reaches an advisory rule, so an idle mount reports nothing, and the sync
-task's own `error` line covers a database that never loads. The recovery line follows the next
+task's own `error` line covers a database that never loads. A request stops at the first rule that
+decides, so a rule that a higher-precedence rule always decides ahead of never reports, and the
+continuing line names only the rules requests reach. The recovery line follows the next
 evaluation that finds the database answering, so a source no rule asks again reports no recovery.
 
 A failed poll of the advisory store logs `error` on the same pacing, whether or not a database is

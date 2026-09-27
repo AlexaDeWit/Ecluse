@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Read one synced advisory artifact through a pinned lookup capability.
-Package keys are canonical per ecosystem. Fix versions match raw text exactly.
+Package keys are canonical per ecosystem.
 -}
 module Ecluse.Core.Cve (
     -- * The opened artifact
@@ -24,7 +24,7 @@ module Ecluse.Core.Cve (
 
 import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
-import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, probeQuery, provenanceQuery)
+import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement)
@@ -37,12 +37,10 @@ import Database.SQLite.Simple (Connection, SQLError, close)
 Display names must not be used as query keys.
 -}
 data CveLookup = CveLookup
-    { cveRemediationProbe :: Text -> Text -> IO Bool
-    {- ^ Does any advisory for this package name carry this exact version string as a fixed
-    bound? Throws the confined 'CveQueryFault' on a query fault, as every field here does.
+    { cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
+    {- ^ Every advisory range recorded against a package name, for a rule predicate to read.
+    Throws the confined 'CveQueryFault' on a query fault, as every field here does.
     -}
-    , cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
-    -- ^ Every advisory range recorded against a package name, for a rule predicate to read.
     , cveCoveredNames :: IO [Text]
     -- ^ Every package name this generation records an advisory against, for a store sweep.
     }
@@ -50,9 +48,9 @@ data CveLookup = CveLookup
 -- | A database query fault for the rule's resilience policy to classify.
 data CveQueryFault = CveQueryFault
     { cqfQuery :: Text
-    -- ^ Which handle field was asked (@remediation-probe@ or @advisories-for@).
+    -- ^ Which handle field was asked (@advisories-for@ or @covered-names@).
     , cqfDetail :: Text
-    -- ^ The rendered 'SQLError', for the harness's log line. Never parsed.
+    -- ^ The rendered 'SQLError', for the operator's outage report. Never parsed.
     }
     deriving stock (Eq, Show)
 
@@ -92,8 +90,7 @@ mkCveDb conn meta =
     CveDb
         { cveDbLookup =
             CveLookup
-                { cveRemediationProbe = \name version -> taggedQuery "remediation-probe" (probeQuery conn name version)
-                , cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
+                { cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
                 , cveCoveredNames = taggedQuery "covered-names" (coveredNamesQuery conn)
                 }
         , -- Total by construction: the connection is going away either way (see

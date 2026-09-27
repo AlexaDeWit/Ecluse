@@ -55,7 +55,7 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     partitionByFloor,
  )
-import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
+import Ecluse.Core.Rules (PreparedRule, cveIdsInReason, prepResilience)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
@@ -163,9 +163,8 @@ denialLabels = \case
     Unavailable _ -> (Nothing, Metric.ReasonUnavailable)
     UpstreamInvalid -> (Nothing, Metric.ReasonUnavailable)
 
-{- | The rule-evaluation tier a duration is attributed to, from the mount's rule set. The
-two tiers are one engine, so a prepared rule's resilience policy is what marks it
-effectful, not a separate list.
+{- | The rule-evaluation tier a duration is attributed to: effectful when any prepared rule reads
+through a resilience policy.
 -}
 evalTier :: [PreparedRule] -> Metric.Tier
 evalTier rules = if any (isJust . prepResilience) rules then Metric.Effectful else Metric.Structural
@@ -191,9 +190,8 @@ recordDenials metrics = traverse_ recordOne
             let (rule, reasonClass) = denialLabels reason
              in mpRuleDenial metrics rule reasonClass
 
-{- | Count each effectful-rule failure among a packument's per-version decisions. An
-'Undecidable' is an effectful rule whose source could not be consulted, so it is the
-effectful-failure signal.
+{- | Count each 'Undecidable' among a packument's per-version decisions, the signal that an
+effectful rule could not consult its source.
 -}
 recordEffectfulFailures :: MetricsPort -> [Decision] -> IO ()
 recordEffectfulFailures metrics = traverse_ recordOne
@@ -214,9 +212,8 @@ data VersionVerdict = VersionVerdict
     }
     deriving stock (Eq, Show)
 
-{- | An extensible bag of audit fields folded into a denial line's JSON at emit time. It
-lives at the audit boundary and never on the pure 'Ecluse.Core.Rules.Types.Decision', so new
-audit data joins here without threading a field through the rule engine.
+{- | An extensible bag of audit fields folded into a denial line's JSON at emit time. It lives at
+the audit boundary, never on the pure 'Ecluse.Core.Rules.Types.Decision'.
 -}
 newtype Metadata = Metadata (Map Text Text)
     deriving stock (Eq, Show)
@@ -227,9 +224,8 @@ instance Semigroup Metadata where
 instance Monoid Metadata where
     mempty = Metadata Map.empty
 
-{- | Everything one denial audit line records. The advisory 'DbEtag' is the database active
-at emit, not the one the decision was evaluated against, because a shadow swap can land
-mid-request.
+{- | Everything one denial audit line records. The advisory 'DbEtag' is the one active at emit,
+which a shadow swap during the request can make differ from the one the decision read.
 -}
 data DenialAudit = DenialAudit
     { daPackage :: PackageName
@@ -260,8 +256,7 @@ versionAuditPayload pkg version etag =
         <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) etag
 
 {- | The advisory ids a denial named, recovered from its rendered message into a comma-joined
-@cve@ field. Empty for a non-CVE denial, so the field appears only when an advisory drove
-the refusal.
+@cve@ field. A non-CVE denial yields none, so the line carries no field.
 -}
 cveMetadata :: Text -> Metadata
 cveMetadata message = case cveIdsInReason message of

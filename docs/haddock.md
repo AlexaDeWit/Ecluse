@@ -142,15 +142,11 @@ totality: a crash would take down the gate. A `-- ^` on an argument only where t
 say its role or unit. Never add a reflexive "pure and total" tag (docs/style.md §9.2):
 
 ```haskell
-{- | Evaluate a single rule against a single package version. Total: a
-malformed rule or package yields an outcome, never an exception, so hostile
+{- | The single dispatch over the closed rule vocabulary. Every verdict it yields
+is total: a malformed package yields a verdict, never an exception, so hostile
 metadata cannot crash the gate.
 -}
-evalRule
-    :: EvalContext     -- ^ Ambient inputs (the current time, …)
-    -> Rule
-    -> PackageDetails
-    -> RuleOutcome
+verdictSource :: Rule -> VerdictSource
 ```
 
 **Sum types, a `-- |` per constructor.** Écluse's domain knowledge lives here, so document each
