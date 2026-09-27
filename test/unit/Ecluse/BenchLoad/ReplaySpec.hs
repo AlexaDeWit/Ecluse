@@ -38,7 +38,7 @@ spec = describe "finite HTTP replay" $ do
             report <- replayHttp <$> runReplay replay
             reverse <$> readIORef seen `shouldReturn` [["first"], ["second"]]
             ohaStatusCounts report `shouldBe` Map.singleton "200" 2
-            ohaSuccessRate report `shouldBe` 1
+            length (ohaSuccessLatencies report) `shouldBe` 2
     it "retains refused responses while successful latency stays unavailable" $
         testWithApplication (pure (\_ respond -> respond (responseLBS status503 [] "refused"))) $ \port -> do
             let replay =
@@ -49,9 +49,7 @@ spec = describe "finite HTTP replay" $ do
                         (pure "")
             report <- replayHttp <$> runReplay replay
             ohaStatusCounts report `shouldBe` Map.singleton "503" 1
-            ohaSuccessRate report `shouldBe` 0
-            ohaP99 report `shouldBe` Nothing
-            ohaRequestsPerSec report `shouldBe` 0
+            ohaSuccessLatencies report `shouldBe` []
     it "expands a listing into an artifact request in order" $ do
         seen <- newIORef ([] :: [[Text]])
         let app request respond = do
@@ -141,4 +139,4 @@ spec = describe "finite HTTP replay" $ do
             rtotalRefused totals `shouldBe` 1
             rtotalTransportFailed totals `shouldBe` 1
             rtotalUnfinished totals `shouldBe` 0
-            ohaSuccessRate (replayHttp result) `shouldBe` (1 / 3)
+            length (ohaSuccessLatencies (replayHttp result)) `shouldBe` 1

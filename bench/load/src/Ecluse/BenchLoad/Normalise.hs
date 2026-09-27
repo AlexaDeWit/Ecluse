@@ -2,29 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The pure attribution and saturation maths behind the load benchmarks harness's two
-analysis views. It sits apart from the live measurement shell, so the tests exercise it
-deterministically.
-
-Two complementary views split a measured latency into parts a capacity planner can act
-on:
-
-  * __service-time attribution__ ('attribute'): at concurrency one, where no request
-    queues, a measured latency is @upstream baseline + Écluse overhead@. The baseline is
-    the real public-registry round trip. The overhead is everything Écluse adds on top of
-    hitting the public registry: the private leg, the merge, the decode, the re-serialise.
-    The view reports both absolute and as a fraction of the total, so a reader tells the
-    upstream-bound floor apart from the achievable-gain portion.
-
-  * __load saturation__ ('deriveSaturation'): under concurrent load the same latency grows
-    by a queuing delay that is neither upstream nor per-request overhead, but a capacity
-    signal. 'deriveSaturation' recovers it as @loaded p50 − concurrency-one service p50@.
-    It flags the delay when it dominates the loaded latency, alongside the achieved
-    throughput and the deadline-abort count.
-
-Both operate on plain scalars lifted out of a scenario's report. This module therefore
-carries none of the harness's socket or load-generator dependencies, and stays
-unit-testable.
+{- | The attribution and saturation arithmetic behind the load report, apart from the live shell
+so the unit suite can test it. At concurrency one a latency splits into the upstream baseline and
+the Écluse overhead ('attribute'). Under load the queuing delay above the concurrency-one service
+time is a capacity signal ('deriveSaturation'). Every latency here is a successful response's.
 -}
 module Ecluse.BenchLoad.Normalise (
     -- * The public-leg baseline
@@ -48,9 +29,8 @@ module Ecluse.BenchLoad.Normalise (
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | The per-request upstream wait as a multiple of the public-registry round trip. The
-proxy fetches the two origin legs concurrently and single-flights the public leg, so a
-request waits one round trip. Another ecosystem's fixtures must re-check this.
+{- | The upstream wait per request in public round trips: one, because the origin legs run
+concurrently and the public leg is single-flight. Another ecosystem's fixtures must re-check it.
 -}
 publicLegMultiple :: Double
 publicLegMultiple = 1.0
@@ -119,15 +99,15 @@ data NormalisedRow = NormalisedRow
 renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
 renderNormalised source rows =
     T.unlines $
-        [ "## Service-time attribution -- upstream vs Écluse overhead (concurrency 1)"
+        [ "## Service-time attribution: upstream against Écluse overhead (concurrency 1)"
         , ""
-        , "Concurrency-1 pass, so queuing does not contaminate the split: each latency is "
+        , "Concurrency-1 pass, so queuing does not contaminate the split: each successful latency is "
             <> "the upstream baseline plus the Écluse overhead. Baseline = "
             <> baselineLabel source
             <> ", "
-            <> "subtracted once per request (the public leg; concurrent fan-out, single-flight). "
+            <> "subtracted once per request (the public leg, with concurrent fan-out and single-flight). "
             <> "Overhead is everything Écluse adds on top of hitting the public registry (the private "
-            <> "leg, the merge, the decode, the re-serialise). p50 is primary; p99 is the tail (GC included)."
+            <> "leg, the merge, the decode, the re-serialise). p50 is primary. p99 is the tail, GC included."
         , ""
         , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead |"
         , "| --- | --- | --- | --- | --- | --- | --- |"
@@ -161,8 +141,8 @@ point the client sees mostly waiting in line, neither upstream nor Écluse's own
 queuingDominanceThreshold :: Double
 queuingDominanceThreshold = 0.5
 
-{- | The scalars 'deriveSaturation' works from. Both passes run at the same injected
-upstream latency, so their p50 difference is the queuing delay alone.
+{- | The scalars 'deriveSaturation' works from. Both passes run at the same injected upstream
+latency, so the difference of their successful-response p50s is the queuing delay alone.
 -}
 data SaturationInput = SaturationInput
     { siName :: Text
@@ -173,7 +153,7 @@ data SaturationInput = SaturationInput
     , siC1ServiceP50Ms :: Maybe Double
     -- ^ The p50 service time from the concurrency-one pass.
     , siLoadedP50Ms :: Maybe Double
-    -- ^ The p50 latency from the loaded pass.
+    -- ^ The successful-response p50 from the loaded pass. 'Nothing' when nothing succeeded.
     }
     deriving stock (Eq, Show)
 
@@ -221,11 +201,11 @@ scenario is queuing-bound.
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =
     T.unlines $
-        [ "## Load saturation -- queuing delay"
+        [ "## Load saturation: queuing delay"
         , ""
-        , "The queuing delay is the loaded p50 less the concurrency-1 service p50 (both at the "
-            <> "same injected upstream latency), so it is the time a request spends waiting in line -- "
-            <> "neither upstream nor per-request overhead, but a capacity signal. It is flagged "
+        , "The queuing delay is the loaded p50 of successful responses less the concurrency-1 service p50 (both at the "
+            <> "same injected upstream latency), so it is the time a request spends waiting in line. "
+            <> "It is neither upstream nor per-request overhead, but a capacity signal. It is flagged "
             <> "queuing-bound when it exceeds "
             <> pctCell threshold
             <> " of the loaded p50. Inform-only: "
@@ -236,15 +216,19 @@ renderSaturation threshold sats =
         ]
             <> map renderSat sats
             <> ["", summaryLine]
+            <> [unmeasuredLine | not (null unmeasured)]
   where
     bound = filter satQueuingDominates sats
+    unmeasured = filter (isNothing . satLoadedP50Ms) sats
     summaryLine
         | null bound =
-            "No scenario is queuing-bound: the loaded latency is upstream plus per-request overhead, not backlog."
+            "No measured scenario is queuing-bound: the loaded latency is upstream plus per-request overhead, not backlog."
         | otherwise =
-            "FLAG -- queuing-bound: "
+            "FLAG, queuing-bound: "
                 <> T.intercalate ", " (map satName bound)
-                <> " -- the loaded latency is mostly backlog (connection-pool / admission-bound), not per-request work."
+                <> ". The loaded latency is mostly backlog (connection-pool or admission-bound), not per-request work."
+    unmeasuredLine =
+        "No successful response under load, so no queuing reading: " <> T.intercalate ", " (map satName unmeasured) <> "."
 
 renderSat :: Saturation -> Text
 renderSat s =
@@ -257,10 +241,15 @@ renderSat s =
             , msMaybe (satC1ServiceP50Ms s)
             , msMaybe (satLoadedP50Ms s)
             , delayCell
-            , if satQueuingDominates s then "queuing-bound" else "ok"
+            , flag
             ]
         <> " |"
   where
+    flag
+        | satQueuingDominates s = "queuing-bound"
+        | isNothing (satLoadedP50Ms s) = "no successes"
+        | isNothing (satQueuingFraction s) = "n/a"
+        | otherwise = "ok"
     delayCell = case (satQueuingDelayMs s, satQueuingFraction s) of
         (Just d, Just f) -> msCell d <> " (" <> pctCell f <> ")"
         (Just d, Nothing) -> msCell d

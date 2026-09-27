@@ -2,35 +2,40 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Local npm load scenarios for metadata, artifacts, caches, and the mirror worker.
-Private reads stay live. Public requests can share one in-flight fetch even at zero cache TTL.
-The harness uses loopback upstreams and the production composition defaults.
+{- | Local npm load scenarios for metadata, artifacts, caches, admission under memory pressure, and
+the mirror worker. Private reads stay live. Public requests can share one in-flight fetch even at
+zero cache TTL.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
     corpusPublicStub,
     privateOverlayStub,
+    privateOverlayStubWith,
 ) where
 
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, encode, (.=))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.Types (Pair)
+import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
+import Data.Time (addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Clock (getMonotonicTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, defaultCacheEntries, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
-import Ecluse.BenchLoad.PatternScenario (patternScenarios)
-
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath, saUpstreamUrl))
+import Ecluse.BenchLoad.PatternScenario (loadPins, patternScenarios, selectArtifacts)
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, proxyPort)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
@@ -47,10 +52,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), VersionListResponse (..))
-import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
@@ -67,13 +69,11 @@ import Ecluse.Core.Worker (
     processBatch,
     runWorkerM,
  )
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName, permissiveAgeRules)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier, cpWeight), CorpusTier (Heavy), corpusPackages, cpName)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (inertRuleDeps)
-import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 import Ecluse.Test.Worker (admitAllPolicies)
 
@@ -84,6 +84,7 @@ npmFixture =
         { fixtureEcosystem = Npm
         , fixtureScenarios =
             [ mergeScenario
+            , heavyPrivateScenario
             , assembledHitScenario
             , revalidateScenario
             , cacheFitsScenario
@@ -91,12 +92,14 @@ npmFixture =
             , tarballScenario
             , tarballOnboardingScenario
             , tarballCeilingScenario
+            , herdScenario
+            , warmUnderColdScenario
+            , rampScenario
             , workerScenario
             ]
                 <> patternScenarios
                     Npm
                     corpusPackages
-                    npmDeps
                     (\knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
                     ( \knobs bodies artifacts -> do
                         rewritten <- newIORef mempty
@@ -107,108 +110,182 @@ npmFixture =
 
 mergeScenario :: Scenario
 mergeScenario =
-    Scenario
-        { scenarioName = "merge-cold"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET /npm/{pkg} over the weighted corpus with public cache TTL 0. Concurrent public misses share one fetch and decode. Every request reads private metadata, merges, filters, rewrites URLs, and serialises."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs 0 defaultCacheEntries serveMix (k . DriveHttpUrls)
-        }
+    scenario
+        "merge-cold"
+        "GET /npm/{pkg} over the weighted corpus with public cache TTL 0. Concurrent public misses share one fetch and decode. Every request reads private metadata, merges, filters, rewrites URLs, and serialises."
+        (\knobs k -> withNpmProxy knobs 0 Nothing serveMix (httpTarget k))
+
+heavyPrivateScenario :: Scenario
+heavyPrivateScenario =
+    scenario
+        "heavy-private"
+        "GET /npm/{pkg} over the weighted corpus with public cache TTL 0, while the private upstream returns the complete public capture, as a private registry that proxies npmjs does. Each request decodes its own private copy, which single-flight cannot share across callers."
+        ( \knobs k -> do
+            bodies <- loadCorpusBodies corpusPackages
+            privateRewritten <- newIORef mempty
+            publicRewritten <- newIORef mempty
+            let latency = lkUpstreamLatencyMicros knobs
+            withProxyOverStubs
+                Npm
+                knobs
+                0
+                Nothing
+                (corpusPublicStub privateRewritten latency bodies Map.empty)
+                (corpusPublicStub publicRewritten latency bodies Map.empty)
+                serveMix
+                (httpTarget k)
+        )
 
 assembledHitScenario :: Scenario
 assembledHitScenario =
-    Scenario
-        { scenarioName = "assembled-response-hit"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET /npm/{pkg} over the weighted corpus with retained assembled responses. Each request fetches full public and private metadata, except overlapping public reads share active work."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries serveMix (k . DriveHttpUrls)
-        }
+    scenario
+        "assembled-response-hit"
+        "GET /npm/{pkg} over the weighted corpus with retained assembled responses. Each request fetches full public and private metadata, except overlapping public reads share active work."
+        (\knobs k -> withNpmProxy knobs longCacheTtl Nothing serveMix (httpTarget k))
 
 revalidateScenario :: Scenario
 revalidateScenario =
-    Scenario
-        { scenarioName = "revalidate-not-modified"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET the heaviest corpus packument with a primed If-None-Match validator. Each request reads private metadata and computes the plan, then returns 304 without assembly or encoding."
-        , scenarioBoot = \knobs k ->
-            let pkgs = take 1 (workingSet knobs)
-             in withNpmProxy knobs longCacheTtl defaultCacheEntries (uniformMix pkgs) $ \case
-                    url : _ -> do
-                        etag <- primeETag url
-                        k (DriveHttpHeaders [("If-None-Match", etag)] [url])
-                    [] -> benchFail "revalidate-not-modified: no URL to drive"
-        }
+    scenario
+        "revalidate-not-modified"
+        "GET the heaviest corpus packument with a primed If-None-Match validator. Each request reads private metadata and computes the plan, then returns 304 without assembly or encoding."
+        ( \knobs k ->
+            withNpmProxy knobs longCacheTtl Nothing (uniformMix (take 1 (workingSet knobs))) $ \proxy -> \case
+                url : _ -> do
+                    etag <- primeETag url
+                    k (proxied proxy (DriveHttp (Load [("If-None-Match", etag)] [url])))
+                [] -> benchFail "revalidate-not-modified: no URL to drive"
+        )
 
 cacheFitsScenario :: Scenario
 cacheFitsScenario =
-    Scenario
-        { scenarioName = "cache-fits-large"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET a uniform corpus working set with enough assembled-response slots for every project. Full public metadata is always fetched. Compare with cache-evicts-large for assembly reuse."
-        , scenarioBoot = \knobs k ->
+    scenario
+        "cache-fits-large"
+        "GET a uniform corpus working set with enough assembled-response slots for every project. Full public metadata is always fetched. Compare with cache-evicts-large for assembly reuse."
+        ( \knobs k ->
             let pkgs = workingSet knobs
-             in withNpmProxy knobs longCacheTtl (length pkgs) (uniformMix pkgs) (k . DriveHttpUrls)
-        }
+             in withNpmProxy knobs longCacheTtl (Just (length pkgs)) (uniformMix pkgs) (httpTarget k)
+        )
 
 cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
-    Scenario
-        { scenarioName = "cache-evicts-large"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated assembly. Full public metadata is always fetched."
-        , scenarioBoot = \knobs k ->
-            let pkgs = workingSet knobs
-             in withNpmProxy knobs longCacheTtl (lkCacheMaxEntries knobs) (uniformMix pkgs) (k . DriveHttpUrls)
-        }
+    scenario
+        "cache-evicts-large"
+        "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated assembly. Full public metadata is always fetched."
+        (\knobs k -> withNpmProxy knobs longCacheTtl (Just (lkCacheMaxEntries knobs)) (uniformMix (workingSet knobs)) (httpTarget k))
 
 tarballScenario :: Scenario
 tarballScenario =
-    Scenario
-        { scenarioName = "tarball-hot-path"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET /npm/{pkg}/-/{unscoped-pkg}-9999.0.2.tgz. Resolve the private artifact and stream its bytes from the local upstream."
-        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries tarballMix (k . DriveHttpUrls)
-        }
+    scenario
+        "tarball-hot-path"
+        "GET /npm/{pkg}/-/{unscoped-pkg}-9999.0.2.tgz. Resolve the private artifact and stream its bytes from the local upstream."
+        (\knobs k -> withNpmProxy knobs longCacheTtl Nothing tarballMix (httpTarget k))
 
 tarballOnboardingScenario :: Scenario
 tarballOnboardingScenario =
-    Scenario
-        { scenarioName = "tarball-onboarding"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "GET /npm/{pkg}/-/{unscoped-pkg}-1.0.0.tgz. A private 404 precedes public admission, artifact streaming, and mirror enqueue. The private probe and public artifact add two sequential upstream waits."
-        , scenarioBoot = \knobs k ->
+    scenario
+        "tarball-onboarding"
+        "GET /npm/{pkg}/-/{unscoped-pkg}-1.0.0.tgz. A private 404 precedes public admission and artifact streaming. The private probe and public artifact add two sequential upstream waits. The mount mirrors nothing, so no mirror job is enqueued."
+        ( \knobs k ->
             let latency = lkUpstreamLatencyMicros knobs
                 bytes = artifactBytes (lkPayloadBytes knobs)
              in withProxyOverStubs
                     Npm
-                    npmDeps
                     knobs
                     longCacheTtl
-                    defaultCacheEntries
+                    Nothing
                     (onboardingPrivateStub latency)
                     (onboardingPublicStub latency bytes)
                     onboardingMix
-                    (k . DriveHttpUrls)
-        }
+                    (httpTarget k)
+        )
 
 tarballCeilingScenario :: Scenario
 tarballCeilingScenario =
-    Scenario
-        { scenarioName = "tarball-ceiling"
-        , scenarioConcurrencyScale = 4
-        , scenarioDescription =
-            "Measure the private artifact relay at four times the base concurrency and 2 ms upstream latency. The payload knob sets the streamed body size."
-        , scenarioBoot = \knobs k ->
-            withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl defaultCacheEntries tarballMix (k . DriveHttpUrls)
+    ( scenario
+        "tarball-ceiling"
+        "Measure the private artifact relay at four times the base concurrency and 2 ms upstream latency. The payload knob sets the streamed body size."
+        (\knobs k -> withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl Nothing tarballMix (httpTarget k))
+    )
+        { scenarioConcurrencyScale = 4
         }
 
-withNpmProxy :: LoadKnobs -> NominalDiffTime -> Int -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
+herdScenario :: Scenario
+herdScenario =
+    ( scenario
+        "herd"
+        ("Send " <> show herdSize <> " simultaneous cold GET /npm/typescript to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
+        ( \knobs k ->
+            withNpmProxy knobs 0 Nothing (\port -> [packageUrl port "typescript"]) $ \proxy -> \case
+                url : _ -> k (proxied proxy (DriveBurst herdSize url))
+                [] -> benchFail "herd: no URL to drive"
+        )
+    )
+        { scenarioServiceTime = False
+        }
+
+herdSize :: Int
+herdSize = 100
+
+warmUnderColdScenario :: Scenario
+warmUnderColdScenario =
+    ( scenario
+        "warm-under-cold"
+        "With cache TTL 3600, measure assembled-response hits and retained selected-version reads for the corpus outside the heavy tier, while a second generator drives listings of the heavy tier at the same concurrency. The heavy tier's private documents change on every request, so those listings never reuse an assembled response."
+        warmUnderCold
+    )
+        { scenarioServiceTime = False
+        }
+
+warmUnderCold :: LoadKnobs -> (Target -> IO a) -> IO a
+warmUnderCold knobs k = do
+    bodies <- loadCorpusBodies corpusPackages
+    pins <- loadPins
+    selected <- either benchFail pure (selectArtifacts Npm (Just "pinned") pins warmPackages bodies)
+    artifactRequests <- traverse (HTTP.parseRequest . toString . saUpstreamUrl) (Map.elems selected)
+    served <- newIORef (0 :: Int)
+    rewritten <- newIORef mempty
+    let latency = lkUpstreamLatencyMicros knobs
+        bytes = artifactBytes (lkPayloadBytes knobs)
+        artifacts = Map.fromList [(HTTP.path request, bytes) | request <- artifactRequests]
+        nonce name
+            | name `elem` map cpName coldPackages = do
+                n <- atomicModifyIORef' served (\count -> (count + 1, count))
+                pure ["description" .= ("bench nonce " <> show n :: Text)]
+            | otherwise = pure []
+    withProxyOverStubs
+        Npm
+        knobs
+        longCacheTtl
+        Nothing
+        (privateOverlayStubWith nonce latency bytes)
+        (corpusPublicStub rewritten latency bodies artifacts)
+        (const [])
+        $ \proxy _ -> do
+            let port = proxyPort proxy
+                listings = concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp)))
+                warmUrls = listings warmPackages <> [packageUrl port (saProxyPath artifact) | artifact <- Map.elems selected]
+            -- Prime the assembled and selected-version stores, and prove every warm path serves.
+            for_ (ordNub warmUrls) (void . fetchChecked status200 [])
+            k (proxied proxy (DriveUnder (urlLoad warmUrls) (urlLoad (listings coldPackages))))
+
+rampScenario :: Scenario
+rampScenario =
+    ( scenario
+        "ramp"
+        ("GET /npm/{pkg} over the weighted corpus with public cache TTL 0, holding " <> T.intercalate ", " (map show rampSteps) <> " connections in turn for the configured duration each. Successes should level off past saturation, not fall.")
+        (\knobs k -> withNpmProxy knobs 0 Nothing serveMix (\proxy urls -> k (proxied proxy (DriveRamp rampSteps (urlLoad urls)))))
+    )
+        { scenarioServiceTime = False
+        }
+
+rampSteps :: [Int]
+rampSteps = [10, 25, 50, 100, 200, 400]
+
+-- The heavy tier drives the cold side of the paired scenario, and the rest the warm side.
+coldPackages, warmPackages :: [CorpusPackage]
+(coldPackages, warmPackages) = partition ((== Heavy) . cpTier) corpusPackages
+
+withNpmProxy :: LoadKnobs -> Int -> Maybe Int -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadCorpusBodies corpusPackages
     rewritten <- newIORef mempty
@@ -216,7 +293,6 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
         latency = lkUpstreamLatencyMicros knobs
     withProxyOverStubs
         Npm
-        npmDeps
         knobs
         ttl
         maxEntries
@@ -226,45 +302,28 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
         body
 
 packageUrl :: Int -> Text -> Text
-packageUrl proxyPort name = localhost proxyPort <> "/npm/" <> name
+packageUrl port name = localhost port <> "/npm/" <> name
 
 serveMix :: Int -> [Text]
-serveMix proxyPort =
-    concatMap (\cp -> replicate (cpWeight cp) (packageUrl proxyPort (cpName cp))) corpusPackages
+serveMix port =
+    concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp))) corpusPackages
 
 uniformMix :: [CorpusPackage] -> Int -> [Text]
-uniformMix pkgs proxyPort = map (packageUrl proxyPort . cpName) pkgs
+uniformMix pkgs port = map (packageUrl port . cpName) pkgs
 
 tarballMix :: Int -> [Text]
-tarballMix proxyPort =
-    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-9999.0.2.tgz")) corpusPackages
+tarballMix port =
+    concatMap (\cp -> replicate (cpWeight cp) (localhost port <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-9999.0.2.tgz")) corpusPackages
 
 workingSet :: LoadKnobs -> [CorpusPackage]
 workingSet knobs = take (max 1 (lkWorkingSet knobs)) corpusPackages
 
-npmDeps :: Int -> Int -> IO PackumentDeps
-npmDeps privatePort publicPort = do
-    prepared <- prepare inertRuleDeps permissiveAgeRules
-    pure
-        ( npmServeDeps
-            (Just (loopbackRegistryUrl (localhost privatePort)))
-            (loopbackRegistryUrl (localhost publicPort))
-            (MirrorOnAdmit (loopbackRegistryUrl "https://mirror.bench"))
-            prepared
-            (pure benchNow)
-        )
-            { pdMountBaseUrl = "https://bench.proxy"
-            , pdEgressUrl = Right . loopbackRegistryUrl
-            }
-
 workerScenario :: Scenario
 workerScenario =
-    Scenario
-        { scenarioName = "worker-mirroring"
-        , scenarioConcurrencyScale = 1
-        , scenarioDescription =
-            "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop. The presence probe reports absent, so every job exercises the complete pipeline."
-        , scenarioBoot = \knobs k -> do
+    ( scenario
+        "worker-mirroring"
+        "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop in the harness process. The presence probe reports absent, so every job exercises the complete pipeline."
+        $ \knobs k -> do
             counter <- newIORef (0 :: Int)
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
@@ -287,7 +346,9 @@ workerScenario =
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
                     job = mirrorJob artUrl
-                k (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter))
+                k (Target Nothing (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter)))
+    )
+        { scenarioInProcess = True
         }
 
 runWorkerLoop :: LoadKnobs -> LogEnv -> WorkerRuntime -> MirrorQueue -> MirrorJob -> IORef Int -> IO [Double]
@@ -301,7 +362,7 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
                 <> show published
                 <> " of "
                 <> show (length latencies)
-                <> " jobs published -- a harness wiring failure (fetch/verify/publish broke)"
+                <> " jobs published: a harness wiring failure (fetch, verify, or publish broke)"
             )
     pure latencies
   where
@@ -362,7 +423,11 @@ corpusPublicStub rewritten latency bodies artifacts request respond = do
 
 -- | Only the trusted overlay artifact exists privately. Captured public artifacts miss here.
 privateOverlayStub :: Int -> LByteString -> Application
-privateOverlayStub latency bytes request respond = do
+privateOverlayStub = privateOverlayStubWith (const (pure []))
+
+-- | 'privateOverlayStub' with extra top-level fields per package name, drawn on every request.
+privateOverlayStubWith :: (Text -> IO [Pair]) -> Int -> LByteString -> Application
+privateOverlayStubWith extraFields latency bytes request respond = do
     when (latency > 0) (threadDelay latency)
     let mPkg = requestedPackage request
     case mPkg of
@@ -372,8 +437,9 @@ privateOverlayStub latency bytes request respond = do
                  in if file == "/-/" <> tarballStem name <> "-9999.0.2.tgz"
                         then respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
                         else respond (responseLBS status404 [] "")
-        Just pkg ->
-            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay (selfBaseUrl request) pkg)))
+        Just pkg -> do
+            extra <- extraFields pkg
+            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay (selfBaseUrl request) pkg extra)))
         Nothing ->
             respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
 
@@ -420,17 +486,17 @@ onboardingVersion :: Text
 onboardingVersion = "1.0.0"
 
 onboardingMix :: Int -> [Text]
-onboardingMix proxyPort =
-    [localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- corpusPackages]
+onboardingMix port =
+    [localhost port <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- corpusPackages]
 
-privateOverlay :: Text -> Text -> Value
-privateOverlay authority name =
+privateOverlay :: Text -> Text -> [Pair] -> Value
+privateOverlay authority name extra =
     packumentValue
         name
         "9999.0.2"
         [(version, overlayVersionObject authority name version) | version <- overlayVersions]
         (("created" .= publishedLongAgo) : [Key.fromText version .= publishedLongAgo | version <- overlayVersions])
-        ["_id" .= name]
+        (("_id" .= name) : extra)
   where
     overlayVersions :: [Text]
     overlayVersions = ["9999.0.0", "9999.0.1", "9999.0.2"]

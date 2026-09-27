@@ -15,6 +15,7 @@ import UnliftIO (evaluate, timeout)
 import UnliftIO.Async (mapConcurrently_)
 import UnliftIO.Exception (mask, tryAny)
 
+import Ecluse.BenchLoad.Latency (isSuccessStatus)
 import Ecluse.BenchLoad.Oha (OhaReport (..))
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (ClientTrace (..), RequestTrace (..))
@@ -71,13 +72,11 @@ fetch manager results url = mask $ \restore -> do
 summarise :: Int -> Double -> [(Maybe Int, Double)] -> ReplayReport
 summarise scheduled elapsed results = ReplayReport http totals
   where
-    successes = sort [latency | (Just status, latency) <- results, status >= 200 && status < 400]
+    successes = [latency | (Just status, latency) <- results, isSuccessStatus status]
     statuses = Map.fromListWith (+) [(show status, 1) | (Just status, _) <- results]
     failed = length [() | (Nothing, _) <- results]
     completed = sum (Map.elems statuses)
     refused = sum [Map.findWithDefault 0 status statuses | status <- ["429", "503"]]
-    quantile :: Double -> Maybe Double
-    quantile q = successes !!? max 0 (ceiling (q * fromIntegral (length successes)) - 1)
     totals =
         ReplayTotals
             scheduled
@@ -90,15 +89,10 @@ summarise scheduled elapsed results = ReplayReport http totals
             elapsed
     http =
         OhaReport
-            { ohaRequestsPerSec = fromIntegral (length successes) / elapsed
-            , ohaSuccessRate = fromIntegral (length successes) / fromIntegral (max 1 scheduled)
-            , ohaElapsedSeconds = elapsed
-            , ohaP50 = quantile (0.5 :: Double)
-            , ohaP90 = quantile 0.9
-            , ohaP99 = quantile 0.99
-            , ohaP999 = quantile 0.999
+            { ohaElapsedSeconds = elapsed
             , ohaStatusCounts = statuses
             , ohaErrorCounts = if failed == 0 then mempty else Map.singleton "transport failure" failed
+            , ohaSuccessLatencies = successes
             }
 
 waitUntil :: Double -> IO ()

@@ -30,7 +30,7 @@ import Ecluse.BenchLoad.Normalise (
 spec :: Spec
 spec = do
     describe "publicLegMultiple" $
-        it "is one round trip -- concurrent fan-out plus single-flight public leg" $
+        it "is one round trip: concurrent fan-out plus a single-flight public leg" $
             publicLegMultiple `shouldBe` 1.0
 
     describe "attribute" $ do
@@ -115,4 +115,11 @@ spec = do
         it "states no scenario is queuing-bound when none dominates" $ do
             let ok = deriveSaturation 0.5 (SaturationInput "worker" 130 0 (Just 153) (Just 160))
                 rendered = renderSaturation 0.5 [ok]
-            rendered `shouldSatisfy` T.isInfixOf "No scenario is queuing-bound"
+            rendered `shouldSatisfy` T.isInfixOf "No measured scenario is queuing-bound"
+
+        it "marks a scenario with no successful response instead of calling it ok" $ do
+            let unmeasured = deriveSaturation 0.5 (SaturationInput "merge-cold" 0 0 (Just 255) Nothing)
+                rendered = renderSaturation 0.5 [unmeasured]
+            rendered `shouldSatisfy` T.isInfixOf "| no successes |"
+            rendered `shouldSatisfy` T.isInfixOf "no queuing reading: merge-cold"
+            rendered `shouldNotSatisfy` T.isInfixOf "| ok |"

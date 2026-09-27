@@ -4,8 +4,26 @@ name: Load test
 on:
   workflow_dispatch:
     inputs:
+      pod-shape:
+        description: "Pod shape the measured proxy runs under, or thrash for the GC-thrash probe alone"
+        type: choice
+        options:
+          - all
+          - unlimited
+          - 2cpu-512mib
+          - 4cpu-1gib
+          - 4cpu-2gib
+          - thrash
+        default: all
+      scenarios:
+        description: "Comma-separated scenario keys, such as npm/merge-cold,npm/herd (blank: every scenario)"
+        required: false
+      thrash-limits-mib:
+        description: "Memory limits in MiB the GC-thrash probe steps down through, highest first"
+        required: false
+        default: "2048,1536,1024,768,512"
       duration-seconds:
-        description: "Seconds each scenario applies load"
+        description: "Seconds each scenario, or each ramp step, applies load"
         required: false
         default: "30"
       concurrency:
@@ -16,14 +34,14 @@ on:
         description: "Maximum concurrent packument fetches (blank exercises the proxy's computed default, as a scheduled run does)"
         required: false
       payload-bytes:
-        description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 363520, about the median popular-package tarball; sweep this to probe the relay's byte rate)"
+        description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 363520, about the median popular-package tarball)"
         required: false
   schedule:
     - cron: "17 4 * * *"
 
-# One run per ref. Never cancel a scheduled or dispatched run mid-flight.
+# One run per ref and pod-shape choice. Never cancel a scheduled or dispatched run mid-flight.
 concurrency:
-  group: bench-load-${{ github.ref }}
+  group: bench-load-${{ github.ref }}-${{ inputs.pod-shape || 'all' }}
   cancel-in-progress: false
 
 # Least privilege: a read-only token is all this workflow needs. Artifact upload uses
@@ -31,26 +49,36 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Pin the cabal store to a deterministic, cacheable location, as the other Haskell jobs do.
+  CABAL_DIR: ${{ github.workspace }}/.cabal
+  # The load knobs, from the dispatch inputs (defaulted for a scheduled run). They travel
+  # through the environment, never interpolated into a shell command, so a malformed value
+  # can only mis-size a measurement, never inject. Blank admission leaves the proxy's
+  # computed default in force, which is what an unconfigured deployment gets.
+  BENCH_LOAD_DURATION_SECONDS: ${{ inputs.duration-seconds || '30' }}
+  BENCH_LOAD_CONCURRENCY: ${{ inputs.concurrency || '100' }}
+  BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ inputs.serve-max-in-flight }}
+  BENCH_LOAD_PAYLOAD_BYTES: ${{ inputs.payload-bytes || '363520' }}
+  BENCH_LOAD_SCENARIOS: ${{ inputs.scenarios }}
+  BENCH_LOAD_ISOLATE_OHA: "1"
+  # The proxy's own cgroups sit beside the harness under this directory (see the steps).
+  BENCH_LOAD_CGROUP: /sys/fs/cgroup/ecluse-bench-load
+
 jobs:
   bench-load:
-    name: Throughput & latency load test (inform-only)
+    name: Load test (${{ matrix.pod-shape }}, inform-only)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-512mib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
     env:
-      # Pin the cabal store to a deterministic, cacheable location, as the other
-      # Haskell jobs do.
-      CABAL_DIR: ${{ github.workspace }}/.cabal
-      # The load knobs, from the dispatch inputs (defaulted for a scheduled run). They
-      # travel through the environment, never interpolated into a shell command, so a
-      # malformed value can only mis-size a measurement, never inject. Admission has no
-      # fixed default here. Blank means the harness resolves the proxy's computed
-      # default from the capability count, exactly as an unconfigured deployment would.
-      # Nightly trends then measure what an operator gets. Dispatch a number to pin it.
-      BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
-      BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '100' }}
-      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight }}
-      BENCH_LOAD_PAYLOAD_BYTES: ${{ github.event.inputs.payload-bytes || '363520' }}
-      BENCH_LOAD_ISOLATE_OHA: "1"
+      # The probe sets its own shape per step, so the shape here only matters for the passes.
+      BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
+      BENCH_LOAD_THRASH_LIMITS_MIB: ${{ matrix.pod-shape == 'thrash' && (inputs.thrash-limits-mib || '2048,1536,1024,768,512') || '' }}
+      BENCH_LOAD_THRASH_CPUS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,18 +92,36 @@ jobs:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
 
-      # An exact cabal-store hit already covers cabal.project's pinned index-state.
+      # Skipped on an exact cabal-store cache hit: the restored index already covers
+      # cabal.project's pinned index-state.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # The runner has 4 cores. The harness pins oha to core 0, and GHC takes the other
-      # 3 as capabilities. The driver passes -N3 to each scenario child through GHCRTS,
-      # because argv RTS flags do not survive the re-exec. pipefail keeps the harness
-      # exit code through tee.
+      - name: Build the harness
+        run: nix develop .#ci --command cabal build -v0 exe:bench-load
+
+      # The harness bounds each proxy with a cgroup of its own, so it needs a subtree it may
+      # write. Swap goes off, or a pod shape could page instead of meeting its limit.
+      - name: Delegate a cgroup subtree to the harness
+        run: |
+          set -euo pipefail
+          sudo swapoff -a
+          sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
+          sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
+          echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
+          echo "controllers enabled for the proxy cgroups: $(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")"
+
+      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run load tests
         run: |
           set -eo pipefail
+          # This shell, and so the harness, joins the leaf beside the proxy cgroups.
+          echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
+          # The runner has 4 cores. The harness pins oha to core 0, and GHC takes the other
+          # 3 as capabilities. The driver passes -N3 to each scenario child through GHCRTS,
+          # because argv RTS flags do not survive the re-exec, and strips it from the proxy,
+          # whose own boot sizes it from its cgroup.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # Preserve partial output when the harness fails.
@@ -83,6 +129,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-load-results-${{ runner.arch }}-${{ github.sha }}
+          name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
           path: bench-load-results.md
           if-no-files-found: warn

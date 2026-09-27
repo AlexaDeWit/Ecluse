@@ -3,12 +3,9 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The one failure type the load benchmarks harness raises.
-
-The load benchmarks tier is inform-only: it never fails on a slow or degraded result. Its
-only red state is a __literal failure__: the harness cannot boot, @oha@ cannot run, a
-report does not parse, or a scenario served nothing. The harness raises that as this typed
-exception (a non-zero exit) rather than a stringly throw, per @STYLE.md@ section 11.
+{- | The one failure the load harness raises, as a typed exception and a non-zero exit. It never
+fails on a slow result. It fails when a fixture or a proxy cannot boot, when @oha@ cannot run, when
+a report does not parse, and when a run breaks an invariant in "Ecluse.BenchLoad.Verdict".
 -}
 module Ecluse.BenchLoad.Error (
     BenchLoadError (..),

@@ -43,6 +43,7 @@ module Ecluse.Rts (
     -- * Cgroup v2 parsing
     parseCpuMax,
     parseMemoryMax,
+    readIfExists,
 ) where
 
 import Data.Ord (clamp)
@@ -484,8 +485,7 @@ tightest found = case catMaybes found of
     [] -> Nothing
     (x : xs) -> Just (foldl' min x xs)
 
--- An absent file is the ordinary case off a cgroup-v2 host, so it reads as no limit rather
--- than a fault. Every other IO error propagates.
+-- | Read a file that may be absent, as off a cgroup-v2 host. Every other IO error propagates.
 readIfExists :: FilePath -> IO (Maybe Text)
 readIfExists path =
     rightToMaybe <$> tryJust (guard . isDoesNotExistError) (decodeUtf8 <$> readFileBS path)
