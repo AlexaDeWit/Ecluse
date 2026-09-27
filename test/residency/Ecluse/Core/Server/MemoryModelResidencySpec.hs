@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Corpus-authenticated metadata measurements in one child process per retained shape.
-module Ecluse.Core.Server.MemoryModelResidencySpec (spec, childMain, sourceMain, selectedMain, probeIdentity, probeLimits) where
+module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object, eitherDecodeStrict, encode, object, (.:), (.=))
@@ -11,9 +11,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Parser)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import System.Environment (getExecutablePath)
-import System.Exit (ExitCode (ExitSuccess))
-import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
@@ -23,7 +20,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), packages, probe, probeSelected, probeSource)
+import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
@@ -38,11 +35,7 @@ spec = describe "metadata retained heap" $ do
         forM_ [minBound .. maxBound] $ \shape ->
             it (toString (cpName package) <> "/" <> show shape) $ do
                 (size, digest) <- authenticate package
-                executable <- getExecutablePath
-                (status, output, errors) <-
-                    readProcessWithExitCode executable ["--metadata-probe", show shape, cpPath package, "+RTS", "-T", "-N1", "-RTS"] ""
-                unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
-                result <- either fail pure (eitherDecodeStrict (encodeUtf8 (toText output)))
+                result <- measureInChild "--metadata-probe" (show shape) package
                 report package digest shape result
                 checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
 
@@ -66,14 +59,6 @@ envelopeQuarters _ shape = case shape of
     Raw -> 28
     Typed -> 9
     Shared -> 30
-
--- | Dispatch a fresh process without entering Hspec or loading any other capture.
-childMain :: String -> FilePath -> IO ()
-childMain rawShape path = do
-    shape <- maybe (fail "unknown metadata residency shape") pure (readMaybe rawShape)
-    package <- maybe (fail "unknown metadata residency corpus path") pure (find ((== path) . cpPath) packages)
-    result <- probe shape package
-    LBS.putStr (encode result)
 
 authenticate :: CorpusPackage -> IO (Int, Text)
 authenticate package = do

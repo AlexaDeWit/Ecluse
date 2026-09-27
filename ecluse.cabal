@@ -1273,6 +1273,7 @@ test-suite ecluse-residency
   hs-source-dirs:     test/residency test/integration
   other-modules:
     Ecluse.Core.Registry.JsonStreamResidencySpec
+    Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Server.MemoryModel.MaterialProbe
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec

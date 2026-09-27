@@ -150,6 +150,24 @@ Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.
 
+### Read evaluation
+
+`MetadataResidencySpec` checks that a full read hands back a fully evaluated result.
+It reads each capture through the production projection in two fresh child processes, with the
+warm-up and baseline above:
+
+- One child roots the shared entry at weak head normal form, as production holds a read result.
+- The other roots the entry after forcing its derived rendering.
+
+The two retained samples may differ by at most 4 KiB, plus 128 bytes a release for PyPI.
+Both directions fail, because a deferred field can hold more or less than its value.
+PyPI releases still defer PEP 440 key parts, yank reasons and some file fields, under 120 bytes a
+release in the corpus.
+
+A second check holds only the typed view and places weak pointers on the served document and on
+each served release or file object. Every pointer must clear after a major collection. While the
+document is also rooted, every pointer must survive one, so the check can observe liveness.
+
 ### Streaming source probes
 
 The same residency executable accepts `--metadata-source-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH`.

@@ -10,6 +10,11 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     Measurement (..),
     packages,
     probe,
+    Evaluation (..),
+    probeEvaluation,
+    project,
+    measureInChild,
+    childMain,
     SelectedShape (..),
     probeSelected,
     SourceMode (..),
@@ -28,8 +33,11 @@ import Data.Text qualified as T
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats, getRTSStatsEnabled)
+import System.Environment (getExecutablePath)
+import System.Exit (ExitCode (ExitSuccess))
 import System.IO (withBinaryFile)
 import System.Mem (performMajorGC)
+import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
@@ -102,6 +110,14 @@ data SelectedShape
       SelectedControl
     deriving stock (Eq, Show)
 
+-- | How far the shared entry is evaluated before it is rooted.
+data Evaluation
+    = -- | Weak head normal form, as production holds a read result.
+      WeakHead
+    | -- | Fully forced through the derived rendering.
+      Forced
+    deriving stock (Eq, Show, Read)
+
 data HeapSample = HeapSample
     { live :: !Word64
     , sampleAllocated :: !Word64
@@ -112,9 +128,40 @@ data HeapSample = HeapSample
 packages :: [CorpusPackage]
 packages = corpusPackages <> pypiCorpusPackages
 
+-- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
+measureInChild :: String -> String -> CorpusPackage -> IO Measurement
+measureInChild flag shape package = do
+    executable <- getExecutablePath
+    (status, output, errors) <- readProcessWithExitCode executable [flag, shape, cpPath package, "+RTS", "-T", "-N1", "-RTS"] ""
+    unless (status == ExitSuccess) (fail (show status <> ": " <> errors))
+    either fail pure (eitherDecodeStrict (encodeUtf8 (toText output)))
+
+-- | Dispatch a fresh process without entering Hspec or loading any other capture.
+childMain :: (Read shape) => (shape -> CorpusPackage -> IO Measurement) -> String -> FilePath -> IO ()
+childMain measure rawShape path = do
+    shape <- maybe (fail "unknown metadata residency shape") pure (readMaybe rawShape)
+    package <- maybe (fail "unknown metadata residency corpus path") pure (find ((== path) . cpPath) packages)
+    measure shape package >>= LBS.putStr . encode
+
 -- | Root only the selected representation across collections, then verify its release separately.
 probe :: Shape -> CorpusPackage -> IO Measurement
 probe shape package = measureRetained (prepare shape package)
+
+-- | Root the shared entry at one depth. A thunk that reaches decoder state holds more at weak head.
+probeEvaluation :: Evaluation -> CorpusPackage -> IO Measurement
+probeEvaluation evaluation package = measureRetained (prepareEvaluated evaluation package)
+
+{-# NOINLINE prepareEvaluated #-}
+prepareEvaluated :: Evaluation -> CorpusPackage -> IO (StablePtr Held, (Int, Int64, Int, Int))
+prepareEvaluated evaluation package = do
+    bytes <- BS.readFile (cpPath package)
+    (info, document) <- project package bytes
+    entry <- evaluate (CacheEntry info document (BS.length bytes) (digestOf bytes))
+    when (evaluation == Forced) (void (forceShown entry))
+    size <- evaluate (BS.length bytes)
+    count <- evaluate (Map.size (infoVersions info))
+    root <- evaluate (HeldShared entry) >>= newStablePtr
+    pure (root, (size, 0, 0, count))
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
