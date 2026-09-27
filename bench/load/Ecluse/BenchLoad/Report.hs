@@ -176,8 +176,10 @@ proxyRows p =
     , row "memory.events oom_kill / oom / max / high" (maybe "no cgroup" eventsCell cgroup)
     , row "CPU throttled during the window" (maybe "n/a" (\us -> fmt1 (fromIntegral us / 1_000) <> " ms") (pfWindowThrottledUsec p))
     , row "proxy ending" (endingCell (pfEnding p) <> if pfExitedEarly p then ", before the harness stopped it" else "")
+    , row "boot attempts" (show (length (pfBootRetries p) + 1))
     , row "CPU admission / memory admission budget / cold listings at once" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMaterialBudgetBytes limits) <> " / " <> maybe "n/a" show (admittedListings limits))
-    , row "admission in-flight gauge: max / mean / last (samples, missed)" inFlightCell
+    , row "admission in-flight gauge: max / mean / last (samples, missed)" (gaugeCell (pfInFlight p))
+    , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     ]
   where
     cgroup = pfCgroup p
@@ -190,8 +192,7 @@ proxyRows p =
             <> maybe "n/a" (mib . fromIntegral) (pfIdleCgroupBytes p)
     eventsCell c = T.intercalate " / " [show (counter key (crMemoryEvents c)) | key <- ["oom_kill", "oom", "max", "high"]]
     statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
-    g = pfInFlight p
-    inFlightCell =
+    gaugeCell g =
         T.intercalate " / " (map (maybe "n/a" fmt1) [gsMax g, gsMean g, gsLast g])
             <> " ("
             <> show (gsSamples g)
@@ -202,6 +203,7 @@ proxyRows p =
 proxyDetail :: ProxyFigures -> [Text]
 proxyDetail p =
     section "Admission series at the end of the window" (pfAdmissionSeries p)
+        <> section "Retried proxy boots" (concatMap lines (pfBootRetries p))
         <> section "Proxy stderr" (if T.null (pfStderrTail p) then [] else lines (pfStderrTail p))
   where
     section _ [] = []

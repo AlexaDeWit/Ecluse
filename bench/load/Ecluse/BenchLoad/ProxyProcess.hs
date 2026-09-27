@@ -24,6 +24,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     proxyBootLines,
     proxyIdleRts,
     proxyIdleCgroupBytes,
+    proxyBootRetries,
     proxySnapshot,
     proxyCgroupNow,
     proxyScrape,
@@ -35,12 +36,16 @@ module Ecluse.BenchLoad.ProxyProcess (
     -- * A drained process
     Drained,
     bootDrained,
+    BootFailure (..),
+    retryingBoot,
+    bootDiagnostic,
 ) where
 
-import Control.Concurrent (modifyMVar)
+import Control.Concurrent (modifyMVar, threadDelay)
 import Data.Aeson (eitherDecode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime)
@@ -61,9 +66,10 @@ import Network.HTTP.Client (
 import Network.HTTP.Types (statusCode)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectory)
 import System.Environment (getEnvironment, getExecutablePath)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, signalProcess)
+import System.Posix.User (getRealUserID)
 import System.Process (getPid, terminateProcess)
 import System.Process.Typed (
     ExitCode (ExitFailure, ExitSuccess),
@@ -141,6 +147,7 @@ data ProxyProcess = ProxyProcess
     , ppBootLines :: [Text]
     , ppIdleRts :: Maybe RtsSnapshot
     , ppIdleCgroupBytes :: Maybe Int
+    , ppBootRetries :: [Text]
     , ppEnd :: MVar (Maybe ProxyEnd)
     }
 
@@ -159,6 +166,10 @@ proxyIdleRts = ppIdleRts
 -- | The proxy cgroup's @memory.current@ at the idle floor.
 proxyIdleCgroupBytes :: ProxyProcess -> Maybe Int
 proxyIdleCgroupBytes = ppIdleCgroupBytes
+
+-- | The failed boots retried before this one, each with its diagnostic.
+proxyBootRetries :: ProxyProcess -> [Text]
+proxyBootRetries = ppBootRetries
 
 -- | How the proxy ended and what its cgroup recorded.
 data ProxyEnd = ProxyEnd
@@ -184,7 +195,7 @@ acquireCgroup :: PodShape -> Maybe FilePath -> IO (Maybe FilePath)
 acquireCgroup shape root = case (shape, root) of
     (Unlimited, Nothing) -> pure Nothing
     (Limited _ _, Nothing) ->
-        benchFail ("pod shape " <> renderPodShape shape <> " needs BENCH_LOAD_CGROUP: a cgroup v2 directory delegated to this user, with the cpu and memory controllers enabled")
+        benchFail ("pod shape " <> renderPodShape shape <> " needs BENCH_LOAD_CGROUP: a cgroup v2 directory delegated to this user, with the cpu, memory, and pids controllers enabled")
     (_, Just base) -> do
         pid <- getProcessID
         let dir = base </> ("proxy-" <> show pid)
@@ -230,7 +241,8 @@ launch settings shape dir cgroup publicPort privatePort = do
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
             Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
     manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
-    drained <- bootDrained manager 1200 port (setEnv environment command)
+    (retries, booting) <- retryingBoot (bootDiagnostic cgroup) (bootDrained manager 1200 port (setEnv environment command))
+    drained <- either (const (benchFail ("bench-load: the proxy did not boot\n" <> T.intercalate "\n\n" retries))) pure booting
     endVar <- newMVar Nothing
     let booted =
             ProxyProcess
@@ -243,6 +255,7 @@ launch settings shape dir cgroup publicPort privatePort = do
                 , ppBootLines = []
                 , ppIdleRts = Nothing
                 , ppIdleCgroupBytes = Nothing
+                , ppBootRetries = retries
                 , ppEnd = endVar
                 }
     (`onException` stopProxy booted) $ do
@@ -335,7 +348,8 @@ readCgroup dir = do
     events <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.events")
     stat <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.stat")
     cpu <- maybe mempty keyedCounters <$> readIfExists (dir </> "cpu.stat")
-    pure (CgroupReading maxBytes peak current events stat cpu)
+    tasks <- (readMaybe . toString . T.strip =<<) <$> readIfExists (dir </> "pids.current")
+    pure (CgroupReading maxBytes peak current events stat cpu tasks)
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
 
@@ -376,10 +390,22 @@ data Drained = Drained
     , drDrains :: [Async ()]
     }
 
+-- | Why a boot failed, with the tails of both streams, read after the process was stopped.
+data BootFailure = BootFailure
+    { bfReason :: Text
+    , bfStderr :: Text
+    , bfLog :: Text
+    }
+    deriving stock (Show)
+
+renderBootFailure :: BootFailure -> Text
+renderBootFailure failure =
+    "the proxy " <> bfReason failure <> "\nstderr:\n" <> bfStderr failure <> "\nlog tail:\n" <> bfLog failure
+
 {- | Start a process on drained pipes and wait, 100 ms per attempt, for @/readyz@ on the port. A
-process that exits or never answers is stopped, and the harness fails with both streams' tails.
+process that exits or never answers is stopped, and the failure carries both streams' tails.
 -}
-bootDrained :: Manager -> Int -> Int -> ProcessConfig () () () -> IO Drained
+bootDrained :: Manager -> Int -> Int -> ProcessConfig () () () -> IO (Either BootFailure Drained)
 bootDrained manager attempts port command = do
     process <- startProcess (setStdin nullStream (setStdout createPipe (setStderr createPipe command)))
     out <- newIORef emptyCaptured
@@ -389,9 +415,9 @@ bootDrained manager attempts port command = do
     -- A drain failure or an interrupt during the wait must not leave the process behind.
     readiness <- pollUntil attempts 100_000 settled (probe drained) `onException` stopDrained drained
     case readiness of
-        Ready -> pure drained
-        ExitedDuringBoot code -> failBoot drained ("exited during boot with " <> show code)
-        Booting -> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
+        Ready -> pure (Right drained)
+        ExitedDuringBoot code -> Left <$> failBoot drained ("exited during boot with " <> show code)
+        Booting -> Left <$> failBoot drained ("did not become ready within " <> show (attempts `div` 10) <> " s")
   where
     -- A failed read would leave the pipe full and stall the proxy, so it fails the scenario at once.
     startDrain (stream, source, captured) = do
@@ -407,9 +433,72 @@ bootDrained manager attempts port command = do
             Nothing -> bool Booting Ready . isJust <$> getFrom manager port "/readyz"
     failBoot drained reason = do
         void (stopDrained drained)
-        errText <- capturedTailText (drStderr drained)
-        logText <- capturedTailText (drStdout drained)
-        benchFail ("bench-load: the proxy " <> reason <> "\nstderr:\n" <> errText <> "\nlog tail:\n" <> logText)
+        BootFailure reason <$> capturedTailText (drStderr drained) <*> capturedTailText (drStdout drained)
+
+{- | Run a boot, and once more two seconds later when the RTS could not start an OS thread: a task
+limit outside the harness. Each failed attempt comes back with the diagnostic taken right after it.
+-}
+retryingBoot :: IO Text -> IO (Either BootFailure a) -> IO ([Text], Either BootFailure a)
+retryingBoot diagnose boot = attempt (2 :: Int) []
+  where
+    attempt remaining notes =
+        boot >>= \case
+            Right booted -> pure (reverse notes, Right booted)
+            Left failure -> do
+                diagnostic <- diagnose
+                let note = renderBootFailure failure <> "\n" <> diagnostic
+                    retry = remaining > 1 && "failed to create OS thread" `T.isInfixOf` bfStderr failure
+                if retry
+                    then do
+                        TIO.hPutStrLn stderr ("bench-load: retrying a proxy boot once\n" <> note)
+                        threadDelay 2_000_000
+                        attempt (remaining - 1) (note : notes)
+                    else pure (reverse (note : notes), Left failure)
+
+{- | The task and memory limits a thread start meets, read just after a failed boot: the process
+limits, this user's tasks, the system's, and the proxy cgroup with any sibling left behind.
+-}
+bootDiagnostic :: Maybe FilePath -> IO Text
+bootDiagnostic cgroup = do
+    limits <- readIfExists "/proc/self/limits"
+    uid <- getRealUserID
+    tasks <- userTasks (fromIntegral uid)
+    loadavg <- readIfExists "/proc/loadavg"
+    threadsMax <- readIfExists "/proc/sys/kernel/threads-max"
+    pidMax <- readIfExists "/proc/sys/kernel/pid_max"
+    meminfo <- readIfExists "/proc/meminfo"
+    overcommit <- readIfExists "/proc/sys/vm/overcommit_memory"
+    cgroupLines <- maybe (pure ["proxy cgroup: none"]) cgroupFacts cgroup
+    pure . T.unlines $
+        [ "diagnostic:"
+        , "limits of this process: " <> maybe "unreadable" (T.intercalate "; " . filter (\l -> any (`T.isPrefixOf` l) ["Max processes", "Max stack size", "Max address space"]) . lines) limits
+        , "tasks of this user: " <> show tasks
+        , "loadavg (running/total tasks in the fourth field): " <> maybe "unreadable" T.strip loadavg
+        , "kernel threads-max / pid_max: " <> maybe "?" T.strip threadsMax <> " / " <> maybe "?" T.strip pidMax
+        , "memory: " <> maybe "unreadable" (T.intercalate "; " . filter (\l -> any (`T.isPrefixOf` l) ["MemAvailable", "CommitLimit", "Committed_AS"]) . lines) meminfo
+        , "vm.overcommit_memory: " <> maybe "?" T.strip overcommit
+        ]
+            <> cgroupLines
+  where
+    cgroupFacts dir = do
+        facts <- traverse (\file -> (file,) <$> readIfExists (dir </> file)) ["pids.current", "pids.max", "memory.current", "memory.max", "memory.events"]
+        siblings <- filter (/= takeFileName dir) . filter ("proxy-" `isPrefixOf`) <$> listDirectory (takeDirectory dir)
+        pure $
+            ["proxy cgroup " <> toText file <> ": " <> maybe "absent" (T.unwords . words) value | (file, value) <- facts]
+                <> ["other proxy cgroups still present: " <> show (length siblings)]
+
+-- The threads of every process this user owns, from each process's status file.
+userTasks :: Int -> IO Int
+userTasks uid = do
+    entries <- filter (all (`elem` ['0' .. '9'])) <$> listDirectory "/proc"
+    counts <- traverse (fmap (>>= threadsOf) . readIfExists . (\pid -> "/proc" </> pid </> "status")) entries
+    pure (sum (catMaybes counts))
+  where
+    threadsOf status = do
+        let fields = mapMaybe (\l -> (,) <$> listToMaybe (words l) <*> listToMaybe (drop 1 (words l))) (lines status)
+        owner <- readMaybe . toString =<< lookup "Uid:" fields
+        guard (owner == uid)
+        readMaybe . toString =<< lookup "Threads:" fields
 
 data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
 

@@ -109,7 +109,7 @@ jobs:
           sudo swapoff -a
           sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
           sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
-          echo "+cpu +memory" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
+          echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
           echo "controllers enabled for the proxy cgroups: $(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")"
 
       # pipefail preserves the harness exit code through tee's output capture.

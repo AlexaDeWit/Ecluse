@@ -55,6 +55,7 @@ import Ecluse.BenchLoad.ProxyProcess (
     ProxyProcess,
     podShapeFromEnv,
     proxyBootLines,
+    proxyBootRetries,
     proxyCgroupNow,
     proxyIdleCgroupBytes,
     proxyIdleRts,
@@ -241,8 +242,12 @@ data ProxyFigures = ProxyFigures
     , pfStderrTail :: Text
     -- ^ Kept only for an ending other than a clean shutdown.
     , pfBootLines :: [Text]
+    , pfBootRetries :: [Text]
+    -- ^ Failed boots the harness retried, each with its diagnostic.
     , pfInFlight :: GaugeSummary
     -- ^ @ecluse.serve.admission.in_flight@ sampled each second of the window.
+    , pfTasks :: GaugeSummary
+    -- ^ The proxy cgroup's @pids.current@, its thread count, sampled each second of the window.
     , pfAdmissionSeries :: [Text]
     -- ^ Every admission series at the end of the window.
     }
@@ -289,7 +294,7 @@ measure knobs s shape (Target proxy driver) = do
     settle proxy
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
-    (outcome, inFlight) <- sampling proxy (drive knobs driver)
+    (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
     admission <- maybe (pure []) admissionSeries proxy
@@ -311,7 +316,7 @@ measure knobs s shape (Target proxy driver) = do
             , srRtsWindow = rtsWindow <$> before <*> after
             , srRtsEnd = after
             , srRetainedBytes = rsLiveBytes <$> retained
-            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) inFlight admission) <$> ends
+            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) (inFlight, tasks) admission) <$> ends
             , srEvidence = evidence
             }
   where
@@ -320,8 +325,8 @@ measure knobs s shape (Target proxy driver) = do
         stop <- b
         pure (counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start))
 
-proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> [Maybe Double] -> [Text] -> ProxyFigures
-proxyFigures proxy end windowCgroup throttledUsec inFlight admission =
+proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> ([Maybe Double], [Maybe Double]) -> [Text] -> ProxyFigures
+proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) admission =
     ProxyFigures
         { pfIdleRts = proxyIdleRts proxy
         , pfIdleCgroupBytes = proxyIdleCgroupBytes proxy
@@ -332,7 +337,9 @@ proxyFigures proxy end windowCgroup throttledUsec inFlight admission =
         , pfExitedEarly = peExitedEarly end
         , pfStderrTail = if peEnding end == CleanShutdown then "" else peStderrTail end
         , pfBootLines = proxyBootLines proxy
+        , pfBootRetries = proxyBootRetries proxy
         , pfInFlight = summariseGauge inFlight
+        , pfTasks = summariseGauge tasks
         , pfAdmissionSeries = admission
         }
 
@@ -352,18 +359,20 @@ settle = traverse_ $ \p -> void (pollUntil 300 200_000 (== Just 0) (inFlightNow 
 cgroupOf :: Maybe ProxyProcess -> IO (Maybe CgroupReading)
 cgroupOf = fmap join . traverse proxyCgroupNow
 
--- Sample the in-flight gauge once a second while the load runs. A failed scrape is a miss, and a
--- scrape with no series yet reads zero, because the gauge appears on its first admission.
-sampling :: Maybe ProxyProcess -> IO a -> IO (a, [Maybe Double])
+-- Sample the in-flight gauge and the proxy's thread count once a second while the load runs. A
+-- failed scrape is a miss, and a scrape with no series yet reads zero, because the gauge appears
+-- on its first admission.
+sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double]))
 sampling proxy load = case proxy of
-    Nothing -> (,[]) <$> load
+    Nothing -> (,([], [])) <$> load
     Just p -> do
         readings <- newIORef []
         let sampleOnce = do
                 scraped <- proxyScrape p
-                modifyIORef' readings ((fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped) :)
+                tasks <- (crTasks =<<) <$> proxyCgroupNow p
+                modifyIORef' readings ((fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped, fromIntegral <$> tasks) :)
         result <- withAsync (forever (sampleOnce >> threadDelay 1_000_000)) (const load)
-        (result,) . reverse <$> readIORef readings
+        (result,) . unzip . reverse <$> readIORef readings
 
 inFlightSeries :: Text
 inFlightSeries = "ecluse_serve_admission_in_flight"

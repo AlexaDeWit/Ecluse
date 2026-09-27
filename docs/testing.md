@@ -402,7 +402,8 @@ zero, and `cpu.max` at the cores. The load generator and the stubs stay outside 
 flag is set by hand: the proxy's boot reads the cgroup and derives its capabilities, its heap
 ceiling, and its memory plan as it would in a pod. The unlimited shape sets `runtime.cores` to the
 harness's capability count instead. The workflow delegates the cgroup subtree with `sudo` before
-the run and turns swap off. The cgroup outlives the proxy, so an OOM kill stays countable after the
+the run, enables the cpu, memory, and pids controllers for it without a task limit, and turns swap
+off. The cgroup outlives the proxy, so an OOM kill stays countable after the
 process is gone, and the harness retires any proxy cgroup a killed run left. A scheduled run
 measures `unlimited`, `2cpu-512mib`, `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one
 shape, `all`, or `thrash` for the GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this harness into it.
@@ -425,8 +426,13 @@ Each scenario reports:
   status), a kernel OOM kill, or another exit
 - the CPU admission, the memory admission budget, and the cold listings that budget admits at
   once, read from the proxy's boot log, with the runtime lines quoted
-- `ecluse.serve.admission.in_flight` sampled each second, and every admission series at the end
-  of the window
+- `ecluse.serve.admission.in_flight` and the proxy's thread count (`pids.current`) sampled each
+  second, and every admission series at the end of the window
+
+A boot that fails because the runtime could not start an OS thread is booted once more, two
+seconds later. That failure is a task limit reached outside the harness, which sets none. The
+harness prints the failure with the process limits, the task counts, and the proxy cgroup's state
+as it read them, and the report counts the boot attempts. Any other boot failure fails the scenario.
 
 Four scenarios stress admission under memory pressure. `npm/heavy-private` has the private stub
 return the complete public capture, so every request decodes its own private copy.

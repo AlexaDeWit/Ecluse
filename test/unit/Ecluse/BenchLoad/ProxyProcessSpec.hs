@@ -9,16 +9,15 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import System.Directory (doesDirectoryExist)
+import System.Directory (createDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 import System.Process.Typed (proc)
 import Test.Hspec
 import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
-import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), bootDrained, proxyEnvironment, proxySettings)
+import Ecluse.BenchLoad.ProxyProcess (BootFailure (..), ProxySettings (..), bootDiagnostic, bootDrained, proxyEnvironment, proxySettings, retryingBoot)
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (loadConfig, renderConfigError)
@@ -33,30 +32,70 @@ spec = do
     bootSpec
 
 bootSpec :: Spec
-bootSpec = describe "bootDrained" $ do
-    let bootFailure expected (BenchLoadError message) = all (`T.isInfixOf` message) expected
-    it "stops a process that never answers and fails with the tails of both streams" $ do
-        manager <- newManager defaultManagerSettings
-        port <- freePort
-        void (bootDrained manager 5 port (proc "/bin/sh" ["-c", "echo boot line; echo boot fault >&2; exec sleep 60"]))
-            `shouldThrow` bootFailure ["did not become ready", "boot line", "boot fault"]
-    it "stops the process when the readiness wait is interrupted" $
-        withSystemTempDirectory "ecluse-boot-interrupt" $ \dir -> do
+bootSpec = do
+    describe "bootDrained" $ do
+        let failedWith expected = \case
+                Left failure -> for_ expected $ \(field, text) -> field failure `shouldSatisfy` T.isInfixOf text
+                Right _ -> expectationFailure "the boot succeeded"
+        it "stops a process that never answers and returns the tails of both streams" $ do
             manager <- newManager defaultManagerSettings
             port <- freePort
-            let pidFile = dir </> "pid"
-                command = proc "/bin/sh" ["-c", "echo $$ > \"$0\"; exec sleep 60", pidFile]
-            pid <- withAsync (bootDrained manager 600 port command) $ \booting -> do
-                started <- pollUntil 50 100_000 isJust ((readMaybe . toString . T.strip =<<) <$> readIfExists pidFile)
-                cancel booting
-                pure (started :: Maybe Int)
-            pid `shouldSatisfy` isJust
-            traverse (\p -> doesDirectoryExist ("/proc/" <> show p)) pid `shouldReturn` Just False
-    it "fails with the tails of a process that exits during boot" $ do
-        manager <- newManager defaultManagerSettings
-        port <- freePort
-        void (bootDrained manager 50 port (proc "/bin/sh" ["-c", "echo last words; echo refused >&2; exit 2"]))
-            `shouldThrow` bootFailure ["exited during boot", "last words", "refused"]
+            outcome <- bootDrained manager 5 port (proc "/bin/sh" ["-c", "echo boot line; echo boot fault >&2; exec sleep 60"])
+            failedWith [(bfReason, "did not become ready"), (bfLog, "boot line"), (bfStderr, "boot fault")] outcome
+        it "stops the process when the readiness wait is interrupted" $
+            withSystemTempDirectory "ecluse-boot-interrupt" $ \dir -> do
+                manager <- newManager defaultManagerSettings
+                port <- freePort
+                let pidFile = dir </> "pid"
+                    command = proc "/bin/sh" ["-c", "echo $$ > \"$0\"; exec sleep 60", pidFile]
+                pid <- withAsync (bootDrained manager 600 port command) $ \booting -> do
+                    started <- pollUntil 50 100_000 isJust ((readMaybe . toString . T.strip =<<) <$> readIfExists pidFile)
+                    cancel booting
+                    pure (started :: Maybe Int)
+                pid `shouldSatisfy` isJust
+                traverse (\p -> doesDirectoryExist ("/proc/" <> show p)) pid `shouldReturn` Just False
+        it "returns the tails of a process that exits during boot" $ do
+            manager <- newManager defaultManagerSettings
+            port <- freePort
+            outcome <- bootDrained manager 50 port (proc "/bin/sh" ["-c", "echo last words; echo refused >&2; exit 2"])
+            failedWith [(bfReason, "exited during boot"), (bfLog, "last words"), (bfStderr, "refused")] outcome
+    describe "retryingBoot" $ do
+        let threadStart = BootFailure "exited during boot" "bench-load: failed to create OS thread: Resource temporarily unavailable" ""
+            scripted outcomes = do
+                remaining <- newIORef outcomes
+                calls <- newIORef (0 :: Int)
+                let boot = do
+                        modifyIORef' calls (+ 1)
+                        atomicModifyIORef' remaining $ \case
+                            next : rest -> (rest, next)
+                            [] -> ([], Left (BootFailure "ran out of scripted boots" "" ""))
+                pure (boot, readIORef calls)
+        it "boots again once when the RTS could not start an OS thread, and keeps the diagnostic" $ do
+            (boot, calls) <- scripted [Left threadStart, Right ()]
+            (retries, outcome) <- retryingBoot (pure "diagnostic: counts") boot
+            isRight outcome `shouldBe` True
+            calls `shouldReturn` 2
+            retries `shouldSatisfy` \case
+                [note] -> all (`T.isInfixOf` note) ["failed to create OS thread", "diagnostic: counts"]
+                _ -> False
+        it "retries at most once" $ do
+            (boot, calls) <- scripted [Left threadStart, Left threadStart, Right ()]
+            (retries, outcome) <- retryingBoot (pure "diagnostic") boot
+            isLeft outcome `shouldBe` True
+            calls `shouldReturn` 2
+            length retries `shouldBe` 2
+        it "does not retry any other boot failure" $ do
+            (boot, calls) <- scripted [Left (BootFailure "exited during boot" "configuration refused" ""), Right ()]
+            (_, outcome) <- retryingBoot (pure "diagnostic") boot
+            isLeft outcome `shouldBe` True
+            calls `shouldReturn` 1
+    describe "bootDiagnostic" $
+        it "names the process limits, the user's tasks, and the proxy cgroup's leftover siblings" $
+            withSystemTempDirectory "ecluse-diagnostic" $ \root -> do
+                traverse_ (createDirectory . (root </>)) ["proxy-1", "proxy-2", "harness"]
+                diagnostic <- bootDiagnostic (Just (root </> "proxy-1"))
+                for_ ["Max processes", "tasks of this user: ", "proxy cgroup pids.max: absent", "other proxy cgroups still present: 1"] $ \expected ->
+                    diagnostic `shouldSatisfy` T.isInfixOf expected
 
 environmentSpec :: Spec
 environmentSpec = describe "proxyEnvironment" $ do
