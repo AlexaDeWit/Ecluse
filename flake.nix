@@ -199,12 +199,32 @@
           }) { });
         };
 
+        # nixpkgs passes haddock -j$NIX_BUILD_CORES, and GHC 9.10's haddock then
+        # sometimes deadlocks in the RTS scheduler (GHC #21539). -j1 avoids it.
+        sequentialHaddock = drv: hlib.overrideCabal drv (old: {
+          haddockFlags = (old.haddockFlags or [ ]) ++ [ "--haddock-option=-j1" ];
+        });
+
+        # Only libraries whose output differs from the base set's take
+        # sequentialHaddock, so no path cache.nixos.org serves changes.
+        sequentialHaddockOverlay = _hself: hsuper:
+          let
+            base = pkgs.haskell.packages.ghc910;
+            rebuilt = name: pkg:
+              let served = builtins.tryEval (base.${name}.outPath or null);
+              in !(served.success && served.value == pkg.outPath);
+          in builtins.mapAttrs (name: pkg:
+            if (pkg.isHaskellLibrary or false) && rebuilt name pkg
+            then sequentialHaddock pkg
+            else pkg) hsuper;
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
             jsonStreamOverlay
+            sequentialHaddockOverlay
           ];
         };
 
@@ -547,7 +567,7 @@
         # interfaces, avoiding cabal's separate documentation closure build.
         # Use Nix checks where its store or evaluated inputs are required.
         # doHaddock forces documentation generation. dontCheck skips tests.
-        checks.docs = hlib.doHaddock ecluse;
+        checks.docs = sequentialHaddock (hlib.doHaddock ecluse);
 
       # The two checks below clear the same bar in a different way. Each compares
       # the Nix and cabal views of one pin, which only Nix evaluation can see side
