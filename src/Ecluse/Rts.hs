@@ -138,7 +138,7 @@ resolveRuntimePlan overrides cgroup rts =
     maxHeap = case (roMaxHeapBytes overrides, cgMemoryMaxBytes cgroup) of
         (Just bytes, _) -> (Just (alignToBlock bytes), FromConfig)
         (Nothing, Just memMax) ->
-            (Just (deriveMaxHeapBytes memMax (fst capabilities) (rpAllocAreaBytes rts)), FromCgroup)
+            (Just (deriveMaxHeapBytes memMax (rpAllocAreaBytes rts)), FromCgroup)
         (Nothing, Nothing) -> (rpMaxHeapBytes rts, FromRts)
 
 -- The last rung's cap, when no cgroup limit says anything. It is a policy stance, not a machine
@@ -147,7 +147,7 @@ defaultCoresCeiling :: Int
 defaultCoresCeiling = 8
 
 {- | The capability count a memory budget can feed. The nursery charge is capabilities x the
-allocation area, and a count the budget cannot feed is the surge shape that ends in an OOM kill.
+allocation area, and a count the budget cannot feed is the surge shape that overflows the heap.
 -}
 nurseryFittedCapabilities :: Int -> Int -> Int
 nurseryFittedCapabilities budgetBytes allocAreaBytes =
@@ -158,14 +158,17 @@ nurseryFittedCapabilities budgetBytes allocAreaBytes =
 nurseryCeilingShareDiv :: Int
 nurseryCeilingShareDiv = 4
 
-{- | The heap ceiling derived from a cgroup memory limit. The nursery sits outside the heap, so
-it comes off the limit, and the half-limit floor keeps a tiny pod's ceiling from vanishing.
+{- | The heap ceiling derived from a cgroup memory limit, floored at half the limit. The nursery
+counts inside @-M@ (GHC 9.6 and later), so only an overshoot allowance and slack come off.
 -}
-deriveMaxHeapBytes :: Int -> Int -> Int -> Int
-deriveMaxHeapBytes memMax capabilities allocAreaBytes =
-    alignToBlock (max (memMax - nursery - slack) (memMax `div` 2))
+deriveMaxHeapBytes :: Int -> Int -> Int
+deriveMaxHeapBytes memMax allocAreaBytes =
+    alignToBlock (max (memMax - overshoot - slack) (memMax `div` 2))
   where
-    nursery = capabilities * allocAreaBytes
+    -- The RTS checks @-M@ only at a collection, and large objects allocated in between can
+    -- reach @-AL@, which defaults to @-A@.
+    overshoot = allocAreaBytes
+    -- Memory @-M@ does not see: socket buffers, OS thread stacks and native zlib state.
     slack = memMax `div` 10
 
 {- A heap ceiling rounded down to the RTS's 4 KiB block granularity. The RTS stores @-M@ in
