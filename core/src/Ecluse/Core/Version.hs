@@ -47,10 +47,8 @@ parses. There is deliberately __no__ 'Ord'. Comparison goes through 'compareVers
 data Version = Version
     { -- The version as published: for rendering and round-tripping, never for ordering.
       versionRaw :: Text
-    , versionKey :: Maybe VersionKey
-    {- ^ The parsed, canonical ordering key. 'Nothing' if the raw text did not parse
-    for its ecosystem, in which case ordering rules abstain.
-    -}
+    , -- Private, so the key a version carries is always the one 'mkVersion' parsed from its text.
+      versionKeyField :: Maybe VersionKey
     }
     deriving stock (Eq, Show)
 
@@ -63,6 +61,12 @@ mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
 -- | Render a version in wire form: the raw text, verbatim as published.
 renderVersion :: Version -> Text
 renderVersion = versionRaw
+
+{- | The parsed, canonical ordering key. 'Nothing' if the raw text did not parse for its
+ecosystem, in which case ordering rules abstain.
+-}
+versionKey :: Version -> Maybe VersionKey
+versionKey = versionKeyField
 
 {- | The version's key under an ecosystem's grammar, as 'mkVersion' for that ecosystem builds it.
 It reuses the key the version carries when that key is the ecosystem's, and parses otherwise.

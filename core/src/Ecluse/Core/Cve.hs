@@ -183,12 +183,11 @@ string, the segment names it literally, since nothing can order it against anyth
 segmentBounds :: Ecosystem -> AdvisoryRange -> SegmentBounds
 segmentBounds eco ar = case (arIntroduced ar, arUpperBound ar) of
     (Just introduced, LastAffected lastAffected)
-        | introduced == lastAffected
-        , Nothing <- keyOf introduced ->
-            OnlyText introduced
-    (introduced, upper) -> Ordered (keyOf =<< introduced) (upperKey upper)
+        | introduced == lastAffected -> maybe (OnlyText introduced) (\k -> Ordered (Just k) (AtMost k)) introducedKey
+    (_, upper) -> Ordered introducedKey (upperKey upper)
   where
     keyOf = rightToMaybe . parseVersionKey eco
+    introducedKey = keyOf =<< arIntroduced ar
     upperKey = \case
         FixedBefore fixed -> maybe NoUpper Below (keyOf fixed)
         LastAffected lastAffected -> maybe NoUpper AtMost (keyOf lastAffected)
