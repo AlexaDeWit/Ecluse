@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
-import Ecluse.Core.Server.Admission.Budget (ChargeFactors (..))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -60,11 +60,11 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
-{- | What npm metadata charges the memory budget per source byte. A full read keeps the typed
-projection and the raw document: 1.1 to 4.43 bytes per source byte in the residency gate.
+{- | npm's memory charges per source byte, the residency tier's maxima rounded up: a full read's retention
+(4.38, typescript) and a listing's encoding with its strict copy (1.51, @aws-sdk/client-s3).
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 3500, cfOutputPermille = 1300}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
 
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

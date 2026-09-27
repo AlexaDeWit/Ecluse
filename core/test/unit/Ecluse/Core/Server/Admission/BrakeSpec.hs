@@ -11,8 +11,6 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Server.Admission.Brake (
-    BrakeBounds (..),
-    BrakeLevel (..),
     BrakeMarks (..),
     BrakeState (..),
     CollectorReading (..),
@@ -24,6 +22,7 @@ import Ecluse.Core.Server.Admission.Brake (
     newSampleWindow,
     windowSample,
  )
+import Ecluse.Core.Server.Admission.Types (BrakeBounds (..), BrakeLevel (..))
 
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Admission.Brake" $ do
@@ -49,18 +48,22 @@ windowSpec = describe "windowSample" $ do
 
     it "reports live data only after a major collection since the previous reading" $ do
         let opening = reading 1_000 100 3
-            (_, window) = windowSample (newSampleWindow 10) (Just opening) 0 Nothing
-            (sameMajor, window') = windowSample window (Just opening{crCpuNs = 2_000, crLiveBytes = 70}) 0 Nothing
-            (nextMajor, _) = windowSample window' (Just opening{crCpuNs = 3_000, crMajorCollections = 4, crLiveBytes = 90}) 0 Nothing
+            (_, window) = windowSample (newSampleWindow 10) (Just opening) 0 0 Nothing
+            (sameMajor, window') = windowSample window (Just opening{crCpuNs = 2_000, crLiveBytes = 70}) 0 0 Nothing
+            (nextMajor, _) = windowSample window' (Just opening{crCpuNs = 3_000, crMajorCollections = 4, crLiveBytes = 90}) 0 0 Nothing
         gsLiveAfterMajor sameMajor `shouldBe` Nothing
         gsLiveAfterMajor nextMajor `shouldBe` Just 90
 
+    it "reports no live data from the first reading, which has no earlier one to compare" $ do
+        let (first', _) = windowSample (newSampleWindow 10) (Just (reading 1_000 100 3){crLiveBytes = 70}) 0 0 Nothing
+        gsLiveAfterMajor first' `shouldBe` Nothing
+
     it "leaves the collector's rules out without statistics, and keeps the meter and kernel readings" $ do
-        let (sample, _) = windowSample (newSampleWindow 10) Nothing 42 (Just 500)
-        sample `shouldBe` GcSample{gsGcSharePermille = Nothing, gsLiveAfterMajor = Nothing, gsChargedBytes = 42, gsKernelPermille = Just 500}
+        let (sample, _) = windowSample (newSampleWindow 10) Nothing 42 7 (Just 500)
+        sample `shouldBe` GcSample{gsGcSharePermille = Nothing, gsLiveAfterMajor = Nothing, gsChargedBytes = 42, gsLargestCharge = 7, gsKernelPermille = Just 500}
   where
     feed (samples, window) next =
-        let (sample, window') = windowSample window (Just next) 0 Nothing
+        let (sample, window') = windowSample window (Just next) 0 0 Nothing
          in (sample : samples, window')
 
 reading :: Int64 -> Int64 -> Word32 -> CollectorReading
@@ -72,6 +75,15 @@ stepSpec = describe "brakeStep" $ do
         let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsGcSharePermille = Just 700})
         bsBudget stepped `shouldBe` 50 * unit
         bsLevel stepped `shouldBe` Braking
+
+    it "halves at most once per cooldown while pressure lasts, so a sustained surge still halves each second" $ do
+        let hot = calm{gsGcSharePermille = Just 700}
+            run = iterate (\s -> brakeStep defaultBrakeMarks bounds s hot) start
+            cooldown = bmCooldownSamples defaultBrakeMarks
+        (bsBudget <$> run !!? 1) `shouldBe` Just (50 * unit)
+        (bsBudget <$> run !!? cooldown) `shouldBe` Just (50 * unit)
+        (bsLevel <$> run !!? cooldown) `shouldBe` Just Braking
+        (bsBudget <$> run !!? (cooldown + 1)) `shouldBe` Just (25 * unit)
 
     it "halves the budget when live data nears the copying overflow point" $ do
         let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (900 * unit)})
@@ -111,6 +123,18 @@ stepSpec = describe "brakeStep" $ do
         (bsBudget <$> afterStretch) `shouldBe` Just (112 * unit + unit `div` 2)
         (bsBudget <$> afterMany) `shouldBe` Just (140 * unit)
 
+    it "leaves room under the overflow point for the largest request seen" $ do
+        -- Overflow at 300 with a 150-unit request caps live data at 150, and 10 idle units stay outside.
+        let tight = bounds{bbOverflowLiveBytes = Just (300 * unit)}
+            seen = brakeStep defaultBrakeMarks tight (initialBrakeState tight) (calm{gsLargestCharge = 150 * unit})
+        bsLargestRequest seen `shouldBe` 150 * unit
+        bsBudget seen `shouldBe` 90 * unit
+
+    it "lets the largest request fade while no request matches it" $ do
+        let seen = brakeStep defaultBrakeMarks bounds start (calm{gsLargestCharge = 256 * unit})
+            faded = brakeStep defaultBrakeMarks bounds seen calm
+        bsLargestRequest faded `shouldBe` 255 * unit
+
     it "holds the budget between the marks" $ do
         let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsGcSharePermille = Just 400})
         bsBudget stepped `shouldBe` 100 * unit
@@ -139,12 +163,13 @@ stepSpec = describe "brakeStep" $ do
             , bbGrowFloorBytes = unit
             }
     start = initialBrakeState bounds
-    calm = GcSample{gsGcSharePermille = Just 100, gsLiveAfterMajor = Nothing, gsChargedBytes = 0, gsKernelPermille = Nothing}
+    calm = GcSample{gsGcSharePermille = Just 100, gsLiveAfterMajor = Nothing, gsChargedBytes = 0, gsLargestCharge = 0, gsKernelPermille = Nothing}
 
 genSample :: Gen GcSample
 genSample =
     GcSample
         <$> Gen.maybe (Gen.int (Range.linear 0 1000))
         <*> Gen.maybe (Gen.int (Range.linear 0 (2048 * 1024 * 1024)))
+        <*> Gen.int (Range.linear 0 (512 * 1024 * 1024))
         <*> Gen.int (Range.linear 0 (512 * 1024 * 1024))
         <*> Gen.maybe (Gen.int (Range.linear 0 1000))

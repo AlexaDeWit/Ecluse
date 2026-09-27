@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
-import Ecluse.Core.Server.Admission.Budget (ChargeFactors (..))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -44,11 +44,11 @@ newPyPIMetadataReads ::
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
-{- | What PyPI metadata charges the memory budget per source byte. A full read keeps the typed
-projection and the raw document: 3.23 to 4.37 bytes per source byte in the residency gate.
+{- | PyPI's memory charges per source byte, the residency tier's maxima rounded up: a full read's
+retention (4.36, requests) and a listing's encoding with its strict copy (1.57, requests).
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1300}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
 
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

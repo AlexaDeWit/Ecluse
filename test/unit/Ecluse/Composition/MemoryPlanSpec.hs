@@ -210,7 +210,7 @@ spec = describe "resolveMemoryPlan" $ do
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
                        , "memory plan: memory-queue depth 41943" <> ceilingClause
                        , "memory plan: mirror artifact byte cap 8589934" <> ceilingClause
-                       , "memory plan: transient budget 132581991 (live target 264241152 less 131659161 idle and retained; floor 16777216; live ceiling 352321536)"
+                       , "memory plan: transient budget 132581991 (live target 264241152 less 131659161 for the idle process and the other tenants, floor 16777216, live ceiling 352321536)"
                        ]
 
     describe "the combined invariant (property)" $

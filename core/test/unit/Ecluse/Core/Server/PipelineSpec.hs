@@ -45,7 +45,8 @@ import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
-import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), MeterSnapshot (snChargedBytes), meterSnapshot, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -86,7 +87,7 @@ import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMemoryMeter)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Ecluse.Test.Wai (countingUpstream)
-import Network.HTTP.Types.Header (RequestHeaders, hHost)
+import Network.HTTP.Types.Header (RequestHeaders, hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
@@ -264,7 +265,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
-    it "releases both doors before public artifact relay starts" $ do
+    it "releases both gates before public artifact relay starts" $ do
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission noopMetricsPort
         released <- newIORef Nothing
@@ -287,7 +288,50 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
 memoryAdmissionSpec :: Spec
 memoryAdmissionSpec = describe "memory admission on live request paths" $ do
-    it "sheds a listing at a full memory door before either origin starts" $ do
+    for_ [("1.0.0", 200), ("9.0.0", 404)] $ \(version, expectedStatus) ->
+        it ("serves pinned selected reuse, including absence, with no second lookup and fresh rules: " <> toString version) $ do
+            lookupCalls <- newIORef (0 :: Int)
+            let upstream req respond = do
+                    when (rawPathInfo req == "/leftpad") (modifyIORef' lookupCalls (+ 1))
+                    upstreamApp req respond
+            testWithApplication (pure upstream) $ \port -> do
+                rt <- mkRuntime noopMetricsPort
+                deps <- depsFor port
+                let serve rules selected =
+                        captureServe
+                            npmTarballContract
+                            rt
+                            (mountWith deps{pdRules = rules})
+                            (serveTarball npmTarballReplies leftpadName (npmVersion selected) (unsafeFilename ("leftpad-" <> selected <> ".tgz")) defaultRequest)
+                warm <- serve (pdRules deps) version
+                statusCode (responseStatus warm) `shouldBe` expectedStatus
+                retained <- serve (pdRules deps) version
+                statusCode (responseStatus retained) `shouldBe` expectedStatus
+                when (expectedStatus == 200) $ do
+                    denied <- serve [] version
+                    statusCode (responseStatus denied) `shouldBe` 403
+                readIORef lookupCalls `shouldReturn` 1
+
+    it "reads both origins for assembled hits and conditional responses" $ do
+        privateCalls <- newIORef (0 :: Int)
+        publicCalls <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream privateCalls upstreamApp)) $ \privatePort ->
+            testWithApplication (pure (countingUpstream publicCalls upstreamApp)) $ \publicPort -> do
+                rt <- mkRuntime noopMetricsPort
+                base <- depsFor publicPort
+                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base
+                    serve request = captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName request)
+                initial <- serve defaultRequest
+                statusCode (responseStatus initial) `shouldBe` 200
+                validator <- maybe (throwIO MissingFixtureResponse) pure (lookup hETag (responseHeaders initial))
+                reused <- serve defaultRequest
+                statusCode (responseStatus reused) `shouldBe` 200
+                unchanged <- serve (requestWith [(hIfNoneMatch, validator)])
+                statusCode (responseStatus unchanged) `shouldBe` 304
+                readIORef privateCalls `shouldReturn` 3
+                readIORef publicCalls `shouldReturn` 3
+
+    it "sheds a listing at a full memory gate before either origin starts" $ do
         lookups <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> do
             (rt, meter) <- fullDoorRuntime noopMetricsPort
@@ -300,7 +344,7 @@ memoryAdmissionSpec = describe "memory admission on live request paths" $ do
             (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
             readIORef lookups `shouldReturn` 0
 
-    it "sheds a public artifact decision at a full memory door before any lookup" $ do
+    it "sheds a public artifact decision at a full memory gate before any lookup" $ do
         lookups <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream lookups upstreamApp)) $ \port -> do
             (rt, meter) <- fullDoorRuntime noopMetricsPort

@@ -12,9 +12,9 @@ module Ecluse.Composition.MemoryPlan.Types (
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
+    TransientBudget (..),
 ) where
 
-import Ecluse.Composition.MemoryPlan.Transient (TransientBudget)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), MirrorRuntimePlan (MirrorWith, NoMirroring))
 
 {- | Whether the memory plan owes the in-memory queue a tenant, projected from the
@@ -84,5 +84,22 @@ data MemoryPlan = MemoryPlan
     {- ^ The pins the plan blames for a residual overshoot it cannot shed around. The boot and
     check-config refuse on these with exit 2.
     -}
+    }
+    deriving stock (Eq, Show)
+
+-- | The budget the boot hands the meter and the sampler, in bytes of live data.
+data TransientBudget = TransientBudget
+    { tbLiveTargetBytes :: Maybe Int
+    -- ^ The live data the heap holds in the collector's normal regime. 'Nothing' without a ceiling.
+    , tbExplainedBytes :: Int
+    -- ^ Live data outside the budget: the idle process and the other tenants.
+    , tbBootBytes :: Int
+    -- ^ The budget at boot.
+    , tbLiveCeilingBytes :: Maybe Int
+    -- ^ The live data the sampler lets charges and the measured remainder reach together.
+    , tbFloorBytes :: Int
+    -- ^ The least the sampler may shrink the budget to.
+    , tbOverflowLiveBytes :: Maybe Int
+    -- ^ The live data at which the copying collector overflows the ceiling.
     }
     deriving stock (Eq, Show)

@@ -10,7 +10,7 @@ import Test.Hspec
 import Ecluse.Rts (
     CgroupLimits (CgroupLimits, cgCpuCores, cgMemoryMaxBytes),
     EffectiveRuntimePlan (erpCapabilities, erpMaxHeapBytes),
-    Provenance (FromCgroup, FromCgroupMemory, FromConfig, FromCoresCeiling, FromRts),
+    Provenance (FromCgroup, FromCgroupMemory, FromConfig, FromCoresCeiling, FromHeapCeiling, FromRts),
     RtsPosture (..),
     RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes),
     RuntimePlan (planAllocAreaBytes, planCapabilities, planMaxHeapBytes),
@@ -28,6 +28,7 @@ import Ecluse.Rts (
     renderPostureWarnings,
     requiredRtsFlags,
     resolveRuntimePlan,
+    usePermille,
  )
 
 spec :: Spec
@@ -69,6 +70,11 @@ mib = 1024 * 1024
 
 cgroupParsingSpec :: Spec
 cgroupParsingSpec = describe "cgroup v2 parsing" $ do
+    it "reads memory use less reclaimable page cache in thousandths of the limit" $ do
+        usePermille (1000 * mib) (Just (100 * mib)) (600 * mib) `shouldBe` 500
+        usePermille (1000 * mib) Nothing (600 * mib) `shouldBe` 600
+        usePermille (1000 * mib) (Just (700 * mib)) (600 * mib) `shouldBe` 0
+
     it "reads cpu.max quota over period as granted cores" $ do
         parseCpuMax "200000 100000\n" `shouldBe` Just 2.0
         parseCpuMax "50000 100000" `shouldBe` Just 0.5
@@ -143,11 +149,22 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planCapabilities (resolveRuntimePlan noOverrides cgroup unpinned)
             `shouldBe` (4, FromCgroup)
 
-    it "keeps an operator GHCRTS heap ceiling rather than fabricating one" $ do
+    it "keeps an operator GHCRTS heap ceiling rather than fabricating one, and fits the area to it" $ do
         -- No config and no cgroup memory limit: an -M the operator set stands.
         let live = unpinned{rpMaxHeapBytes = Just (300 * mib)}
             plan = resolveRuntimePlan noOverrides noCgroup live
         planMaxHeapBytes plan `shouldBe` (Just (300 * mib), FromRts)
+        planAllocAreaBytes plan `shouldBe` (9 * mib, FromHeapCeiling)
+
+    it "fits the nursery to a configured heap ceiling when no cgroup memory limit binds" $ do
+        -- 16 cores at the shipped 64 MiB would fill a 1 GiB ceiling, so each gets an eighth of it across 16.
+        let wide = unpinned{rpCapabilities = 16, rpProcessors = 16}
+            plan = resolveRuntimePlan noOverrides{roCores = Just 16, roMaxHeapBytes = Just (1024 * mib)} noCgroup wide
+        planAllocAreaBytes plan `shouldBe` (8 * mib, FromHeapCeiling)
+        requiredRtsFlags wide plan `shouldBe` ["-A" <> show (8 * mib), "-M" <> show (1024 * mib)]
+
+    it "keeps the shipped area when nothing bounds the heap" $
+        planAllocAreaBytes (resolveRuntimePlan noOverrides noCgroup unpinned) `shouldBe` (64 * mib, FromRts)
 
 ladderSpec :: Spec
 ladderSpec = describe "the capability ladder below the cgroup CPU quota" $ do
@@ -218,18 +235,18 @@ derivationSpec = describe "deriveMaxHeapBytes and deriveAllocAreaBytes" $ do
 flagsSpec :: Spec
 flagsSpec = describe "requiredRtsFlags" $ do
     it "is empty when the plan is already in force" $ do
-        let live = unpinned{rpCapabilities = 2, rpMaxHeapBytes = Just (400 * mib)}
+        let live = unpinned{rpCapabilities = 2, rpAllocAreaBytes = 25 * mib, rpMaxHeapBytes = Just (400 * mib)}
             plan = resolveRuntimePlan pinnedBoth noCgroup live
         requiredRtsFlags live plan `shouldBe` []
 
     it "asks only for the capability change when the heap already matches" $ do
-        let live = unpinned{rpMaxHeapBytes = Just (400 * mib)}
+        let live = unpinned{rpAllocAreaBytes = 25 * mib, rpMaxHeapBytes = Just (400 * mib)}
             plan = resolveRuntimePlan pinnedBoth noCgroup live
         requiredRtsFlags live plan `shouldBe` ["-N2"]
 
     it "asks for the heap flag in bytes when a ceiling must be enforced" $ do
         let plan = resolveRuntimePlan pinnedBoth{roCores = Just 4} noCgroup unpinned
-        requiredRtsFlags unpinned plan `shouldBe` ["-M" <> show (400 * mib)]
+        requiredRtsFlags unpinned plan `shouldBe` ["-A" <> show (12 * mib), "-M" <> show (400 * mib)]
 
     it "asks for every flag that differs" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}

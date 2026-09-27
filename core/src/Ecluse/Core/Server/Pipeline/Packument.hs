@@ -63,8 +63,9 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules (newEvaluator)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Admission.Budget (ChargeFactors (cfOutputPermille), scaleCharge)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, chargeOnce)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille), FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -400,14 +401,16 @@ etagProvenanceTag = \case
 -- its encoding before either exists, and wraps a render escape, which breaks the totality contract.
 servedBytes :: PackumentServing response -> [Contribution] -> MergePlan -> ETag -> IO ByteString
 servedBytes serving sources plan etag =
-    resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $ do
-        chargeOnce (psvTicket serving) outputCharge
+    awaitingFlight (psvTicket serving) flight . resolveAssembled (srMetrics rt) (srMetadataCache rt) key $ do
+        charge (servingFlight flight (psvTicket serving)) outputCharge
         markRenderEscape $
             pure $!
                 LBS.toStrict (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
   where
     rt = psvRuntime serving
     deps = psvDeps serving
+    key = renderETag etag
+    flight = FlightKey ("assembled " <> key)
     outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (sum (map srcBodyBytes sources))
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)

@@ -12,13 +12,13 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Composition.MemoryPlan.Transient (
-    TransientBudget (..),
     idleLiveFloorBytes,
     liveTargetBytes,
     noCeilingTransientBytes,
     transientBudget,
     transientFloorBytes,
  )
+import Ecluse.Composition.MemoryPlan.Types (TransientBudget (..))
 import Ecluse.Composition.Support (mib)
 
 spec :: Spec

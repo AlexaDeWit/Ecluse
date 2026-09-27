@@ -32,11 +32,10 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
 import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, status503)
 import Network.Wai (Request, requestHeaders)
+import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
-import UnliftIO (MonadUnliftIO)
-
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
@@ -77,8 +76,8 @@ shedMessage = "server is busy; retry later"
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
 retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 
-{- | Run metadata work behind the memory door and then the CPU gate, and answer its result after both
-release. A shed at either door answers with @shed@, counted once.
+{- | Run metadata work behind the memory gate and then the CPU gate, and answer its result after both
+release. A shed at either gate answers with @shed@, counted once.
 -}
 withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
 withMetadataAdmission runtime shed gated answer =

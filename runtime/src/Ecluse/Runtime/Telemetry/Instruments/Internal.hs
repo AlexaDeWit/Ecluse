@@ -87,8 +87,7 @@ import OpenTelemetry.Metric.Core (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Server.Admission.Brake (brakeLevelCode)
-import Ecluse.Core.Server.Admission.Meter (MeterSnapshot (snBrakeLevel, snBudgetBytes, snChargedBytes))
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (..), brakeLevelCode)
 import Ecluse.Core.Telemetry.Catalogue (
     MetricName (..),
     metricName,
@@ -162,9 +161,11 @@ data Metrics = Metrics
     , mMemoryAdmissionBudgetBytes :: ObservableGauge Int64
     , mMemoryAdmissionChargedBytes :: ObservableGauge Int64
     , mMemoryAdmissionBrakeLevel :: ObservableGauge Int64
+    , mMemoryAdmissionWaiting :: ObservableGauge Int64
+    , mMemoryAdmissionPausedNow :: ObservableGauge Int64
     , mMemoryAdmissionQueued :: Counter Int64
     , mMemoryAdmissionShed :: Counter Int64
-    , mMemoryAdmissionPaused :: Counter Int64
+    , mMemoryAdmissionPauses :: Counter Int64
     , mMemoryAdmissionOverdraws :: Counter Int64
     }
 
@@ -214,9 +215,11 @@ newMetrics telemetry = do
         <*> observableGauge meter MemoryAdmissionBudgetBytes "the metadata memory budget in bytes"
         <*> observableGauge meter MemoryAdmissionChargedBytes "bytes metadata requests hold against the memory budget"
         <*> observableGauge meter MemoryAdmissionBrakeLevel "memory brake level (0 calm, 1 holding, 2 braking)"
+        <*> observableGauge meter MemoryAdmissionWaiting "new requests waiting at the memory gate"
+        <*> observableGauge meter MemoryAdmissionPausedNow "started requests paused for memory"
         <*> counter meter MemoryAdmissionQueued "{request}" "requests that waited for their memory entry step"
-        <*> counter meter MemoryAdmissionShed "{request}" "requests shed at the memory door"
-        <*> counter meter MemoryAdmissionPaused "{read}" "started reads that paused for memory"
+        <*> counter meter MemoryAdmissionShed "{request}" "requests shed at the memory gate"
+        <*> counter meter MemoryAdmissionPauses "{pause}" "times a started request paused for memory"
         <*> counter meter MemoryAdmissionOverdraws "{step}" "steps the overdraw token holder took past the memory budget"
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
@@ -253,7 +256,7 @@ metricsPortOf m =
         , mpPublishBodyShed = addOne (mPublishBodyShed m) []
         , mpMemoryAdmissionQueued = addOne (mMemoryAdmissionQueued m) []
         , mpMemoryAdmissionShed = addOne (mMemoryAdmissionShed m) []
-        , mpMemoryAdmissionPaused = addOne (mMemoryAdmissionPaused m) []
+        , mpMemoryAdmissionPause = addOne (mMemoryAdmissionPauses m) []
         , mpMemoryAdmissionOverdraw = addOne (mMemoryAdmissionOverdraws m) []
         , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
@@ -498,7 +501,7 @@ reportAdvisorySourceAge eco pushedAt result = do
 observeAge :: ObservableResult Int64 -> Ecosystem -> Int64 -> IO ()
 observeAge result eco seconds = observe result (max 0 seconds) (metricAttributes [LEcosystem eco])
 
--- | Attach the memory meter's budget, charge and brake level to their gauges, read at each collection.
+-- | Attach the memory meter's figures to their gauges, read at each collection.
 registerMemoryMeter :: Metrics -> IO MeterSnapshot -> IO ()
 registerMemoryMeter m readMeter = do
     let observeWith pick instrument =
@@ -508,6 +511,8 @@ registerMemoryMeter m readMeter = do
     observeWith snBudgetBytes (mMemoryAdmissionBudgetBytes m)
     observeWith snChargedBytes (mMemoryAdmissionChargedBytes m)
     observeWith (brakeLevelCode . snBrakeLevel) (mMemoryAdmissionBrakeLevel m)
+    observeWith snWaiting (mMemoryAdmissionWaiting m)
+    observeWith snPaused (mMemoryAdmissionPausedNow m)
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

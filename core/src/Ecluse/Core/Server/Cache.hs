@@ -21,6 +21,7 @@ module Ecluse.Core.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
+    metadataKey,
 
     -- * Single-version resolution
     resolveVersion,
@@ -54,6 +55,10 @@ import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
+
+-- | The key a full read of one package from one source is shared and retained under.
+metadataKey :: Source -> PackageName -> Text
+metadataKey = keyText
 
 keyText :: Source -> PackageName -> Text
 keyText (Source source) name =

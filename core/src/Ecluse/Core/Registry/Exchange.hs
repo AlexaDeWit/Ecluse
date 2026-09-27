@@ -168,9 +168,7 @@ digestingRead consume readChunk = do
             pure chunk
     consume next >>= traverse (\result -> (result,) . digestFromContext <$> readIORef context)
 
-{- | Pay for each chunk's length before the consumer sees it. The final empty chunk pays zero,
-which marks the end of a read.
--}
+-- | Pay for each chunk's length before the consumer sees it.
 chargedRead :: (Int -> IO ()) -> IO ByteString -> IO ByteString
 chargedRead charge readChunk = do
     chunk <- readChunk

@@ -39,7 +39,7 @@ data OriginClient = OriginClient
     , ocLimits :: Limits
     -- ^ The bound every read through this origin is held to, fail-closed past the maximum.
     , ocChargeFullRead :: Int -> IO ()
-    -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it, zero at its end.
+    -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it.
     }
 
 {- | One origin from the four things that name it. The bound comes first because a caller

@@ -20,7 +20,6 @@ import Control.Concurrent (threadDelay)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (cpu_ns, gc, gc_cpu_ns, major_gcs), getRTSStats, getRTSStatsEnabled)
 
 import Ecluse.Core.Server.Admission.Brake (
-    BrakeBounds,
     BrakeMarks,
     BrakeState (bsBudget, bsLevel),
     CollectorReading (..),
@@ -29,7 +28,8 @@ import Ecluse.Core.Server.Admission.Brake (
     newSampleWindow,
     windowSample,
  )
-import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSnapshot (snChargedBytes), meterSnapshot, steerMeter)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, meterSnapshot, steerMeter, takeLargestCharge)
+import Ecluse.Core.Server.Admission.Types (BrakeBounds, MeterSnapshot (snChargedBytes))
 
 -- | What one sampler loop reads and steers.
 data SamplerSettings = SamplerSettings
@@ -76,8 +76,9 @@ runMemorySampler settings =
         threadDelay (ssPeriodMicros settings)
         reading <- ssCollector settings
         charged <- snChargedBytes <$> meterSnapshot (ssMeter settings)
+        largest <- takeLargestCharge (ssMeter settings)
         kernel <- ssKernelPermille settings
-        let (sample, window') = windowSample window reading charged kernel
+        let (sample, window') = windowSample window reading charged largest kernel
             next = brakeStep (ssMarks settings) (ssBounds settings) current sample
         when (bsBudget next /= bsBudget current || bsLevel next /= bsLevel current) $
             steerMeter (ssMeter settings) (bsBudget next) (bsLevel next)

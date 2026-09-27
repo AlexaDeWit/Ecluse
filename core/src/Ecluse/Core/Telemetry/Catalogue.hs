@@ -47,12 +47,16 @@ data MetricName
       MemoryAdmissionChargedBytes
     | -- | @ecluse.serve.admission.memory.brake_level@: 0 calm, 1 holding, 2 braking (observable gauge).
       MemoryAdmissionBrakeLevel
+    | -- | @ecluse.serve.admission.memory.waiting@: new requests waiting at the memory gate (observable gauge).
+      MemoryAdmissionWaiting
+    | -- | @ecluse.serve.admission.memory.paused@: started requests paused for memory (observable gauge).
+      MemoryAdmissionPausedNow
     | -- | @ecluse.serve.admission.memory.queued@: requests that waited for their entry step (counter).
       MemoryAdmissionQueued
-    | -- | @ecluse.serve.admission.memory.shed@: requests shed at the memory door (counter).
+    | -- | @ecluse.serve.admission.memory.shed@: requests shed at the memory gate (counter).
       MemoryAdmissionShed
-    | -- | @ecluse.serve.admission.memory.paused@: started reads that paused for memory (counter).
-      MemoryAdmissionPaused
+    | -- | @ecluse.serve.admission.memory.pauses@: times a started request paused for memory (counter).
+      MemoryAdmissionPauses
     | -- | @ecluse.serve.admission.memory.overdraws@: steps the token holder took past the budget (counter).
       MemoryAdmissionOverdraws
     | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
@@ -135,9 +139,11 @@ metricName = \case
     MemoryAdmissionBudgetBytes -> "ecluse.serve.admission.memory.budget_bytes"
     MemoryAdmissionChargedBytes -> "ecluse.serve.admission.memory.charged_bytes"
     MemoryAdmissionBrakeLevel -> "ecluse.serve.admission.memory.brake_level"
+    MemoryAdmissionWaiting -> "ecluse.serve.admission.memory.waiting"
+    MemoryAdmissionPausedNow -> "ecluse.serve.admission.memory.paused"
     MemoryAdmissionQueued -> "ecluse.serve.admission.memory.queued"
     MemoryAdmissionShed -> "ecluse.serve.admission.memory.shed"
-    MemoryAdmissionPaused -> "ecluse.serve.admission.memory.paused"
+    MemoryAdmissionPauses -> "ecluse.serve.admission.memory.pauses"
     MemoryAdmissionOverdraws -> "ecluse.serve.admission.memory.overdraws"
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"

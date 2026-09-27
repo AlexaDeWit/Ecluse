@@ -62,8 +62,8 @@ data MetricsPort = MetricsPort
     -- ^ Record one request that waited for its memory entry step (@ecluse.serve.admission.memory.queued@).
     , mpMemoryAdmissionShed :: IO ()
     -- ^ Record one request shed at the memory door (@ecluse.serve.admission.memory.shed@).
-    , mpMemoryAdmissionPaused :: IO ()
-    -- ^ Record one started read that paused for memory (@ecluse.serve.admission.memory.paused@).
+    , mpMemoryAdmissionPause :: IO ()
+    -- ^ Record one started request pausing for memory (@ecluse.serve.admission.memory.pauses@).
     , mpMemoryAdmissionOverdraw :: IO ()
     -- ^ Record one step taken past the memory budget (@ecluse.serve.admission.memory.overdraws@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()

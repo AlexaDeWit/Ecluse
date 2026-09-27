@@ -95,7 +95,7 @@ spec = describe "resolveBootPlan" $ do
                        , "memory plan: cache entry bound 16384" <> fallbackClause
                        , "memory plan: memory-queue depth 50000" <> fallbackClause
                        , "memory plan: mirror artifact byte cap 536870912" <> fallbackClause
-                       , "memory plan: transient budget 1073741824" <> fallbackClause
+                       , "memory plan: transient budget 1073741824 (built-in default, no heap-ceiling datapoint)"
                        , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
                        ]
                 <> mountPostureLines config

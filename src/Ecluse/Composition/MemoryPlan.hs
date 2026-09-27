@@ -45,12 +45,13 @@ import Ecluse.Composition.MemoryPlan.Internal (OverridePins (..), PlanInputs (..
 import Ecluse.Composition.MemoryPlan.Override (configuredPins, overrideViolationsFor)
 import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, renderControlWarnings, renderDegradations, renderPlanLines)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedToFit)
-import Ecluse.Composition.MemoryPlan.Transient (TransientBudget (..), renderTransientBudget, transientBudget)
+import Ecluse.Composition.MemoryPlan.Transient (renderTransientBudget, transientBudget)
 import Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
     MirrorArtifactTenant (..),
     PublishTenant (..),
     QueueTenantDemand (..),
+    TransientBudget (..),
     queueTenantDemand,
  )
 import Ecluse.Composition.Sizing (resolveServeAdmission, resolveSized)
@@ -116,8 +117,10 @@ solvedPlan inputs h =
     )
   where
     demands = tenantDemands inputs h
-    retained = soCacheFinal outcomes + soQueueTenantBytes outcomes + tdFixedBuffers demands
-    transient = transientBudget (Just h) (piCapabilities inputs) (piAllocAreaBytes inputs) retained
+    -- Retained tenants only. Publish bodies and mirror artifacts are byte-admitted on their own,
+    -- and the sampler measures what they hold after each major collection.
+    tenants = soCacheFinal outcomes + soQueueTenantBytes outcomes + tdFixedBuffers demands
+    transient = transientBudget (Just h) (piCapabilities inputs) (piAllocAreaBytes inputs) tenants
     outcomes = shedToFit demands
 
 {- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.

@@ -45,6 +45,7 @@ module Ecluse.Rts (
     parseMemoryMax,
     readIfExists,
     parseInactiveFile,
+    usePermille,
 
     -- * Cgroup memory use
     cgroupMemoryUse,
@@ -103,6 +104,8 @@ data Provenance
       FromCgroupMemory
     | -- | Capped at @coresCeiling@, with no cgroup limit of either kind in force.
       FromCoresCeiling
+    | -- | Fitted to a heap ceiling from config or @GHCRTS@, with no cgroup memory limit in force.
+      FromHeapCeiling
     | -- | Left as the RTS resolved it (baked defaults plus any operator @GHCRTS@).
       FromRts
     deriving stock (Eq, Show)
@@ -117,9 +120,8 @@ data RuntimePlan = RuntimePlan
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the runtime plan: capabilities down the four-rung ladder, the allocation area and the
-heap ceiling together from the cgroup memory limit, and the heap ceiling from @maxHeapBytes@ first.
-Without a memory limit both stay as the live RTS posture an operator @GHCRTS@ set.
+{- | Resolve the runtime plan: capabilities down the four-rung ladder, the heap ceiling from
+@maxHeapBytes@, else the cgroup limit, else @GHCRTS@, and the allocation area to fit either bound.
 -}
 resolveRuntimePlan :: RuntimeOverrides -> CgroupLimits -> RtsPosture -> RuntimePlan
 resolveRuntimePlan overrides cgroup rts =
@@ -143,14 +145,17 @@ resolveRuntimePlan overrides cgroup rts =
     -- Every derived rung floors at one capability and ceilings at the visible processors.
     visible = clamp (1, rpProcessors rts)
 
-    -- A live area that is neither the shipped default nor the derived one is an operator's
-    -- GHCRTS choice, and stands. The derived one is what a re-launch already applied.
-    allocArea = case cgMemoryMaxBytes cgroup of
-        Just memMax
-            | rpAllocAreaBytes rts `elem` [shippedAllocAreaBytes, derivedArea] -> (derivedArea, FromCgroup)
-          where
-            derivedArea = deriveAllocAreaBytes memMax (fst capabilities)
-        _ -> (rpAllocAreaBytes rts, FromRts)
+    -- The area fits the pod's memory limit, else a configured heap ceiling. Any live area other than
+    -- the shipped or the derived one is an operator's GHCRTS choice, and stands.
+    allocArea = case (cgMemoryMaxBytes cgroup, roMaxHeapBytes overrides <|> rpMaxHeapBytes rts) of
+        (Just memMax, _) -> fitted memMax FromCgroup
+        (Nothing, Just ceiling') -> fitted ceiling' FromHeapCeiling
+        (Nothing, Nothing) -> (rpAllocAreaBytes rts, FromRts)
+    fitted bound provenance
+        | rpAllocAreaBytes rts `elem` [shippedAllocAreaBytes, derivedArea] = (derivedArea, provenance)
+        | otherwise = (rpAllocAreaBytes rts, FromRts)
+      where
+        derivedArea = deriveAllocAreaBytes bound (fst capabilities)
 
     maxHeap = case (roMaxHeapBytes overrides, cgMemoryMaxBytes cgroup) of
         (Just bytes, _) -> (Just (alignToBlock bytes), FromConfig)
@@ -370,6 +375,7 @@ capabilityAdvice p = case effectiveCapabilities p of
     -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
     (_, FromConfig) -> []
     (_, FromCgroup) -> []
+    (_, FromHeapCeiling) -> []
     (_, FromRts) -> []
   where
     advice reason suffix = "runtime: " <> reason <> ". " <> suffix
@@ -407,6 +413,7 @@ provenanceClause = \case
     FromCgroup -> "derived from the cgroup limit"
     FromCgroupMemory -> "bounded by the cgroup memory limit, no CPU quota set"
     FromCoresCeiling -> "no cgroup CPU or memory limit found, capped at runtime.coresCeiling"
+    FromHeapCeiling -> "fitted to the heap ceiling, no cgroup memory limit set"
     FromRts -> "as the RTS resolved it"
 
 -- A byte count in MiB: whole when exact, else to one decimal place.
@@ -468,9 +475,11 @@ readUse :: FilePath -> Int -> IO (Maybe Int)
 readUse dir limit = do
     current <- fromRight Nothing <$> tryIO (limitAt parseMemoryMax "/memory.current" dir)
     inactive <- fromRight Nothing <$> tryIO ((>>= parseInactiveFile) <$> readIfExists (dir <> "/memory.stat"))
-    pure $ do
-        used <- current
-        pure (max 0 (used - fromMaybe 0 inactive) * 1000 `div` max 1 limit)
+    pure (usePermille limit inactive <$> current)
+
+-- | Memory in use less reclaimable page cache, in thousandths of the limit, from a cgroup's readings.
+usePermille :: Int -> Maybe Int -> Int -> Int
+usePermille limit inactive current = max 0 (current - fromMaybe 0 inactive) * 1000 `div` max 1 limit
 
 {- | Resolve the runtime plan and apply it, first thing at boot. It never aborts the boot, and the
 plan it returns is the effective one, so downstream sizing computes from what the RTS runs with.

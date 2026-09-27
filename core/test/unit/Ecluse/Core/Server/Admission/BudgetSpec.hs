@@ -4,6 +4,7 @@
 
 module Ecluse.Core.Server.Admission.BudgetSpec (spec) where
 
+import Data.IntSet qualified as IntSet
 import Hedgehog (assert, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -71,27 +72,33 @@ entrySpec = describe "entryDecision" $ do
 growthSpec :: Spec
 growthSpec = describe "growthDecision" $ do
     it "lets a fitting step through, whoever holds the token" $
-        growthDecision (view 10 5){mvToken = Just 1} 7 5 `shouldBe` GrowWithin
+        growthDecision (view 10 5){mvToken = Just 1} (serving [7]) 5 `shouldBe` GrowWithin
 
     it "lets the token holder overdraw" $
-        growthDecision (view 10 10){mvToken = Just 7} 7 5 `shouldBe` GrowOverdraw
+        growthDecision (view 10 10){mvToken = Just 7} (serving [7]) 5 `shouldBe` GrowOnToken
 
-    it "hands a free token to the oldest paused ticket only" $ do
+    it "lets work the token holder waits on overdraw on the holder's token" $
+        growthDecision (view 10 10){mvToken = Just 1} (serving [9, 1]) 5 `shouldBe` GrowOnToken
+
+    it "hands a free token to work that serves the oldest paused ticket only" $ do
         let full = (view 10 10){mvOldestWaiter = Just 3}
-        growthDecision full 3 5 `shouldBe` GrowOverdraw
-        growthDecision full 2 5 `shouldBe` GrowOverdraw
-        growthDecision full 4 5 `shouldBe` GrowWait
+        growthDecision full (serving [3]) 5 `shouldBe` GrowTakeToken
+        growthDecision full (serving [2]) 5 `shouldBe` GrowTakeToken
+        growthDecision full (serving [8, 3]) 5 `shouldBe` GrowTakeToken
+        growthDecision full (serving [4]) 5 `shouldBe` GrowWait
 
     it "makes everyone else wait while the token is held" $
-        growthDecision (view 10 10){mvToken = Just 1, mvOldestWaiter = Just 0} 0 5 `shouldBe` GrowWait
+        growthDecision (view 10 10){mvToken = Just 1, mvOldestWaiter = Just 0} (serving [0]) 5 `shouldBe` GrowWait
 
-    it "lets exactly one of a full meter's paused tickets overdraw (property)" $ hedgehog $ do
+    it "lets exactly one of a full meter's paused tickets take a free token (property)" $ hedgehog $ do
         tickets <- forAll (Gen.list (Range.linear 1 20) (Gen.int (Range.linear 0 1000)))
         want <- forAll (Gen.int (Range.linear 1 100))
         let paused = ordNub tickets
             full = (view 50 50){mvOldestWaiter = listToMaybe (sort paused)}
-            moving = [ticket | ticket <- paused, growthDecision full ticket want == GrowOverdraw]
+            moving = [ticket | ticket <- paused, growthDecision full (serving [ticket]) want == GrowTakeToken]
         length moving === 1
+  where
+    serving = IntSet.fromList
 
 view :: Int -> Int -> MeterView
 view budget charged = MeterView{mvBudget = budget, mvCharged = charged, mvToken = Nothing, mvOldestWaiter = Nothing}

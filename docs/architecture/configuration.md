@@ -133,28 +133,34 @@ captured large-package corpus. They express bounded policy headroom, not measure
 
 The boot sizes the allocation area and the heap ceiling together from the cgroup memory limit, and
 keeps every core the ladder resolved. A smaller nursery costs some collector time, where shedding a
-core would cost that core's throughput. Since GHC 9.6 the nursery counts inside `-M`, so the
+core would cost that core's throughput. With no memory limit, a configured heap ceiling takes the
+limit's place, so the nursery still fits. Since GHC 9.6 the nursery counts inside `-M`, so the
 ceiling reserves only what the heap does not cover: native and kernel memory, and one allocation
-area of growth between collections.
+area of growth between collections. The collector keeps its default compaction threshold, 30% of
+`-M`, which switches to compaction before copying would overflow and above the live budget.
 
 Memory admission exists to keep the pod clear of an OOM kill and of collector thrash, and to admit
 as much work as that allows. A busy copying collector keeps about four times its live data plus
 the nursery. So the live data it holds without strain is a quarter of the heap the nursery leaves,
-and it overflows the heap at half. That quarter, less the cache and the idle process, is the budget
-metadata requests pay into. A static estimate per request cannot hold that line, because request
-cost spans about sixty times across real packages while the cost per byte stays in a narrow band.
-So a request pays per byte as it reads, and pays for its response before it builds it. A started
-read pauses rather than failing, which avoids wasting its upstream transfer and inviting a retry
-storm.
+and it overflows the heap at half. That quarter, less the cache, the queue tenants and the idle
+process, is the budget metadata requests pay into. A static estimate per request cannot hold that
+line, because request cost spans about sixty times across real packages while the cost per byte
+stays in a narrow band. So a request pays per byte as it reads, and pays for its response before it
+builds it. A started read pauses rather than failing, which avoids wasting its upstream transfer and
+inviting a retry storm. Only one request at a time may run past the budget, until it ends, and the
+shared work it waits on runs with it, so the overshoot stays within about one request and a pause
+never deadlocks.
 
-The charges model the memory the heap holds, and the collector's own view corrects them. After each
-major collection a sampler measures the live data outside the charges, so the budget may grow until
-charges and that remainder reach a third of the heap, whether the charges run high or low. It halves
-the budget when the collector takes more than half the CPU. The charges act the moment work starts
-and the measurement arrives seconds later, so neither alone holds the line. The per-byte factors
-come from the retained-byte gate in
-[`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating), set a little above the
-load mix's average rather than at the worst package.
+The per-byte charges are the retained-byte gate's measured maxima, rounded up: 4.5 bytes held per
+source byte of a full read, and 1.6 for a listing's encoding with its strict copy. The residency
+tier in [`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating) fails when a
+package retains more, so a representation change cannot silently outgrow the charge. A charge above
+the average costs little, because the sampler's measurement corrects the budget. After each major
+collection it measures the live data outside the charges, so the budget may grow until charges and
+that remainder reach a third of the heap, less room for the largest recent request under the
+overflow point. It halves the budget, at most once a second, while the collector takes more than
+half the CPU. The charges act the moment work starts and the measurement arrives later, so neither
+alone holds the line.
 
 The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
 pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains

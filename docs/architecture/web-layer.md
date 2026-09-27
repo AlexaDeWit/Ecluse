@@ -195,23 +195,23 @@ No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 
-Listings and public artifact metadata decisions pass two doors: a memory door, then a process-wide
-CPU gate. The memory door charges a small entry step against the
+Listings and public artifact metadata decisions pass two gates: a memory gate, then a process-wide
+CPU gate. The memory gate charges a small entry step against the
 [memory budget](configuration.md#runtime-sizing-cores-and-heap-ceiling) before the request takes a
-CPU slot, so no request waits for memory while it holds one. The CPU capacity follows the core
+CPU slot, so a new request waiting for memory holds no CPU slot. The CPU capacity follows the core
 count or an explicit operator pin.
 
 Once admitted, a listing pays for its full reads chunk by chunk and for its response before it
-builds it. A request that joins another's public fetch pays nothing for that fetch, and an
+builds it. A request that joins another's public fetch or render pays nothing for it, and an
 assembled hit or a conditional `304` pays for its reads alone. A public artifact decision reads one
 selected release, so its entry step is its whole charge. A started request that runs out of budget
-pauses at its next chunk instead of failing. Both doors stay held through metadata evaluation and
-the listing response. Public artifact requests release both after the metadata decision, before
-streaming the admitted artifact.
+pauses at its next charge, keeping its CPU slot, and fails only if the pause outlives the serve-path
+cap. Both gates stay held through metadata evaluation and the listing response. Public artifact
+requests release both after the metadata decision, before streaming the admitted artifact.
 
-Each door has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
+Each gate has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
 sheds with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact
-hits bypass both doors. The mirror worker runs outside them. A slow artifact client therefore holds
+hits bypass both gates. The mirror worker runs outside them. A slow artifact client therefore holds
 no serve metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger

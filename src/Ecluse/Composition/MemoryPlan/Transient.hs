@@ -12,7 +12,6 @@ until charges and the live data it measures outside them reach a third of that h
 the point where copying overflows.
 -}
 module Ecluse.Composition.MemoryPlan.Transient (
-    TransientBudget (..),
     transientBudget,
     renderTransientBudget,
     brakeBounds,
@@ -27,30 +26,14 @@ module Ecluse.Composition.MemoryPlan.Transient (
     meterStepBytes,
 ) where
 
-import Ecluse.Core.Server.Admission.Brake (BrakeBounds (..))
+import Ecluse.Composition.MemoryPlan.Types (TransientBudget (..))
+import Ecluse.Core.Server.Admission.Types (BrakeBounds (..))
 
--- | The budget the boot hands the meter and the sampler, in bytes of live data.
-data TransientBudget = TransientBudget
-    { tbLiveTargetBytes :: Maybe Int
-    -- ^ The live data the heap holds in the collector's normal regime. 'Nothing' without a ceiling.
-    , tbExplainedBytes :: Int
-    -- ^ Live data outside the budget: the idle floor and the retained tenants.
-    , tbBootBytes :: Int
-    -- ^ The budget at boot.
-    , tbLiveCeilingBytes :: Maybe Int
-    -- ^ The live data the sampler lets charges and the measured remainder reach together.
-    , tbFloorBytes :: Int
-    -- ^ The least the sampler may shrink the budget to.
-    , tbOverflowLiveBytes :: Maybe Int
-    -- ^ The live data at which the copying collector overflows the ceiling.
-    }
-    deriving stock (Eq, Show)
-
-{- | Resolve the budget from the heap ceiling, the capability count, the allocation area and the
-retained tenants' bytes. With no ceiling the budget is a large constant the brake alone moves.
+{- | Resolve the budget from the heap ceiling, the capability count, the allocation area and the other
+tenants' bytes. With no ceiling the budget is a large constant the brake alone moves.
 -}
 transientBudget :: Maybe Int -> Int -> Int -> Int -> TransientBudget
-transientBudget heapCeiling capabilities allocArea retained = case heapCeiling of
+transientBudget heapCeiling capabilities allocArea tenants = case heapCeiling of
     Nothing ->
         TransientBudget
             { tbLiveTargetBytes = Nothing
@@ -72,13 +55,13 @@ transientBudget heapCeiling capabilities allocArea retained = case heapCeiling o
                 , tbOverflowLiveBytes = Just (copyable `div` 2)
                 }
   where
-    explained = idleLiveFloorBytes + max 0 retained
+    explained = idleLiveFloorBytes + max 0 tenants
 
 -- | The boot line for the budget, with the arithmetic an operator needs to check it.
 renderTransientBudget :: TransientBudget -> Text
 renderTransientBudget budget = case tbLiveTargetBytes budget of
     Nothing ->
-        "memory plan: transient budget " <> show (tbBootBytes budget) <> " (built-in default; no heap-ceiling datapoint)"
+        "memory plan: transient budget " <> show (tbBootBytes budget) <> " (built-in default, no heap-ceiling datapoint)"
     Just target ->
         "memory plan: transient budget "
             <> show (tbBootBytes budget)
@@ -86,9 +69,9 @@ renderTransientBudget budget = case tbLiveTargetBytes budget of
             <> show target
             <> " less "
             <> show (tbExplainedBytes budget)
-            <> " idle and retained; floor "
+            <> " for the idle process and the other tenants, floor "
             <> show (tbFloorBytes budget)
-            <> maybe "" (\ceiling' -> "; live ceiling " <> show ceiling') (tbLiveCeilingBytes budget)
+            <> maybe "" (\ceiling' -> ", live ceiling " <> show ceiling') (tbLiveCeilingBytes budget)
             <> ")"
 
 -- | The fixed bounds the sampler's brake steers the budget within.

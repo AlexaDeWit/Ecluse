@@ -119,13 +119,17 @@ These are regression limits for authenticated fixtures, not a universal metadata
 | npm | Wire bytes | 1.001106275 | lodash | 1.25 | 24.9% |
 | npm | Raw `Value` | 6.479086061 | express | 7 | 8.0% |
 | npm | Typed projection | 0.584934090 | react | 0.75 | 28.2% |
-| npm | Shared cache entry | 4.428914846 | typescript | 5 | 12.9% |
+| npm | Shared cache entry | 4.428914846 | typescript | 4.5 | 1.6% |
 | PyPI | Wire bytes | 1.079997401 | requests | 1.25 | 15.7% |
 | PyPI | Raw `Value` | 4.120672117 | boto3 | 7 | 69.9% |
 | PyPI | Typed projection | 1.821159345 | requests | 2.25 | 23.5% |
-| PyPI | Shared cache entry | 4.367559137 | requests | 5 | 14.5% |
+| PyPI | Shared cache entry | 4.367559137 | requests | 4.5 | 2.9% |
 
-The npm typed gate and both shared gates changed with their compact representations.
+The npm typed gate changed with its compact representation. A shared cache entry is what a
+listing's full read holds, so its gate is the memory gate's full-read charge, 4.5 bytes per source
+byte, read from each ecosystem's adapter. The same test checks the listing output charge: twice a
+shared entry's encoded size, for the lazy encoding and its strict copy, must stay within the 1.6
+output charge. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
 For example, the TypeScript shared shape retains 69,507,208 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,363,033 bytes. That encoded size and the source probe's

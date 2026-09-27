@@ -453,29 +453,39 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | Work | What it pays |
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
-| A full metadata read, which a listing makes | Each decompressed chunk before it is parsed: 3.5 bytes per source byte on npm, 4.5 on PyPI |
-| A listing's response | 1.3 bytes per source byte of the documents it merges, before assembly |
+| A full metadata read, which a listing makes | 4.5 bytes per decompressed source byte, chunk by chunk before parsing |
+| A listing's response | 1.6 bytes per source byte of the documents it merges, before assembly |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
-| A request that joins another request's public fetch | Nothing for that fetch |
+| A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
-A new request that cannot take its entry step waits up to 1 s at the door, then gets `503` with
-`Retry-After: 1`. Écluse never refuses a request that has started reading. The request pauses until
-memory frees instead, and one request at a time may run past the budget, so a pause always leaves
-a request that finishes. Everything a request paid returns when it ends. Trusted private artifact
-hits and artifact relay pay nothing.
+The per-byte charges are the largest the residency tests measure on the captured package corpus,
+rounded up: what a full read holds, and a response's encoding with its copy. The tests fail when a
+package would hold more, so the charges stay above the measured retention.
 
-The budget starts at a quarter of the heap the nursery leaves, less the cache budget and the idle
-process. That is the live data at which the copying collector still runs normally. A sampler reads
-the collector and the cgroup ten times a second and moves the budget:
+A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
+with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until
+memory frees, and fails only if the pause outlives the 50-second cap on a served upstream exchange.
+Only one request at a time may run past the budget. It keeps that right until it ends, so the
+budget holds within one request's worth. Work that request waits on, a public fetch or a render
+another request leads, runs past the budget with it, so a pause always leaves a request that
+finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
+artifact relay pay nothing.
+
+The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
+tenants and the idle process. That is the live data at which the copying collector still runs
+normally. A sampler reads the collector and the cgroup ten times a second and moves the budget:
 
 - It halves the budget when the collector takes more than half the CPU over the last second, when
   live data after a major collection passes 80% of the point where the heap overflows, or when the
-  cgroup's memory use, less reclaimable page cache, passes 90% of its limit.
+  cgroup's memory use, less reclaimable page cache, passes 90% of its limit. It halves at most once
+  a second, so a sustained surge still drives the budget down, one step each second.
 - After each major collection it measures the live data outside the charges: the cache, the idle
   process and any error in the charges. The budget may grow until the charges and that remainder
   reach a third of the heap the nursery leaves, and it drops at once when a larger remainder lowers
   that ceiling. A smaller remainder counts a quarter at a time.
+- The ceiling also leaves room under the heap's overflow point for the largest request seen lately,
+  since that one request may run past the budget.
 - After a calm second, with the collector under 35% of the CPU, it grows the budget by an eighth
   toward that ceiling.
 
@@ -488,20 +498,22 @@ only the collector's share moves it.
 | `ecluse.serve.admission.memory.budget_bytes` | The current budget |
 | `ecluse.serve.admission.memory.charged_bytes` | What the requests in flight hold against it |
 | `ecluse.serve.admission.memory.brake_level` | `0` calm, `1` holding, `2` braking |
+| `ecluse.serve.admission.memory.waiting` | New requests waiting at the memory gate now |
+| `ecluse.serve.admission.memory.paused` | Started requests paused for memory now |
 | `ecluse.serve.admission.memory.queued` | Requests that waited for their entry step |
-| `ecluse.serve.admission.memory.shed` | Requests refused at the memory door |
-| `ecluse.serve.admission.memory.paused` | Started reads that paused for memory |
+| `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
+| `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
 | `ecluse.serve.admission.memory.overdraws` | Steps a request took past the budget |
 
-A `503` with `Retry-After` from either door is backpressure, so exclude it from alerts. A brake
+A `503` with `Retry-After` from either gate is backpressure, so exclude it from alerts. A brake
 level that stays at `2`, or a `shed` count that keeps rising, means the pod needs more memory for
 its package mix.
 
 ### The rest of the plan
 
 The memory plan also accounts for the runtime reserve, the enqueue buffer, cache retention, publish
-bodies, the in-memory queue and mirror-artifact work. The cache budget is a share of the live
-target, so it grows with the pod. Their accounted sum does not measure all live process allocations.
+bodies, the in-memory queue and mirror-artifact work. The cache budget is 30% of the live target,
+at least 64 MiB, so it grows with the pod. Their accounted sum does not measure all live process allocations.
 Small automatic plans shed mirror-artifact capacity before cache retention. Read each warning for
 the resulting loss of capacity. An explicit override can still fail plan validation. The ingest
 ceiling is independent of those tenant allocations.
@@ -531,7 +543,7 @@ the document, so removing a document pin alone does not restore the automatic va
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
 | Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
-| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory door's waiting room | Review it against the pod's cores and concurrent workload |
+| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory gate's waiting room | Review it against the pod's cores and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 
 Response and CPU pins are not silently clamped. Read the override warnings before rollout.
@@ -687,12 +699,13 @@ the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, o
 
 **Size a proxy pod from measured process usage as well as the RTS numbers.** The boot sizes the
 per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
-whole MiB from 4 to 64. The heap ceiling (`-M`) is the limit less an eighth of it (at least 32 MiB)
-for memory outside the heap, and less one allocation area for the growth between collections. The
-nursery sits inside that ceiling. An allocation area you set through `GHCRTS` stands, unless it
-equals the shipped `-A64m`. The binary also ships `-T` for the memory sampler, `-c60` so the
-copying collector covers the whole memory budget before it switches to compaction, and
-`--disable-delayed-os-memory-return` so memory the heap gives back leaves the cgroup's count at once.
+whole MiB from 4 to 64. With no cgroup memory limit, a heap ceiling you set takes the limit's place,
+so the nursery still fits. The heap ceiling (`-M`) is the limit less an eighth of it (at least
+32 MiB) for memory outside the heap, and less one allocation area for the growth between
+collections. The nursery sits inside that ceiling. An allocation area you set through `GHCRTS`
+stands, unless it equals the shipped `-A64m`. The binary also ships `-T` for the memory sampler,
+and `--disable-delayed-os-memory-return` so memory the heap gives back leaves the cgroup's count at
+once.
 
 These examples meet the [1 GiB minimum](@/docs/operations.md#memory-plan-and-runtime-sizing).
 They show the arithmetic, not a workload guarantee:

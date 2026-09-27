@@ -16,9 +16,12 @@ import Test.Hspec
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
@@ -49,18 +52,25 @@ checkMeasurement ecosystem shape size result = do
     retained `shouldSatisfy` (> 0)
     residual `shouldSatisfy` (<= 16 * 1024)
     (10 * residual) `shouldSatisfy` (<= retained)
-    (4 * retained) `shouldSatisfy` (<= envelopeQuarters ecosystem shape * toInteger size)
+    (1000 * retained) `shouldSatisfy` (<= envelopePermille ecosystem shape * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
+    -- A listing holds its encoded output and a strict copy of it, which the output charge covers.
+    when (shape == Shared) $ for_ (chargeFactors ecosystem) $ \factors ->
+        (2000 * toInteger (compactBytes result)) `shouldSatisfy` (<= toInteger (cfOutputPermille factors) * toInteger size)
 
-envelopeQuarters :: Ecosystem -> Shape -> Integer
-envelopeQuarters Npm Typed = 3
-envelopeQuarters Npm Shared = 20
-envelopeQuarters PyPI Shared = 20
-envelopeQuarters _ shape = case shape of
-    Wire -> 5
-    Raw -> 28
-    Typed -> 9
-    Shared -> 30
+{- A shared entry is what a listing's full read holds, so its gate is the memory gate's full-read
+charge: a representation that retains more fails here before it can outgrow the charge. -}
+envelopePermille :: Ecosystem -> Shape -> Integer
+envelopePermille ecosystem Shared | Just factors <- chargeFactors ecosystem = toInteger (cfFullReadPermille factors)
+envelopePermille Npm Typed = 750
+envelopePermille _ shape = case shape of
+    Wire -> 1250
+    Raw -> 7000
+    Typed -> 2250
+    Shared -> 7500
+
+chargeFactors :: Ecosystem -> Maybe ChargeFactors
+chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
 
 authenticate :: CorpusPackage -> IO (Int, Text)
 authenticate package = do

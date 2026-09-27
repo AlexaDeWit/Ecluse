@@ -81,13 +81,12 @@ common shared
     relude (Relude as Prelude)
 
 -- The shipped server's RTS options. The OpenTelemetry batch processor requires the threaded RTS.
--- -T feeds the memory sampler. -c60 keeps the copying collector through the live budget, and
--- the eager memory return keeps the cgroup's view of the heap current. The boot derives -A and
--- -M from the pod. The load harness links them too, so the proxy it measures boots with the
--- posture a pod gets before its cgroup reshapes it. Tuning and overrides:
--- https://ecluse-proxy.com/docs/operations/.
+-- -T feeds the memory sampler, and the eager memory return keeps the cgroup's view of the heap
+-- current. The boot derives -A and -M from the pod. The load harness links them too, so the proxy
+-- it measures boots with the posture a pod gets before its cgroup reshapes it. Tuning and
+-- overrides: https://ecluse-proxy.com/docs/operations/.
 common shipped-rts
-  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T -c60 --disable-delayed-os-memory-return"
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T --disable-delayed-os-memory-return"
 
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
@@ -221,6 +220,7 @@ library ecluse-core
     Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Admission.Meter
+    Ecluse.Core.Server.Admission.Types
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
