@@ -80,10 +80,12 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
     [] -> use []
     entries -> do
         let heavy = filter ((`elem` heavyPackages) . packageName) entries
+            targets = map heavyTarget heavy <> fillerTargets fillerPackages
         corpus <- corpusAdvisories eco >>= compileInto "corpus"
-        synthetic <- syntheticAdvisories eco (map heavyTarget heavy <> fillerTargets fillerPackages) >>= compileInto "synthetic"
+        synthetic <- syntheticAdvisories eco targets >>= compileInto "synthetic"
         withServed eco corpus $ \corpusDeps corpusDb -> withServed eco synthetic $ \syntheticDeps syntheticDb -> do
-            checkServed (cveDbLookup corpusDb) (cveDbLookup syntheticDb) entries heavy
+            checkCorpusServed (cveDbLookup corpusDb) entries
+            checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
             use
                 [ bgroup
                     ("ecosystem: " <> toString (ecosystemName eco))
@@ -101,18 +103,23 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
     compileInto label inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) (dir </> toString (ecosystemName eco) </> label)
     heavyTarget entry = SyntheticTarget{stPackage = packageName entry, stVersions = Map.keys (infoVersions (entryInfo entry)), stAdvisories = heavyAdvisoryCount}
 
-{- An artifact that served nothing would pass for a speed-up under the shipped policy, since its
-remediation rule then abstains, so setup checks that each artifact serves its packages' ranges. -}
-checkServed :: CveLookup -> CveLookup -> [LoadedEntry] -> [LoadedEntry] -> IO ()
-checkServed corpus synthetic entries heavy = do
-    for_ (filter ((`elem` advisedPackages) . packageName) entries) $ \entry -> do
+{- An empty captured artifact would pass for a speed-up under the shipped policy, since the
+remediation rule then abstains, so setup requires ranges for every advised capture it measures. -}
+checkCorpusServed :: CveLookup -> [LoadedEntry] -> IO ()
+checkCorpusServed corpus entries = case filter ((`elem` advisedPackages) . packageName) entries of
+    [] -> assertFailure "advisory rows: no measured capture is one the captured records name"
+    advised -> for_ advised $ \entry -> do
         ranges <- cveAdvisoriesFor corpus (packageName entry)
         assertBool ("advisory rows: the captured artifact serves no range for " <> entryName entry) (not (null ranges))
+
+-- The generated artifact serves each worst-case target's advisories and names exactly the targets.
+checkSyntheticServed :: CveLookup -> [LoadedEntry] -> [SyntheticTarget] -> IO ()
+checkSyntheticServed synthetic heavy targets = do
     for_ heavy $ \entry -> do
         ranges <- cveAdvisoriesFor synthetic (packageName entry)
         length ranges @?= heavyAdvisoryCount
     covered <- cveCoveredNames synthetic
-    length covered @?= length heavy + fillerPackages
+    assertBool "advisory rows: the generated artifact's package names differ from its targets" (sort covered == sort (map stPackage targets))
 
 packageName :: LoadedEntry -> Text
 packageName (package, _, _, _) = cpName package
