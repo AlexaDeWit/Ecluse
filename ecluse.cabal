@@ -19,6 +19,7 @@ build-type:    Simple
 -- fixtures with `task gen-version-fixtures` and pinned captures with `task gen-bench-corpus`.
 extra-source-files:
   acceptance/criteria.json
+  bench/corpus/advisories/README.md
   bench/corpus/advisories/epss.csv
   bench/corpus/advisories/npm/*.json
   bench/corpus/advisories/pypi/*.json

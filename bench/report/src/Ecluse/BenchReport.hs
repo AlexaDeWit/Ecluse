@@ -174,7 +174,7 @@ preamble =
         <> " compared to a threshold. Allocations (from GC stats, +RTS -T) are the"
         <> " machine-independent signal to track across commits. Time varies with the runner."
         <> " The run's only red state is a literal benchmark failure: a build error, a crashed"
-        <> " harness, or a tripped complexity assertion."
+        <> " harness, a tripped complexity assertion, or an advisory row that leaves a version undecidable."
     , ""
     ]
 
@@ -200,12 +200,12 @@ operatingPoint benches groups =
     , opRow
         "precision"
         ( "each bench iterates until its relative stdev meets the run's --stdev target."
-            <> " the 2*stdev column is the achieved bound"
+            <> " the 2*stdev column is the achieved bound, and 0 marks a single-iteration row"
         )
     , opRow
         "correctness guards"
         ( "generator tests and complexity assertions run in the same tree (raw output"
-            <> " below). A trip is this run's one red state"
+            <> " below). A trip reds the run"
         )
     , ""
     ]
@@ -287,7 +287,7 @@ readingNotes =
         <> " only ever rises down the table, so read it as the run's footprint, never as"
         <> " one bench's cost."
     , "- **The generator tests and complexity assertions are not in the CSV**. Their"
-        <> " verdicts live in the raw console output, and a trip is the run's one red state."
+        <> " verdicts live in the raw console output, and a trip reds the run."
     ]
 
 cells :: [Text] -> Text

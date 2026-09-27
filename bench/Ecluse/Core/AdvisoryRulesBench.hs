@@ -16,11 +16,11 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (localOption)
 import Test.Tasty.Bench (Benchmark, RelStDev (RelStDev), bench, bgroup, whnfAppIO)
-import Test.Tasty.HUnit (assertFailure, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Bench.Corpus (LoadedEntry, benchEvalContext, entryInfo, entryName)
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbLookup), CveLookup (cveAdvisoriesFor), openCveDb)
+import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames), openCveDb)
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -36,7 +36,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
  )
 import Ecluse.Test.Corpus (cpName)
-import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), SyntheticTarget (..), corpusAdvisories, syntheticAdvisories)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), SyntheticTarget (..), corpusAdvisories, fillerTargets, syntheticAdvisories)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isUndecidable, slotRuleDeps)
@@ -52,12 +52,20 @@ withBenchmarks ecosystems action =
 measuredPackages :: [Text]
 measuredPackages = ["typescript", "react", "@types/node", "numpy"]
 
+-- The measured captures the captured records name.
+advisedPackages :: [Text]
+advisedPackages = ["react", "numpy"]
+
 -- The capture per ecosystem the generated worst case targets, and its advisory count.
 heavyPackages :: [Text]
 heavyPackages = ["typescript", "numpy"]
 
 heavyAdvisoryCount :: Int
 heavyAdvisoryCount = 200
+
+-- Other packages in the generated database, so each lookup searches a table far larger than its own rows.
+fillerPackages :: Int
+fillerPackages = 20000
 
 -- The shipped policy: the minimum-age quarantine and the remediation fast lane.
 shippedPolicy :: [PrecededRule]
@@ -73,11 +81,9 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
     entries -> do
         let heavy = filter ((`elem` heavyPackages) . packageName) entries
         corpus <- corpusAdvisories eco >>= compileInto "corpus"
-        synthetic <- syntheticAdvisories eco (map heavyTarget heavy) >>= compileInto "synthetic"
-        withServed eco corpus $ \corpusDeps _ -> withServed eco synthetic $ \syntheticDeps syntheticDb -> do
-            for_ heavy $ \entry -> do
-                ranges <- cveAdvisoriesFor (cveDbLookup syntheticDb) (packageName entry)
-                length ranges @?= heavyAdvisoryCount
+        synthetic <- syntheticAdvisories eco (map heavyTarget heavy <> fillerTargets fillerPackages) >>= compileInto "synthetic"
+        withServed eco corpus $ \corpusDeps corpusDb -> withServed eco synthetic $ \syntheticDeps syntheticDb -> do
+            checkServed (cveDbLookup corpusDb) (cveDbLookup syntheticDb) entries heavy
             use
                 [ bgroup
                     ("ecosystem: " <> toString (ecosystemName eco))
@@ -95,6 +101,19 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
     compileInto label inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) (dir </> toString (ecosystemName eco) </> label)
     heavyTarget entry = SyntheticTarget{stPackage = packageName entry, stVersions = Map.keys (infoVersions (entryInfo entry)), stAdvisories = heavyAdvisoryCount}
 
+{- An artifact that served nothing would pass for a speed-up under the shipped policy, since its
+remediation rule then abstains, so setup checks that each artifact serves its packages' ranges. -}
+checkServed :: CveLookup -> CveLookup -> [LoadedEntry] -> [LoadedEntry] -> IO ()
+checkServed corpus synthetic entries heavy = do
+    for_ (filter ((`elem` advisedPackages) . packageName) entries) $ \entry -> do
+        ranges <- cveAdvisoriesFor corpus (packageName entry)
+        assertBool ("advisory rows: the captured artifact serves no range for " <> entryName entry) (not (null ranges))
+    for_ heavy $ \entry -> do
+        ranges <- cveAdvisoriesFor synthetic (packageName entry)
+        length ranges @?= heavyAdvisoryCount
+    covered <- cveCoveredNames synthetic
+    length covered @?= length heavy + fillerPackages
+
 packageName :: LoadedEntry -> Text
 packageName (package, _, _, _) = cpName package
 
@@ -109,7 +128,8 @@ withServed eco path use =
 rows :: String -> RuleDeps -> [PrecededRule] -> [LoadedEntry] -> Benchmark
 rows label deps policy entries = bgroup label [bench (entryName entry) (whnfAppIO (survivors deps policy) entry) | entry <- entries]
 
--- The admitted count, refused when a read went unanswered, since that row would measure an outage.
+-- The admitted count. An undecidable version fails the row, which catches an unanswered read
+-- under the fail-closed deny rules only.
 survivors :: RuleDeps -> [PrecededRule] -> LoadedEntry -> IO Int
 survivors deps policy entry = do
     plan <- filterPlan deps benchEvalContext policy (entryInfo entry)

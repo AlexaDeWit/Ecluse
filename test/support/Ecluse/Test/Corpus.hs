@@ -11,10 +11,13 @@ module Ecluse.Test.Corpus (
     corpusPackages,
     pypiCorpusPackages,
     cpName,
+    readCorpusPins,
     syntheticProxyBase,
     permissiveAgeRules,
 ) where
 
+import Data.Aeson (Object, eitherDecode, withObject)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Time (nominalDay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -73,6 +76,14 @@ pypiCorpusPackages =
 -- | A corpus package's wire name, both the request path and the body's self-reported name.
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
+
+-- | Parse @bench/corpus/pins.json@ with the given parser, or return why it did not parse.
+readCorpusPins :: (Object -> Parser a) -> IO (Either String a)
+readCorpusPins parser = do
+    raw <- readFileLBS pinsPath
+    pure (first ((pinsPath <> ": ") <>) (eitherDecode raw >>= parseEither (withObject "corpus pins" parser)))
+  where
+    pinsPath = "bench/corpus/pins.json"
 
 -- | The placeholder proxy origin the serve-time rewrite puts tarball URLs under.
 syntheticProxyBase :: Text

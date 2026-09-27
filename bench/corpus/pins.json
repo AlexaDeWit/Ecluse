@@ -159,72 +159,301 @@
     }
   },
   "advisories": {
-    "_note": "Every OSV record osv.dev listed against a corpus package, copied byte for byte from the osv.dev export's per-record objects, and the rows of the EPSS daily feed for their CVE aliases under the feed's two header lines. The benchmark compiles them through the OSV compile path at run time and never fetches. records pins the files by id, so a stray file cannot join the fixture.",
+    "_note": "Every OSV record osv.dev listed against a corpus package, copied byte for byte from the osv.dev export's per-record objects, and the rows of the EPSS daily feed for their CVE aliases under the feed's two header lines. advisories/README.md carries their licences and attribution. The benchmark compiles them through the OSV compile path at run time, never fetches, and refuses a file whose size or SHA-256 differs from its record here. records pins the files by id, so a stray file cannot join the fixture.",
     "source": "https://osv-vulnerabilities.storage.googleapis.com/{npm,PyPI}/<id>.json",
     "capturedAt": "2026-09-27T18:01:25Z",
-    "epssSource": "https://epss.empiricalsecurity.com/epss_scores-2026-09-27.csv.gz",
-    "epssCapturedAt": "2026-09-27T18:03:19Z",
     "records": {
-      "npm": [
-        "GHSA-29mw-wpgm-hmr9",
-        "GHSA-35jh-r3h4-6jhm",
-        "GHSA-38r7-794h-5758",
-        "GHSA-4vvj-4cpr-p986",
-        "GHSA-4x5r-pxfx-6jf8",
-        "GHSA-4xc9-xhrj-v574",
-        "GHSA-7xfp-9c55-5vqj",
-        "GHSA-8fgc-7cc6-rx7x",
-        "GHSA-cm5g-3pgc-8rg4",
-        "GHSA-f23m-r3pf-42rh",
-        "GHSA-fvqr-27wr-82fm",
-        "GHSA-g53w-52xc-2j85",
-        "GHSA-gpvr-g6gh-9mc2",
-        "GHSA-hc6q-2mpp-qw7j",
-        "GHSA-hg79-j56m-fxgv",
-        "GHSA-jf85-cpcp-j695",
-        "GHSA-jj78-5fmv-mv28",
-        "GHSA-p6mc-m468-83gw",
-        "GHSA-p8p7-x288-28g6",
-        "GHSA-qw6h-vgh9-j6wx",
-        "GHSA-r5fr-rjxr-66jc",
-        "GHSA-rv95-896h-c2vc",
-        "GHSA-x5rq-j2xg-h7qm",
-        "GHSA-xxjr-mmjv-4gpg"
-      ],
-      "pypi": [
-        "GHSA-2fc2-6r4j-p65h",
-        "GHSA-5545-2q6w-2gh6",
-        "GHSA-652x-xj99-gmcc",
-        "GHSA-6p56-wp2h-9hxr",
-        "GHSA-9fq2-x9r6-wfmf",
-        "GHSA-9hjg-9r4m-mvj7",
-        "GHSA-9wx4-h78v-vm56",
-        "GHSA-cfj3-7x9c-4p3h",
-        "GHSA-cw6w-4rcx-xphc",
-        "GHSA-f7c7-j99h-c22f",
-        "GHSA-fpfv-jqm9-f5jm",
-        "GHSA-frgw-fgh6-9g52",
-        "GHSA-gc5v-m9x4-r6x2",
-        "GHSA-j8r2-6x86-q33q",
-        "GHSA-pg2w-x9wp-vw92",
-        "GHSA-x84v-xcm2-53pg",
-        "PYSEC-2014-13",
-        "PYSEC-2014-14",
-        "PYSEC-2015-17",
-        "PYSEC-2017-1",
-        "PYSEC-2018-28",
-        "PYSEC-2018-33",
-        "PYSEC-2018-34",
-        "PYSEC-2019-108",
-        "PYSEC-2021-854",
-        "PYSEC-2021-855",
-        "PYSEC-2021-856",
-        "PYSEC-2021-857",
-        "PYSEC-2023-74",
-        "PYSEC-2026-1872",
-        "PYSEC-2026-1873",
-        "PYSEC-2026-2275"
-      ]
+      "npm": {
+        "GHSA-29mw-wpgm-hmr9": {
+          "path": "advisories/npm/GHSA-29mw-wpgm-hmr9.json",
+          "bytes": 4841,
+          "sha256": "932c555b8d688595abdee24b07499d74e862dc2d723aa40cf02ae618e765951f"
+        },
+        "GHSA-35jh-r3h4-6jhm": {
+          "path": "advisories/npm/GHSA-35jh-r3h4-6jhm.json",
+          "bytes": 4216,
+          "sha256": "da755b55fe4f90a37fd4f45b6a71119c17850a8eb3fd5f52985ea6526f44bba8"
+        },
+        "GHSA-38r7-794h-5758": {
+          "path": "advisories/npm/GHSA-38r7-794h-5758.json",
+          "bytes": 11500,
+          "sha256": "98de5b78af4dc621b0401c0c7b6f89d559605d15fd3a4b09cfbd44286a95822f"
+        },
+        "GHSA-4vvj-4cpr-p986": {
+          "path": "advisories/npm/GHSA-4vvj-4cpr-p986.json",
+          "bytes": 9308,
+          "sha256": "281383e23e89b6bf846f9912975f472b6c4d579735d0d9f2df9dfe3c4acaca18"
+        },
+        "GHSA-4x5r-pxfx-6jf8": {
+          "path": "advisories/npm/GHSA-4x5r-pxfx-6jf8.json",
+          "bytes": 2647,
+          "sha256": "a0dc83a93a739c4968540fd56e863901dde82d1c135148786061c957ae1a264b"
+        },
+        "GHSA-4xc9-xhrj-v574": {
+          "path": "advisories/npm/GHSA-4xc9-xhrj-v574.json",
+          "bytes": 2360,
+          "sha256": "815ad793e58521f58a3374a2f4484a61fc180518673b5e34aecb07e31a15a0f6"
+        },
+        "GHSA-7xfp-9c55-5vqj": {
+          "path": "advisories/npm/GHSA-7xfp-9c55-5vqj.json",
+          "bytes": 2396,
+          "sha256": "a1a54cee36ce25a4624eab32391c5ff6d11dad8d3635744ce84b8aa926d1eec0"
+        },
+        "GHSA-8fgc-7cc6-rx7x": {
+          "path": "advisories/npm/GHSA-8fgc-7cc6-rx7x.json",
+          "bytes": 11674,
+          "sha256": "1d8bd8b69bc4036c2afdb3da826db47c0ef89296f099cf64f2d4e3eb5c4f7383"
+        },
+        "GHSA-cm5g-3pgc-8rg4": {
+          "path": "advisories/npm/GHSA-cm5g-3pgc-8rg4.json",
+          "bytes": 1572,
+          "sha256": "ec4d801c72e812fc918f1f600b4da4edf2fe7afa8e870a41f782c1b75bd17b85"
+        },
+        "GHSA-f23m-r3pf-42rh": {
+          "path": "advisories/npm/GHSA-f23m-r3pf-42rh.json",
+          "bytes": 3076,
+          "sha256": "2c9e42a8876e7233dcdd7b1b6b385062ff4ed37cdb461c766dce27ab978d6dd1"
+        },
+        "GHSA-fvqr-27wr-82fm": {
+          "path": "advisories/npm/GHSA-fvqr-27wr-82fm.json",
+          "bytes": 2430,
+          "sha256": "06e150fea172141b10c1add9a050d2d1ddf7925fe4e7dc0a9051c669c9799820"
+        },
+        "GHSA-g53w-52xc-2j85": {
+          "path": "advisories/npm/GHSA-g53w-52xc-2j85.json",
+          "bytes": 2009,
+          "sha256": "b4b773dab95fc9960284574c23dde4f7a0b6a51fa02bf7c751ee24817a650cb5"
+        },
+        "GHSA-gpvr-g6gh-9mc2": {
+          "path": "advisories/npm/GHSA-gpvr-g6gh-9mc2.json",
+          "bytes": 1899,
+          "sha256": "21a0a0f94440d7e72a0d18c5acb2da48b4c1930187433ca695a933f47cbf486d"
+        },
+        "GHSA-hc6q-2mpp-qw7j": {
+          "path": "advisories/npm/GHSA-hc6q-2mpp-qw7j.json",
+          "bytes": 1737,
+          "sha256": "3be5623f66f0055591603e0a88d1a832fd02e288e25121f1364bcc2e6a0f9a94"
+        },
+        "GHSA-hg79-j56m-fxgv": {
+          "path": "advisories/npm/GHSA-hg79-j56m-fxgv.json",
+          "bytes": 1445,
+          "sha256": "618a5dcff5a463429c293fe645305e9b9c75d58aad7201c139d629e81bdeb913"
+        },
+        "GHSA-jf85-cpcp-j695": {
+          "path": "advisories/npm/GHSA-jf85-cpcp-j695.json",
+          "bytes": 3865,
+          "sha256": "2a0f08121d6b795536e91e6d95f581e7ba68a9aa2a679318940fd17527aa3218"
+        },
+        "GHSA-jj78-5fmv-mv28": {
+          "path": "advisories/npm/GHSA-jj78-5fmv-mv28.json",
+          "bytes": 1427,
+          "sha256": "e2dd9f8a38f291aef6a921b7fe0fd61b787e81d29f273915b1880b10b2b4857d"
+        },
+        "GHSA-p6mc-m468-83gw": {
+          "path": "advisories/npm/GHSA-p6mc-m468-83gw.json",
+          "bytes": 4949,
+          "sha256": "07a142500c4fef0274340c7124b31683200cbc41eda5008775be57f4a7d483e1"
+        },
+        "GHSA-p8p7-x288-28g6": {
+          "path": "advisories/npm/GHSA-p8p7-x288-28g6.json",
+          "bytes": 2511,
+          "sha256": "ab585fd5c9f654cab3c92dd065c38c1921b474c699c13734514df94fdeffbab0"
+        },
+        "GHSA-qw6h-vgh9-j6wx": {
+          "path": "advisories/npm/GHSA-qw6h-vgh9-j6wx.json",
+          "bytes": 2355,
+          "sha256": "28f23114a00546a7ae693c64311316f7e680a6137fa3f8ae6920996bc5c2fb25"
+        },
+        "GHSA-r5fr-rjxr-66jc": {
+          "path": "advisories/npm/GHSA-r5fr-rjxr-66jc.json",
+          "bytes": 3727,
+          "sha256": "1e6dca9f607632946852f214c815271b5669f710a7073d31066ac6735cde7c0a"
+        },
+        "GHSA-rv95-896h-c2vc": {
+          "path": "advisories/npm/GHSA-rv95-896h-c2vc.json",
+          "bytes": 3311,
+          "sha256": "50bb7c7df0a7c7b1a89febb311e2fe379351ee5701c4ab19bdb4f4b4086baaa5"
+        },
+        "GHSA-x5rq-j2xg-h7qm": {
+          "path": "advisories/npm/GHSA-x5rq-j2xg-h7qm.json",
+          "bytes": 3012,
+          "sha256": "b72c78618c6e7a13cc1cdc114813046dcc7ca8442f2844fefc9438b9ad636fd8"
+        },
+        "GHSA-xxjr-mmjv-4gpg": {
+          "path": "advisories/npm/GHSA-xxjr-mmjv-4gpg.json",
+          "bytes": 2965,
+          "sha256": "7d3d73c8e7dfefd46de8dbed0cd17d4fc58503cddc26f046db1ee947c4fb1884"
+        }
+      },
+      "pypi": {
+        "GHSA-2fc2-6r4j-p65h": {
+          "path": "advisories/pypi/GHSA-2fc2-6r4j-p65h.json",
+          "bytes": 2610,
+          "sha256": "55634ee47fc804a28ca7cd5a3f72a729395ccb3c209e6e063a76f1d1519eea64"
+        },
+        "GHSA-5545-2q6w-2gh6": {
+          "path": "advisories/pypi/GHSA-5545-2q6w-2gh6.json",
+          "bytes": 2260,
+          "sha256": "134f5473ae24ab11f0c27d27a889f9944eae51675e072cb7868066f13942513d"
+        },
+        "GHSA-652x-xj99-gmcc": {
+          "path": "advisories/pypi/GHSA-652x-xj99-gmcc.json",
+          "bytes": 2727,
+          "sha256": "524d7117dff094e89c52b6c3c773868caf51b27b24433046b46763390602882d"
+        },
+        "GHSA-6p56-wp2h-9hxr": {
+          "path": "advisories/pypi/GHSA-6p56-wp2h-9hxr.json",
+          "bytes": 2521,
+          "sha256": "656af06af35d73ad8ddf3ec4d5b8d0cb9ff58b801bf899cf2a126498665f27ce"
+        },
+        "GHSA-9fq2-x9r6-wfmf": {
+          "path": "advisories/pypi/GHSA-9fq2-x9r6-wfmf.json",
+          "bytes": 3516,
+          "sha256": "19ba917216eb96727c16dbf972141c2ddb6104236ce879d0caacfbbe46c6d04a"
+        },
+        "GHSA-9hjg-9r4m-mvj7": {
+          "path": "advisories/pypi/GHSA-9hjg-9r4m-mvj7.json",
+          "bytes": 3662,
+          "sha256": "05ddfcace5a47f3fa84e0d9212a784e7daf3ea9b0e562218d3bc778ddac51437"
+        },
+        "GHSA-9wx4-h78v-vm56": {
+          "path": "advisories/pypi/GHSA-9wx4-h78v-vm56.json",
+          "bytes": 3605,
+          "sha256": "689024190d56429eb909064dd218e0a0e26fea26917a8015f8f846e4228a6c10"
+        },
+        "GHSA-cfj3-7x9c-4p3h": {
+          "path": "advisories/pypi/GHSA-cfj3-7x9c-4p3h.json",
+          "bytes": 2840,
+          "sha256": "7acba0e72d5f3e17dac8086ed4905b74a3c8523ab701de88254dc5da540d722d"
+        },
+        "GHSA-cw6w-4rcx-xphc": {
+          "path": "advisories/pypi/GHSA-cw6w-4rcx-xphc.json",
+          "bytes": 2457,
+          "sha256": "e81f7f575dbfa92a1dbddbcb75b480e7b9b73990b13d759afa8d2c2c232ca36e"
+        },
+        "GHSA-f7c7-j99h-c22f": {
+          "path": "advisories/pypi/GHSA-f7c7-j99h-c22f.json",
+          "bytes": 2065,
+          "sha256": "8890f05d2852d819c152748d118927b08a428da8922f44ea5baa9ef6eda71512"
+        },
+        "GHSA-fpfv-jqm9-f5jm": {
+          "path": "advisories/pypi/GHSA-fpfv-jqm9-f5jm.json",
+          "bytes": 2374,
+          "sha256": "2ba39fe8b376be7af0bbb798a360b5473b6a5b7cf6e8f282386f7dfc3ff63aa3"
+        },
+        "GHSA-frgw-fgh6-9g52": {
+          "path": "advisories/pypi/GHSA-frgw-fgh6-9g52.json",
+          "bytes": 1994,
+          "sha256": "c232e70e2ddd07d5e6af71f56ca4a4775c4e4578a47a5a81d7ba0d7afa708cce"
+        },
+        "GHSA-gc5v-m9x4-r6x2": {
+          "path": "advisories/pypi/GHSA-gc5v-m9x4-r6x2.json",
+          "bytes": 3491,
+          "sha256": "a9031d22d2c7669f6ceefb77e397c7fdc66ad3152037b71f8584a4b8c4308bae"
+        },
+        "GHSA-j8r2-6x86-q33q": {
+          "path": "advisories/pypi/GHSA-j8r2-6x86-q33q.json",
+          "bytes": 5565,
+          "sha256": "2624497cfdbd491af09766897344b74ff437f9a733dc8ab453f9ca8d3009aac1"
+        },
+        "GHSA-pg2w-x9wp-vw92": {
+          "path": "advisories/pypi/GHSA-pg2w-x9wp-vw92.json",
+          "bytes": 2066,
+          "sha256": "7c5bc1af6963ad4cf69a3f03b422fbaf6cbf24429e016299e5f05e1cd1ae2cc3"
+        },
+        "GHSA-x84v-xcm2-53pg": {
+          "path": "advisories/pypi/GHSA-x84v-xcm2-53pg.json",
+          "bytes": 3331,
+          "sha256": "57b5366acafdd7caf341776a2cc72b337e936926c54037cbd089bb8f74cf08be"
+        },
+        "PYSEC-2014-13": {
+          "path": "advisories/pypi/PYSEC-2014-13.json",
+          "bytes": 1901,
+          "sha256": "4c1f16924edfb34ac1261d469ef8eeb9bbcc678df1dea00ed734f8198428f411"
+        },
+        "PYSEC-2014-14": {
+          "path": "advisories/pypi/PYSEC-2014-14.json",
+          "bytes": 1935,
+          "sha256": "e998c1b3ac9aaab20bbdaa4427a874f6c57f22333638d3a82b5eabbaa456bce9"
+        },
+        "PYSEC-2015-17": {
+          "path": "advisories/pypi/PYSEC-2015-17.json",
+          "bytes": 2344,
+          "sha256": "16c3f69d6b7c37a2930695840e1c565b9e7164ca3a8e257c1abdfc97ddd06f87"
+        },
+        "PYSEC-2017-1": {
+          "path": "advisories/pypi/PYSEC-2017-1.json",
+          "bytes": 1354,
+          "sha256": "09835f27b907b6ab22112eb25bd6e40485fcf2ca7a0cc028a5905d3dc52b4adf"
+        },
+        "PYSEC-2018-28": {
+          "path": "advisories/pypi/PYSEC-2018-28.json",
+          "bytes": 2802,
+          "sha256": "fab7da7f3b544e4e16560696747a4755d211a069a26099e5677cf1a7bbd8a6e6"
+        },
+        "PYSEC-2018-33": {
+          "path": "advisories/pypi/PYSEC-2018-33.json",
+          "bytes": 1916,
+          "sha256": "87c0e73bbc7c757d4a98b05cf356df566bd4bf7430e218b88dff07adcd41badb"
+        },
+        "PYSEC-2018-34": {
+          "path": "advisories/pypi/PYSEC-2018-34.json",
+          "bytes": 2010,
+          "sha256": "f0dde73617d7aeb4fd26926180f338b7cea4230e3ea59009df2eba6fb29d6336"
+        },
+        "PYSEC-2019-108": {
+          "path": "advisories/pypi/PYSEC-2019-108.json",
+          "bytes": 2413,
+          "sha256": "c9a46b75486d3a50ce41e1cb32741ef9ff1d7d30f7a05e6c5be76f671a953ecb"
+        },
+        "PYSEC-2021-854": {
+          "path": "advisories/pypi/PYSEC-2021-854.json",
+          "bytes": 919,
+          "sha256": "3c702a6bcd2fec9eee2cf1f307dce3f08165f7d8ab48035fb5f61e1860f0e210"
+        },
+        "PYSEC-2021-855": {
+          "path": "advisories/pypi/PYSEC-2021-855.json",
+          "bytes": 836,
+          "sha256": "885701f34fd7680736b2330403ec1d1d7235c79a3c6999c8085df9f34872568c"
+        },
+        "PYSEC-2021-856": {
+          "path": "advisories/pypi/PYSEC-2021-856.json",
+          "bytes": 1700,
+          "sha256": "7d26ec50b2aa2321ae50af4717a6cc645e11ca096b08553247a6c8682941acc1"
+        },
+        "PYSEC-2021-857": {
+          "path": "advisories/pypi/PYSEC-2021-857.json",
+          "bytes": 1656,
+          "sha256": "27569e17c410e1738308600ee32733199ea79419d13d0fa075e4c8c3feff26b4"
+        },
+        "PYSEC-2023-74": {
+          "path": "advisories/pypi/PYSEC-2023-74.json",
+          "bytes": 2473,
+          "sha256": "ba228595929c1347e9bdd84f719507c8602d80ebda43525a57c481cf246a9ead"
+        },
+        "PYSEC-2026-1872": {
+          "path": "advisories/pypi/PYSEC-2026-1872.json",
+          "bytes": 3587,
+          "sha256": "2394bbe1a5abbc9808962de626716435399dd2a1e486f41322f1f04aeecca486"
+        },
+        "PYSEC-2026-1873": {
+          "path": "advisories/pypi/PYSEC-2026-1873.json",
+          "bytes": 3530,
+          "sha256": "d3ccdcaddcdd28f8f56d127dec4230d3190c0f9a505c33e7678534064a5d22eb"
+        },
+        "PYSEC-2026-2275": {
+          "path": "advisories/pypi/PYSEC-2026-2275.json",
+          "bytes": 3047,
+          "sha256": "0fc6eae8e111b015711c5e6f2fa023fe65404f226fea5ba22a1f61404bfbc349"
+        }
+      }
+    },
+    "epss": {
+      "path": "advisories/epss.csv",
+      "bytes": 1237,
+      "sha256": "5dc901a82704585e92083704c5197fea15f4d3746e107779447fdd95dd31daee",
+      "source": "https://epss.empiricalsecurity.com/epss_scores-2026-09-27.csv.gz",
+      "capturedAt": "2026-09-27T18:03:19Z"
     }
   }
 }
