@@ -6,10 +6,11 @@
 "Ecluse.Composition.MemoryPlan.Shed" walks it. A configured value wins its own bound here,
 so a pinned tenant enters the ladder at the operator's number and a computed one enters at
 its share of the application heap, bracketed by the floors and caps in
-"Ecluse.Composition.MemoryPlan.Bounds".
+"Ecluse.Composition.MemoryPlan.Bounds". Material work takes what the other tenants leave.
 -}
 module Ecluse.Composition.MemoryPlan.Demands (
     tenantDemands,
+    desiredTenantSum,
 ) where
 
 import Data.Ord (clamp)
@@ -20,12 +21,13 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheBytesFloor,
     cacheSharePercent,
     fixedBufferBytes,
-    materialSharePercent,
+    materialBytesForSlots,
     memoryQueueCharged,
     mirrorArtifactBytesCap,
     mirrorArtifactEnvelopeMultiplier,
     mirrorArtifactSharePercent,
     publishSharePercent,
+    queueCharge,
     queueDepthCap,
     queueDepthFloor,
     queueSharePercent,
@@ -46,7 +48,25 @@ import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
 -- | Every tenant's desired share over a heap ceiling h, before the shed ladder walks it.
 tenantDemands :: PlanInputs -> Int -> TenantDemands
-tenantDemands inputs h =
+tenantDemands inputs h = others{tdMaterialDesired = max 1 (min forSlots (h - desiredTenantSum others))}
+  where
+    others = demandsBesideMaterial inputs h
+    forSlots = materialBytesForSlots (piCpuAdmission inputs)
+
+-- | Every tenant at its desired share. What this overshoots is what the ladder must reclaim.
+desiredTenantSum :: TenantDemands -> Int
+desiredTenantSum d =
+    tdReserve d
+        + tdFixedBuffers d
+        + tdMirrorChargeDesired d
+        + tdCacheDesired d
+        + tdMaterialDesired d
+        + (if tdPublishConfigured d then tdPublishDesired d else 0)
+        + queueCharge (tdMemoryBacked d) (tdDepthDesired d)
+
+-- Every demand except material, which is zero here and takes the remainder in 'tenantDemands'.
+demandsBesideMaterial :: PlanInputs -> Int -> TenantDemands
+demandsBesideMaterial inputs h =
     TenantDemands
         { tdCeiling = h
         , tdReserve = reserve
@@ -54,7 +74,7 @@ tenantDemands inputs h =
         , tdPins = pins
         , tdCacheDesired = fromMaybe (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100)) (opCache pins)
         , tdCacheEntriesExplicit = csMaxEntries (piCache inputs)
-        , tdMaterialDesired = max 1 (appHeap * materialSharePercent `div` 100)
+        , tdMaterialDesired = 0
         , tdAdmissionDesired = piCpuAdmission inputs
         , tdResponseFinal = fromMaybe responseBytesFallback (limMaxResponseBytes (piLimits inputs))
         , tdPublishConfigured = piPublishConfigured inputs

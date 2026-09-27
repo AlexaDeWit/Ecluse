@@ -22,6 +22,7 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     queueCharge,
     queueDepthFloor,
  )
+import Ecluse.Composition.MemoryPlan.Demands (desiredTenantSum)
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opArtifact, opCache, opDepth),
     PlanInputs (piAllocAreaBytes, piCapabilities),
@@ -63,17 +64,6 @@ shedToFit d =
     materialStep = shedMaterialStep d (stepResidual cacheStep)
     publishStep = shedPublishStep d (stepResidual materialStep)
     queue = shedQueueStep d (stepResidual publishStep)
-
--- Every tenant at its desired share. What this overshoots is what the ladder must reclaim.
-desiredTenantSum :: TenantDemands -> Int
-desiredTenantSum d =
-    tdReserve d
-        + tdFixedBuffers d
-        + tdMirrorChargeDesired d
-        + tdCacheDesired d
-        + tdMaterialDesired d
-        + (if tdPublishConfigured d then tdPublishDesired d else 0)
-        + queueCharge (tdMemoryBacked d) (tdDepthDesired d)
 
 -- One shed-ladder step: give up as much of a tenant's reclaimable bytes as the residual
 -- overshoot demands. 'stepResidual' is the overshoot the next step inherits.

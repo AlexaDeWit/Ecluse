@@ -204,7 +204,7 @@ packumentWith mode replies name request respond = do
     serveWithinGuards serving (forwardedCredential mount request)
 
 -- The edge token is compared before any upstream is touched, so an unauthenticated client
--- cannot drive egress. Admission is held only for the gated work.
+-- cannot drive egress. A request waits for material before it takes a CPU slot, never inside one.
 serveWithinGuards :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
 serveWithinGuards serving clientToken
     | not (edgeTokenMatches (pdInboundToken (psvDeps serving)) clientToken) =
@@ -215,8 +215,8 @@ serveWithinGuards serving clientToken
             (liftIO (respond (packumentUnavailable replies [shedRetryAfter] (mkRefusal Nothing shedMessage))))
             ( fmap
                 join
-                ( withServeAdmission (servingMetrics serving) (srAdmission runtime) $
-                    withMaterialAdmission (srMaterialAdmission runtime) (ListingMaterial originCount) $
+                ( withMaterialAdmission (srMaterialAdmission runtime) (ListingMaterial originCount) $
+                    withServeAdmission (servingMetrics serving) (srAdmission runtime) $
                         serveAdmittedPackument serving clientToken
                 )
             )

@@ -8,14 +8,13 @@ module Ecluse.Composition.MemoryPlan.Bounds (
     runtimeReserveShareDiv,
     runtimeReserveFloorBytes,
     cacheSharePercent,
-    materialSharePercent,
     publishSharePercent,
     queueSharePercent,
     mirrorArtifactSharePercent,
 
     -- * Byte floors, caps, and no-ceiling fallbacks
     responseBytesFallback,
-    materialBytesFallback,
+    materialBytesForSlots,
     materialAllowances,
     requestBytesFloor,
     requestBytesCap,
@@ -56,15 +55,9 @@ runtimeReserveShareDiv = 5
 runtimeReserveFloorBytes :: Int
 runtimeReserveFloorBytes = 33554432
 
-{- | The cache aggregate's share of the application heap, the ceiling less the runtime reserve. The
-four computed shares sum to 95%, so a plan with no floor and no pin in it fits by construction.
--}
+-- | The cache aggregate's share of the application heap, the ceiling less the runtime reserve.
 cacheSharePercent :: Int
 cacheSharePercent = 30
-
--- | The materialisation envelope's share of the application heap.
-materialSharePercent :: Int
-materialSharePercent = 45
 
 -- | The publish aggregate's share of the application heap, and the computed request cap's.
 publishSharePercent :: Int
@@ -84,21 +77,24 @@ mirrorArtifactSharePercent = 4
 responseBytesFallback :: Int
 responseBytesFallback = maxMetadataBytes defaultLimits
 
-{- | Static estimates from the declared npm/PyPI stage workload with 25% headroom, rounded up.
-See <https://github.com/AlexaDeWit/Ecluse/issues/1427> for the workload and measurement limits.
+{- | Heap footprint of one more concurrent request, slightly worse than the twelve-capture mean.
+Four times the marginal live bytes, because a busy GHC heap holds about four times its live data.
 -}
 materialAllowances :: MaterialAllowances
 materialAllowances =
     MaterialAllowances
-        { maColdSelectedBytes = 9437184
-        , maRetainedSelectedBytes = 262144
-        , maFullOriginBytes = 38797312
-        , maListingOutputBytes = 11534336
+        { maColdSelectedBytes = 1048576
+        , maRetainedSelectedBytes = 65536
+        , maFullOriginBytes = 4194304
+        , maListingOutputBytes = 8388608
         }
 
--- | Two calibrated two-origin listings without a heap datapoint, independent of CPU capacity.
-materialBytesFallback :: Int
-materialBytesFallback = 2 * (2 * maFullOriginBytes materialAllowances + maListingOutputBytes materialAllowances)
+-- | Room for every CPU admission slot to run one two-origin listing, saturating at 'maxBound'.
+materialBytesForSlots :: Int -> Int
+materialBytesForSlots slots =
+    fromInteger (min (toInteger (maxBound :: Int)) (toInteger (max 1 slots) * twoOriginListing))
+  where
+    twoOriginListing = toInteger (maListingOutputBytes materialAllowances + 2 * maFullOriginBytes materialAllowances)
 
 -- | The smallest computed publish-body cap.
 requestBytesFloor :: Int

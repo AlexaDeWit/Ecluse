@@ -110,14 +110,15 @@ servePublicArtifact ctx = do
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
+    -- A local lookup only. The material wait then comes before the CPU slot, never inside one.
+    prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
     withAdmissionResultOrShed
         metrics
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
         ( fmap
             join
-            ( withServeAdmission metrics (srAdmission rt) $ do
-                prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
-                withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
+            ( withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
+                withServeAdmission metrics (srAdmission rt) $
                     gatePublicVersion ctx advisoryEtag prepared
             )
         )

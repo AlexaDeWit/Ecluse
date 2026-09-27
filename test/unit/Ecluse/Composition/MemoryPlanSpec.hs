@@ -33,7 +33,7 @@ spec = describe "resolveMemoryPlan" $ do
     it "falls back to the shipped bounds with no heap-ceiling datapoint" $ do
         let (plan, lines') = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) MemoryQueueTenant False
         mpMaxResponseBytes plan `shouldBe` 134217728
-        mpMaterialAggregateBytes plan `shouldBe` 178257920
+        mpMaterialAggregateBytes plan `shouldBe` 671088640
         mpMaxRequestBytes plan `shouldBe` 26214400
         mpCacheAggregateBytes plan `shouldBe` 268435456
         mpQueueMemoryMaxDepth plan `shouldBe` 50000
@@ -212,10 +212,10 @@ spec = describe "resolveMemoryPlan" $ do
         lines'
             `shouldBe` [ "memory plan: runtime reserve 214748364" <> ceilingClause
                        , "runtime: serve admission 40 (computed from 4 capabilities)"
-                       , "memory plan: material estimate budget 386547057" <> ceilingClause
+                       , "memory plan: material estimate budget 394088459" <> ceilingClause
                        , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
                        , "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
-                       , "metadata admission estimates: cold selected 9437184, retained selected 262144, full origin 38797312, listing output 11534336 bytes"
+                       , "metadata admission estimates: cold selected 1048576, retained selected 65536, full origin 4194304, listing output 8388608 bytes"
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "memory plan: cache byte bound 257698038" <> ceilingClause

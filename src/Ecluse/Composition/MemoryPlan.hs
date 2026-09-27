@@ -30,7 +30,7 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheEntriesFloor,
     cacheEntryExpectedBytes,
     fixedBufferBytes,
-    materialBytesFallback,
+    materialBytesForSlots,
     memoryQueueCharged,
     mirrorArtifactBytesCap,
     mirrorArtifactEnvelopeMultiplier,
@@ -129,7 +129,7 @@ fallbackPlan inputs =
         { mpRuntimeReserveBytes = 0
         , mpCacheAggregateBytes = cacheBytes
         , mpCacheMaxEntries = cacheEntries
-        , mpMaterialAggregateBytes = materialBytesFallback
+        , mpMaterialAggregateBytes = materialBytes
         , mpMaxResponseBytes = responseBytes
         , mpMaxRequestBytes = requestBytes
         , mpAdmissionCapacity = piCpuAdmission inputs
@@ -139,7 +139,7 @@ fallbackPlan inputs =
         , mpQueueMemoryMaxDepth = queueDepth
         , mpQueueTenantBytes = queueCharge (memoryQueueCharged demand) queueDepth
         , mpFixedBufferBytes = fixedBufferBytes demand
-        , mpDegradations = renderControlWarnings pins (piCpuAdmission inputs) responseBytes materialBytesFallback
+        , mpDegradations = renderControlWarnings pins (piCpuAdmission inputs) responseBytes materialBytes
         , mpOverrideViolations = []
         }
     , [localCachePolicyLine, piCpuAdmissionLine inputs, materialLine, responseLine, materialAdmissionPolicyLine, materialAllowancesLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
@@ -149,7 +149,8 @@ fallbackPlan inputs =
     demand = piQueueDemand inputs
     pins = configuredPins inputs
     (responseBytes, responseLine) = resolveSized "memory plan: metadata ingest ceiling" (opResponse pins) responseBytesFallback "built-in default, independent of heap and CPU"
-    materialLine = snd (fallbackOr "material estimate budget" Nothing materialBytesFallback)
+    materialBytes = materialBytesForSlots (piCpuAdmission inputs)
+    materialLine = snd (fallbackOr "material estimate budget" Nothing materialBytes)
     (requestBytes, requestLine) = fallbackOr "request byte cap" (opRequest pins) requestBytesFallback
     (cacheBytes, cacheBytesLine) = fallbackOr "cache byte bound" (opCache pins) cacheBytesFallback
     (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp (cacheEntriesFloor, cacheEntriesCap) (cacheBytes `div` cacheEntryExpectedBytes))
