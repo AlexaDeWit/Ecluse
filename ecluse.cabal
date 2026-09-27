@@ -211,6 +211,8 @@ library ecluse-core
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Admission.Material
+    Ecluse.Core.Server.Admission.Memory.Brake
+    Ecluse.Core.Server.Admission.Memory.Gate
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
@@ -848,6 +850,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.LimitsSpec
     Ecluse.Core.Server.Admission.BytesSpec
     Ecluse.Core.Server.Admission.MaterialSpec
+    Ecluse.Core.Server.Admission.Memory.BrakeSpec
+    Ecluse.Core.Server.Admission.Memory.GateSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
