@@ -431,6 +431,9 @@
           # the injection-free workflow rule in AGENTS.md → "CI & Security".
           pkgs.actionlint
           pkgs.zizmor
+          # yq (the Go yq-go) turns each workflow into JSON for the runner-policy
+          # check in `task lint-workflows` (scripts/ci-runner-policy.sh).
+          pkgs.yq-go
           # shellcheck for `task lint-scripts` (scripts/*.sh). actionlint already
           # runs shellcheck on workflow `run:` blocks. This lints the committed
           # scripts too.

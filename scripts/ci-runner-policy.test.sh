@@ -167,15 +167,15 @@ jobs: # every job
     runs-on: ubuntu-24.04-arm # the policy runner
 YAML
 
-check "an unrecognised two-space key under jobs fails" 1 ci.yml <<'YAML'
+check "a flow-mapping job is checked like any other" 1 ci.yml <<'YAML'
 jobs:
   build: { runs-on: ubuntu-latest }
 YAML
 
-check "a quoted job id fails as unrecognised" 1 ci.yml <<'YAML'
+check "a quoted job id is checked like any other" 1 ci.yml <<'YAML'
 jobs:
   "build":
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
 YAML
 
 check "a workflow with no jobs fails" 1 ci.yml <<'YAML'
@@ -243,6 +243,103 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, ubuntu-latest]
 YAML
+
+check "an include entry that adds an unlisted runner fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner:
+        - ubuntu-latest
+        include:
+          - runner: ubuntu-24.04-arm
+YAML
+
+check "a flow-mapping include entry with an unlisted runner fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04-arm]
+        include:
+          - {runner: ubuntu-latest}
+YAML
+
+check "an include entry that sets a two-segment path fails when unlisted" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04-arm
+        include:
+          - platform:
+              runner: ubuntu-latest
+YAML
+
+check "a nested key of the same name does not stand in for the path" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+        - arch: amd64
+          runner: ubuntu-latest
+          meta:
+            runner: ubuntu-24.04-arm
+YAML
+
+check "a call to a remote reusable workflow fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    uses: someone/else/.github/workflows/build.yml@0123456789abcdef0123456789abcdef01234567
+YAML
+
+check "a runs-on list with an unlisted label fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: [ubuntu-24.04-arm, ubuntu-latest]
+YAML
+
+check "a runs-on list of the arm64 runner passes" 0 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: [ubuntu-24.04-arm]
+YAML
+
+check "a runner group fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on:
+      group: arm-runners
+      labels: [ubuntu-24.04-arm]
+YAML
+
+check "a labels mapping with an unlisted label fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on:
+      labels: ubuntu-latest
+YAML
+
+check "an anchored runner resolves through its alias" 1 ci.yml <<'YAML'
+x-runner: &runner ubuntu-latest
+jobs:
+  build:
+    runs-on: *runner
+YAML
+
+check "a workflow yq cannot parse fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: [ubuntu-24.04-arm
+YAML
+
+check "an empty workflow file fails" 1 ci.yml < /dev/null
 
 mkdir -p "$work/empty"
 if bash "$script" "$work/empty" >/dev/null 2>&1; then

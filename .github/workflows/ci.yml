@@ -605,8 +605,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
-      # The script accepts a skip only from the documentation-only filter, and only for
-      # the jobs that filter may skip. Every other skip still fails the gate.
+      # The script accepts a skip only from the classifier's two filters (documentation
+      # only, and no release-build change), each for the jobs it may skip.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

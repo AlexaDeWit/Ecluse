@@ -28,9 +28,9 @@ inputs:
     default: "true"
   save-nix-store:
     description: >-
-      Whether this job may save the architecture's Nix-store cache (only ever on
-      main). ci.yml's docs job is the one writer. No other job may set it, because
-      GitHub caches are immutable per key and two savers would race for the entry.
+      Whether this job may save the Nix-store cache (only ever on main). ci.yml's
+      docs job is the one writer. No other job may set it, because GitHub caches are
+      immutable per key and two savers would race for the entry.
     default: "false"
 
 outputs:
@@ -110,7 +110,8 @@ runs:
         echo "setup-toolchain: the Nix database stayed locked for 60 s" >&2
         exit 1
 
-    # One entry per architecture for every job in every workflow, keyed on the flake.
+    # One entry, keyed on the flake, that ci.yml's docs job writes on arm64 and every
+    # arm64 job restores. A job on another architecture finds no entry and starts cold.
     # The prefix restore-key keeps a lockfile bump warm: the run takes the previous
     # epoch and rebuilds only the delta. An entry is immutable, so widening what it
     # holds takes a fresh epoch: v2 carries the dev shell and the Haskell closure both.
