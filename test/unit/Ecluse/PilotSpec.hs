@@ -28,8 +28,8 @@ import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), run
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runQuietKatip)
-import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, metaOf, scoresOf, stubSourceEnv)
-import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured, withStub)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, metaOf, scoresOf, withSourceStubs)
+import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured)
 
 spec :: Spec
 spec = do
@@ -118,20 +118,15 @@ spec = do
 
         it "refuses that upload before it compiles anything" $ do
             le <- newTestLogEnv
-            -- No listener answers here, so a fetch that starts fails rather than reaching an upstream.
-            config <-
-                expectConfig
-                    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "http://127.0.0.1:1")
-                    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", "http://127.0.0.1:1/epss.csv.gz")
-                    ]
-                    Nothing
-            withSystemTempDirectory "ecluse-pilot-compile" $ \dir -> do
-                -- A file stands where the output directory's parent would be, so
-                -- 'compileOsvToSqlite's createDirectoryIfMissing fails if the run reaches it.
-                writeFileText (dir </> "blocker") ""
-                let outDir = dir </> "blocker" </> "out"
-                runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = True}
-                    `shouldThrow` (== PilotUploadUnconfigured)
+            withSystemTempDirectory "ecluse-pilot-compile" $ \dir ->
+                withStubbedSources [] (status200, Nothing) $ \config epssStub -> do
+                    -- A file stands where the output directory's parent would be, so
+                    -- 'compileOsvToSqlite's createDirectoryIfMissing fails if the run reaches it.
+                    writeFileText (dir </> "blocker") ""
+                    let outDir = dir </> "blocker" </> "out"
+                    runPilotCompile le telemetryDisabled Nothing config (compileOptions outDir){pcoUpload = True}
+                        `shouldThrow` (== PilotUploadUnconfigured)
+                    allCaptured epssStub `shouldReturn` []
 
 -- The upstream outage one ecosystem's cycle suffers while the other keeps compiling.
 data FeedDown = FeedDown
@@ -159,10 +154,9 @@ withStubbedSources :: [(String, String)] -> (Status, Maybe LByteString) -> (Conf
 withStubbedSources env (feedStatus, feedBody) use = do
     zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
     epssData <- maybe (LBS.readFile epssFixtureFile) pure feedBody
-    withStub status200 zipData $ \osvStub ->
-        withStub feedStatus epssData $ \epssStub -> do
-            config <- expectConfig (env <> stubSourceEnv osvStub epssStub) Nothing
-            use config epssStub
+    withSourceStubs zipData (feedStatus, epssData) $ \sources epssStub -> do
+        config <- expectConfig (env <> sources) Nothing
+        use config epssStub
 
 compileOptions :: FilePath -> PilotCompileOptions
 compileOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = False}

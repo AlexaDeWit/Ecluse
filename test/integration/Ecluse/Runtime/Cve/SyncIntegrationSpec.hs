@@ -44,7 +44,7 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
-import Ecluse.Test.OsvDb (epssFixtureFile, stubSourceEnv)
+import Ecluse.Test.OsvDb (epssFixtureFile, withSourceStubs)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
@@ -154,19 +154,18 @@ publishViaPilot s3Endpoint env v = do
     zipBytes <- osvCorpusZip v
     epssBytes <- readFileLBS epssFixtureFile
     logEnv <- quietLogEnv
-    withStub status200 zipBytes $ \osvStub ->
-        withStub status200 epssBytes $ \epssStub -> do
-            config <-
-                either (fail . ("CveSyncSpec fixture env: " <>) . show) pure $
-                    loadConfig (env <> stubSourceEnv osvStub epssStub) Nothing
-            withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
-                void $
-                    runPilotCompile
-                        logEnv
-                        telemetryDisabled
-                        s3Endpoint
-                        config
-                        PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
+    withSourceStubs zipBytes (status200, epssBytes) $ \sources _ -> do
+        config <-
+            either (fail . ("CveSyncSpec fixture env: " <>) . show) pure $
+                loadConfig (env <> sources) Nothing
+        withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
+            void $
+                runPilotCompile
+                    logEnv
+                    telemetryDisabled
+                    s3Endpoint
+                    config
+                    PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
 
 -- The real serve application over the shipped fast-lane policy: the quarantine plus
 -- AllowIfRemediatesCve, with the packument stub as the public origin.
