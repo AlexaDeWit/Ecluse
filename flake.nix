@@ -199,12 +199,19 @@
           }) { });
         };
 
+        # No job reads dependency docs, and haddock runs on dependencies can hang.
+        # cache.nixos.org holds only documented builds, so this set builds from source.
+        noHaddockOverlay = _hself: hsuper: {
+          mkDerivation = args: hsuper.mkDerivation (args // { doHaddock = false; });
+        };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
             jsonStreamOverlay
+            noHaddockOverlay
           ];
         };
 
@@ -543,10 +550,8 @@
           };
         };
 
-        # The docs job builds these checks. Nix reuses dependency Haddock
-        # interfaces, avoiding cabal's separate documentation closure build.
-        # Use Nix checks where its store or evaluated inputs are required.
-        # doHaddock forces documentation generation. dontCheck skips tests.
+        # The docs job builds these checks. doHaddock turns documentation back on
+        # for ecluse alone, so its docs do not link into the set's other packages.
         checks.docs = hlib.doHaddock ecluse;
 
       # The two checks below clear the same bar in a different way. Each compares

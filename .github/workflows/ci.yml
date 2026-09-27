@@ -327,8 +327,8 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-24.04-arm
-    # Sized for a cold run: any flake.lock change misses the Nix-store cache and
-    # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
+    # Sized for a cold run, where a flake.nix or flake.lock change can leave the restored
+    # Nix store without the Haskell closure, and every dependency builds from source.
     timeout-minutes: 160
     # `checks.docs`, not `cabal haddock`: the cabal path wants a documentation variant of
     # the deps that the build job's store lacks, so it rebuilds the whole closure every run.
