@@ -205,8 +205,8 @@
           haddockFlags = (old.haddockFlags or [ ]) ++ [ "--haddock-option=-j1" ];
         });
 
-        # cache.nixos.org serves every library whose output matches the base set's,
-        # so only the ones built here take sequentialHaddock. No served path changes.
+        # Only libraries whose output differs from the base set's take
+        # sequentialHaddock, so no path cache.nixos.org serves changes.
         sequentialHaddockOverlay = _hself: hsuper:
           let
             base = pkgs.haskell.packages.ghc910;
