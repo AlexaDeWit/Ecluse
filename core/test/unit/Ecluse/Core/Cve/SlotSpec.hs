@@ -20,7 +20,7 @@ import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAd
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveLookup, namesFix)
 
 fakeDb :: Text -> IORef [Text] -> CveDb
 fakeDb tag closeLog =
@@ -32,7 +32,7 @@ fakeDb tag closeLog =
         }
 
 generationSeen :: Maybe (DbEtag, CveLookup) -> IO (Maybe Bool)
-generationSeen = traverse (\(_, l) -> cveRemediationProbe l "gen-b" "1.0.0")
+generationSeen = traverse (\(_, l) -> namesFix l "gen-b" "1.0.0")
 
 spec :: Spec
 spec = describe "CveSlot" $ do
@@ -44,7 +44,7 @@ spec = describe "CveSlot" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
         swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
-        withSlotGeneration slot (traverse (\(_, l) -> cveRemediationProbe l "gen-a" "1.0.0"))
+        withSlotGeneration slot (traverse (\(_, l) -> namesFix l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         readIORef closeLog `shouldReturn` []
 

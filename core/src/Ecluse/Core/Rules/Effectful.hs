@@ -2,12 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The resilience harness around an effectful rule's IO: a per-attempt timeout, bounded retry
-with backoff, and a per-source circuit breaker, attached by 'Ecluse.Core.Rules.prepare'.
+{- | The resilience harness around the advisory package read: a per-attempt timeout, bounded retry
+with backoff, and a per-rule circuit breaker, attached by 'Ecluse.Core.Rules.prepare'.
 
-Any 'RuleVerdict' the rule returns, 'CannotVet' included, resets the breaker and comes back
-'Decided' unretried, so only a harness-observed fault advances the breaker and resolves to
-'Unavailable' under the rule's own alignment. 'runResilient' never throws.
+Any value the read returns resets the breaker unretried, so only a harness-observed fault advances
+the breaker and returns a 'ReadFault'. 'runResilient' never throws.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
@@ -16,8 +15,9 @@ module Ecluse.Core.Rules.Effectful (
     defaultEffectfulConfig,
     newBreaker,
 
-    -- * Running an evaluation through it
+    -- * Running a read through it
     runResilient,
+    ReadFault (..),
 ) where
 
 import Control.Retry (retrying)
@@ -33,21 +33,16 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Rules.Outage (SourceHealth (SourceUnavailable), SourceReporter (..))
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | The resilience policy wrapped around one effectful rule's IO. The prepared rule carries
-it, so each rule holds its own breaker state and failure alignment.
--}
+-- | The resilience policy around one advisory rule's reads. Each rule holds its own breaker state.
 data Resilience = Resilience
     { resConfig :: EffectfulConfig
     -- ^ The per-attempt timeout, retry budget\/backoff, and breaker threshold\/cooldown.
-    , resAlignment :: FailureAlignment
-    -- ^ Whether an exhausted evaluation fails closed ('FailDeny') or open ('FailNoDecision').
     , resBreaker :: TVar Breaker
-    -- ^ This rule's per-source circuit-breaker state, shared across evaluations.
+    -- ^ This rule's circuit-breaker state, shared across requests.
     , resBreakerReporter :: BreakerReporter
     {- ^ The observer this rule's breaker reports state transitions to
     (@ecluse.rule.breaker.state@). Inert ('Ecluse.Core.Breaker.noBreakerReporter') when unobserved.
@@ -56,69 +51,64 @@ data Resilience = Resilience
     {- ^ The wall clock the breaker reads for admission and cooldown, separate from the request
     snapshot 'ctxNow'. A fresh read at failure commit starts the cooldown at the failure.
     -}
-    , resSourceReporter :: SourceReporter
-    {- ^ The observer an exhausted evaluation and an open-breaker fast-fail report to, with the
-    fault detail that never reaches the client-facing message.
-    -}
     }
 
-{- | Run one effectful rule evaluation under its 'Resilience' policy. The evaluator is the
-rule's per-version IO with the evaluation context applied, and the name tags the audit reason.
--}
-runResilient :: Resilience -> Text -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO RuleEvaluation
-runResilient res name evalAt ev = do
+-- | Why the harness gave a read up. Each rule relying on it resolves this under its own alignment.
+data ReadFault = ReadFault
+    { rfTransience :: Transience
+    -- ^ Whether a retry may succeed, with the configured @Retry-After@ hint.
+    , rfReason :: Text
+    -- ^ The client-facing cause a decision carries.
+    , rfDetail :: Text
+    -- ^ The fault detail an operator reads in the outage report, never in a client message.
+    }
+    deriving stock (Eq, Show)
+
+-- | Run one read under its 'Resilience' policy: the read's value, or why the harness gave it up.
+runResilient :: Resilience -> IO a -> IO (Either ReadFault a)
+runResilient res act = do
     admitted <- admitProbe res =<< resClock res
     if not admitted
-        then do
-            -- Breaker open and still cooling down: fast-fail without running the rule's IO, the
-            -- cheap path a sustained outage stays on. Reported, so the outage stays observed.
-            reportSource (resSourceReporter res) (SourceUnavailable name breakerOpen)
-            pure (exhausted res name (transientCause (resConfig res)) breakerOpen)
+        then
+            -- Breaker open and still cooling down: fast-fail without running the read, the cheap
+            -- path a sustained outage stays on.
+            pure (Left (ReadFault (transientCause (resConfig res)) breakerOpen breakerOpen))
         else do
-            result <- attemptWithRetry res evalAt ev
+            result <- attemptWithRetry res act
             -- Read the clock again after the retry run. An exhausted result then starts its
             -- cooldown at the failure commit, not at the start of the run.
             settledNow <- resClock res
-            settleOutcome res name settledNow result
+            settleOutcome res settledNow result
   where
     breakerOpen = "the rule source circuit breaker is open"
 
-{- Settle a finished retry run against the breaker. A verdict resets it, an exhausted run
-trips it. -}
-settleOutcome :: Resilience -> Text -> UTCTime -> Either (Transience, Text) RuleVerdict -> IO RuleEvaluation
-settleOutcome res name now = \case
-    Right verdict -> do
+-- Settle a finished retry run against the breaker. A value resets it, an exhausted run trips it.
+settleOutcome :: Resilience -> UTCTime -> Either (Transience, Text) a -> IO (Either ReadFault a)
+settleOutcome res now = \case
+    Right value -> do
         commitBreaker res recordSuccess
-        pure (Decided verdict)
+        pure (Right value)
     Left (transience, detail) -> do
         commitBreaker res (tripOnFailure (resConfig res) now)
-        -- Surface the fault detail before it collapses to the generic client-facing reason,
-        -- which would otherwise hide the cause of a live-database query fault.
-        reportSource (resSourceReporter res) (SourceUnavailable name detail)
-        pure (exhausted res name transience "the rule could not be evaluated")
+        pure (Left (ReadFault transience "the rule could not be evaluated" detail))
 
-{- Attempt the rule's IO under the per-attempt timeout until the retry budget is spent.
-Only a 'Left' fault retries, so a deterministic verdict never enters the retry loop. -}
-attemptWithRetry :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
-attemptWithRetry res evalAt ev =
-    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt ev)
+-- Attempt the read under the per-attempt timeout until the retry budget is spent. Only a fault retries.
+attemptWithRetry :: Resilience -> IO a -> IO (Either (Transience, Text) a)
+attemptWithRetry res act =
+    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res act)
   where
     shouldRetry _ = pure . isLeft
 
-{- One attempt under the timeout. A 'RuleVerdict', a deterministic 'CannotVet' included, is
-taken at face value, so only a throw or a timeout retries and feeds the breaker. -}
-attemptOnce :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
-attemptOnce res evalAt ev = do
-    result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt ev))
+-- One attempt under the timeout. Only a throw or a timeout retries and feeds the breaker.
+attemptOnce :: Resilience -> IO a -> IO (Either (Transience, Text) a)
+attemptOnce res act = do
+    result <- tryAny (timeout (ecTimeout (resConfig res)) act)
     pure $ case result of
         Left e -> Left (transient, "the rule threw: " <> displayExceptionT e)
         Right Nothing -> Left (transient, "the attempt timed out")
-        Right (Just verdict) -> Right verdict
+        Right (Just value) -> Right value
   where
     transient = transientCause (resConfig res)
-
-exhausted :: Resilience -> Text -> Transience -> Text -> RuleEvaluation
-exhausted res name transience reason = Unavailable transience (resAlignment res) (name <> ": " <> reason)
 
 transientCause :: EffectfulConfig -> Transience
 transientCause cfg = WillResolve (ecRetryAfter cfg)
@@ -148,8 +138,8 @@ commitBreaker res step = do
 tripOnFailure :: EffectfulConfig -> UTCTime -> Breaker -> Breaker
 tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg)
 
-{- | The resilience knobs around an effectful rule's IO. The breaker's timing reads 'resClock'
-fresh at failure commit, not the request snapshot 'ctxNow'.
+{- | The resilience knobs around an advisory rule's package read. The breaker's timing reads
+'resClock' fresh at failure commit, not the request snapshot 'ctxNow'.
 -}
 data EffectfulConfig = EffectfulConfig
     { ecTimeout :: Int
@@ -161,7 +151,7 @@ data EffectfulConfig = EffectfulConfig
     the retry budget, so @[]@ admits no retry at all.
     -}
     , ecBreakerThreshold :: Int
-    -- ^ Consecutive exhausted-rule failures that trip the breaker.
+    -- ^ Consecutive exhausted reads that trip the breaker, one read per request.
     , ecBreakerCooldown :: NominalDiffTime
     {- ^ How long the breaker stays open (fast-failing the rule) before it allows a
     single half-open probe to test recovery.

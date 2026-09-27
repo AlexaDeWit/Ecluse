@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The policy engine denies by default and decides in boot order.
-Effectful evaluation may overlap, but precedence governs the result.
+{- | The policy engine denies by default and decides in boot order. One advisory read per package
+serves every advisory rule an evaluator reaches, so a request's decisions read one generation.
 -}
 module Ecluse.Core.Rules (
     -- * The boot-bound rule capabilities
@@ -12,27 +12,31 @@ module Ecluse.Core.Rules (
     withCveLookup,
 
     -- * The built-in rule dispatch
-    evalRule,
+    VerdictSource (..),
+    AdvisoryAlignment (..),
+    verdictSource,
+    AdvisoryRows,
+    readAdvisories,
 
     -- * The engine's prepared rule
     PreparedRule (..),
-    AdvisoryGate (..),
+    RuleEval (..),
+    PackageRead (..),
     Resilience (..),
     prepare,
+    prepResilience,
 
     -- * Boot-time ordering
     bootOrder,
     renderBootOrder,
 
     -- * Evaluation
+    newEvaluator,
     evalRules,
     renderDecision,
     renderDuration,
     renderIneligible,
     cveIdsInReason,
-
-    -- * The resilience harness
-    runEffectfulRule,
 
     -- * Observing the advisory source
     SourceHealth (..),
@@ -44,8 +48,7 @@ import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
 import UnliftIO (tryAny)
-import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
-import UnliftIO.Exception (bracket)
+import UnliftIO.MVar (modifyMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), insideAffectedRange, scoreAtLeast)
@@ -54,6 +57,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
+    ReadFault (..),
     Resilience (..),
     defaultEffectfulConfig,
     newBreaker,
@@ -73,14 +77,14 @@ data RuleDeps = RuleDeps
     delays a shadow-swap.
     -}
     , rdBreakerReporter :: BreakerReporter
-    -- ^ Where effectful rules report breaker transitions, as @ecluse.rule.breaker.state@.
+    -- ^ Where advisory rules report breaker transitions, as @ecluse.rule.breaker.state@.
     , rdSourceReporter :: SourceReporter
-    {- ^ Where every advisory-reading evaluation reports whether it could consult the source, so
+    {- ^ Where each advisory rule a request reaches reports whether it could consult the source, so
     an outage is observed as a transition rather than once per request.
     -}
     , rdAdvisoryFreshness :: IO AdvisoryFreshness
-    {- ^ How old the serving artifact's push is, read again at every evaluation. The wall clock
-    alone ages it, so an unchanged artifact expires in a warm process.
+    {- ^ How old the serving artifact's push is, read again for every package read. The wall
+    clock alone ages it, so an unchanged artifact expires in a warm process.
     -}
     }
 
@@ -96,50 +100,68 @@ withCveLookup deps use = case rdAdvisoryDatabase deps of
     NoAdvisoryDatabase -> use Nothing
     AdvisoryDatabase borrow -> borrow use
 
-{- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule that reads a fact
-nothing supplied refuses rather than abstaining, so the fold stops at it.
+-- | One package's advisory rows and the generation that served them, or 'Nothing' while none is loaded.
+type AdvisoryRows = Maybe (DbEtag, [AdvisoryRange])
+
+-- | Pin a generation and read one package's rows through it. A query fault escapes to the caller.
+readAdvisories :: RuleDeps -> PackageName -> IO AdvisoryRows
+readAdvisories deps name =
+    withCveLookup deps (traverse (\(etag, cve) -> (etag,) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name))))
+
+-- | Where a built-in rule's verdict comes from.
+data VerdictSource
+    = -- | One version's evidence and the request context.
+      FromEvidence (EvalContext -> RuleEvidence -> RuleVerdict)
+    | -- | The package's advisory rows, with how the rule resolves when it cannot read them.
+      FromAdvisories AdvisoryAlignment (AdvisoryRows -> RuleEvidence -> RuleVerdict)
+
+-- | How an advisory rule resolves when it cannot read: on an expired push, and on a faulted read.
+data AdvisoryAlignment = AdvisoryAlignment
+    { onExpiredPush :: FailureAlignment
+    -- ^ Fixed per rule, since expiry is unavailability configuration cannot waive.
+    , onFaultedRead :: FailureAlignment
+    -- ^ The rule's configured alignment for a timeout, a spent retry budget, or an open breaker.
+    }
+
+{- | The single dispatch over the closed vocabulary. A rule that reads a fact nothing supplied
+refuses rather than abstaining, so the fold stops at it.
 -}
-evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
-evalRule _ _ (AllowScope scope) ev =
-    pure $ case pkgNamespace (evName ev) of
+verdictSource :: Rule -> VerdictSource
+verdictSource = \case
+    AllowScope scope -> FromEvidence $ \_ ev -> case pkgNamespace (evName ev) of
         Just s
             | s == scope ->
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
-evalRule _ ctx (AllowIfOlderThan minAge) ev =
-    pure $ case evPublishedAt ev of
+    AllowIfOlderThan minAge -> FromEvidence $ \ctx ev -> case evPublishedAt ev of
         Unread -> needsFact "AllowIfOlderThan" "the publish time"
         Known Nothing -> NoDecision "publish time is unknown"
         Known (Just publishedAt) -> ageVerdict minAge (diffUTCTime (ctxNow ctx) publishedAt)
-evalRule _ _ DenyInstallTimeExecution ev =
-    pure $ case evInstallCode ev of
+    DenyInstallTimeExecution -> FromEvidence $ \_ ev -> case evInstallCode ev of
         Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
         Known (RunsCodeOnInstall how) -> Deny Nothing ("runs code on install: " <> how)
         Known NoCodeOnInstall -> NoDecision "no install-time code execution"
         Known CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
-evalRule _ _ (DenyByIdentity ident) ev =
-    pure $
+    DenyByIdentity ident -> FromEvidence $ \_ ev ->
         if matchesIdentity ident ev
             then Deny Nothing ("identity " <> ident <> " is revoked by operator")
             else NoDecision ("identity is not the revoked " <> ident)
-evalRule _ _ (AllowByIdentity ident) ev =
-    pure $
+    AllowByIdentity ident -> FromEvidence $ \_ ev ->
         if matchesIdentity ident ev
             then Allow ("identity " <> ident <> " is allow-listed by operator")
             else NoDecision ("identity is not the allow-listed " <> ident)
-evalRule deps _ AllowIfRemediatesCve ev =
-    withCveLookup deps $ \case
-        Nothing -> pure (NoDecision "no advisory database is loaded")
-        Just (_, cve) -> remediationVerdict cve ev
-evalRule deps _ (DenyIfCve params) ev =
-    withCveLookup deps $ \case
-        Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just (etag, cve) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve ev
-evalRule deps _ (DenyIfEpss params) ev =
-    withCveLookup deps $ \case
-        Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just (etag, cve) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
+    -- Expiry abstains on the remediation allow, so a deny's refusal is what the version meets.
+    AllowIfRemediatesCve -> FromAdvisories (AdvisoryAlignment FailNoDecision FailNoDecision) $ \case
+        Nothing -> const (NoDecision "no advisory database is loaded")
+        Just (_, ranges) -> \ev -> classifyRanges (pkgEcosystem (evName ev)) (renderVersion (evVersion ev)) ranges
+    -- A deny's configured alignment governs a faulted read and an unloaded database alike.
+    DenyIfCve params -> FromAdvisories (AdvisoryAlignment FailDeny (dicOnUnavailable params)) $ \case
+        Nothing -> const (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
+        Just (etag, ranges) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity ranges
+    DenyIfEpss params -> FromAdvisories (AdvisoryAlignment FailDeny (dieOnUnavailable params)) $ \case
+        Nothing -> const (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
+        Just (etag, ranges) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss ranges
 
 {- The minimum-age verdict for a version whose publish time the evidence carries. The quarantine
 holds a new version until the registry has had time to yank a malicious publish. -}
@@ -160,23 +182,14 @@ fault, because no in-process retry could load one, so the harness never retries 
 noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
 noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
-advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> RuleEvidence -> IO RuleVerdict
-advisoryDenyVerdict etag missing metric threshold scoreOf cve ev = do
-    ranges <- cveAdvisoriesFor cve name
-    let blocking =
-            ordNub
-                [ arCveId ar
-                | ar <- ranges
-                , insideAffectedRange eco version ar
-                , scoreAtLeast missing threshold (scoreOf ar)
-                ]
-    pure $ case blocking of
+-- The score filter runs once per read, so each version tests only the ranges that clear it.
+advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> [AdvisoryRange] -> RuleEvidence -> RuleVerdict
+advisoryDenyVerdict etag missing metric threshold scoreOf ranges = \ev ->
+    case ordNub [arCveId ar | ar <- scored, insideAffectedRange (pkgEcosystem (evName ev)) (renderVersion (evVersion ev)) ar] of
         [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
         ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
   where
-    eco = pkgEcosystem (evName ev)
-    name = TS.toText (pkgCanonical (evName ev))
-    version = renderVersion (evVersion ev)
+    scored = filter (scoreAtLeast missing threshold . scoreOf) ranges
 
 -- | Read the advisory identifiers from a scored denial reason, or return none.
 cveIdsInReason :: Text -> [Text]
@@ -190,33 +203,15 @@ cveIdsInReason message
     body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
     (ids, afterThreshold) = T.breakOn " (" body
 
--- The CVE rule's verdict against a loaded advisory database.
-remediationVerdict :: CveLookup -> RuleEvidence -> IO RuleVerdict
-remediationVerdict cve ev = do
-    fixes <- cveRemediationProbe cve name version
-    if not fixes
-        then pure (NoDecision "no advisory names this version as its fix")
-        else do
-            -- The probe hit, so the version is some advisory's exact fixed bound.
-            ranges <- cveAdvisoriesFor cve name
-            pure (classifyRanges (pkgEcosystem (evName ev)) version ranges)
-  where
-    name = TS.toText (pkgCanonical (evName ev))
-    version = renderVersion (evVersion ev)
-
--- A version still inside any advisory's affected range, an unfixed one included, must not
--- fast-track. Otherwise credit the advisories that name it as their exact fixed bound.
+{- A version still inside any advisory's affected range, an unfixed one included, must not
+fast-track. A row with a fixed bound always decodes to 'FixedBefore', so the fix test is exact. -}
 classifyRanges :: Ecosystem -> Text -> [AdvisoryRange] -> RuleVerdict
 classifyRanges eco version ranges =
     case (remediated, stillOpen) of
-        (_, _ : _) ->
-            NoDecision
-                ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
-        ([], []) ->
-            -- Unreachable under one acquisition (the probe and the
-            -- fetch see the same artifact), kept total.
-            NoDecision "no advisory names this version as its fix"
+        ([], _) -> NoDecision "no advisory names this version as its fix"
         (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
+        (ids, open) ->
+            NoDecision ("fixes " <> T.intercalate ", " ids <> " but is still affected by " <> T.intercalate ", " open)
   where
     remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
     stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
@@ -235,90 +230,77 @@ data PreparedRule = PreparedRule
     -- ^ The stable, human-facing name: the boot-order tiebreak and the credited identity.
     , prepPrecedence :: Int
     -- ^ The precedence at which this rule competes. Higher wins in the boot order.
-    , prepResilience :: Maybe Resilience
-    -- ^ The resilience policy, or 'Nothing' for a rule run directly.
-    , prepAdvisoryGate :: Maybe AdvisoryGate
-    -- ^ The push-age gate, or 'Nothing' for a rule that reads no advisory database.
-    , prepEval :: EvalContext -> RuleEvidence -> IO RuleVerdict
-    {- ^ The rule's raw verdict for one version. For a resilient rule it may do IO that fails
-    or hangs, and 'runEffectfulRule' wraps it.
-    -}
+    , prepEval :: RuleEval
+    -- ^ How the rule reaches the versions an evaluator decides.
     }
 
-{- | One advisory-reading rule's push-age gate: the reading, and what an expired push resolves the
-rule to. Expiry is unavailability a rule may not waive, so a deny's alignment is fixed here.
+-- | How a prepared rule reaches the versions an evaluator decides.
+data RuleEval
+    = -- | Each version's verdict on its own. A throw refuses admission.
+      PerVersion (EvalContext -> RuleEvidence -> IO RuleVerdict)
+    | -- | A verdict for each version from the evaluator's one advisory read of the package.
+      PerPackage PackageRead
+
+{- | An advisory rule: how to make the evaluator's shared read when this rule reaches it first, and
+how the rule decides from that read.
 -}
-data AdvisoryGate = AdvisoryGate
-    { agAlignment :: FailureAlignment
-    -- ^ The alignment an expired push resolves under, which configuration cannot change.
-    , agFreshness :: IO AdvisoryFreshness
-    -- ^ The push-age reading, taken fresh for every evaluation.
-    , agReporter :: SourceReporter
-    -- ^ Where the rule's decided verdicts report the source's health.
+data PackageRead = PackageRead
+    { prFreshness :: IO AdvisoryFreshness
+    -- ^ The push-age reading, taken ahead of the breaker.
+    , prResilience :: Maybe Resilience
+    -- ^ The policy around the read, or 'Nothing' where no database is configured and the read does no IO.
+    , prRows :: PackageName -> IO AdvisoryRows
+    -- ^ The package's rows in one pinned generation.
+    , prAlignment :: AdvisoryAlignment
+    -- ^ How this rule resolves an ineligible push and a faulted read.
+    , prVerdict :: AdvisoryRows -> RuleEvidence -> RuleVerdict
+    -- ^ This rule's verdict for each version, from the rows.
+    , prReporter :: SourceReporter
+    -- ^ Where this rule reports whether the read let it consult the source.
     }
 
-{- | Allocate each effectful rule's breaker once. Unconfirmed remediation claims abstain. With no
-advisory database configured, an advisory rule runs directly and returns its fixed verdict.
+-- | The resilience policy a prepared rule's package read runs under, if any.
+prepResilience :: PreparedRule -> Maybe Resilience
+prepResilience rule = case prepEval rule of
+    PerVersion _ -> Nothing
+    PerPackage packageRead -> prResilience packageRead
+
+{- | Allocate each advisory rule's breaker once. With no advisory database configured, an advisory
+rule's read does no IO and returns the rule's fixed verdict, so it runs without resilience.
 -}
 prepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
 prepare deps = traverse (prepareRule deps)
 
 prepareRule :: RuleDeps -> PrecededRule -> IO PreparedRule
 prepareRule deps (PrecededRule prec rule) = do
-    resilience <- resilienceFor deps rule
+    eval <- case verdictSource rule of
+        FromEvidence verdict -> pure (PerVersion (\ctx -> pure . verdict ctx))
+        FromAdvisories alignment verdict -> PerPackage <$> advisoryRead deps alignment verdict
+    pure PreparedRule{prepName = ruleName rule, prepPrecedence = prec, prepEval = eval}
+
+advisoryRead :: RuleDeps -> AdvisoryAlignment -> (AdvisoryRows -> RuleEvidence -> RuleVerdict) -> IO PackageRead
+advisoryRead deps alignment verdict = do
+    resilience <- case rdAdvisoryDatabase deps of
+        NoAdvisoryDatabase -> pure Nothing
+        AdvisoryDatabase _ -> Just <$> newResilience deps
     pure
-        PreparedRule
-            { prepName = ruleName rule
-            , prepPrecedence = prec
-            , prepResilience = resilience
-            , prepAdvisoryGate = advisoryGateFor deps rule
-            , prepEval = \ctx -> evalRule deps ctx rule
+        PackageRead
+            { prFreshness = rdAdvisoryFreshness deps
+            , prResilience = resilience
+            , prRows = readAdvisories deps
+            , prAlignment = alignment
+            , prVerdict = verdict
+            , prReporter = rdSourceReporter deps
             }
 
-{- The gate each advisory-reading rule carries. Expired evidence refuses on the deny rules and
-abstains on the remediation allow, so the deny's refusal is what the version meets. -}
-advisoryGateFor :: RuleDeps -> Rule -> Maybe AdvisoryGate
-advisoryGateFor deps = \case
-    DenyIfCve{} -> gate FailDeny
-    DenyIfEpss{} -> gate FailDeny
-    AllowIfRemediatesCve -> gate FailNoDecision
-    AllowScope{} -> Nothing
-    AllowIfOlderThan{} -> Nothing
-    DenyInstallTimeExecution -> Nothing
-    DenyByIdentity{} -> Nothing
-    AllowByIdentity{} -> Nothing
-  where
-    gate alignment = Just AdvisoryGate{agAlignment = alignment, agFreshness = rdAdvisoryFreshness deps, agReporter = rdSourceReporter deps}
-
--- The resilience a rule needs: a policy for an advisory rule reading a configured database. With
--- no database configured its verdict is fixed and cannot fault or hang, so it runs directly.
-resilienceFor :: RuleDeps -> Rule -> IO (Maybe Resilience)
-resilienceFor deps = \case
-    AllowIfRemediatesCve -> effectful FailNoDecision
-    -- A deny rule aligns per its config. The same alignment governs a lookup that throws or
-    -- times out (here) and a database that is not loaded ('noAdvisoryDbVerdict').
-    DenyIfCve params -> effectful (dicOnUnavailable params)
-    DenyIfEpss params -> effectful (dieOnUnavailable params)
-    AllowScope{} -> pure Nothing
-    AllowIfOlderThan{} -> pure Nothing
-    DenyInstallTimeExecution -> pure Nothing
-    DenyByIdentity{} -> pure Nothing
-    AllowByIdentity{} -> pure Nothing
-  where
-    effectful alignment = case rdAdvisoryDatabase deps of
-        NoAdvisoryDatabase -> pure Nothing
-        AdvisoryDatabase _ -> Just <$> newResilience deps alignment
-
-newResilience :: RuleDeps -> FailureAlignment -> IO Resilience
-newResilience deps alignment = do
+newResilience :: RuleDeps -> IO Resilience
+newResilience deps = do
     breaker <- newBreaker
     pure
         Resilience
             { resConfig = defaultEffectfulConfig
-            , resAlignment = alignment
             , resBreaker = breaker
             , resBreakerReporter = rdBreakerReporter deps
-            , resSourceReporter = rdSourceReporter deps
             , resClock = getCurrentTime
             }
 
@@ -346,36 +328,102 @@ renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
             <> show (prepPrecedence r)
             <> ")"
 
--- | Decide in boot order despite concurrent lookups. Unexpected direct-rule faults refuse admission.
+{- | An evaluator for one request's versions, in boot order. Its advisory rules must come from one
+'prepare', since the first reached reads the package once for them all. A throw refuses.
+-}
+newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
+newEvaluator ctx rules = do
+    shared <- newPackageCell
+    bound <- traverse (\rule -> (rule,) <$> bindRule ctx shared rule) (bootOrder rules)
+    pure (\ev -> stepRules ev bound [])
+
+-- | Decide one version through a fresh 'newEvaluator'.
 evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
-evalRules ctx rules ev = stepRules ctx ev (bootOrder rules) []
+evalRules ctx rules ev = newEvaluator ctx rules >>= ($ ev)
+
+-- One rule as an evaluator runs it for each version: its evaluation, or what it threw.
+type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
+
+bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
+bindRule ctx shared rule = case prepEval rule of
+    PerVersion eval -> pure (caught . fmap Decided . eval ctx)
+    PerPackage packageRead -> do
+        own <- newPackageCell
+        pure $ \ev -> fmap ($ ev) <$> heldFor own (evName ev) (decideFromRead (prepName rule) packageRead shared ev)
+
+caught :: IO a -> IO (Either Text a)
+caught = fmap (first displayExceptionT) . tryAny
+
+-- A result held for the last package decided. Another package computes its own, never borrowing it.
+newtype PackageCell a = PackageCell (MVar (Maybe (PackageName, a)))
+
+newPackageCell :: IO (PackageCell a)
+newPackageCell = PackageCell <$> newMVar Nothing
+
+heldFor :: PackageCell a -> PackageName -> IO a -> IO a
+heldFor (PackageCell held) package compute =
+    modifyMVar held $ \case
+        Just (known, value) | known == package -> pure (Just (known, value), value)
+        _ -> (\value -> (Just (package, value), value)) <$> compute
+
+-- The evaluator's one advisory read of a package: its rows, or why it has none.
+data AdvisoryRead
+    = RowsRead AdvisoryRows
+    | PushIneligible Text
+    | ReadGivenUp ReadFault
+
+{- One rule's evaluation of every version from the shared read, made by this rule if it is the first
+reached. The rule reports once per package whether the read let it consult the source. -}
+decideFromRead :: Text -> PackageRead -> PackageCell (Either Text AdvisoryRead) -> RuleEvidence -> IO (Either Text (RuleEvidence -> RuleEvaluation))
+decideFromRead name packageRead shared reaching =
+    heldFor shared package (caught (readShared packageRead package)) >>= \case
+        Left escape -> pure (Left escape)
+        Right advisory ->
+            caught (resolveRead name packageRead advisory <$ reportSource (prReporter packageRead) (readHealth name packageRead advisory reaching))
+  where
+    package = evName reaching
+
+{- The push-age gate, then the rows under the reading rule's resilience. The gate runs ahead of
+breaker admission, which an open breaker would otherwise skip past. -}
+readShared :: PackageRead -> PackageName -> IO AdvisoryRead
+readShared packageRead package =
+    prFreshness packageRead >>= \freshness -> case renderIneligible freshness of
+        Just why -> pure (PushIneligible why)
+        Nothing -> case prResilience packageRead of
+            Nothing -> RowsRead <$> prRows packageRead package
+            Just res -> either ReadGivenUp RowsRead <$> runResilient res (prRows packageRead package)
+
+-- One rule's evaluation of each version, under its own alignments. A fault resolves all alike.
+resolveRead :: Text -> PackageRead -> AdvisoryRead -> RuleEvidence -> RuleEvaluation
+resolveRead name packageRead = \case
+    RowsRead rows -> Decided . prVerdict packageRead rows
+    PushIneligible why -> const (Decided (CannotVet (onExpiredPush alignment) (name <> ": " <> why)))
+    ReadGivenUp fault -> const (Unavailable (rfTransience fault) (onFaultedRead alignment) (name <> ": " <> rfReason fault))
+  where
+    alignment = prAlignment packageRead
+
+-- Whether the read let one rule consult the source: only a rule that could not vet says it did not.
+readHealth :: Text -> PackageRead -> AdvisoryRead -> RuleEvidence -> SourceHealth
+readHealth name packageRead advisory reaching = case advisory of
+    RowsRead rows -> case prVerdict packageRead rows reaching of
+        CannotVet _ reason -> SourceUnavailable name (bareCause name reason)
+        Allow _ -> SourceAnswered name
+        Deny _ _ -> SourceAnswered name
+        NoDecision _ -> SourceAnswered name
+    PushIneligible why -> SourceUnavailable name why
+    ReadGivenUp fault -> SourceUnavailable name (rfDetail fault)
 
 -- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default trail
 -- and an admission's skipped-check evidence both read it back.
-stepRules :: EvalContext -> RuleEvidence -> [PreparedRule] -> [Passed] -> IO Decision
-stepRules _ _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
-stepRules ctx ev (r : rs) passed
-    | isNothing (prepResilience r) =
-        directOutcome ctx ev r >>= \case
-            Left d -> pure (withEvidence passed rs d)
-            Right res -> stepRules ctx ev rs (Passed (prepName r) res : passed)
-    | otherwise =
-        -- Stopping the block at the next direct rule keeps the "no mooted IO" guarantee: that
-        -- rule runs, and may decide, before the engine launches any resilient rule beyond it.
-        let (block, rest) = span (isJust . prepResilience) (r : rs)
-         in evalBlock ctx ev block >>= \case
-                BlockDecided d inBlock unreached -> pure (withEvidence (inBlock <> passed) (unreached <> rest) d)
-                BlockPassed inBlock -> stepRules ctx ev rest (inBlock <> passed)
-
--- A direct rule is zero-cost, so it runs in place: reaching it moots no speculated IO. It still
--- goes through the one runner, so no rule can skip its own gate.
-directOutcome :: EvalContext -> RuleEvidence -> PreparedRule -> IO (Either Decision RuleEvaluation)
-directOutcome ctx ev r = do
-    evaluated <- tryAny (runEffectfulRule ctx r ev)
-    pure $ case evaluated of
-        -- A direct-rule exception breaks its contract and must refuse admission.
-        Left escape -> Left (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
-        Right res -> maybe (Right res) Left (decisive (prepName r) res)
+stepRules :: RuleEvidence -> [(PreparedRule, VersionEval)] -> [Passed] -> IO Decision
+stepRules _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
+stepRules ev ((rule, eval) : rest) passed =
+    eval ev >>= \case
+        -- An evaluation that throws breaks its contract and must refuse admission.
+        Left escape -> pure (Undecidable (WillResolve Nothing) (prepName rule <> ": the rule threw: " <> escape))
+        Right res -> case decisive (prepName rule) res of
+            Just d -> pure (withEvidence passed (map fst rest) d)
+            Nothing -> stepRules ev rest (Passed (prepName rule) res : passed)
 
 -- One non-decisive evaluation as the fold keeps it, so the trail and the evidence read one record.
 data Passed = Passed Text RuleEvaluation
@@ -405,32 +453,6 @@ withEvidence passed unreached = \case
 bareCause :: Text -> Reason -> Reason
 bareCause name reason = fromMaybe reason (T.stripPrefix (name <> ": ") reason)
 
--- A resilient block's result: the earliest decisive winner with what ran ahead of it (reverse boot
--- order) and what it pre-empted (boot order), or every evaluation when nothing decided.
-data BlockOutcome
-    = BlockDecided Decision [Passed] [PreparedRule]
-    | BlockPassed [Passed]
-
--- Launch a contiguous resilient block concurrently, then await in boot order.
-evalBlock :: EvalContext -> RuleEvidence -> [PreparedRule] -> IO BlockOutcome
-evalBlock ctx ev block =
-    bracket
-        (traverse (\r -> async (runEffectfulRule ctx r ev)) block)
-        (traverse_ uninterruptibleCancel)
-        (\asyncs -> awaitInOrder (zip block asyncs) [])
-
--- Await a launched block's evaluations in boot order. A decisive winner cancels
--- every strictly-later one.
-awaitInOrder :: [(PreparedRule, Async RuleEvaluation)] -> [Passed] -> IO BlockOutcome
-awaitInOrder [] passed = pure (BlockPassed passed)
-awaitInOrder ((r, a) : rest) passed = do
-    res <- wait a
-    case decisive (prepName r) res of
-        Just d -> do
-            traverse_ (cancel . snd) rest
-            pure (BlockDecided d passed (map fst rest))
-        Nothing -> awaitInOrder rest (Passed (prepName r) res : passed)
-
 -- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal. An admission's
 -- evidence is attached by the fold, which alone knows what it passed and pre-empted.
 decisive :: Text -> RuleEvaluation -> Maybe Decision
@@ -451,33 +473,6 @@ reasonOf (Decided verdict) = case verdict of
     Deny _ reason -> reason
     NoDecision reason -> reason
     CannotVet _ reason -> reason
-
-{- | Apply the push-age gate, then resilience. The gate runs ahead of breaker admission, which an
-open breaker would otherwise skip past. Direct-rule exceptions remain the caller's responsibility.
--}
-runEffectfulRule :: EvalContext -> PreparedRule -> RuleEvidence -> IO RuleEvaluation
-runEffectfulRule ctx rule ev =
-    expiredEvidence rule >>= \case
-        Just verdict -> observed (Decided verdict)
-        Nothing -> case prepResilience rule of
-            Nothing -> observed . Decided =<< prepEval rule ctx ev
-            Just res -> observed =<< runResilient res (prepName rule) (prepEval rule ctx) ev
-  where
-    -- The harness reports its own faults with their detail, so only a decided verdict is
-    -- classified here, and only for a rule that reads the advisory source.
-    observed res = res <$ whenJust (prepAdvisoryGate rule) (whenJust (healthOf res) . reportSource . agReporter)
-    healthOf = \case
-        Decided (CannotVet _ reason) -> Just (SourceUnavailable (prepName rule) (bareCause (prepName rule) reason))
-        Decided _ -> Just (SourceAnswered (prepName rule))
-        Unavailable{} -> Nothing
-
--- The verdict an ineligible push resolves a gated rule to, or nothing while its evidence holds.
-expiredEvidence :: PreparedRule -> IO (Maybe RuleVerdict)
-expiredEvidence rule = case prepAdvisoryGate rule of
-    Nothing -> pure Nothing
-    Just gate -> agFreshness gate <&> fmap (refuseOn gate) . renderIneligible
-  where
-    refuseOn gate why = CannotVet (agAlignment gate) (prepName rule <> ": " <> why)
 
 {- | Why a push is not eligible evidence, or 'Nothing' while it is. A serving generation the store
 gave no publication time for reads as unverified, because its age cannot be established.

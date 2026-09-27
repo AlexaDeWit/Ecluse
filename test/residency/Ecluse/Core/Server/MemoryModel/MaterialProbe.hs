@@ -28,7 +28,7 @@ import Ecluse.Core.Package.Merge (MergePlan, Provenance (GatedSource, TrustedSou
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionRead (vrVersion))
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (evalRules, newEvaluator, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), completeEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes))
 import Ecluse.Core.Server.Cache (CacheEntry (..))
@@ -172,7 +172,8 @@ listingWork input held = do
     admitted <- forM (zip origins entries) $ \(origin, entry) -> case origin of
         TrustedSource -> pure (entryInfo entry, 0)
         GatedSource -> do
-            decisions <- traverse (evalRules calibrationClock rules . completeEvidence) (infoVersions (entryInfo entry))
+            decide <- newEvaluator calibrationClock rules
+            decisions <- traverse (decide . completeEvidence) (infoVersions (entryInfo entry))
             let survivors = fpSurvivors (filterPlanFromDecisions decisions)
             pure (restrictToSurvivors survivors (entryInfo entry), Set.size survivors)
     let (infos, counts) = unzip admitted

@@ -21,9 +21,8 @@ import Ecluse.Core.Package (
     PackageInfo (..),
  )
 import Ecluse.Core.Rules (
-    PreparedRule (..),
+    PreparedRule,
     Resilience (Resilience),
-    noSourceReporter,
     prepare,
  )
 import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
@@ -61,7 +60,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Test.Log (runJsonLog)
 import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, leftpadName, npmVersion, unsafeHash, unscopedNpm, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule)
 
 spec :: Spec
 spec = do
@@ -104,16 +103,8 @@ spec = do
             evalTier rules `shouldBe` Metric.Structural
         it "is the effectful tier when any rule carries a resilience policy" $ do
             breaker <- newBreaker
-            let effectful :: PreparedRule
-                effectful =
-                    PreparedRule
-                        { prepName = "EffRule"
-                        , prepPrecedence = 300
-                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime noSourceReporter)
-                        , prepAdvisoryGate = Nothing
-                        , prepEval = \_ _ -> pure (NoDecision "noop")
-                        }
-            evalTier [effectful] `shouldBe` Metric.Effectful
+            let resilience = Resilience defaultEffectfulConfig breaker noBreakerReporter getCurrentTime
+            evalTier [packageRule "EffRule" 300 FailDeny (Just resilience) pass (NoDecision "noop")] `shouldBe` Metric.Effectful
 
     describe "transienceCause (effectful-failure cause)" $ do
         it "maps a retryable cause to a connection fault" $
@@ -209,9 +200,8 @@ spec = do
             -- versions: the bucket order the fold must hold, not the key order.
             refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
 
-{- | A packument interleaving the three integrity classes by key: two below floor, two missing a
-digest, one admissible. The refused classes alternate in ascending key order, so the assertion
-pins the bucket order and not the key order.
+{- | A packument interleaving the three integrity classes by key. The refused classes alternate in
+ascending key order, so the assertion pins the bucket order and not the key order.
 -}
 mixedIntegrityInfo :: PackageInfo
 mixedIntegrityInfo =

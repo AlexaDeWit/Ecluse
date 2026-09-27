@@ -60,7 +60,7 @@ import Ecluse.Core.Registry.Metadata (
     Manifest (manifestDigest, manifestInfo, manifestRaw),
     digestBytes,
  )
-import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules (newEvaluator)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission (withServeAdmission)
@@ -322,8 +322,9 @@ gatePublic tracing metrics deps name ctx trustedVersions = \case
                         deniedEvidence
 
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
-decideVersions deps ctx info =
-    traverse (evalRules ctx (pdRules deps) . completeEvidence) (infoVersions info)
+decideVersions deps ctx info = do
+    decide <- newEvaluator ctx (pdRules deps)
+    traverse (decide . completeEvidence) (infoVersions info)
 
 projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =

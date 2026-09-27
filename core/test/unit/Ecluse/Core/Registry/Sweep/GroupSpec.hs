@@ -51,7 +51,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     previewCache,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
-import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerVersion), prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore, seededStoreConfig, servedVersion, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion)
@@ -160,7 +160,7 @@ spec = describe "grouped preview" $ do
             generation <- newIORef (DbEtag "initial")
             let mark etag store = store{obReadManifest = \name -> writeIORef generation (DbEtag etag) >> obReadManifest store name}
                 original = smStore mount
-                policy = denyRule{prepEval = \_ _ -> (\etag -> Deny (Just etag) "location evidence") <$> readIORef generation}
+                policy = denyRule{prepEval = PerVersion (\_ _ -> (\etag -> Deny (Just etag) "location evidence") <$> readIORef generation)}
                 located = original{ssObserve = mark "mirror-denial" (ssObserve original), ssPrivate = mapCache (mark "cache-denial") (ssPrivate original)}
             recorded <- recordingPortsUnder previewingReport Nothing
             outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smRules = [policy], smStore = located}]

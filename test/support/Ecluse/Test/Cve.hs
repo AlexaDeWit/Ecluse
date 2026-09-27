@@ -11,6 +11,7 @@ and the real handle, so the two cannot drift apart.
 module Ecluse.Test.Cve (
     fakeCveLookup,
     fakeCveDb,
+    namesFix,
     unscoredEpssCases,
 ) where
 
@@ -19,15 +20,11 @@ import Ecluse.Core.Osv.Epss (epssForIds, mkEpssScores, parseEpssLine)
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 
-{- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
-on the fixed bound, matching the artifact's verbatim version text.
--}
+-- | Build the fake from (package name, range) rows.
 fakeCveLookup :: [(Text, AdvisoryRange)] -> CveLookup
 fakeCveLookup rows =
     CveLookup
-        { cveRemediationProbe = \name version ->
-            pure (any (\(n, ar) -> n == name && arUpperBound ar == FixedBefore version) rows)
-        , cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
+        { cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
         , cveCoveredNames = pure (ordNub (map fst rows))
         }
 
@@ -36,6 +33,10 @@ retires a displaced generation builds its own recording handle instead.
 -}
 fakeCveDb :: [(Text, AdvisoryRange)] -> CveDb
 fakeCveDb rows = CveDb{cveDbLookup = fakeCveLookup rows, cveDbClose = pass, cveDbMeta = [], cveDbProvenance = noProvenance}
+
+-- | Whether a package row names this exact version as its fix, which tells generations apart.
+namesFix :: CveLookup -> Text -> Text -> IO Bool
+namesFix cve name version = any ((== FixedBefore version) . arUpperBound) <$> cveAdvisoriesFor cve name
 
 -- | Individual gaps in a nonempty feed, joined through the production score parser.
 unscoredEpssCases :: [(String, Maybe Double)]

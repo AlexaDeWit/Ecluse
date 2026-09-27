@@ -77,7 +77,7 @@ data Rule
       precedence (above AllowScope) as a post-mirror revocation mechanism.
       -}
       DenyByIdentity Text
-    | {- | Allow an exact package identity, optionally with a version, including fixes the remediation probe cannot match.
+    | {- | Allow an exact package identity, optionally with a version, including fixes the exact fix match cannot recognise.
       Default precedence overrides advisory denies but yields to install-code and identity denies.
       -}
       AllowByIdentity Text

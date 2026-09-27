@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     recordMetric,
     recordTally,
  )
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderIneligible)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluator, renderIneligible)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
@@ -130,7 +130,9 @@ selectPackage counting ports counters mount ctx name stored
             Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
-    decideAll evidence = catMaybes <$> traverse (decideVersion counting ports counters mount ctx evidence) served
+    decideAll evidence = do
+        decide <- newEvaluator ctx (smRules mount)
+        catMaybes <$> traverse (decideVersion counting ports counters decide evidence) served
 
 {- The manifest's own entry for a version, or identity alone where it projects none. A listing can
 name a version the manifest omits, and identity is established either way. -}
@@ -139,19 +141,18 @@ evidenceIn name manifest version =
     maybe (identityEvidence name version) completeEvidence (selectVersion version (manifestInfo manifest))
 
 {- Decide one version from whatever evidence it has and count it. Only a named decisive deny
-condemns, so this runs 'evalRules' rather than the wrapper that folds in deny-by-default. -}
+condemns, so this reads the engine's decision rather than the wrapper that folds in deny-by-default. -}
 decideVersion ::
     Bool ->
     SweepPorts ->
     SweepState ->
-    SweepMount ->
-    EvalContext ->
+    (RuleEvidence -> IO Decision) ->
     (Version -> RuleEvidence) ->
     Version ->
     IO (Maybe Condemned)
-decideVersion counting ports counters mount ctx evidence version = do
+decideVersion counting ports counters decide evidence version = do
     when counting (record ports counters SweepExamined)
-    evalRules ctx (smRules mount) (evidence version) >>= \case
+    decide (evidence version) >>= \case
         Blocked rule etag reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdAdvisoryEtag = etag, cdReason = reason})
         _ -> when counting (record ports counters SweepKept) $> Nothing
 

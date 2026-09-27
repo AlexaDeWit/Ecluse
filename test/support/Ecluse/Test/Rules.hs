@@ -13,11 +13,19 @@ module Ecluse.Test.Rules (
     -- * Precedence pairing
     atDefaultPrecedence,
 
+    -- * One version under one rule
+    evalRule,
+
     -- * Fixed-verdict prepared rules
     constRule,
     admitRule,
     denyRule,
     cannotVetRule,
+
+    -- * Package-read prepared rules
+    packageRule,
+    mapPackageRead,
+    mapResilience,
 
     -- * Reading back a decision
     admittedBy,
@@ -49,12 +57,19 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (
+    AdvisoryAlignment (AdvisoryAlignment),
     AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase),
-    PreparedRule (PreparedRule, prepAdvisoryGate, prepEval, prepName, prepPrecedence, prepResilience),
+    PackageRead (..),
+    PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence),
+    Resilience,
     RuleDeps (..),
-    evalRules,
+    RuleEval (PerPackage, PerVersion),
+    VerdictSource (FromAdvisories, FromEvidence),
+    newEvaluator,
     noSourceReporter,
     prepare,
+    readAdvisories,
+    verdictSource,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (
@@ -65,7 +80,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (PrecededRule),
     Rule,
     RuleEvaluation (Unavailable),
-    RuleEvidence (evInstallCode),
+    RuleEvidence (evInstallCode, evName),
     RuleVerdict (Allow, CannotVet, Deny, NoDecision),
     completeEvidence,
     defaultPrecedence,
@@ -94,6 +109,14 @@ configured precedence ("Ecluse.Config.Rule").
 atDefaultPrecedence :: Rule -> PrecededRule
 atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
 
+{- | One rule's verdict for one version. An advisory rule reads its rows directly, with no gate and no
+resilience, so a lookup fault escapes.
+-}
+evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
+evalRule deps ctx rule ev = case verdictSource rule of
+    FromEvidence verdict -> pure (verdict ctx ev)
+    FromAdvisories _ verdict -> (`verdict` ev) <$> readAdvisories deps (evName ev)
+
 {- | A prepared rule returning a fixed verdict, so an evaluation reaches a chosen decision
 independent of the version under test.
 -}
@@ -102,10 +125,38 @@ constRule ruleName verdict =
     PreparedRule
         { prepName = ruleName
         , prepPrecedence = 0
-        , prepResilience = Nothing
-        , prepAdvisoryGate = Nothing
-        , prepEval = \_ _ -> pure verdict
+        , prepEval = PerVersion (\_ _ -> pure verdict)
         }
+
+{- | An advisory rule on a fresh push whose read runs the given effect and finds no rows. Every
+version takes the given verdict, and a faulted read resolves under the given alignment.
+-}
+packageRule :: Text -> Int -> FailureAlignment -> Maybe Resilience -> IO () -> RuleVerdict -> PreparedRule
+packageRule ruleName prec alignment resilience effect verdict =
+    PreparedRule
+        { prepName = ruleName
+        , prepPrecedence = prec
+        , prepEval =
+            PerPackage
+                PackageRead
+                    { prFreshness = pure AdvisoryFresh
+                    , prResilience = resilience
+                    , prRows = \_ -> Nothing <$ effect
+                    , prAlignment = AdvisoryAlignment FailDeny alignment
+                    , prVerdict = \_ _ -> verdict
+                    , prReporter = noSourceReporter
+                    }
+        }
+
+-- | Adjust a prepared advisory rule's package read. A per-version rule has none.
+mapPackageRead :: (PackageRead -> PackageRead) -> PreparedRule -> PreparedRule
+mapPackageRead adjust rule = case prepEval rule of
+    PerPackage packageRead -> rule{prepEval = PerPackage (adjust packageRead)}
+    PerVersion _ -> rule
+
+-- | Adjust the resilience around a prepared rule's package read.
+mapResilience :: (Resilience -> Resilience) -> PreparedRule -> PreparedRule
+mapResilience adjust = mapPackageRead (\packageRead -> packageRead{prResilience = adjust <$> prResilience packageRead})
 
 {- | The three fixed-verdict rules the admission and worker suites reuse. 'cannotVetRule' models
 an absent advisory database, so a fail-closed evaluation reaches an undecidable decision.
@@ -168,6 +219,6 @@ real engine and the real survivor resolution without wiring the staged serve pat
 -}
 filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
 filterPlan deps ctx rules info = do
-    prepared <- prepare deps rules
-    decisions <- traverse (evalRules ctx prepared . completeEvidence) (infoVersions info)
+    decide <- prepare deps rules >>= newEvaluator ctx
+    decisions <- traverse (decide . completeEvidence) (infoVersions info)
     pure (filterPlanFromDecisions decisions)

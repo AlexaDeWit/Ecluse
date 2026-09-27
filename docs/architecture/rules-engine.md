@@ -29,14 +29,15 @@ decision, the no-op under deny-by-default, never a configuration error. Where no
 signal at all, the rule yields `CannotVet` instead, so evaluation stops rather than letting a
 lower-precedence rule decide past an unresolved one.
 
-A `Rule` is closed `Eq`/`Show` data with no evaluation. `evalRule` is the single dispatch over
-it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
+A `Rule` is closed `Eq`/`Show` data with no evaluation. `verdictSource` is the single dispatch
+over it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
 security boundary: untrusted config can only name a built-in constructor, never supply an
-evaluator. A rule is **pure or effectful** by whether it carries a resilience policy, which
-depends on where its signal lives and, for an advisory rule, on whether a database is configured.
-So `DenyInstallTimeExecution` is pure for npm's `hasInstallScript` but effectful for a RubyGems
-native `extensions` signal that appears only inside the `.gem`. Without a database an advisory
-rule's verdict is fixed at boot, so it runs as a pure rule.
+evaluator. Most rules decide a version from its evidence alone. The three advisory rules decide it
+from their package's advisory rows. One evaluator decides a request's versions. The first advisory
+rule a request reaches reads the package's rows once, and every advisory rule then decides every
+version from that one read with no further IO. A rule is **effectful** when that read runs under a
+resilience policy, which is when an advisory database is configured. Without one, an advisory
+rule's verdict is fixed at boot, and the read does no IO.
 
 ### Evaluation model
 
@@ -50,33 +51,36 @@ a fault:
   of a fact the rule needs. It carries its own failure alignment (below). There is deliberately
   no fail-allow: a check that cannot vet must never admit unvetted bytes.
 
-Under its resilience harness a rule either returns a decided verdict, taken at face value, or
-the harness synthesises `Unavailable`. That means no verdict at all: the IO faulted, it timed
-out, or the breaker is open. The engine walks the boot order and credits the winning rule by
-name. With nothing decisive it collects each non-decisive reason, in boot order, so the denial
-can explain what the engine considered. An admission also carries the configured checks it did
-not benefit from, as `SkippedCheck` evidence: a check that ran and could not vet under a fail-open
-alignment, kept apart from a check an earlier allow pre-empted, so nothing downstream reads an
-unreached check as passed. The public artifact gate logs the skipped ones once, at the admission,
-and a trusted read of a mirrored copy runs no rules, so it never repeats them. The evidence lives
-in the decision and the log only. The
+Under its resilience harness the advisory read either returns rows, whose verdicts stand at face
+value, or the harness gives it up, and every advisory rule resolves every version to `Unavailable`
+under its own alignment. That means no verdict at all: the read faulted, it timed out, or the
+breaker is open. The engine walks the boot order and credits the winning rule by name. With nothing
+decisive it collects each non-decisive reason, in boot order, so the denial can explain what the
+engine considered. An admission also carries the configured checks it did not benefit from, as
+`SkippedCheck` evidence: a check that ran and could not vet under a fail-open alignment, kept apart
+from a check an earlier allow pre-empted, so nothing downstream reads an unreached check as passed.
+The public artifact gate logs the skipped ones once, at the admission, and a trusted read of a
+mirrored copy runs no rules, so it never repeats them. The evidence lives in the decision and the
+log only. The
 [`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs) Haddock holds the full verdict and
 harness vocabulary. The proxy logs the boot order at start-up (see
 [Configuration → rule policy](configuration.md#rule-policy)).
 
 ### Effectful-rule failure
 
-An effectful rule does IO that can fail or hang. Each carries a short per-attempt timeout with
-bounded retry and backoff, and a per-source circuit breaker. After repeated failures the
-breaker trips and the rule fast-fails for a cooldown. A sustained outage then neither adds
-latency to every request nor hammers a down service. The shipped defaults are a 2-second
-per-attempt timeout, two retries at 100ms then 250ms. The breaker trips after 5 consecutive
-failures and cools for 30 seconds.
+The advisory read does IO that can fail or hang. It runs once per request under the resilience of
+the first advisory rule reached: a short per-attempt timeout with bounded retry and backoff, and
+that rule's circuit breaker. A rule that reuses the read sends its own breaker no traffic for that
+request. After repeated failed requests the breaker trips and the rule fast-fails for a cooldown. A
+sustained outage then neither adds latency to every request nor hammers a down service. The shipped
+defaults are a 2-second per-attempt timeout, two retries at 100ms then 250ms. The breaker trips
+after 5 consecutive failed requests and cools for 30 seconds. The timeout cannot interrupt SQLite
+during one step of the query, so it takes effect when that step returns.
 
-A fault the harness observes becomes `Unavailable`. A rule reports a deterministic in-process
-absence as `CannotVet`, for example no advisory database loaded. The harness takes that at face
-value: no retry, no breaker count, since no retry could change it. The rule's failure alignment
-governs either one:
+A fault the harness observes becomes `Unavailable` for every version of the request, under each
+advisory rule's own alignment. A rule reports a deterministic in-process absence as `CannotVet`, for
+example no advisory database loaded. The harness takes that at face value: no retry, no breaker
+count, since no retry could change it. The rule's failure alignment governs either one:
 
 - **`FailDeny` (fail-closed, the default)**: decisive. The gate refuses a version a needed rule
   could not vet, whether the scanner is down or the advisory database is not yet loaded.
@@ -91,14 +95,14 @@ surfaces through the [error model](web-layer.md#error-model) as `503` with `Retr
 transient, and `500` when not. A fail-closed undecidable result logs at WARNING with the denial
 audit fields. A breaker trip logs nothing and moves the `ecluse.rule.breaker.state` gauge instead.
 
-The advisory source's availability is reported apart from any request. Each advisory-reading
-evaluation reports to a per-ecosystem outage monitor
-([`Ecluse.Core.Rules.Outage`](../../core/src/Ecluse/Core/Rules/Outage.hs)): the harness reports a
-fault or an open breaker with its detail, and the engine classifies every decided verdict, so an
-absent database and an expired push count too. The monitor logs `error` when an outage begins,
-`error` again at most every 15 minutes while it continues, and `info` on recovery. A sustained
-outage therefore costs the log one line per period whatever the traffic, and the reminder keeps a
-deduplicated outage from going quiet.
+The advisory source's availability is reported apart from any request. Each advisory rule a request
+reaches reports once to a per-ecosystem outage monitor
+([`Ecluse.Core.Rules.Outage`](../../core/src/Ecluse/Core/Rules/Outage.hs)): a fault or an open
+breaker with its detail, or whether the rows it read let it vet, so an absent database and an
+expired push count too. A rule that no request reaches reports nothing. The monitor logs `error`
+when an outage begins, `error` again at most every 15 minutes while it continues, and `info` on
+recovery. A sustained outage therefore costs the log one line per period whatever the traffic, and
+the reminder keeps a deduplicated outage from going quiet.
 
 ### Applying verdicts to a packument
 
@@ -161,9 +165,10 @@ reads the synced `osv.db` SQLite artifact on local disk, never the network, on t
 models an advisory's affected set faithfully: range bounds (inclusive `introduced`, exclusive
 `fixed` or inclusive `last_affected`) and exactly-enumerated versions as points. Each advisory also
 carries a numeric CVSS base score and, where the EPSS feed scores one of its identifiers, an EPSS
-probability. Each evaluation brackets its own acquisition, so the
+probability. Each read brackets its own acquisition, so the
 [shadow-swap](#local-polling-decoupled-ingestion) can retire a superseded artifact the moment no
-evaluation still reads it. Two rules read it in opposite directions.
+read still holds it. One read per request serves every advisory rule, so every decision in one
+response reads one generation. Two rules read it in opposite directions.
 
 ### `AllowIfRemediatesCve`, remediation fast-track
 
@@ -179,13 +184,13 @@ malicious publish.
   open**, unlike a deny, which fails closed. The version then falls back to the normal
   quarantine instead of being admitted on an unverified claim.
 
-It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the
-scope allow-list, so a trusted scope never pays the probe. The fix test is an exact text match on the
-advisory's `fixed` version as written. A fix published under any other spelling waits
-out the quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range
-membership in Haskell with the same per-ecosystem ordering as
-[`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison
-counts as affected, so the lane only opens on evidence.
+It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the scope
+allow-list, so a trusted scope never pays the advisory read. The fix test is an exact text match on
+the advisory's `fixed` version as written. A fix published under any other spelling waits out the
+quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range membership
+in Haskell with the same per-ecosystem ordering as
+[`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison counts
+as affected, so the lane only opens on evidence.
 
 ### `DenyIfCve`, the deny direction
 

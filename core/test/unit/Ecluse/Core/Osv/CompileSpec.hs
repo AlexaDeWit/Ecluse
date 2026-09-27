@@ -51,6 +51,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
+import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
@@ -220,8 +221,8 @@ spec = describe "SQLite OSV Compilation" $ do
             Right db -> flip finally (cveDbClose db) $ do
                 let cve = cveDbLookup db
                 cveCoveredNames cve `shouldReturn` ["flask-thing"]
-                cveRemediationProbe cve "flask-thing" "1.0.0" `shouldReturn` True
-                cveRemediationProbe cve "flask-thing" "1.0" `shouldReturn` False
+                namesFix cve "flask-thing" "1.0.0" `shouldReturn` True
+                namesFix cve "flask-thing" "1.0" `shouldReturn` False
                 cveAdvisoriesFor cve "flask-thing" >>= (`shouldSatisfy` (not . null))
         removeFile dbFile
 
@@ -475,7 +476,7 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
                 Left rejection -> fail ("optional reader rejected unavailable enrichment: " <> show rejection)
                 Right db -> flip finally (cveDbClose db) $ do
                     cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
-                    cveRemediationProbe (cveDbLookup db) "hono" "4.6.5" `shouldReturn` True
+                    namesFix (cveDbLookup db) "hono" "4.6.5" `shouldReturn` True
             openCveDb Npm EpssRequired dbFile >>= \case
                 Left rejection -> rejection `shouldBe` CveDbEpssNotEstablished
                 Right db -> cveDbClose db >> fail "required reader accepted unavailable enrichment"

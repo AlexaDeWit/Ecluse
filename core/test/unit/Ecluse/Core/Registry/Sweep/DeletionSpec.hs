@@ -18,7 +18,7 @@ import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome
 import Ecluse.Core.Registry.Sweep.Types
-import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerVersion), prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepGuardSkipped), SweepTarget (..))
 import Ecluse.Core.Version (Version)
@@ -48,7 +48,7 @@ spec = describe "grouped deletion" $ do
         cache <- seeded "cache" ["1.0.0"]
         mount <- grouped mirror cache
         let generation = Just (DbEtag "cap-generation")
-            policy = denyRule{prepEval = \_ _ -> pure (Deny generation "current advisory")}
+            policy = denyRule{prepEval = PerVersion (\_ _ -> pure (Deny generation "current advisory"))}
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smRules = [policy]}]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 generation)
@@ -228,7 +228,7 @@ spec = describe "grouped deletion" $ do
         mount <- grouped mirror cache
         changed <- newIORef False
         attempts <- newIORef (0 :: Int)
-        let policy = denyRule{prepEval = \ctx evidence -> readIORef changed >>= \allow -> if allow then pure (Allow "new policy") else prepEval denyRule ctx evidence}
+        let policy = denyRule{prepEval = PerVersion (\_ _ -> readIORef changed <&> \allow -> if allow then Allow "new policy" else Deny Nothing "denied by current policy")}
             fault = (protocolFault "response lost"){faultRetry = RetryWorthwhile}
             source =
                 mapDeletion

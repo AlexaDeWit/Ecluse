@@ -18,14 +18,15 @@ import UnliftIO.Exception (impureThrow, throwIO)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
-import Ecluse.Core.Rules (PreparedRule (..), Resilience (..), noSourceReporter)
+import Ecluse.Core.Rules (PreparedRule, Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
-import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleEvidence, RuleVerdict (..))
+import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (packageRule)
 import Katip (Environment (Environment), closeScribes)
 
 spec :: Spec
@@ -35,29 +36,23 @@ spec = do
     boundsLogSpec
     perimeterSpec
 
-mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
-mkEffectful name prec cfg align eval = do
+-- A resilient advisory rule whose read runs the given effect, then gives every version the verdict.
+mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO () -> RuleVerdict -> IO PreparedRule
+mkEffectful name prec cfg align effect verdict = do
     breaker <- newBreaker
-    pure
-        PreparedRule
-            { prepName = name
-            , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime noSourceReporter)
-            , prepAdvisoryGate = Nothing
-            , prepEval = \_ ev -> eval ev
-            }
+    pure (packageRule name prec align (Just (Resilience cfg breaker noBreakerReporter getCurrentTime)) effect verdict)
 
 downEffectfulRule :: IO PreparedRule
 downEffectfulRule =
-    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwIO (CveQueryFault "advisories-for" "advisory source down"))
+    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (throwIO (CveQueryFault "advisories-for" "advisory source down")) (NoDecision "unreached")
 
 denyingEffectfulRule :: IO PreparedRule
 denyingEffectfulRule =
-    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny (\_ -> pure (Deny Nothing "affected by a known advisory"))
+    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny pass (Deny Nothing "affected by a known advisory")
 
 allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =
-    mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision (\_ -> pure (Allow "remediates a known advisory"))
+    mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision pass (Allow "remediates a known advisory")
 
 effectfulSpec :: Spec
 effectfulSpec = describe "effectful rule tier" $ do

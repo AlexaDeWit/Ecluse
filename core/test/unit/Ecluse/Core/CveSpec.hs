@@ -27,7 +27,7 @@ import Ecluse.Core.Cve (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveLookup, namesFix)
 import Ecluse.Test.Osv (
     CorpusVersion (CorpusV1),
     mkDbWithCorruptPage,
@@ -55,18 +55,6 @@ corpusRows =
 -- implementation, so the fake the core suite trusts cannot drift from the real handle.
 lookupContract :: ((CveLookup -> IO ()) -> IO ()) -> Spec
 lookupContract withLookup = do
-    it "probes True for a version an advisory names as its fixed bound" $
-        withLookup $ \l -> do
-            cveRemediationProbe l "corpus-vuln" "1.2.0" `shouldReturn` True
-            cveRemediationProbe l "corpus-vuln" "2.5.0" `shouldReturn` True
-            cveRemediationProbe l "@corpus/scoped" "3.0.0" `shouldReturn` True
-
-    it "probes False for versions no advisory names as a fix" $
-        withLookup $ \l -> do
-            cveRemediationProbe l "corpus-vuln" "1.2.1" `shouldReturn` False
-            cveRemediationProbe l "corpus-unfixed" "1.0.0" `shouldReturn` False
-            cveRemediationProbe l "no-such-package" "1.0.0" `shouldReturn` False
-
     it "returns every advisory range recorded against a package" $
         withLookup $ \l -> do
             ranges <- cveAdvisoriesFor l "corpus-vuln"
@@ -172,7 +160,7 @@ spec = do
                     Right db -> flip finally (cveDbClose db) $ do
                         ranges <- cveAdvisoriesFor (cveDbLookup db) "corpus-vuln"
                         map arEpss ranges `shouldBe` [Nothing, Nothing]
-                        cveRemediationProbe (cveDbLookup db) "corpus-vuln" "1.2.0" `shouldReturn` True
+                        namesFix (cveDbLookup db) "corpus-vuln" "1.2.0" `shouldReturn` True
 
         it "rejects epoch 3 even when its tables conform to the current shape" $
             withFixtureOsvDb CorpusV1 $ \path -> do
@@ -256,7 +244,7 @@ spec = do
                 openCveDb Npm EpssOptional path >>= \case
                     Left rejection -> fail ("trigger artifact unexpectedly rejected: " <> show rejection)
                     Right db ->
-                        (cveRemediationProbe (cveDbLookup db) "trigger-pkg" "1.0.0" `shouldReturn` True)
+                        (namesFix (cveDbLookup db) "trigger-pkg" "1.0.0" `shouldReturn` True)
                             `finally` cveDbClose db
 
         it "rejects an artifact whose b-tree pages are structurally corrupt" $
@@ -293,10 +281,10 @@ spec = do
                 saboteur <- open dbFile
                 execute_ saboteur "DROP TABLE package_vulnerability_ranges"
                 close saboteur
-                probed <- try (cveRemediationProbe (cveDbLookup db) "corpus-vuln" "1.2.0")
-                first cqfQuery probed `shouldBe` Left "remediation-probe"
                 listed <- try (cveAdvisoriesFor (cveDbLookup db) "corpus-vuln")
                 bimap cqfQuery (map arCveId) listed `shouldBe` Left "advisories-for"
+                covered <- try (cveCoveredNames (cveDbLookup db))
+                first cqfQuery covered `shouldBe` Left "covered-names"
                 cveDbClose db
 
         it "cveDbClose never throws, a second close of the same handle included" $
