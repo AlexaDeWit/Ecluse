@@ -21,10 +21,13 @@ import Data.Aeson.Types (Parser, parseMaybe)
 {- | Decode an optional field __leniently__: absent, @null@, and undecodable yield 'Nothing', so
 one poisoned value cannot deny the document. For __advisory__ fields only, never a load-bearing one.
 -}
-lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
+lenientOptional :: (FromJSON a, NFData a) => Object -> Key -> Parser (Maybe a)
 lenientOptional o k = do
     mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
-    pure (mv >>= parseMaybe parseJSON)
+    -- Evaluated in full, so a retained field holds none of the decoder's state.
+    pure $ case mv >>= parseMaybe parseJSON of
+        Just value -> Just $!! value
+        Nothing -> Nothing
 
 {- | Fail a lenient decoder with a message that names the accepted shapes and the JSON kind
 it found.

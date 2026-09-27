@@ -11,6 +11,9 @@ module Ecluse.Test.Corpus (
     corpusPackages,
     pypiCorpusPackages,
     cpName,
+    CaptureUpstream (..),
+    npmCaptureUpstream,
+    pypiCaptureUpstream,
     readCorpusPins,
     syntheticProxyBase,
     permissiveAgeRules,
@@ -22,7 +25,10 @@ import Data.Time (nominalDay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
+import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Core.Security (AllowedHostPorts, ecosystemArtifactAuthorities)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
@@ -76,6 +82,21 @@ pypiCorpusPackages =
 -- | A corpus package's wire name, both the request path and the body's self-reported name.
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
+
+-- | The registry a capture came from, which production enforces artifact locations against.
+data CaptureUpstream = CaptureUpstream
+    { upstreamOrigin :: Text
+    , upstreamAuthorities :: AllowedHostPorts
+    -- ^ The artifact hosts the registry may name besides its own.
+    }
+
+-- | The npm registry the npm captures came from.
+npmCaptureUpstream :: CaptureUpstream
+npmCaptureUpstream = CaptureUpstream "https://registry.npmjs.org" (ecosystemArtifactAuthorities npmArtifactHosts)
+
+-- | The PyPI Simple index the PyPI captures came from.
+pypiCaptureUpstream :: CaptureUpstream
+pypiCaptureUpstream = CaptureUpstream "https://pypi.org/simple" (ecosystemArtifactAuthorities pypiArtifactHosts)
 
 -- | Parse @bench/corpus/pins.json@ with the given parser, or return why it did not parse.
 readCorpusPins :: (Object -> Parser a) -> IO (Either String a)

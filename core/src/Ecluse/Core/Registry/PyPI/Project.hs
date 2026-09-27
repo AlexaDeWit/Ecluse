@@ -63,6 +63,7 @@ import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
     withinNameLimit,
  )
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
 
 -- | A filename's canonical release and artifact kind.
@@ -83,7 +84,7 @@ projectSimpleIndex name invalid files =
         { infoName = name
         , infoVersions = versions
         , infoDistTags = latestTag versions
-        , infoInvalidEntries = invalid <> fileDrops
+        , infoInvalidEntries = strictElements (invalid <> fileDrops)
         }
   where
     (versions, fileDrops) = projectVersions name files
@@ -114,6 +115,7 @@ latestTag :: Map Text PackageDetails -> Map Text Version
 latestTag versions =
     maybe Map.empty (Map.singleton "latest") (selectLatest Nothing (map pkgVersion (Map.elems versions)))
 
+-- Every field is evaluated here, so a retained release never keeps its decoded files alive.
 projectDetails :: PackageName -> NonEmpty (IndexFile, FileCoordinate) -> PackageDetails
 projectDetails name entries =
     PackageDetails
@@ -123,7 +125,7 @@ projectDetails name entries =
         , pkgInstallCode = releaseInstallCode entries
         , pkgTrust = TrustUnknown
         , pkgAvailability = releaseAvailability files
-        , pkgArtifacts = fmap (uncurry projectArtifact) entries
+        , pkgArtifacts = strictElements (fmap (uncurry projectArtifact) entries)
         , -- Licence and publisher live in distribution metadata, outside the Simple index.
           pkgLicenses = []
         , pkgPublisher = Nothing
@@ -134,7 +136,7 @@ projectDetails name entries =
 -- An unknown-age file cannot borrow a sibling's expired quarantine. A later wheel restarts
 -- quarantine when every timestamp is known.
 newestUpload :: NonEmpty IndexFile -> Maybe UTCTime
-newestUpload files = (\(instant :| rest) -> foldl' max instant rest) <$> traverse ifUploadTime files
+newestUpload files = (\(instant :| rest) -> foldl' max instant rest) <$!> traverse ifUploadTime files
 
 releaseInstallCode :: NonEmpty (IndexFile, FileCoordinate) -> CodeExecSignal
 releaseInstallCode entries
@@ -162,7 +164,7 @@ projectArtifact file coordinate =
         , artFilename = ifFilename file
         , artUrl = ifUrl file
         , artKind = fcKind coordinate
-        , artHashes = mapMaybe indexHash (Map.toAscList (ifHashes file))
+        , artHashes = strictElements (mapMaybe indexHash (Map.toAscList (ifHashes file)))
         , artSize = ifSize file
         , artInterpreter = ifRequiresPython file
         , artYanked = case ifYanked file of

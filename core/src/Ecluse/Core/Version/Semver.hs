@@ -35,7 +35,8 @@ parseSemver :: Text -> Maybe SemverKey
 parseSemver raw = do
     guard (withinVersionLength raw)
     guard (not (hasOverlongNumericRun raw))
-    SemverKey <$> rightToMaybe (V.semver raw)
+    -- Evaluated in full, so a retained key holds none of the parser's intermediate state.
+    SemverKey . force <$> rightToMaybe (V.semver raw)
 
 -- | Whether a semver version is stable: a final release with no prerelease component.
 isSemverStable :: SemverKey -> Bool

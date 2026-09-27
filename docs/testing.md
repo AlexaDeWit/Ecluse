@@ -150,6 +150,27 @@ Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.
 
+### Read evaluation
+
+`MetadataResidencySpec` checks that a full read hands back a fully evaluated result. For each
+capture, a fresh child process reads through the production projection and enforces artifact
+locations against the capture's registry, as a production fetch does. It then takes two samples of
+the same rooted cache entry:
+
+- the live bytes with the entry at weak head normal form, as production holds a read result
+- the live bytes after the child forces the entry through its derived rendering
+
+The samples may differ by at most 1 KiB in either direction, because a deferred field can hold
+more or less than its value. The entry's digest sits in a 4 KiB pinned memory block, and the names
+that forcing renders also use pinned memory. Once they fill that block, the runtime starts another
+and both stay live. So the child fills one pinned block before the first sample, and both samples
+count the same blocks.
+
+A second check holds only the typed view. It places weak pointers on the served document, on each
+served release or file object, and on each non-empty member map. Every pointer must clear after a
+major collection. While the document is also rooted, every pointer must survive one, so the check
+can observe liveness.
+
 ### Streaming source probes
 
 The same residency executable accepts `--metadata-source-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH`.

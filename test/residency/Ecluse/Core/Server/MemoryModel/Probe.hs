@@ -2,14 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Isolated retained-heap probes for the shipping metadata representation.
-Preparation forces derived renderings, so its allocation and high-water counters include that work.
+{- | Isolated retained-heap probes for the shipping metadata representation, each run in a fresh
+child process of the residency executable. A forced preparation renders its shape, so its
+allocation and high-water counters include that work.
 -}
 module Ecluse.Core.Server.MemoryModel.Probe (
     Shape (..),
     Measurement (..),
     packages,
     probe,
+    Evaluated (..),
+    probeEvaluation,
+    project,
+    measureInChild,
+    childMain,
+    evaluationMain,
     SelectedShape (..),
     probeSelected,
     SourceMode (..),
@@ -28,12 +35,16 @@ import Data.Text qualified as T
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats, getRTSStatsEnabled)
+import System.Environment (getExecutablePath)
+import System.Exit (ExitCode (ExitSuccess))
 import System.IO (withBinaryFile)
 import System.Mem (performMajorGC)
+import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
+import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
 
 import Ecluse.Core.Registry.Exchange (digestingRead)
@@ -52,7 +63,7 @@ import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), corpusPackages, pypiCorpusPackages)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
@@ -102,6 +113,18 @@ data SelectedShape
       SelectedControl
     deriving stock (Eq, Show)
 
+-- | Live bytes before one read result, with it rooted as production holds it, and once forced in place.
+data Evaluated = Evaluated
+    { evaluatedVersions :: Int
+    , evaluatedBaseline :: Word64
+    , evaluatedWeakHead :: Word64
+    , evaluatedForced :: Word64
+    }
+    deriving stock (Show, Generic)
+
+instance ToJSON Evaluated
+instance FromJSON Evaluated
+
 data HeapSample = HeapSample
     { live :: !Word64
     , sampleAllocated :: !Word64
@@ -112,9 +135,64 @@ data HeapSample = HeapSample
 packages :: [CorpusPackage]
 packages = corpusPackages <> pypiCorpusPackages
 
+-- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
+measureInChild :: (FromJSON a) => [String] -> CorpusPackage -> IO (Either String a)
+measureInChild mode package = do
+    executable <- getExecutablePath
+    (status, output, errors) <- readProcessWithExitCode executable (mode <> [cpPath package, "+RTS", "-T", "-N1", "-RTS"]) ""
+    pure $
+        if status == ExitSuccess
+            then eitherDecodeStrict (encodeUtf8 (toText output))
+            else Left (show status <> ": " <> errors)
+
+-- | Dispatch a fresh process without entering Hspec or loading any other capture.
+childMain :: (Read shape) => (shape -> CorpusPackage -> IO Measurement) -> String -> FilePath -> IO ()
+childMain measure rawShape path = do
+    shape <- maybe (fail "unknown metadata residency shape") pure (readMaybe rawShape)
+    package <- corpusPackageAt path
+    measure shape package >>= LBS.putStr . encode
+
+-- | 'childMain' for 'probeEvaluation', which has one mode.
+evaluationMain :: FilePath -> IO ()
+evaluationMain path = corpusPackageAt path >>= probeEvaluation >>= LBS.putStr . encode
+
+corpusPackageAt :: FilePath -> IO CorpusPackage
+corpusPackageAt path = maybe (fail "unknown metadata residency corpus path") pure (find ((== path) . cpPath) packages)
+
 -- | Root only the selected representation across collections, then verify its release separately.
 probe :: Shape -> CorpusPackage -> IO Measurement
 probe shape package = measureRetained (prepare shape package)
+
+{- | Sample live bytes with the read result rooted as production holds it, then again after forcing it
+where it is rooted. Both samples share one heap layout, so only deferred work separates them.
+-}
+probeEvaluation :: CorpusPackage -> IO Evaluated
+probeEvaluation package = do
+    enabled <- getRTSStatsEnabled
+    unless enabled (fail "metadata residency requires RTS -T")
+    bracket (prepareEntry package) (freeStablePtr . fst) (forceEntry . fst)
+    before <- sample
+    bracket (prepareEntry package) (freeStablePtr . fst) $ \(root, count) -> do
+        -- Forcing renders names into pinned memory, which retires the pinned block holding the digest.
+        -- 128 strings of 16 bytes, 32 each with their header, fill a 4 KiB block first, so both samples count it.
+        forM_ [1 .. 128 :: Int] $ \i -> evaluate (BS.replicate 16 (fromIntegral i))
+        weakHead <- live <$> sample
+        forceEntry root
+        forced <- live <$> sample
+        pure (Evaluated count (live before) weakHead forced)
+
+{-# NOINLINE prepareEntry #-}
+prepareEntry :: CorpusPackage -> IO (StablePtr CacheEntry, Int)
+prepareEntry package = do
+    bytes <- BS.readFile (cpPath package)
+    (info, document) <- project package bytes
+    entry <- evaluate (CacheEntry info document (BS.length bytes) (digestOf bytes))
+    count <- evaluate (Map.size (infoVersions info))
+    root <- newStablePtr entry
+    pure (root, count)
+
+forceEntry :: StablePtr CacheEntry -> IO ()
+forceEntry root = deRefStablePtr root >>= void . forceShown
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
@@ -207,13 +285,15 @@ prepare shape package = do
     root <- evaluate held >>= newStablePtr
     pure (root, (size, compactSize, charged, versionCount))
 
+-- | The full read as production returns it, with artifact locations enforced against the capture's registry.
 project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
 project package bytes = case pkgEcosystem name of
-    Npm -> either (fail . show) (pure . second (fst npmCached)) (projectNpmManifest defaultLimits name bytes)
-    PyPI -> either (fail . show) (pure . second (fst pypiSimpleCached)) (projectPyPIIndex defaultLimits name bytes)
+    Npm -> either (fail . show) (pure . located npmCaptureUpstream (fst npmCached)) (projectNpmManifest defaultLimits name bytes)
+    PyPI -> either (fail . show) (pure . located pypiCaptureUpstream (fst pypiSimpleCached)) (projectPyPIIndex defaultLimits name bytes)
     RubyGems -> fail "no RubyGems metadata residency corpus"
   where
     name = cpPackage package
+    located upstream cached (info, document) = (enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream) info, cached document)
 
 forceShown :: (Show a) => a -> IO Int
 forceShown value = evaluate (length (show value :: String))

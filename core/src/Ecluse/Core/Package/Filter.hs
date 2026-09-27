@@ -33,6 +33,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Rules.Types (Decision (Admitted))
 import Ecluse.Core.Security (AllowedHostPorts, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (renderVersion)
 
@@ -82,7 +83,7 @@ Retain drop records for operator reporting.
 -}
 enforceArtifactLocations :: AllowedHostPorts -> Text -> PackageInfo -> PackageInfo
 enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
-    info{infoVersions = kept, infoInvalidEntries = infoInvalidEntries info <> drops}
+    info{infoVersions = kept, infoInvalidEntries = strictElements (infoInvalidEntries info <> drops)}
   where
     (kept, drops) = Map.foldrWithKey step (Map.empty, []) (infoVersions info)
 
@@ -111,7 +112,7 @@ data ArtifactRefusal = ArtifactRefusal
 partitionArtifacts :: AllowedHostPorts -> Text -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
 partitionArtifacts ecosystemHosts upstreamBaseUrl rawVersion details =
     case nonEmpty (rights resolved) of
-        Just survivors -> (Just details{pkgArtifacts = survivors}, map fileDrop refusals)
+        Just survivors -> (Just details{pkgArtifacts = strictElements survivors}, map fileDrop refusals)
         Nothing -> (Nothing, map (versionDrop rawVersion) (take 1 refusals))
   where
     resolved = map (resolveArtifact ecosystemHosts upstreamBaseUrl) (toList (pkgArtifacts details))
