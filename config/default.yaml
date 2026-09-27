@@ -208,7 +208,9 @@ advisories:
 #   # slack, floored at half the limit. The nursery (cores x allocation area) counts
 #   # inside it. Enforcing it re-executes the binary once. A heap breach is a
 #   # heap-overflow error. Memory outside the heap (socket buffers, OS thread stacks,
-#   # native zlib state) does not count against it.
+#   # native zlib state) does not count against it. Derived from cgroup v2 only: under
+#   # cgroup v1, or a layout that hides the limit, set this by hand or the process
+#   # boots with no heap ceiling.
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations, computed from cores independently of memory.
 #   # A positive explicit value stays exact. A separate material estimate budget

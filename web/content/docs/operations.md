@@ -469,6 +469,12 @@ Cores and the heap ceiling resolve at boot from config, else the cgroup, else a 
 The log records each decision and its source. The
 [appendix](@/docs/operations.md#appendix-runtime-sizing-arithmetic) explains the resource arithmetic.
 
+Écluse reads its memory limit from cgroup v2's `memory.max`. Under cgroup v1, or any layout
+where the container cannot see that limit, Écluse boots as if unlimited: no heap ceiling applies,
+and the boot log's `runtime: max heap unbounded` line reports that it found no cgroup memory
+limit. Set the heap ceiling and the core count by hand in that case, with `runtime.maxHeapBytes`
+(`ECLUSE_RUNTIME__MAX_HEAP_BYTES`) and `runtime.cores` (`ECLUSE_RUNTIME__CORES`).
+
 A warm selected-version or assembled response can avoid repeated work, and simultaneous eligible
 reads can share an active fetch. The local provider never retains full metadata. A warm-up install
 therefore does not promise that later full listings avoid origin reads. Test cold listings and
@@ -630,6 +636,10 @@ env:
 Read `requests.cpu`, never `limits.cpu`: with no limit set, the kubelet substitutes the node's
 allocatable CPU, which is the whole-node claim you are trying to avoid. `divisor: "1"` rounds up
 to whole cores, so a `500m` request becomes 1.
+
+Écluse reads a memory limit the same way, from cgroup v2 alone. See
+[Memory plan and runtime sizing](@/docs/operations.md#memory-plan-and-runtime-sizing) for what a
+container without a readable limit runs with, and the keys to set by hand.
 
 **Bare metal and dev hosts** have no cgroup limits either, so they take the same ceiling of 8, or
 the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set

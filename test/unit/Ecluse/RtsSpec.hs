@@ -267,10 +267,12 @@ renderSpec = describe "renderEffectivePosture and renderPostureWarnings" $ do
         rendered `shouldSatisfy` any (\l -> "max heap" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
         rendered `shouldSatisfy` any ("allocation area 64 MiB/capability" `T.isInfixOf`)
 
-    it "says the heap is unbounded when nothing granted a ceiling" $ do
+    it "says the heap is unbounded when nothing granted a ceiling, and names the override" $ do
         let plan = resolveRuntimePlan noOverrides noCgroup unpinned
-        renderEffectivePosture (appliedRuntimePlan noCgroup plan unpinned)
-            `shouldSatisfy` any ("max heap unbounded" `T.isInfixOf`)
+            rendered = renderEffectivePosture (appliedRuntimePlan noCgroup plan unpinned)
+        rendered `shouldSatisfy` any ("max heap unbounded" `T.isInfixOf`)
+        rendered
+            `shouldSatisfy` any (\l -> "found no cgroup memory limit" `T.isInfixOf` l && "runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES)" `T.isInfixOf` l)
 
     it "renders a config-pinned posture as such" $ do
         let plan = resolveRuntimePlan noOverrides{roCores = Just 2, roMaxHeapBytes = Just (400 * mib)} noCgroup unpinned
@@ -298,7 +300,9 @@ renderSpec = describe "renderEffectivePosture and renderPostureWarnings" $ do
         renderEffectivePosture effective
             `shouldSatisfy` any (\l -> "capabilities 8" `T.isInfixOf` l && "runtime.coresCeiling" `T.isInfixOf` l)
         renderPostureWarnings effective
-            `shouldSatisfy` any (\l -> "runtime.cores (ECLUSE_RUNTIME__CORES)" `T.isInfixOf` l)
+            `shouldSatisfy` any (\l -> "found no cgroup CPU or memory limit" `T.isInfixOf` l)
+        renderPostureWarnings effective
+            `shouldSatisfy` any (\l -> "runtime.cores (ECLUSE_RUNTIME__CORES)" `T.isInfixOf` l && "runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES)" `T.isInfixOf` l)
 
     it "keeps quiet about the count when a quota or the config decided it" $ do
         let quotaCgroup = noCgroup{cgCpuCores = Just 2}

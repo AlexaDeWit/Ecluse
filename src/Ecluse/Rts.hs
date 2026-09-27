@@ -289,7 +289,7 @@ renderEffectivePosture p =
     [ "runtime: capabilities " <> show capabilities <> renderProvenance capsProvenance
     , case effectiveHeapCeiling p of
         (Just bytes, prov) -> "runtime: max heap " <> renderMiB bytes <> renderProvenance prov
-        (Nothing, _) -> "runtime: max heap unbounded (the container memory limit is the only backstop; set maxHeapBytes or -M for a graceful ceiling)"
+        (Nothing, _) -> "runtime: max heap unbounded (found no cgroup memory limit and no maxHeapBytes or -M, set runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES) for a ceiling)"
     , "runtime: allocation area "
         <> renderMiB (erpAllocAreaBytes p)
         <> "/capability"
@@ -310,18 +310,21 @@ conditional in form: the process cannot tell an unlimited pod from bare metal. -
 capabilityAdvice :: EffectiveRuntimePlan -> [Text]
 capabilityAdvice p = case effectiveCapabilities p of
     (n, FromCgroupMemory) ->
-        [advice ("no cgroup CPU quota binds this process, so capabilities are bounded at " <> show n <> " by what the cgroup memory limit can feed")]
+        [ advice
+            ("no cgroup CPU quota binds this process, so capabilities are bounded at " <> show n <> " by what the cgroup memory limit can feed")
+            "If this container has a CPU request but no limit, set runtime.cores (ECLUSE_RUNTIME__CORES) to the whole cores requested."
+        ]
     (n, FromCoresCeiling) ->
-        [advice ("no cgroup CPU or memory limit binds this process, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")]
+        [ advice
+            ("found no cgroup CPU or memory limit, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")
+            "If a limit exists but Écluse cannot read it, set runtime.cores (ECLUSE_RUNTIME__CORES) and the heap ceiling runtime.maxHeapBytes (ECLUSE_RUNTIME__MAX_HEAP_BYTES) by hand."
+        ]
     -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
     (_, FromConfig) -> []
     (_, FromCgroup) -> []
     (_, FromRts) -> []
   where
-    advice reason =
-        "runtime: "
-            <> reason
-            <> ". If this container has a CPU request but no limit, set runtime.cores (ECLUSE_RUNTIME__CORES) to the whole cores requested."
+    advice reason suffix = "runtime: " <> reason <> ". " <> suffix
 
 {- One warning per axis the RTS is not enforcing. The budgets size from the effective value, so a
 divergence must be legible in the boot log rather than silently absorbed. -}
