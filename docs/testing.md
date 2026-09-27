@@ -364,7 +364,7 @@ Reports support manual comparisons only. No workflow stores a cross-run baseline
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Full-document and selective-decode overhead on live registry documents against reviewed budgets | `perf-acceptance-report.md` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, and `bench-load-thrash.md` for the GC-thrash probe |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, per pod shape or for the GC-thrash probe |
 
 Read a red result according to its measurement:
 
@@ -404,8 +404,8 @@ ceiling, and its memory plan as it would in a pod. The unlimited shape sets `run
 harness's capability count instead. The workflow delegates the cgroup subtree with `sudo` before
 the run and turns swap off. The cgroup outlives the proxy, so an OOM kill stays countable after the
 process is gone, and the harness retires any proxy cgroup a killed run left. A scheduled run
-measures every shape in a matrix. A dispatch picks one shape, `all`, or `thrash` for the GC-thrash
-probe. To measure a branch, dispatch the workflow on that branch after merging this harness into it.
+measures `unlimited`, `2cpu-512mib`, `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one
+shape, `all`, or `thrash` for the GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this harness into it.
 Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
 
 Each scenario reports:

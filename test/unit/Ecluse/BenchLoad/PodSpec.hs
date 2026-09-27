@@ -22,7 +22,7 @@ spec = do
                 parsePodShape raw `shouldSatisfy` isLeft
     describe "renderPodShape" $
         it "round-trips every shape the workflow schedules" $
-            for_ ["unlimited", "2cpu-256mib", "2cpu-512mib", "4cpu-1gib", "4cpu-2gib"] $ \raw ->
+            for_ ["unlimited", "2cpu-512mib", "4cpu-1gib", "4cpu-2gib"] $ \raw ->
                 renderPodShape <$> parsePodShape raw `shouldBe` Right raw
     describe "cpuMaxValue" $
         it "grants whole cores over the default period" $
