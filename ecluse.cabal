@@ -80,7 +80,7 @@ common shared
 -- The load harness links them too, so the proxy it measures boots with the posture a pod gets
 -- before its cgroup reshapes it. Tuning and overrides: https://ecluse-proxy.com/docs/operations/.
 common shipped-rts
-  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-T -N -A64m -n4m"
 
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
