@@ -113,7 +113,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Rts (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Env (ambientAwsEntries)
-import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Poll (awaitUntil, pollUntil)
 import Ecluse.Test.Wai (freePort)
 
 -- | The argument that makes this executable serve as the measured proxy.
@@ -311,13 +311,26 @@ launch settings shape root dir publicPort privatePort = do
         idleCgroup <- proxyCgroupNow booted
         pure booted{ppBootLines = bootMessages logged, ppRuleLines = ruleMessages logged, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
 
--- Wait up to a minute for the first advisory sync, so every reading includes the database.
+{- | Wait a minute of wall clock for the first advisory sync, so every reading includes the database.
+A proxy that exits or never installs one is stopped, and the failure carries both streams' tails.
+-}
 awaitAdvisoryDatabase :: ProxyProcess -> Ecosystem -> IO ()
 awaitAdvisoryDatabase proxy ecosystem = do
-    installed <- pollUntil 600 100_000 id (maybe False (advisoryDatabaseInstalled ecosystem) <$> proxyScrape proxy)
-    unless installed $ do
-        logTail <- capturedTailText (drStdout (ppDrained proxy))
-        benchFail ("bench-load: the proxy did not install its advisory database within 60 s\nlog tail:\n" <> logTail)
+    void (awaitUntil 60_000_000 100_000 (settled <$> installation))
+    installation >>= \case
+        Ready -> pass
+        waiting -> do
+            end <- stopProxy proxy
+            logTail <- capturedTailText (drStdout (ppDrained proxy))
+            benchFail ("bench-load: " <> renderBootFailure (BootFailure (reason waiting) (peStderrTail end) logTail))
+  where
+    installation =
+        getExitCode (drProcess (ppDrained proxy)) >>= \case
+            Just code -> pure (ExitedDuringBoot code)
+            Nothing -> bool Booting Ready . maybe False (advisoryDatabaseInstalled ecosystem) <$> proxyScrape proxy
+    reason = \case
+        ExitedDuringBoot code -> "exited with " <> show code <> " before installing its advisory database"
+        _ -> "did not install its advisory database within 60 s"
 
 -- Three distinct free ports: the proxy, its RTS control listener, and its scrape listener.
 distinctPorts :: IO (Int, Int, Int)
@@ -492,9 +505,6 @@ bootDrained manager attempts port command = do
         worker <- async (drain stream source captured)
         link worker
         pure worker
-    settled = \case
-        Booting -> False
-        _ -> True
     probe drained =
         getExitCode (drProcess drained) >>= \case
             Just code -> pure (ExitedDuringBoot code)
@@ -573,6 +583,11 @@ userTasks uid = do
         readMaybe . toString =<< lookup "Threads:" fields
 
 data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
+
+settled :: Readiness -> Bool
+settled = \case
+    Booting -> False
+    _ -> True
 
 {- The waits poll rather than use 'timeout': a cleanup handler runs under 'uninterruptibleMask',
 where a timeout cannot fire. -}

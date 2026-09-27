@@ -5,7 +5,8 @@
 
 {- | The proxy's Prometheus scrape, read as samples. The harness waits for an advisory database to
 be installed, samples the admission gauges during a window, and reads the metadata cache outcomes
-across it. A line it cannot read is skipped, so a series added later never breaks a report.
+and rule failures across it. A line it cannot read is skipped, so a series added later never
+breaks a report.
 -}
 module Ecluse.BenchLoad.Exposition (
     -- * Samples
@@ -19,8 +20,9 @@ module Ecluse.BenchLoad.Exposition (
     GaugeSummary (..),
     summariseGauge,
 
-    -- * Advisory database
+    -- * Advisory database and rule failures
     advisoryDatabaseInstalled,
+    ruleFailuresWindow,
 
     -- * Metadata cache outcomes
     expositionName,
@@ -35,7 +37,7 @@ import Data.Text qualified as T
 import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, AssembledCacheRequests, MetadataCacheRequests, SingleVersionCacheRequests), metricName)
+import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, AssembledCacheRequests, MetadataCacheRequests, RuleEffectfulFailures, SingleVersionCacheRequests), metricName)
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore, LEcosystem), renderLabel)
 
 -- | One exposition line: the metric name, its labels, and its value.
@@ -146,6 +148,12 @@ summariseGauge readings =
 -- | Whether a scrape shows the ecosystem's advisory database age, which the proxy reports once one is installed.
 advisoryDatabaseInstalled :: Ecosystem -> [Sample] -> Bool
 advisoryDatabaseInstalled ecosystem = isJust . seriesTotal (expositionName AdvisoryDatabaseAgeSeconds) [renderLabel (LEcosystem ecosystem)]
+
+-- | The undecidable version decisions a rule recorded between two scrapes of one process.
+ruleFailuresWindow :: [Sample] -> [Sample] -> Int
+ruleFailuresWindow start end = max 0 (failures end - failures start)
+  where
+    failures = round . fromMaybe 0 . seriesTotal (expositionName RuleEffectfulFailures) []
 
 -- | A catalogue metric's name in the exposition, which spells each dot as an underscore.
 expositionName :: MetricName -> Text

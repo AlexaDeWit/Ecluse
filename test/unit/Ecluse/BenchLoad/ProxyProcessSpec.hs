@@ -186,7 +186,8 @@ environmentSpec = describe "proxyEnvironment" $ do
         lookup "AWS_ENDPOINT_URL" shipped `shouldBe` Just "http://127.0.0.1:9003"
         filter ((== "AWS_ACCESS_KEY_ID") . fst) shipped `shouldBe` [("AWS_ACCESS_KEY_ID", "test")]
         lookup "AWS_PROFILE" shipped `shouldBe` Nothing
-        lookup "AWS_ACCESS_KEY_ID" (environmentFor Unlimited) `shouldBe` Nothing
+        let noDatabase = proxyEnvironment settings Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
+        filter (("AWS_" `isPrefixOf`) . fst) noDatabase `shouldBe` []
     it "adds an advisory feed's rules to the shipped policy, and leaves the policy alone without any" $ do
         let rulesFor rules = lookup "ECLUSE_RULES" (proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 Nothing [])
             ruleNames = \case

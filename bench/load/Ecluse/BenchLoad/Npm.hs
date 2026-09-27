@@ -30,7 +30,7 @@ import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
-import Ecluse.BenchLoad.Advisories (allAdvisoryRules, shippedAdvisories)
+import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
@@ -87,7 +87,7 @@ npmFixture =
         , fixtureScenarios =
             [ mergeScenario
             , shippedAdvisories Npm mergeScenario
-            , allAdvisoryRules Npm mergeScenario
+            , allRulesAdvisories Npm mergeScenario
             , heavyPrivateScenario
             , assembledHitScenario
             , revalidateScenario

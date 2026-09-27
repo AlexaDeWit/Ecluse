@@ -50,6 +50,7 @@ import Ecluse.BenchLoad.Exposition (
     cacheWindow,
     commonLabels,
     renderSample,
+    ruleFailuresWindow,
     seriesTotal,
     summariseGauge,
  )
@@ -293,6 +294,7 @@ data ScenarioReport = ScenarioReport
     -- ^ Live data after a major collection at the end of the scenario.
     , srProxy :: Maybe ProxyFigures
     , srEvidence :: Text
+    -- ^ What a replay observed, and any rule failures in the window.
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -318,9 +320,10 @@ measure knobs s shape (Target proxy driver) = do
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
     endScrape <- scrapeOf proxy
-    evidence <- case driver of
+    replayed <- case driver of
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
+    let evidence = T.intercalate "\n\n" (filter (not . T.null) [replayed, maybe "" ruleFailureNote (ruleFailuresWindow <$> startScrape <*> endScrape)])
     retained <- snapshotOf proxy MajorCollection
     ends <- traverse (\p -> (p,) <$> stopProxy p) proxy
     pure
@@ -364,6 +367,12 @@ proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) (startScrape
         , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries endScrape
         , pfCacheWindow = cacheWindow <$> startScrape <*> endScrape
         }
+
+-- A fail-closed rule answers an undecidable version with 503, which the refusals then include.
+ruleFailureNote :: Int -> Text
+ruleFailureNote failures
+    | failures > 0 = "**Rule failures in the window: " <> show failures <> " undecidable version decisions** (`ecluse.rule.effectful.failures`). A fail-closed rule answers them with 503, which the refusals include."
+    | otherwise = ""
 
 -- The proxy's counters over HTTP, or this process's own for in-process work.
 snapshotOf :: Maybe ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)

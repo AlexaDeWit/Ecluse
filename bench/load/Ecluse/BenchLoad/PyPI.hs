@@ -21,7 +21,7 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, responseLBS)
 
-import Ecluse.BenchLoad.Advisories (allAdvisoryRules, shippedAdvisories)
+import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
@@ -43,7 +43,7 @@ pypiFixture =
         , fixtureScenarios =
             [ indexColdScenario
             , shippedAdvisories PyPI indexColdScenario
-            , allAdvisoryRules PyPI indexColdScenario
+            , allRulesAdvisories PyPI indexColdScenario
             , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
             , revalidateScenario
             , shippedAdvisories PyPI revalidateScenario

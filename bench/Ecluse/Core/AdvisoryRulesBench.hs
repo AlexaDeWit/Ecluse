@@ -29,14 +29,11 @@ import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpSurvivors))
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (
-    DenyIfCveParams (DenyIfCveParams),
-    DenyIfEpssParams (DenyIfEpssParams),
-    FailureAlignment (FailDeny),
     PrecededRule,
     Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
  )
 import Ecluse.Test.Corpus (cpName)
-import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), SyntheticTarget (..), corpusAdvisories, fillerTargets, syntheticAdvisories)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), SyntheticTarget (..), corpusAdvisories, fillerTargets, suggestedDenyIfCve, suggestedDenyIfEpss, syntheticAdvisories)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isUndecidable, slotRuleDeps)
@@ -73,7 +70,7 @@ shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), Allo
 
 -- The shipped policy with both advisory denies, at the thresholds config/default.yaml suggests.
 allAdvisoryRules :: [PrecededRule]
-allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 8 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
+allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
 
 withEcosystemGroup :: FilePath -> EcosystemBench -> ([Benchmark] -> IO a) -> IO a
 withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . packageName) (ebCorpus ecosystem) of

@@ -16,6 +16,7 @@ import Ecluse.BenchLoad.Exposition (
     commonLabels,
     parseExposition,
     renderSample,
+    ruleFailuresWindow,
     seriesTotal,
     storeOutcomes,
     summariseGauge,
@@ -62,6 +63,12 @@ spec = do
         it "waits while the age is absent or names another ecosystem" $ do
             advisoryDatabaseInstalled PyPI installed `shouldBe` False
             advisoryDatabaseInstalled Npm (parseExposition exposition) `shouldBe` False
+    describe "ruleFailuresWindow" $ do
+        let failures n = parseExposition ("ecluse_rule_effectful_failures{cause=\"transient\"} " <> show (n :: Int) <> "\necluse_rule_effectful_failures{cause=\"permanent\"} 1\n")
+        it "counts the failures recorded between the two scrapes across every cause" $
+            ruleFailuresWindow (failures 2) (failures 9) `shouldBe` 7
+        it "reads a counter not yet created as zero" $
+            ruleFailuresWindow [] (failures 0) `shouldBe` 1
     describe "renderSample" $
         it "drops the labels every series repeats" $ do
             let samples = parseExposition exposition
