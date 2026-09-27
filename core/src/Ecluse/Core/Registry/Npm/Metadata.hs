@@ -37,6 +37,7 @@ import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, n
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -135,5 +136,5 @@ npmArtifactAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
 selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
 selectNpmVersionDoc version doc = do
     Object packument <- snd npmCached doc
-    Object versions <- KeyMap.lookup "versions" packument
+    versions <- objectField "versions" packument
     fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions
