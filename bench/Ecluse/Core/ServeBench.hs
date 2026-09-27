@@ -11,6 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Ecluse.Bench.Corpus (benchEvalContext, entryName, syntheticInput)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
@@ -36,7 +37,7 @@ benchmarks ecosystem =
                     (syntheticInput ecosystem . fromIntegral)
                     (either (const (pure (-1))) serveDepth)
                ]
-            <> [npmAssemblyBenchmarks ecosystem]
+            <> [npmAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == Npm]
   where
     serveDepth = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
 

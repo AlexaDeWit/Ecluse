@@ -23,6 +23,7 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * Reading and editing a raw document
     documentObject,
     stringField,
+    objectField,
     adjustField,
 ) where
 
@@ -39,7 +40,9 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
--- | Foreign ecosystem documents contribute nothing to assembly.
+{- | Run an ecosystem's plain-'Value' assembly across its own cached-document boundary.
+A source or base that another ecosystem injected contributes nothing.
+-}
 assembleAcross ::
     (Value -> CachedDoc, CachedDoc -> Maybe Value) ->
     (Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value) ->
@@ -78,7 +81,9 @@ overlaySurvivors entriesOf bySource plan =
   where
     admitted = admittedIndex plan
 
--- | Look up admitted object entries in existing unique-key maps, in source and key order.
+{- | Select exact admitted entries by lookup in each winning source's key map, in source and key order.
+Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
+-}
 overlayObjectSurvivors :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
 overlayObjectSurvivors entriesOf bySource plan =
     [ (version, entry)
@@ -137,7 +142,13 @@ stringField key o = case KeyMap.lookup key o of
     Just (String s) -> Just s
     _ -> Nothing
 
--- | Missing fields stay absent.
+-- | The object at @key@ in a raw document object, if present and a JSON object.
+objectField :: Key.Key -> KeyMap Value -> Maybe (KeyMap Value)
+objectField key o = case KeyMap.lookup key o of
+    Just (Object inner) -> Just inner
+    _ -> Nothing
+
+-- | Edit the value an object carries at @key@. A missing field stays absent.
 adjustField :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
 adjustField key edit o = case KeyMap.lookup key o of
     Just v -> KeyMap.insert key (edit v) o

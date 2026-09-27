@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.ServedDocument (
     adjustField,
     assembleAcross,
     documentObject,
+    objectField,
     overlayObjectSurvivors,
     rebaseArtifactUrl,
     safeDocumentName,
@@ -45,7 +46,9 @@ import Ecluse.Core.Version (renderVersion)
 npmDocumentName :: KeyMap Value -> Maybe PackageName
 npmDocumentName = safeDocumentName (rightToMaybe . projectName)
 
--- | Rebase @dist.tarball@ while preserving its filename. Gate the prefix through 'npmDocumentName'.
+{- | Rebase @dist.tarball@ through the given artifact URL renderer, keeping its filename.
+Build the renderer only from a document name that 'npmDocumentName' admits.
+-}
 rewriteVersion :: (Text -> Maybe Text) -> Value -> Value
 rewriteVersion servedUrl = \case
     Object vo -> Object (adjustField "dist" (rewriteDist servedUrl) vo)
@@ -122,11 +125,7 @@ serialiseMergedDocument :: CachedDoc -> LByteString
 serialiseMergedDocument = serialiseAcross (snd npmCached)
 
 versionEntries :: Value -> KeyMap Value
-versionEntries = \case
-    Object o
-        | Just (Object versions) <- KeyMap.lookup "versions" o ->
-            versions
-    _ -> mempty
+versionEntries = fromMaybe mempty . objectField "versions" . documentObject
 
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]

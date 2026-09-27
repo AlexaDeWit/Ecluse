@@ -11,7 +11,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Conc (getAllocationCounter)
-import Hedgehog (forAll, (===))
+import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
 import Ecluse.Core.Registry.ServedDocument (overlayObjectSurvivors, overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
-import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
@@ -154,7 +154,7 @@ objectOverlaySpec = describe "overlayObjectSurvivors" $ do
         serve sources plan{mpArtifacts = fmap (fmap (\entry -> entry{admittedFilename = ""})) (mpArtifacts plan)} `shouldBe` []
         for_ [ArrayEntry (-1), ArrayEntry 0, SingletonEntry] $ \other ->
             serve sources (entryPlan source other) `shouldBe` []
-    it "matches ordered selection for unique objects and mixed winning sources" $
+    it "matches ordered selection for mixed winning sources and adversarial admissions" $
         hedgehog $ do
             count <- forAll (Gen.int (Range.linear 0 40))
             selected <- forAll (Gen.subsequence [0 .. count - 1])
@@ -163,13 +163,28 @@ objectOverlaySpec = describe "overlayObjectSurvivors" $ do
                 bySource = Map.fromList [(0, firstSource), (1, secondSource)]
                 winner :: Int -> (SourceId, Snapshot (KeyMap.KeyMap Text))
                 winner index = if even index then (0, firstSource) else (1, secondSource)
-                selection =
+                exact index = AdmittedEntry (snapshotDigest (snd (winner index))) (ObjectEntry (show index)) "x.tgz"
+                losingDigest index = snapshotDigest (snd (winner (index + 1)))
+            artifacts <- forAll (traverse (\index -> (show index,) <$> admissionVariant count (losingDigest index) (exact index)) selected)
+            let selection =
                     (entryPlan firstSource key)
                         { mpSurvivors = Map.fromList [(show index, fst (winner index)) | index <- selected]
-                        , mpArtifacts = Map.fromList [(show index, AdmittedEntry (snapshotDigest (snd (winner index))) (ObjectEntry (show index)) "x.tgz" :| []) | index <- selected]
+                        , mpArtifacts = Map.fromList artifacts
                         }
                 orderedEntries = map (first (ObjectEntry . Key.toText)) . KeyMap.toList
             overlayObjectSurvivors id bySource selection === overlaySurvivors orderedEntries bySource selection
+
+-- Shrinks toward the exact admission. The other variants duplicate, alias, or corrupt it.
+admissionVariant :: Int -> ContentDigest -> AdmittedEntry -> Gen (NonEmpty AdmittedEntry)
+admissionVariant count losingDigest exact =
+    Gen.frequency
+        [ (4, pure (exact :| []))
+        , (1, pure (exact :| [exact]))
+        , (1, (\other -> exact{admittedKey = ObjectEntry (show other)} :| [exact]) <$> Gen.int (Range.constant 0 count))
+        , (1, (\digest -> exact{admittedSnapshot = digest} :| []) <$> Gen.element [digestOf "foreign bytes", losingDigest])
+        , (1, pure (exact{admittedFilename = ""} :| []))
+        , (1, (\other -> exact{admittedKey = other} :| []) <$> Gen.element [ArrayEntry 0, ArrayEntry (-1), SingletonEntry])
+        ]
 
 entryContractSpec :: Spec
 entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
@@ -209,27 +224,41 @@ entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
         overlaySurvivors id (Map.singleton 0 source) (entryPlan source key) `shouldBe` []
 
 allocationSpec :: Spec
-allocationSpec = describe "entry selection allocation growth" $
+allocationSpec = describe "entry selection allocation growth" $ do
     for_ [("array", ArrayEntry), ("object", ObjectEntry . show)] $ \(label, keyAt) ->
         it ("bounds allocation growth for " <> label <> " coordinates") $ do
-            allocations <- forM [128, 256, 512, 1024] $ \count -> do
+            allocations <- forM growthSizes $ \count -> do
                 let entries = [(keyAt position, "raw entry" :: Text) | position <- [0 .. count - 1]]
                     source = syntheticSnapshot entries
-                    basePlan = entryPlan source SingletonEntry
                     admitted = [AdmittedEntry (snapshotDigest source) key "same-filename" | (key, _) <- entries]
                 kept <- expectRight (maybeToRight ("empty allocation fixture" :: Text) (nonEmpty admitted))
-                let plan = basePlan{mpArtifacts = Map.singleton "1" kept}
-                _ <- evaluate (T.length (show (source, plan)))
-                allocationBefore <- getAllocationCounter
-                served <- evaluate (sum [T.length version + T.length value | (version, value) <- overlaySurvivors id (Map.singleton 0 source) plan])
-                allocationAfter <- getAllocationCounter
-                served `shouldBe` count * 10
-                let allocated = allocationBefore - allocationAfter
-                putTextLn ("entry selection " <> toText label <> ": entries=" <> show count <> ", allocated_bytes=" <> show allocated)
-                allocated `shouldSatisfy` (> 0)
-                pure allocated
+                let plan = (entryPlan source SingletonEntry){mpArtifacts = Map.singleton "1" kept}
+                selectionAllocation ("entry selection " <> toText label <> ": entries=" <> show count) (overlaySurvivors id) (count * 10) source plan
             for_ (zip allocations (drop 1 allocations)) $ \(smaller, larger) ->
                 larger `shouldSatisfy` (< 3 * smaller + 65536)
+
+    it "keeps indexed object lookup flat as unselected source keys grow" $ do
+        allocations <- forM growthSizes $ \count -> do
+            let source = syntheticSnapshot (KeyMap.fromList [(Key.fromText (show position), "raw entry" :: Text) | position <- [0 .. count - 1]])
+            selectionAllocation ("indexed object lookup: entries=" <> show count) (overlayObjectSurvivors id) 10 source (entryPlan source (ObjectEntry "0"))
+        -- The allowance covers allocation-counter granularity. A scan of every source key exceeds it.
+        for_ (zip allocations (drop 1 allocations)) $ \(smaller, larger) ->
+            larger `shouldSatisfy` (<= smaller + 16384)
+
+growthSizes :: [Int]
+growthSizes = [128, 256, 512, 1024]
+
+selectionAllocation :: (Show src) => Text -> (Map SourceId (Snapshot src) -> MergePlan -> [(Text, Text)]) -> Int -> Snapshot src -> MergePlan -> IO Int64
+selectionAllocation label select expected source plan = do
+    _ <- evaluate (T.length (show (source, plan)))
+    allocationBefore <- getAllocationCounter
+    served <- evaluate (sum [T.length version + T.length value | (version, value) <- select (Map.singleton 0 source) plan])
+    allocationAfter <- getAllocationCounter
+    served `shouldBe` expected
+    let allocated = allocationBefore - allocationAfter
+    putTextLn (label <> ", allocated_bytes=" <> show allocated)
+    allocated `shouldSatisfy` (> 0)
+    pure allocated
 
 entryPlan :: Snapshot a -> EntryKey -> MergePlan
 entryPlan source key =
