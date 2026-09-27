@@ -14,6 +14,8 @@ module Ecluse.Core.Server.Admission.Meter (
     MemoryMeter,
     MeterSettings (..),
     newMemoryMeter,
+    setMeterBudget,
+    setMeterBrakeLevel,
     MeterSnapshot (..),
     meterSnapshot,
 
@@ -120,6 +122,14 @@ newMemoryMeter settings = do
             , mmEntryRoom = max 0 (msEntryRoom settings)
             , mmEntryWaitMicros = max 0 (msEntryWaitMicros settings)
             }
+
+-- | Move the budget. Paused reads and queued entries retry against the new value at once.
+setMeterBudget :: MemoryMeter -> Int -> IO ()
+setMeterBudget meter = atomically . writeTVar (mmBudget meter) . max 0
+
+-- | Record the sampler's brake level for the gauges.
+setMeterBrakeLevel :: MemoryMeter -> Int -> IO ()
+setMeterBrakeLevel meter = atomically . writeTVar (mmBrakeLevel meter)
 
 -- | Read every figure the meter keeps, without blocking a request.
 meterSnapshot :: MemoryMeter -> IO MeterSnapshot

@@ -212,6 +212,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache.VersionWeight
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Brake
     Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
     Ecluse.Core.Server.Admission.Meter
@@ -398,6 +399,7 @@ library
     Ecluse.Config.Target
     Ecluse.Config.Types
     Ecluse.Rts
+    Ecluse.Rts.Sampler
 
   build-depends:
     , ecluse:ecluse-core
@@ -851,6 +853,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
+    Ecluse.Core.Server.Admission.BrakeSpec
     Ecluse.Core.Server.Admission.BudgetSpec
     Ecluse.Core.Server.Admission.BytesSpec
     Ecluse.Core.Server.Admission.MeterSpec

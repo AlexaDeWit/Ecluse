@@ -21,6 +21,7 @@ import Ecluse.Rts (
     effectiveCapabilities,
     effectiveHeapCeiling,
     parseCpuMax,
+    parseInactiveFile,
     parseMemoryMax,
     reconcileRuntimePlan,
     renderEffectivePosture,
@@ -79,6 +80,10 @@ cgroupParsingSpec = describe "cgroup v2 parsing" $ do
         parseCpuMax "" `shouldBe` Nothing
         parseCpuMax "banana" `shouldBe` Nothing
         parseCpuMax "-100000 100000" `shouldBe` Nothing
+
+    it "reads inactive_file from a memory.stat body" $ do
+        parseInactiveFile "anon 100\nfile 200\nactive_file 50\ninactive_file 150\n" `shouldBe` Just 150
+        parseInactiveFile "anon 100\n" `shouldBe` Nothing
 
     it "reads memory.max bytes and the unlimited sentinel" $ do
         parseMemoryMax "536870912\n" `shouldBe` Just (512 * mib)

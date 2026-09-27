@@ -44,6 +44,10 @@ module Ecluse.Rts (
     parseCpuMax,
     parseMemoryMax,
     readIfExists,
+    parseInactiveFile,
+
+    -- * Cgroup memory use
+    cgroupMemoryUse,
 ) where
 
 import Data.Ord (clamp)
@@ -433,6 +437,38 @@ parseMemoryMax body = do
     n <- readMaybe (toString (T.strip body)) :: Maybe Int
     guard (n > 0)
     pure n
+
+-- | The @inactive_file@ bytes in a cgroup-v2 @memory.stat@ body: page cache the kernel reclaims first.
+parseInactiveFile :: Text -> Maybe Int
+parseInactiveFile body =
+    listToMaybe
+        [ n
+        | line <- lines body
+        , ["inactive_file", value] <- [T.words line]
+        , Just n <- [readMaybe (toString value)]
+        ]
+
+{- | A reader for this process's cgroup memory use, in thousandths of the binding @memory.max@: the
+tightest limit on the path to the root, less its reclaimable file pages. 'Nothing' when no limit
+binds, or when a read fails, so the caller treats the reading as absent.
+-}
+cgroupMemoryUse :: IO (IO (Maybe Int))
+cgroupMemoryUse = do
+    selfCgroup <- readIfExists "/proc/self/cgroup"
+    let relative = fromMaybe "/" (selfCgroup >>= parseCgroupSelfPath)
+        dirs = [cgroupRoot <> toString suffix | suffix <- ancestorPaths relative]
+    limits <- traverse (\dir -> fmap (dir,) <$> limitAt parseMemoryMax "/memory.max" dir) dirs
+    pure $ case sortOn snd (catMaybes limits) of
+        [] -> pure Nothing
+        (dir, limit) : _ -> readUse dir limit
+
+readUse :: FilePath -> Int -> IO (Maybe Int)
+readUse dir limit = do
+    current <- fromRight Nothing <$> tryIO (limitAt parseMemoryMax "/memory.current" dir)
+    inactive <- fromRight Nothing <$> tryIO ((>>= parseInactiveFile) <$> readIfExists (dir <> "/memory.stat"))
+    pure $ do
+        used <- current
+        pure (max 0 (used - fromMaybe 0 inactive) * 1000 `div` max 1 limit)
 
 {- | Resolve the runtime plan and apply it, first thing at boot. It never aborts the boot, and the
 plan it returns is the effective one, so downstream sizing computes from what the RTS runs with.

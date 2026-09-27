@@ -14,6 +14,7 @@ module Ecluse.Composition.MemoryPlan.Transient (
     TransientBudget (..),
     transientBudget,
     renderTransientBudget,
+    brakeBounds,
     liveTargetBytes,
     liveCacheShareBytes,
 
@@ -24,6 +25,8 @@ module Ecluse.Composition.MemoryPlan.Transient (
     liveCacheSharePercent,
     meterStepBytes,
 ) where
+
+import Ecluse.Core.Server.Admission.Brake (BrakeBounds (..))
 
 -- | The budget the boot hands the meter and the sampler, in bytes of live data.
 data TransientBudget = TransientBudget
@@ -87,6 +90,18 @@ renderTransientBudget budget = case tbLiveTargetBytes budget of
             <> " and "
             <> show (tbCapBytes budget)
             <> ")"
+
+-- | The fixed bounds the sampler's brake steers the budget within.
+brakeBounds :: TransientBudget -> BrakeBounds
+brakeBounds budget =
+    BrakeBounds
+        { bbBootBytes = tbBootBytes budget
+        , bbFloorBytes = tbFloorBytes budget
+        , bbCapBytes = tbCapBytes budget
+        , bbExplainedBytes = tbExplainedBytes budget
+        , bbOverflowLiveBytes = tbOverflowLiveBytes budget
+        , bbGrowFloorBytes = meterStepBytes
+        }
 
 -- | The live target L for a heap ceiling: a quarter of the heap the nursery leaves.
 liveTargetBytes :: Int -> Int -> Int -> Int

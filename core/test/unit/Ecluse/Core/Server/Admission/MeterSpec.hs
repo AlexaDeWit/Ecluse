@@ -18,6 +18,7 @@ import Ecluse.Core.Server.Admission.Meter (
     chargeRead,
     meterSnapshot,
     newMemoryMeter,
+    setMeterBudget,
     unmeteredTicket,
     withMemoryEntry,
  )
@@ -91,6 +92,16 @@ spec = describe "Ecluse.Core.Server.Admission.Meter" $ do
         snOverdraws <$> meterSnapshot meter `shouldNotReturn` 0
         snPeakChargedBytes <$> meterSnapshot meter `shouldReturn` 60
         charged meter `shouldReturn` 0
+
+    it "lets a new request in once the budget grows" $ do
+        meter <- newMeter 10
+        release <- newEmptyMVar
+        holder <- async . entering meter $ \_ -> takeMVar release
+        threadDelay 10_000
+        setMeterBudget meter 20
+        entering meter (\_ -> pure ()) `shouldReturn` Just ()
+        putMVar release ()
+        wait holder `shouldReturn` Just ()
 
     it "cancels a paused read without leaking its charge" $ do
         meter <- newMeter 30
