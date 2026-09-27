@@ -466,11 +466,11 @@ drives heavy-tier listings that never reuse an assembled response. `npm/ramp` st
 400 connections, one configured duration per step, and reports each step. None of the four joins
 the concurrency-one pass.
 
-Three npm scenarios load an advisory database, so the per-version advisory cost shows in the load
-report. Before the proxy boots, the scenario compiles the captured advisories under
-`bench/corpus/advisories/` through Pilot's compiler. It then serves the artifact from a loopback
-stub of the object store, outside the proxy's cgroup, and points `advisories.url` at it. The proxy
-syncs the artifact as it would from S3. The harness takes the idle floor and starts the scenario
+Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
+shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
+under `bench/corpus/advisories/` through Pilot's compiler. It then serves the artifact from a
+loopback stub of the object store, outside the proxy's cgroup, and points `advisories.url` at it.
+The proxy syncs the artifact as it would from S3. The harness takes the idle floor and starts the scenario
 only once the proxy's scrape shows the database's `ecluse.advisory.database.age.seconds`, and fails
 the scenario when that takes more than a minute. Each scenario is otherwise its no-database
 counterpart, and the report lists it right after that counterpart, so their allocations per success
@@ -481,6 +481,9 @@ sit side by side.
 | `npm/merge-cold-advisories` | `npm/merge-cold` | The shipped policy |
 | `npm/merge-cold-all-advisory-rules` | `npm/merge-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed |
 | `npm/revalidate-not-modified-advisories` | `npm/revalidate-not-modified` | The shipped policy |
+| `pypi/index-cold-advisories` | `pypi/index-cold` | The shipped policy |
+| `pypi/index-cold-all-advisory-rules` | `pypi/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed |
+| `pypi/revalidate-not-modified-advisories` | `pypi/revalidate-not-modified` | The shipped policy |
 
 `BENCH_LOAD_SCENARIOS` runs a comma-separated subset, such as `npm/merge-cold,npm/herd`.
 `BENCH_LOAD_THRASH_LIMITS_MIB` runs the GC-thrash probe instead of the passes: one scenario

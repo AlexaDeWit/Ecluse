@@ -11,6 +11,7 @@ module Ecluse.BenchLoad.Advisories (
     shippedAdvisories,
     allAdvisoryRules,
     advisoryDenyRules,
+    compileCorpusAdvisories,
     advisoryStoreStub,
 ) where
 
@@ -70,11 +71,15 @@ advisoryDenyRules =
 withAdvisoryStore :: Ecosystem -> (Int -> IO a) -> IO a
 withAdvisoryStore ecosystem use =
     withSystemTempDirectory "ecluse-bench-advisories" $ \dir -> do
-        inputs <- corpusAdvisories ecosystem
-        compiled <- compileOsvZipDbWithFeedTo ecosystem EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
-        artifact <- readFileLBS compiled
+        artifact <- readFileLBS =<< compileCorpusAdvisories ecosystem dir
         publishedAt <- getCurrentTime
         testWithApplication (pure (advisoryStoreStub ecosystem publishedAt artifact)) use
+
+-- | Compile the ecosystem's pinned corpus advisories into the directory, returning the artifact's path.
+compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
+compileCorpusAdvisories ecosystem dir = do
+    inputs <- corpusAdvisories ecosystem
+    compileOsvZipDbWithFeedTo ecosystem EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
 
 {- | Answer the ecosystem's artifact key in 'advisoryBucket' as S3 answers a path-style HEAD or
 GET, with an ETag and the publication time, and every other path with 404.

@@ -990,6 +990,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
     Ecluse.BenchLoad.ProxyProcess
