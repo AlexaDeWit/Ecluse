@@ -92,7 +92,7 @@ import System.Process.Typed (
     unsafeProcessHandle,
     waitExitCode,
  )
-import UnliftIO (bracket, onException, try, tryAny, tryIO)
+import UnliftIO (bracket, finally, onException, try, tryAny, tryIO)
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -192,7 +192,7 @@ withProxyProcess settings publicPort privatePort body = do
     withSystemTempDirectory "ecluse-bench-proxy" $ \dir ->
         bracket (launch settings shape root dir publicPort privatePort) release body
   where
-    release proxy = stopProxy proxy >> traverse_ retireCgroup (ppCgroup proxy)
+    release proxy = stopProxy proxy `finally` traverse_ retireCgroup (ppCgroup proxy)
 
 -- Each boot attempt gets a cgroup of its own, so a retried boot's counters start from zero.
 acquireCgroup :: PodShape -> Maybe FilePath -> Int -> IO (Maybe FilePath)
@@ -272,7 +272,7 @@ launch settings shape root dir publicPort privatePort = do
                 , ppBootRetries = retries
                 , ppEnd = endVar
                 }
-    (`onException` (stopProxy booted >> traverse_ retireCgroup cgroup)) $ do
+    (`onException` (stopProxy booted `finally` traverse_ retireCgroup cgroup)) $ do
         -- The boot logged its plan before it listened. Give the drain a moment to catch up.
         bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines . capturedHead <$> readIORef (drStdout drained))
         idle <- proxySnapshot booted MajorCollection
