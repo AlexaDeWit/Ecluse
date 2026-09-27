@@ -107,7 +107,7 @@ tasks:
       - defer: bash scripts/test-containers.sh reap
       - |
         echo "==> building the OCI image (.#dockerImage)"
-        img_archive="$(nix build .#dockerImage --no-link --print-out-paths)"
+        img_archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
         
         echo "==> loading the image into docker"
         tag="$(bash scripts/docker-load.sh "$img_archive")"

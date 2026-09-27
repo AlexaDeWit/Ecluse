@@ -678,8 +678,10 @@ on arm64, but such a PR builds no image and compiles nothing on amd64. The flake
 run, and a manual dispatch always run it. The `gate` job accepts a skipped job from these two
 filters and from nothing else, so a job that silently never ran still fails the gate.
 
-The Haddock job wraps its flake checks with `scripts/ci-build-diagnostics.sh`. On Linux,
-the wrapper observes output bytes through two `tee` processes and their `/proc` IO counters.
+The Haddock job's flake checks and the release image build run under
+`scripts/ci-build-diagnostics.sh`. The image build also prints each derivation's build log, and
+Nix fails it after 20 minutes without output. On Linux, the wrapper observes output bytes through
+two `tee` processes and their `/proc` IO counters.
 Output silence produces process, memory and disk snapshots on stderr. Snapshots exclude
 command arguments and environment variables. Missing diagnostics do not change the build result.
 Cancellation stops the command's process group after a two-second grace period.

@@ -17,9 +17,8 @@
         pkgs = nixpkgs.legacyPackages.${system};
         hlib = pkgs.haskell.lib;
 
-        # A hash-pinned Hackage release built without its test suite. Upstream
-        # suites are not ours to run, as with cvss below, and skipping them keeps
-        # their test-only inputs out of the closure.
+        # A hash-pinned Hackage release with dontCheck. Upstream suites are not ours to
+        # run, and their test-only inputs and version bounds stay out of the closure.
         hackageNoCheck = hself: pkg: ver: sha256:
           hlib.dontCheck (hself.callHackageDirect { inherit pkg ver sha256; } { });
 
@@ -32,9 +31,7 @@
           in {
             # cvss 0.3 adds CVSS v4 parsing and fixes v2 scoring. The base set pins
             # 0.2.0.1, which rejects the v4 vectors that about a third of the scored
-            # npm OSV advisories carry. `dontCheck` skips its tasty test suite, which
-            # is not ours to gate, so its test-only version bounds stay out of the
-            # closure.
+            # npm OSV advisories carry.
             cvss = fromHackage "cvss" "0.3.0.0"
               "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
             hs-opentelemetry-api-types =
@@ -71,9 +68,8 @@
             hs-opentelemetry-exporter-handle =
               fromHackage "hs-opentelemetry-exporter-handle" "1.0.0.0"
                 "sha256-DCoVG0Y2aaMjinOP2GWmew0WmjN96j3/UUzEWxN7Ajs=";
-            # The unit suites use the in-memory exporter, so the freeze pins it. The
-            # base set's 0.x build does not compile against the 1.0 api, because a
-            # SpanProcessor field changed type, so it moves to 1.0 too.
+            # The unit suites use the in-memory exporter. The 0.x build fails against
+            # the 1.0 api, where a SpanProcessor field changed type, so it moves to 1.0.
             hs-opentelemetry-exporter-in-memory =
               fromHackage "hs-opentelemetry-exporter-in-memory" "1.0.0.0"
                 "sha256-bJjUHBNMRKhmkqRRnUrAQIDLWpUrox7F418r2QbVQ6o=";
@@ -126,7 +122,7 @@
 
         # The same subdirectory set cabal.project vendors: the umbrella package,
         # its own dependencies, and the service leaves we call. `dontCheck` for the
-        # same reason as cvss above: their test suites are not ours to gate.
+        # reason hackageNoCheck gives above.
         amazonkaOverlay = hself: _hsuper:
           let
             fromMonorepo = name: subdir:
@@ -147,7 +143,7 @@
         # Name Constraints (HSEC-2026-0008). Keep the x509 family, tls, and
         # crypton-connection aligned: tls 2.3 accepts x509 1.9, both need crypton
         # 1.1, and crypton-connection 0.4.6 accepts tls 2.3. aeson-pretty 0.8.11
-        # admits aeson 2.3. dontCheck skips upstream tests as with cvss above.
+        # admits aeson 2.3. hackageNoCheck above skips their upstream suites.
         advisoryOverlay = hself: hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
@@ -184,6 +180,9 @@
             # cborg's library has no aeson dependency. Only its test suite caps
             # aeson <2.3, so dropping the suite drops the conflict.
             cborg = hlib.dontCheck hsuper.cborg;
+            # ecluse-test-support links hspec-wai, and this set rebuilds it from
+            # source. Its suite is not ours to run, as hackageNoCheck says above.
+            hspec-wai = hlib.dontCheck hsuper.hspec-wai;
             # No insert-ordered-containers or openapi3 release or revision admits
             # aeson 2.3 yet. They compile against it, as this build and the suites
             # prove, so strip the stale caps until upstream widens.
