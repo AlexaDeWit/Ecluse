@@ -22,7 +22,6 @@ module Ecluse.Service (
     mountBindingFor,
 ) where
 
-import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -34,7 +33,7 @@ import Ecluse.Composition.Executable (
     MirrorWiring (mwBootWiring, mwCveSync, mwDeferredMetrics, mwQueue, mwRole),
  )
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant),
     MirrorArtifactTenant (matMaxBytes),
     mirrorArtifactBytesCap,
  )
@@ -124,9 +123,6 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         bindings = bwBindings (mwBootWiring mirror)
 
-    -- Apply a shed capability count in-process before the parallel machinery spins up. Past the
-    -- gate, so a refused boot never reshapes the process it is about to abandon.
-    whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime

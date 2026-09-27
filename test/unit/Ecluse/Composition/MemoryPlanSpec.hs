@@ -154,14 +154,6 @@ spec = describe "resolveMemoryPlan" $ do
             mpCacheMaxEntries plan `shouldBe` 256
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
 
-        it "sheds the capability count when the nursery is the pressure" $ do
-            -- 8 capabilities x 64 MiB allocation area = a 512 MiB nursery over a
-            -- 512 MiB ceiling. The capability count itself is the tenant to shed.
-            let runtime = (planWith (Just (512 * mib))){erpCapabilities = enforcedAxis 8, erpAllocAreaBytes = 64 * mib}
-                (plan, _) = resolve bareCache bareLimits bareQueue Nothing runtime NoQueueTenant False
-            mpShedCapabilities plan `shouldSatisfy` maybe False (< 8)
-            mpDegradations plan `shouldSatisfy` any (T.isInfixOf "capability count shed")
-
         it "refuses only an explicit override that breaks the combined invariant" $ do
             -- A 1 GiB explicit cache on a 256 MiB pod cannot fit however much the
             -- computed tenants shed: the override is refused, named.
@@ -280,6 +272,7 @@ spec = describe "resolveMemoryPlan" $ do
             { erpCapabilities = enforcedAxis 4
             , erpMaxHeapBytes = EffectiveAxis{axDesired = ceiling', axObserved = ceiling', axProvenance = FromCgroup}
             , erpAllocAreaBytes = 4 * mib
+            , erpAllocAreaProvenance = FromRts
             , erpNurseryChunkBytes = Nothing
             , erpContainerMemoryBytes = Nothing
             }

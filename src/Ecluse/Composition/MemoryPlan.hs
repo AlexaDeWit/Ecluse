@@ -43,7 +43,7 @@ import Ecluse.Composition.MemoryPlan.Demands (tenantDemands)
 import Ecluse.Composition.MemoryPlan.Internal (OverridePins (..), PlanInputs (..), ShedOutcomes (..), TenantDemands (..))
 import Ecluse.Composition.MemoryPlan.Override (configuredPins, overrideViolationsFor)
 import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, renderControlWarnings, renderDegradations, renderPlanLines)
-import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedCapabilityCount, shedToFit)
+import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedToFit)
 import Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
     MirrorArtifactTenant (..),
@@ -101,13 +101,12 @@ solvedPlan inputs h =
         , mpMaxResponseBytes = soResponseFinal outcomes
         , mpMaxRequestBytes = tdRequestFinal demands
         , mpAdmissionCapacity = soAdmissionFinal outcomes
-        , mpShedCapabilities = shedCaps
         , mpPublishTenant = publishTenantOf demands outcomes
         , mpMirrorArtifactTenant = mirrorArtifactTenantOf demands outcomes
         , mpQueueMemoryMaxDepth = soDepthFinal outcomes
         , mpQueueTenantBytes = soQueueTenantBytes outcomes
         , mpFixedBufferBytes = tdFixedBuffers demands
-        , mpDegradations = renderDegradations inputs demands outcomes shedCaps
+        , mpDegradations = renderDegradations demands outcomes
         , mpOverrideViolations = overrideViolationsFor demands outcomes
         }
     , renderPlanLines inputs demands outcomes
@@ -115,9 +114,6 @@ solvedPlan inputs h =
   where
     demands = tenantDemands inputs h
     outcomes = shedToFit demands
-    -- The nursery (capabilities x allocation area) lives outside the heap ceiling, so
-    -- the tenant sum cannot see it. The capability count sheds on its own.
-    shedCaps = shedCapabilityCount inputs h
 
 {- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.
 Nothing bounds the sum, so there is no tenant arithmetic to check. -}
@@ -130,7 +126,6 @@ fallbackPlan inputs =
         , mpMaxResponseBytes = responseBytes
         , mpMaxRequestBytes = requestBytes
         , mpAdmissionCapacity = piCpuAdmission inputs
-        , mpShedCapabilities = Nothing
         , mpPublishTenant = publishTenant
         , mpMirrorArtifactTenant = mirrorArtifactTenant
         , mpQueueMemoryMaxDepth = queueDepth

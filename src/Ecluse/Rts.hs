@@ -2,14 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolving and applying the process's runtime posture: the capability count and the heap
-ceiling.
+{- | Resolving and applying the process's runtime posture: the capability count, the allocation
+area and the heap ceiling.
 
 The RTS sizes itself from the /machine/, not the pod. Bare @-N@ claims a capability per visible
 processor, a cgroup CPU quota does not shrink that count, and the heap is unbounded unless @-M@
-says so, leaving the kernel OOM killer as the only backstop. The heap ceiling has no in-process
-setter, because the RTS fixes @-M@ at start-up, so applying one re-executes this binary in place
-once, guarded by 'reexecMarker'. Sizes are bytes throughout.
+says so, leaving the kernel OOM killer as the only backstop. Neither @-A@ nor @-M@ has an in-process
+setter, so applying one re-executes this binary in place once, guarded by 'reexecMarker'. Sizes are
+bytes throughout.
 -}
 module Ecluse.Rts (
     -- * Applying the resolved posture at boot
@@ -26,7 +26,7 @@ module Ecluse.Rts (
     currentRtsPosture,
     readCgroupLimits,
     deriveMaxHeapBytes,
-    nurseryFittedCapabilities,
+    deriveAllocAreaBytes,
     requiredRtsFlags,
 
     -- * The effective plan (desired reconciled with observed)
@@ -103,22 +103,25 @@ data Provenance
       FromRts
     deriving stock (Eq, Show)
 
-{- | The resolved runtime posture: the capability count and heap ceiling to run with, each with
-its provenance. A 'FromRts' entry means leave the live posture alone.
+{- | The resolved runtime posture: the capability count, allocation area and heap ceiling to run
+with, each with its provenance. A 'FromRts' entry means leave the live posture alone.
 -}
 data RuntimePlan = RuntimePlan
     { planCapabilities :: (Int, Provenance)
+    , planAllocAreaBytes :: (Int, Provenance)
     , planMaxHeapBytes :: (Maybe Int, Provenance)
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the runtime plan: capabilities down the four-rung ladder, and the heap ceiling from
-@maxHeapBytes@, else the cgroup memory limit, else the live RTS posture an operator @GHCRTS@ set.
+{- | Resolve the runtime plan: capabilities down the four-rung ladder, the allocation area and the
+heap ceiling together from the cgroup memory limit, and the heap ceiling from @maxHeapBytes@ first.
+Without a memory limit both stay as the live RTS posture an operator @GHCRTS@ set.
 -}
 resolveRuntimePlan :: RuntimeOverrides -> CgroupLimits -> RtsPosture -> RuntimePlan
 resolveRuntimePlan overrides cgroup rts =
     RuntimePlan
         { planCapabilities = capabilities
+        , planAllocAreaBytes = allocArea
         , planMaxHeapBytes = maxHeap
         }
   where
@@ -127,18 +130,27 @@ resolveRuntimePlan overrides cgroup rts =
     capabilities = case (roCores overrides, cgCpuCores cgroup, cgMemoryMaxBytes cgroup) of
         (Just n, _, _) -> (max 1 n, FromConfig)
         (Nothing, Just quota, _) -> (visible (floor quota), FromCgroup)
+        -- Fitted against the shipped area, since the live one is derived from this count.
         (Nothing, Nothing, Just memMax) ->
-            (visible (nurseryFittedCapabilities memMax (rpAllocAreaBytes rts)), FromCgroupMemory)
+            (visible (nurseryFittedCapabilities memMax shippedAllocAreaBytes), FromCgroupMemory)
         (Nothing, Nothing, Nothing) ->
             (visible (fromMaybe defaultCoresCeiling (roCoresCeiling overrides)), FromCoresCeiling)
 
     -- Every derived rung floors at one capability and ceilings at the visible processors.
     visible = clamp (1, rpProcessors rts)
 
+    -- A live area that is neither the shipped default nor the derived one is an operator's
+    -- GHCRTS choice, and stands. The derived one is what a re-launch already applied.
+    allocArea = case cgMemoryMaxBytes cgroup of
+        Just memMax
+            | rpAllocAreaBytes rts `elem` [shippedAllocAreaBytes, derivedArea] -> (derivedArea, FromCgroup)
+          where
+            derivedArea = deriveAllocAreaBytes memMax (fst capabilities)
+        _ -> (rpAllocAreaBytes rts, FromRts)
+
     maxHeap = case (roMaxHeapBytes overrides, cgMemoryMaxBytes cgroup) of
         (Just bytes, _) -> (Just (alignToBlock bytes), FromConfig)
-        (Nothing, Just memMax) ->
-            (Just (deriveMaxHeapBytes memMax (fst capabilities) (rpAllocAreaBytes rts)), FromCgroup)
+        (Nothing, Just memMax) -> (Just (deriveMaxHeapBytes memMax (fst allocArea)), FromCgroup)
         (Nothing, Nothing) -> (rpMaxHeapBytes rts, FromRts)
 
 -- The last rung's cap, when no cgroup limit says anything. It is a policy stance, not a machine
@@ -154,19 +166,42 @@ nurseryFittedCapabilities budgetBytes allocAreaBytes =
     max 1 (budgetBytes `div` nurseryCeilingShareDiv `div` max 1 allocAreaBytes)
 
 -- The share of a memory budget the nursery may hold before the capability count is what has
--- to give. The memory-plan shed ladder bounds the same charge against the heap ceiling.
+-- to give, when no CPU quota names the count.
 nurseryCeilingShareDiv :: Int
 nurseryCeilingShareDiv = 4
 
-{- | The heap ceiling derived from a cgroup memory limit. The nursery sits outside the heap, so
-it comes off the limit, and the half-limit floor keeps a tiny pod's ceiling from vanishing.
+{- | The per-capability allocation area for a memory limit: an eighth of the limit across the
+capabilities, in whole MiB between 4 and 64. A smaller nursery costs some collector time, where a
+shed capability would cost a core.
 -}
-deriveMaxHeapBytes :: Int -> Int -> Int -> Int
-deriveMaxHeapBytes memMax capabilities allocAreaBytes =
-    alignToBlock (max (memMax - nursery - slack) (memMax `div` 2))
+deriveAllocAreaBytes :: Int -> Int -> Int
+deriveAllocAreaBytes memMax capabilities =
+    clamp (4 * mebibyte, shippedAllocAreaBytes) share `div` mebibyte * mebibyte
   where
-    nursery = capabilities * allocAreaBytes
-    slack = memMax `div` 10
+    share = memMax `div` (nurseryShareDiv * max 1 capabilities)
+
+-- The share of the memory limit the whole nursery may take.
+nurseryShareDiv :: Int
+nurseryShareDiv = 8
+
+-- The @-A@ the executable bakes in. A live value other than this is an operator's choice.
+shippedAllocAreaBytes :: Int
+shippedAllocAreaBytes = 64 * mebibyte
+
+mebibyte :: Int
+mebibyte = 1024 * 1024
+
+{- | The heap ceiling derived from a cgroup memory limit and the allocation area. Since GHC 9.6 the
+nursery sits inside @-M@. What comes off the limit is what @-M@ does not cover: connection buffers,
+native decoder state, kernel socket memory and stacks, at least 32 MiB or an eighth of the limit,
+plus one allocation area of large-object overshoot between collections. The half-limit floor keeps a
+tiny pod's ceiling from vanishing.
+-}
+deriveMaxHeapBytes :: Int -> Int -> Int
+deriveMaxHeapBytes memMax allocAreaBytes =
+    alignToBlock (max (memMax - offHeap - allocAreaBytes) (memMax `div` 2))
+  where
+    offHeap = max (32 * mebibyte) (memMax `div` 8)
 
 {- A heap ceiling rounded down to the RTS's 4 KiB block granularity. The RTS stores @-M@ in
 blocks, so a non-multiple would read back rounded and the plan would look unapplied forever. -}
@@ -197,7 +232,9 @@ data EffectiveRuntimePlan = EffectiveRuntimePlan
     { erpCapabilities :: EffectiveAxis Int
     , erpMaxHeapBytes :: EffectiveAxis (Maybe Int)
     , erpAllocAreaBytes :: Int
-    -- ^ The per-capability allocation area, observed only (never planned here).
+    -- ^ The per-capability allocation area the RTS runs with.
+    , erpAllocAreaProvenance :: Provenance
+    -- ^ Where the allocation area came from, 'FromRts' when the plan left it alone.
     , erpNurseryChunkBytes :: Maybe Int
     -- ^ The nursery chunk size, observed only.
     , erpContainerMemoryBytes :: Maybe Int
@@ -222,6 +259,8 @@ reconcileRuntimePlan cgroup plan posture =
                 , axProvenance = snd (planMaxHeapBytes plan)
                 }
         , erpAllocAreaBytes = rpAllocAreaBytes posture
+        , erpAllocAreaProvenance =
+            if rpAllocAreaBytes posture == fst (planAllocAreaBytes plan) then snd (planAllocAreaBytes plan) else FromRts
         , erpNurseryChunkBytes = rpNurseryChunkBytes posture
         , erpContainerMemoryBytes = cgMemoryMaxBytes cgroup
         }
@@ -234,6 +273,8 @@ appliedRuntimePlan cgroup plan posture =
     (reconcileRuntimePlan cgroup plan posture)
         { erpCapabilities = enforced (planCapabilities plan)
         , erpMaxHeapBytes = enforced (planMaxHeapBytes plan)
+        , erpAllocAreaBytes = fst (planAllocAreaBytes plan)
+        , erpAllocAreaProvenance = snd (planAllocAreaBytes plan)
         }
   where
     enforced (v, prov) = EffectiveAxis{axDesired = v, axObserved = v, axProvenance = prov}
@@ -263,13 +304,19 @@ entry never contributes a flag, because it /is/ the live posture.
 -}
 requiredRtsFlags :: RtsPosture -> RuntimePlan -> [Text]
 requiredRtsFlags rts plan =
-    catMaybes [capsFlag, heapFlag]
+    catMaybes [capsFlag, allocFlag, heapFlag]
   where
     capsFlag = case planCapabilities plan of
         (_, FromRts) -> Nothing
         (n, _)
             | n == rpCapabilities rts -> Nothing
             | otherwise -> Just ("-N" <> show n)
+
+    allocFlag = case planAllocAreaBytes plan of
+        (_, FromRts) -> Nothing
+        (bytes, _)
+            | bytes == rpAllocAreaBytes rts -> Nothing
+            | otherwise -> Just ("-A" <> show bytes)
 
     heapFlag = case planMaxHeapBytes plan of
         (_, FromRts) -> Nothing
@@ -279,7 +326,7 @@ requiredRtsFlags rts plan =
             | otherwise -> Just ("-M" <> show bytes)
 
 {- | The boot log's posture lines, one decision per line with its provenance. The allocation area
-is always RTS-sourced and deliberately not config-surfaced.
+has no config key: the cgroup limit or an operator @GHCRTS@ sets it.
 -}
 renderEffectivePosture :: EffectiveRuntimePlan -> [Text]
 renderEffectivePosture p =
@@ -291,7 +338,7 @@ renderEffectivePosture p =
         <> renderMiB (erpAllocAreaBytes p)
         <> "/capability"
         <> maybe "" (\c -> ", nursery chunks " <> renderMiB c) (erpNurseryChunkBytes p)
-        <> " (RTS; tune with GHCRTS, see https://ecluse-proxy.com/docs/operations/)"
+        <> renderProvenance (erpAllocAreaProvenance p)
     ]
   where
     (capabilities, capsProvenance) = effectiveCapabilities p

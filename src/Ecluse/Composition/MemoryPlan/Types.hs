@@ -65,10 +65,6 @@ data MemoryPlan = MemoryPlan
     -- ^ The per-request (publish body) wire cap @Q@, enforced at the publish read site.
     , mpAdmissionCapacity :: Int
     -- ^ CPU-derived concurrency, or the exact explicit operator pin.
-    , mpShedCapabilities :: Maybe Int
-    {- ^ A count to shrink to when the nursery is the memory pressure, each capability holding an
-    allocation area. 'Nothing' leaves the live count.
-    -}
     , mpPublishTenant :: Maybe PublishTenant
     -- ^ Tenant 5, present only when a publication target is configured.
     , mpMirrorArtifactTenant :: Maybe MirrorArtifactTenant

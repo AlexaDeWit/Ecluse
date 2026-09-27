@@ -180,17 +180,20 @@ advisories:
 # runtime:
 #   # Cores the process claims. Unset, they resolve down a ladder: the cgroup CPU quota
 #   # floored, else the count the cgroup memory limit can feed, else coresCeiling, each
-#   # clamped to the visible processors. The boot log names the rung that fired, and the
-#   # memory plan may shed some on a small pod. Give the container whole cores.
+#   # clamped to the visible processors. The boot log names the rung that fired. Give
+#   # the container whole cores.
 #   cores: 4
 #   # The cap on the last rung of that ladder, which fires only when no cgroup CPU quota
 #   # and no cgroup memory limit bind this process (bare metal, or a pod with neither
 #   # limit set). It never caps an explicit cores, a CPU quota, or the memory-derived
 #   # count. Prefer setting cores over raising this.
 #   coresCeiling: 8
-#   # Heap ceiling in bytes: the cgroup memory limit less the nursery budget and 10%
-#   # slack, floored at half the limit. Enforcing it re-executes the binary once. A
-#   # breach is a clean heap-overflow error, not a kernel OOM kill.
+#   # Heap ceiling in bytes: the cgroup memory limit less what -M does not cover (at
+#   # least 32 MiB or an eighth of the limit) and one allocation area, floored at half
+#   # the limit. The boot sizes the allocation area (-A) with it, an eighth of the limit
+#   # across the cores, 4 to 64 MiB. Enforcing either re-executes the binary once. A
+#   # breach of -M is a heap-overflow exit. Memory outside the heap still counts
+#   # toward the kernel limit.
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations, computed from cores independently of memory.
 #   # A positive explicit value stays exact. A separate material estimate budget

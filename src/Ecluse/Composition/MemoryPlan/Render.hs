@@ -16,7 +16,7 @@ module Ecluse.Composition.MemoryPlan.Render (
 
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opAdmission, opArtifact, opCache, opDepth, opRequest, opResponse),
-    PlanInputs (piAllocAreaBytes, piCapabilities, piCeilingClause, piCpuAdmissionLine),
+    PlanInputs (piCeilingClause, piCpuAdmissionLine),
     ShedOutcomes (..),
     TenantDemands (..),
  )
@@ -50,14 +50,13 @@ renderPlanLines inputs d o =
     computedClause = "computed from heap ceiling " <> show (tdCeiling d) <> ", " <> piCeilingClause inputs
 
 -- | The shed-ladder warnings, in ladder order, each naming what was given up and why.
-renderDegradations :: PlanInputs -> TenantDemands -> ShedOutcomes -> Maybe Int -> [Text]
-renderDegradations inputs d o shedCaps =
+renderDegradations :: TenantDemands -> ShedOutcomes -> [Text]
+renderDegradations d o =
     catMaybes
         [ shedWarning "mirror artifact byte cap" (tdArtifactCapDesired d) (soArtifactCapFinal o) "this pod mirrors no artifact it cannot buffer safely"
             <$ guard (soMirrorShed o > 0)
         , shedWarning "cache aggregate" (tdCacheDesired d) (soCacheFinal o) "the proxy serves uncached"
             <$ guard (soCacheShed o > 0)
-        , capabilityShedWarning inputs <$> shedCaps
         , "memory plan: publish aggregate shed to one maximum request ("
             <> show (soPublishFinal o)
             <> " bytes)"
@@ -80,16 +79,6 @@ shedWarning tenant desired final atZero =
         <> show final
         <> " bytes to fit the heap ceiling"
         <> (if final == 0 then " (" <> atZero <> ")" else "")
-
-capabilityShedWarning :: PlanInputs -> Int -> Text
-capabilityShedWarning inputs shedTo =
-    "memory plan: capability count shed to "
-        <> show shedTo
-        <> " (the nursery of "
-        <> show (piCapabilities inputs)
-        <> " capabilities x "
-        <> show (piAllocAreaBytes inputs)
-        <> " bytes allocation area is the memory pressure; fewer, or a smaller GHCRTS -A, fits this pod)"
 
 irreducibleMinimumWarning :: Int -> Text
 irreducibleMinimumWarning overshoot =

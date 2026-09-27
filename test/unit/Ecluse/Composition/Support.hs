@@ -111,6 +111,7 @@ noCeiling =
         { erpCapabilities = EffectiveAxis{axDesired = 2, axObserved = 2, axProvenance = FromRts}
         , erpMaxHeapBytes = EffectiveAxis{axDesired = Nothing, axObserved = Nothing, axProvenance = FromRts}
         , erpAllocAreaBytes = 4 * 1024 * 1024
+        , erpAllocAreaProvenance = FromRts
         , erpNurseryChunkBytes = Nothing
         , erpContainerMemoryBytes = Nothing
         }
