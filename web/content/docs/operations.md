@@ -513,11 +513,11 @@ its package mix.
 ### The rest of the plan
 
 The memory plan also accounts for the runtime reserve, the enqueue buffer, cache retention, publish
-bodies, the in-memory queue and mirror-artifact work. The cache budget is 30% of the live target,
-at least 64 MiB, so it grows with the pod. Their accounted sum does not measure all live process allocations.
-Small automatic plans shed mirror-artifact capacity before cache retention. Read each warning for
-the resulting loss of capacity. An explicit override can still fail plan validation. The ingest
-ceiling is independent of those tenant allocations.
+bodies, the in-memory queue and mirror-artifact work. The cache budget is 30% of the live target, at
+least 64 MiB, so it grows with the pod. Their accounted sum does not measure all live process
+allocations. Small automatic plans shed mirror-artifact capacity before cache retention. Read each
+warning for the resulting loss of capacity. An explicit override can still fail plan validation. The
+ingest ceiling is independent of those tenant allocations.
 
 Cores and the heap ceiling resolve at boot from config, else the cgroup, else a capped fallback.
 The log records each decision and its source. The
@@ -700,13 +700,13 @@ the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, o
 
 **Size a proxy pod from measured process usage as well as the RTS numbers.** The boot sizes the
 per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
-whole MiB from 4 to 64. A heap ceiling you set that is tighter than the memory limit, or set with
-no memory limit, takes the limit's place, so the nursery still fits. The heap ceiling (`-M`) is the limit less an eighth of it (at least
-32 MiB) for memory outside the heap, and less one allocation area for the growth between
-collections. The nursery sits inside that ceiling. An allocation area you set through `GHCRTS`
-stands, unless it equals the shipped `-A64m`. The binary also ships `-T` for the memory sampler,
-and `--disable-delayed-os-memory-return` so memory the heap gives back leaves the cgroup's count at
-once.
+whole MiB from 4 to 64. A heap ceiling you set that is tighter than the memory limit, or set with no
+memory limit, takes the limit's place, so the nursery still fits. The heap ceiling (`-M`) is the
+limit less an eighth of it (at least 32 MiB) for memory outside the heap, and less one allocation
+area for the growth between collections. The nursery sits inside that ceiling. An allocation area
+you set through `GHCRTS` stands, unless it equals the shipped `-A64m`. The binary also ships `-T`
+for the memory sampler, and `--disable-delayed-os-memory-return` so memory the heap gives back
+leaves the cgroup's count at once.
 
 These examples meet the [1 GiB minimum](@/docs/operations.md#memory-plan-and-runtime-sizing).
 They show the arithmetic, not a workload guarantee:

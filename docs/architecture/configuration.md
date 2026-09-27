@@ -134,10 +134,11 @@ captured large-package corpus. They express bounded policy headroom, not measure
 The boot sizes the allocation area and the heap ceiling together from the cgroup memory limit, and
 keeps every core the ladder resolved. A smaller nursery costs some collector time, where shedding a
 core would cost that core's throughput. A configured heap ceiling tighter than the memory limit, or
-set with no memory limit, takes the limit's place, so the nursery still fits. Since GHC 9.6 the nursery counts inside `-M`, so the
-ceiling reserves only what the heap does not cover: native and kernel memory, and one allocation
-area of growth between collections. The collector keeps its default compaction threshold, 30% of
-`-M`, which switches to compaction before copying would overflow and above the live budget.
+set with no memory limit, takes the limit's place, so the nursery still fits. Since GHC 9.6 the
+nursery counts inside `-M`, so the ceiling reserves only what the heap does not cover: native and
+kernel memory, and one allocation area of growth between collections. The collector keeps its
+default compaction threshold, 30% of `-M`, which switches to compaction before copying would
+overflow and above the live budget.
 
 Memory admission exists to keep the pod clear of an OOM kill and of collector thrash, and to admit
 as much work as that allows. A busy copying collector keeps about four times its live data plus

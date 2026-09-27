@@ -152,7 +152,8 @@ These rows came from [CI run 35534647795](https://github.com/AlexaDeWit/Ecluse/a
 Its merge checkout `98a03cd9289041b5a2106f333f27ac32596c2aea` has the same source tree as the
 feature head above. The two shared-entry rows and the TypeScript example come from
 [CI run 36354802667](https://github.com/AlexaDeWit/Ecluse/actions/runs/36354802667/job/108720336136)
-at `104cb3de`, after metadata documents began sharing their fixed field names. The later digest-helper move changes no read or projection behaviour.
+at `104cb3de`, after metadata documents began sharing their fixed field names. The later
+digest-helper move changes no read or projection behaviour.
 Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6.4900 and 6.4389.
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.
