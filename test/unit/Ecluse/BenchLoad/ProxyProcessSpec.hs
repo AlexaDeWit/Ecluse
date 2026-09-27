@@ -5,6 +5,8 @@
 -- | Pin the configuration a measured proxy boots from.
 module Ecluse.BenchLoad.ProxyProcessSpec (spec) where
 
+import Data.Aeson (encode, object, (.=))
+import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -19,12 +21,23 @@ import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
-import Ecluse.BenchLoad.ProxyProcess (BootFailure (..), ProxySettings (..), bootDiagnostic, bootDrained, guardDiagnostic, proxyEnvironment, proxySettings, retryingBoot)
+import Ecluse.BenchLoad.ProxyProcess (
+    BootFailure (..),
+    ProxySettings (..),
+    bootDiagnostic,
+    bootDrained,
+    guardDiagnostic,
+    proxyEnvironment,
+    proxyListening,
+    proxySettings,
+    retryingBoot,
+ )
 import Ecluse.Composition.Support (expectPlanFor, noCeiling)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
 import Ecluse.Config (loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Rts (readIfExists)
+import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
 
@@ -32,6 +45,17 @@ spec :: Spec
 spec = do
     environmentSpec
     bootSpec
+    listeningSpec
+
+listeningSpec :: Spec
+listeningSpec = describe "proxyListening" $ do
+    let logLine message = LBS.toStrict (encode (object ["message" .= (message :: Text), "status" .= ("info" :: Text)]))
+    it "accepts the line the proxy logs from the shared prefix once its listener has bound" $
+        proxyListening [logLine "rule 1: AllowIfOlderThan (precedence 100)", logLine (listeningPrefix proxyListener <> "4873")] `shouldBe` True
+    it "does not take the prefix in the middle of another message" $
+        proxyListening [logLine ("bench: " <> listeningPrefix proxyListener <> "4873")] `shouldBe` False
+    it "waits while the log holds only boot lines" $
+        proxyListening [logLine "rule boot order for mount npm:", logLine "rule 1: AllowIfOlderThan (precedence 100)"] `shouldBe` False
 
 bootSpec :: Spec
 bootSpec = do

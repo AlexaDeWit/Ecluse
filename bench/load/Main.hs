@@ -103,7 +103,7 @@ runPasses knobs shape selected = do
                     body =
                         fixtureSection eco $
                             notes
-                                <> [ renderReports loadPassKnobs capabilities processors (renderPodShape shape) eco loadedReports
+                                <> [ renderReports loadPassKnobs capabilities processors (renderPodShape shape) eco c1Reports loadedReports
                                    , renderServiceTime baseline c1Reports
                                    , renderLoadSaturation c1Reports (filter ((`elem` serviceTimeKeys) . srName) loadedReports)
                                    ]

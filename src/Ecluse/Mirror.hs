@@ -22,7 +22,7 @@ import Ecluse.Core.Worker (Liveness)
 import Ecluse.Runtime.Env (envLogEnv)
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (
-    ServerConfig (scCheckLive, scCheckReady, scPort),
+    ServerConfig (scCheckLive, scCheckReady),
     probeOnlyApplication,
     raceServerAgainstLoop,
     runWarp,
@@ -36,9 +36,9 @@ runMirror :: ServiceRuntime -> IO ()
 runMirror runtime = do
     let env = svcEnv runtime
         cfg = mirrorServerConfig (svcAppConfig runtime) (svcCheckReady runtime) (svcCheckLive runtime)
-    moduleLog (envLogEnv env) "Ecluse.Mirror" InfoS ("Mirror worker starting up, health probes on port " <> show (scPort cfg))
+    moduleLog (envLogEnv env) "Ecluse.Mirror" InfoS "Mirror worker starting up"
     raceServerAgainstLoop
-        (runWarp cfg probeOnlyApplication)
+        (runWarp (envLogEnv env) "mirror worker health probes" cfg probeOnlyApplication)
         (concurrently_ (runWorker (svcWorkerPolicies runtime) env) (mapConcurrently_ id (svcSyncTasks runtime)))
 
 {- | The dedicated worker's health surface: no mount, the shared @server.port@, and the

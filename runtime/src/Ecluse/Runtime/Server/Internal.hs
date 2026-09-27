@@ -18,6 +18,9 @@ module Ecluse.Runtime.Server.Internal (
 
     -- * Running the server
     runWarp,
+    serveBound,
+    proxyListener,
+    listeningPrefix,
     raceServerAgainstLoop,
     probeApplication,
     probeOnlyApplication,
@@ -44,9 +47,11 @@ module Ecluse.Runtime.Server.Internal (
 ) where
 
 import Data.List (dropWhileEnd)
-import Katip (Severity (ErrorS), SimpleLogPayload, katipAddContext, logFM, sl)
+import Data.Streaming.Network (bindPortTCP)
+import Katip (LogEnv, Severity (ErrorS, InfoS), SimpleLogPayload, katipAddContext, logFM, sl)
 import Network.HTTP.Types (Method, status500)
 import Network.HTTP.Types.Header (RequestHeaders)
+import Network.Socket (close, setCloseOnExecIfNeeded, socketPort, withFdSocket, withSocketsDo)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestHeaders, requestMethod)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -54,7 +59,7 @@ import Network.Wai.Middleware.Timeout (timeout)
 import System.Posix.Signals qualified as Posix
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (race_)
-import UnliftIO.Exception (catchAny, throwIO)
+import UnliftIO.Exception (bracket, catchAny, throwIO)
 
 import Ecluse.Core.Security (requestTimeoutSeconds)
 import Ecluse.Core.Server.Context (
@@ -73,6 +78,7 @@ import Ecluse.Core.Server.Readiness (Readiness, alwaysReady)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (Liveness, alwaysLive)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, serveRuntimeOf)
+import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server.Drain (
     DrainSignal,
     ShutdownDrainTimeout (..),
@@ -289,8 +295,8 @@ serverMiddleware cfg =
 {- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,
 and the shutdown handler share. @warp@ drains under 'scDrainTimeout', and a TTY adds Ctrl-D.
 -}
-runWarp :: ServerConfig -> (ServerConfig -> IO Application) -> IO ()
-runWarp cfg0 getApp = do
+runWarp :: LogEnv -> Text -> ServerConfig -> (ServerConfig -> IO Application) -> IO ()
+runWarp logEnv listener cfg0 getApp = do
     drain <- newDrainSignal
     let cfg = cfg0{scDrain = drain}
         ShutdownDrainTimeout timeoutSecs = scDrainTimeout cfg
@@ -304,7 +310,26 @@ runWarp cfg0 getApp = do
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp cfg
-    withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings app)
+    withInteractiveHalt defaultInteractiveHalt (serveBound logEnv listener settings app)
+
+-- | Bind as 'Warp.runSettings' does, log the bound port, then serve.
+serveBound :: LogEnv -> Text -> Warp.Settings -> Application -> IO ()
+serveBound logEnv listener settings app =
+    withSocketsDo $
+        bracket (bindPortTCP (Warp.getPort settings) (Warp.getHost settings)) close $ \socket -> do
+            withFdSocket socket setCloseOnExecIfNeeded
+            port <- socketPort socket
+            Warp.runSettingsSocket (Warp.setBeforeMainLoop (announce port) settings) socket app
+  where
+    announce port = moduleLog logEnv "Ecluse.Runtime.Server" InfoS (listeningPrefix listener <> show (fromIntegral port :: Int))
+
+-- | The proxy's listener name, which starts the line it logs once bound.
+proxyListener :: Text
+proxyListener = "proxy"
+
+-- | The start of the line a named listener logs once bound, followed by the port.
+listeningPrefix :: Text -> Text
+listeningPrefix listener = listener <> " listening on port "
 
 -- The neutral response for a fault that escapes to warp's own handler (see 'runWarp'):
 -- a deny-shaped 500 carrying no exception detail.

@@ -420,6 +420,9 @@ Each scenario reports:
   its major collections and the mean live data they left, its RTS `max_live_bytes` and
   `max_mem_in_use_bytes`, and whether its small-object live data crossed the compaction threshold.
   A paired scenario or a ramp divides by every success in the window
+- the allocation per refusal: the same window's allocation divided by its `429` and `503`
+  responses. It and the allocation per success each charge the whole window to one kind of
+  response, so each is an upper bound
 - the idle floor after boot, before any load: live data after a major collection and the cgroup's
   `memory.current`
 - cgroup `memory.peak` against `memory.max` and against the RTS's own peak, `memory.stat` (`anon`,
@@ -431,6 +434,23 @@ Each scenario reports:
   once, read from the proxy's boot log, with the runtime lines quoted
 - `ecluse.serve.admission.in_flight` and the proxy's thread count (`pids.current`) sampled each
   second, and every admission series at the end of the window
+- the metadata cache's hit, miss, and collapsed request counts in the window for the full,
+  version, and assembled stores, from scrapes of the proxy's Prometheus exposition at each end of
+  the window. A collapsed request waited for another request's fetch instead of making its own
+
+Each ecosystem section also shows:
+
+- the rule policy the first scenario's proxy logged at boot: each rule its configuration names,
+  with its type, its other keys, and the layers they came from, and the order each mount
+  evaluates the rules in. A proxy of either pass that logged a different policy is named
+- a cost table that sets each scenario's allocation per success and success p50 beside the same
+  figures from the concurrency-one pass, which runs the scenario again on a fresh proxy with the
+  base concurrency set to one. A scenario that scales its own connections keeps that scale. The
+  table adds the allocation per refusal, each allocation with the count it divides by, and the
+  missed and collapsed cache lookups summed over the stores. One request can look up more than
+  one store, so these count lookups, not requests. A loaded figure far above its concurrency-one
+  figure points at contention, or at work the concurrent requests did not share. A scenario
+  outside the concurrency-one pass shows `n/a` for those figures
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
 seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That

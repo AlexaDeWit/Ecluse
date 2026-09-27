@@ -20,6 +20,8 @@ module Ecluse.Runtime.Server (
 
     -- * Running the server
     runWarp,
+    proxyListener,
+    listeningPrefix,
     raceServerAgainstLoop,
     probeApplication,
     probeOnlyApplication,
@@ -53,11 +55,13 @@ import Ecluse.Runtime.Server.Internal (
     defaultInteractiveHalt,
     defaultShutdownDrainTimeout,
     isDraining,
+    listeningPrefix,
     mkServerConfig,
     neverDraining,
     newDrainSignal,
     probeApplication,
     probeOnlyApplication,
+    proxyListener,
     raceServerAgainstLoop,
     runWarp,
     serverMiddleware,

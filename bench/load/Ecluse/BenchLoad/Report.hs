@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Render the child reports into the Markdown the run summary and the uploaded artifact carry.
-Successes lead every table. Memory, collector, and admission figures describe the proxy process,
-and the verdict section lists every broken invariant.
+Successes lead every table. Memory, collector, admission, and cache figures describe the proxy
+process, and the verdict section lists every broken invariant.
 -}
 module Ecluse.BenchLoad.Report (
     renderReports,
@@ -18,9 +18,9 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-import Ecluse.BenchLoad.BootLines (BootLimits (..), admittedListings, bootLimits)
-import Ecluse.BenchLoad.Exposition (GaugeSummary (..))
-import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowSuccesses)
+import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), admittedListings, bootLimits, loggedRules, ruleBootOrders)
+import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
     BaselineSource,
@@ -37,9 +37,11 @@ import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionT
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
--- | One ecosystem's loaded pass: the operating point, the at-a-glance table, and each scenario.
-renderReports :: LoadKnobs -> Int -> Int -> Text -> Ecosystem -> [ScenarioReport] -> Text
-renderReports knobs capabilities processors shape ecosystem reports =
+{- | One ecosystem's loaded pass: the operating point, the rule policy, the summary tables, and each
+scenario. The concurrency-one reports give the cost table its figures at concurrency one.
+-}
+renderReports :: LoadKnobs -> Int -> Int -> Text -> Ecosystem -> [ScenarioReport] -> [ScenarioReport] -> Text
+renderReports knobs capabilities processors shape ecosystem c1Reports reports =
     T.unlines $
         [ "## Load test: throughput and latency over " <> ecosystemName ecosystem
         , ""
@@ -64,13 +66,15 @@ renderReports knobs capabilities processors shape ecosystem reports =
         , ""
         ]
             <> runtimeLines
+            <> rulePolicyLines c1Reports reports
             <> [ "### At a glance"
                , ""
-               , "| scenario | connections | successes | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success | GC share | memory peak / max | ending |"
+               , "| scenario | connections | successes | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
                , "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
                ]
             <> map glanceRow reports
             <> [""]
+            <> costTable c1Reports reports
             <> concatMap renderScenario reports
             <> readingNotes
   where
@@ -83,6 +87,31 @@ renderReports knobs capabilities processors shape ecosystem reports =
             ["**Runtime posture and memory plan, as the first scenario's proxy logged them**", ""]
                 <> map ("- " <>) lines'
                 <> [""]
+
+-- The first scenario's rule policy, and the proxies of either pass that logged a different one.
+rulePolicyLines :: [ScenarioReport] -> [ScenarioReport] -> [Text]
+rulePolicyLines c1Reports reports = case policies reports "" <> policies c1Reports " (concurrency one)" of
+    [] -> []
+    (_, logged) : rest ->
+        ["**Rule policy, as the first scenario's proxy logged it**", ""]
+            <> ruleTable (loggedRules logged)
+            <> map orderLine (ruleBootOrders logged)
+            <> ["- Scenarios whose proxy logged a different rule policy: " <> T.intercalate ", " differing | let differing = [name | (name, other) <- rest, other /= logged], not (null differing)]
+            <> [""]
+  where
+    policies rs label = [(srName r <> label, pfRuleLines p) | r <- rs, Just p <- [srProxy r]]
+    orderLine (mount, rules) = "- Mount " <> mount <> " evaluates, highest precedence first: " <> bool (T.intercalate ", then " rules) "no rule" (null rules)
+
+ruleTable :: [LoggedRule] -> [Text]
+ruleTable = \case
+    [] -> ["The proxy logged no rule configuration.", ""]
+    rules ->
+        ["| rule | type | other keys | set by |", "| --- | --- | --- | --- |"]
+            <> map ruleRow rules
+            <> [""]
+  where
+    ruleRow r = "| " <> T.intercalate " | " [lrName r, fromMaybe "n/a" (lrType r), settings r, T.intercalate ", " (lrLayers r)] <> " |"
+    settings r = bool (T.intercalate ", " [key <> " " <> value | (key, value) <- lrSettings r]) "none" (null (lrSettings r))
 
 shapeNote :: Text -> Int -> Text
 shapeNote shape capabilities
@@ -113,6 +142,39 @@ glanceRow r =
         <> " |"
   where
     load = srLoad r
+
+-- Each scenario's loaded cost beside its concurrency-one cost, its refusals' cost, and cache sharing.
+costTable :: [ScenarioReport] -> [ScenarioReport] -> [Text]
+costTable c1Reports reports =
+    [ "### Loaded cost against concurrency one"
+    , ""
+    , "| scenario | alloc / success (upper bound) | at base concurrency one | alloc / refusal (upper bound) | success p50 | at base concurrency one | missed lookups | collapsed lookups |"
+    , "| --- | --: | --: | --: | --: | --: | --: | --: |"
+    ]
+        <> map costRow (withConcurrencyOne c1Reports reports)
+        <> [""]
+  where
+    costRow (r, c1) =
+        "| "
+            <> T.intercalate
+                " | "
+                [ srName r
+                , countedKib (allocPerSuccess r) (windowSuccesses r) "successes"
+                , maybe "n/a" (\atOne -> countedKib (allocPerSuccess atOne) (windowSuccesses atOne) "successes") c1
+                , countedKib (allocPerRefusal r) (windowRefusals r) "refusals"
+                , msCell (pP50Ms (lsLatency (srLoad r)))
+                , msCell (pP50Ms . lsLatency . srLoad =<< c1)
+                , lookups coMisses r
+                , lookups coCollapsed r
+                ]
+            <> " |"
+    lookups field r = maybe "n/a" (show . sum . map (field . snd)) (pfCacheWindow =<< srProxy r)
+
+-- Each loaded report with its concurrency-one counterpart, when that pass ran the scenario.
+withConcurrencyOne :: [ScenarioReport] -> [ScenarioReport] -> [(ScenarioReport, Maybe ScenarioReport)]
+withConcurrencyOne c1Reports reports = [(r, Map.lookup (srName r) byName) | r <- reports]
+  where
+    byName = Map.fromList [(srName r, r) | r <- c1Reports]
 
 renderScenario :: ScenarioReport -> [Text]
 renderScenario r =
@@ -156,6 +218,7 @@ rtsRows r =
     [ row "RTS figures from" (srRtsSource r)
     , row "allocation / successful request" (maybe "n/a" kib (allocPerSuccess r) <> " (" <> show (windowSuccesses r) <> " successes, " <> show (windowAttempts r) <> " attempts in the window)")
     , row "allocation / attempt" (maybe "n/a" kib (perAttempt r))
+    , row "allocation / refusal" (countedKib (allocPerRefusal r) (windowRefusals r) "refusals in the window")
     , row "GCs (total / major) / GC share of CPU / GC wall" (maybe "n/a" gcCell (srRtsWindow r))
     , row "mean live data after the window's major collections" (maybe "n/a" (mib . round) (meanLiveAtMajors =<< srRtsWindow r))
     , row "RTS max live / max memory in use" (maybe "n/a" (\s -> mib (rsMaxLiveBytes s) <> " / " <> mib (rsMaxMemInUseBytes s)) (srRtsEnd r))
@@ -180,6 +243,7 @@ proxyRows p =
     , row "CPU admission / memory admission budget / cold listings at once" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMaterialBudgetBytes limits) <> " / " <> maybe "n/a" show (admittedListings limits))
     , row "admission in-flight gauge: max / mean / last (samples, missed)" (gaugeCell (pfInFlight p))
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
+    , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))
     ]
   where
     cgroup = pfCgroup p
@@ -190,6 +254,7 @@ proxyRows p =
             <> maybe "n/a" (mib . rsMemInUseBytes) (pfIdleRts p)
             <> " / "
             <> maybe "n/a" (mib . fromIntegral) (pfIdleCgroupBytes p)
+    cacheCell stores = T.intercalate ", " [store <> " " <> show (coHits o) <> " / " <> show (coMisses o) <> " / " <> show (coCollapsed o) | (store, o) <- stores]
     eventsCell c = T.intercalate " / " [show (counter key (crMemoryEvents c)) | key <- ["oom_kill", "oom", "max", "high"]]
     statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
     gaugeCell g =
@@ -243,6 +308,10 @@ readingNotes =
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
+    , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."
+    , "- **Allocation per refusal** divides the same window's allocation by its refusals instead of its successes. Each figure charges the whole window to one kind of response, so each is an upper bound on that kind's cost, and a small count makes it large."
+    , "- **Concurrency-one** figures come from the concurrency-one pass, which runs the same scenario on a fresh proxy after the same warm-up, with the base concurrency set to one. A scenario that scales its own connections keeps that scale. Scenarios outside that pass show n/a. A loaded allocation per success far above its concurrency-one figure points at contention, or at work the concurrent requests did not share."
+    , "- **Missed and collapsed lookups** are the metadata cache's request outcomes in the window, summed over the full, version, and assembled stores. One request can look up more than one store, so the sums count lookups, not requests. Each scenario lists them per store. A collapsed lookup waited for another request's fetch instead of making its own, so few collapsed lookups beside many missed ones show concurrent requests that did not share work."
     ]
 
 -- | Attribute concurrency-one service time against the named upstream baseline.
@@ -255,15 +324,14 @@ renderServiceTime source reports =
 -- | Pair loaded reports with their concurrency-one counterparts to describe saturation.
 renderLoadSaturation :: [ScenarioReport] -> [ScenarioReport] -> Text
 renderLoadSaturation c1Reports loadedReports =
-    renderSaturation queuingDominanceThreshold (map (deriveSaturation queuingDominanceThreshold . toInput) loadedReports)
+    renderSaturation queuingDominanceThreshold (map (deriveSaturation queuingDominanceThreshold . toInput) (withConcurrencyOne c1Reports loadedReports))
   where
-    c1ByName = Map.fromList [(srName r, r) | r <- c1Reports]
-    toInput loaded =
+    toInput (loaded, c1) =
         SaturationInput
             (srName loaded)
             (throughput (srLoad loaded))
             (lsDeadlineAborts (srLoad loaded))
-            (pP50Ms . lsLatency . srLoad =<< Map.lookup (srName loaded) c1ByName)
+            (pP50Ms . lsLatency . srLoad =<< c1)
             (pP50Ms (lsLatency (srLoad loaded)))
 
 {- | The GC-thrash probe: one scenario at each memory limit, highest first. Reclaim per major
@@ -333,15 +401,16 @@ endingCell ending
     | ending == CleanShutdown = describeEnding ending
     | otherwise = "**" <> describeEnding ending <> "**"
 
-allocPerSuccess :: ScenarioReport -> Maybe Double
-allocPerSuccess r = do
-    w <- srRtsWindow r
-    perSuccess (fromIntegral (rwAllocatedBytes w)) (windowSuccesses r)
+allocPerSuccess, perAttempt, allocPerRefusal :: ScenarioReport -> Maybe Double
+allocPerSuccess = allocationPer windowSuccesses
+perAttempt = allocationPer windowAttempts
+allocPerRefusal = allocationPer windowRefusals
 
-perAttempt :: ScenarioReport -> Maybe Double
-perAttempt r = do
+-- The window's allocation divided by a count of its responses, 'Nothing' when the count is zero.
+allocationPer :: (ScenarioReport -> Int) -> ScenarioReport -> Maybe Double
+allocationPer count r = do
     w <- srRtsWindow r
-    perSuccess (fromIntegral (rwAllocatedBytes w)) (windowAttempts r)
+    perSuccess (fromIntegral (rwAllocatedBytes w)) (count r)
 
 throughput :: LoadSummary -> Double
 throughput l = if lsElapsedSeconds l > 0 then fromIntegral (lsSuccesses l) / lsElapsedSeconds l else 0
@@ -360,6 +429,10 @@ pct x = fmt1 (x * 100) <> "%"
 
 kib :: Double -> Text
 kib bytes = fmt1 (bytes / 1024) <> " KiB"
+
+-- A per-response figure with the count it divides by.
+countedKib :: Maybe Double -> Int -> Text -> Text
+countedKib perResponse count noun = maybe "n/a" kib perResponse <> " (" <> show count <> " " <> noun <> ")"
 
 mib :: Word64 -> Text
 mib = signedMib . fromIntegral
