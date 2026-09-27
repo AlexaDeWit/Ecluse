@@ -84,11 +84,15 @@ spec = do
                 compileEpssRequirement mounts opts `shouldBe` EpssRequired
                 unmountedCompileWarning mounts opts `shouldSatisfy` maybe False (T.isInfixOf ("mounts no " <> name <> " ecosystem"))
 
-    describe "epssAttemptLine -- the egress every compile attempts" $
+    describe "epssAttemptLine -- the egress every compile attempts" $ do
         it "names the configured feed by host and port, never its path" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__EPSS_FEED_URL", "https://epss.example.test/private/scores.csv.gz")]
             epssAttemptLine advisories `shouldSatisfy` T.isInfixOf "the EPSS feed at epss.example.test:443,"
             epssAttemptLine advisories `shouldSatisfy` (not . T.isInfixOf "private")
+
+        it "names the port a plain-http feed dials" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__EPSS_FEED_URL", "http://mirror.example.test/epss.csv.gz")]
+            epssAttemptLine advisories `shouldSatisfy` T.isInfixOf "the EPSS feed at mirror.example.test:80,"
 
     describe "quietTimeFor -- the thresholds one compile is judged against" $ do
         it "takes the shipped seven days for a mounted ecosystem and for EPSS" $ do

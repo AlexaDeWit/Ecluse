@@ -72,7 +72,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, isAllow, isDeny, isNoDecision)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -349,20 +349,10 @@ unavailableEnrichmentSpec = describe "an artifact published with unavailable EPS
                     etag `shouldBe` DbEtag "unavailable"
                     lookup "epss_status" meta `shouldBe` Just "unavailable"
                 other -> expectationFailure ("expected the unavailable artifact installed, got " <> show other)
-            verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isDenial)
-            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isAdmission)
-            verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isDenial)
+            verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isDeny)
+            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isAllow)
+            verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isDeny)
             survivesSweep deps deny False "corpus-revoked" `shouldReturn` False
-  where
-    isNoDecision = \case
-        NoDecision _ -> True
-        _ -> False
-    isDenial = \case
-        Deny _ _ -> True
-        _ -> False
-    isAdmission = \case
-        Allow _ -> True
-        _ -> False
 
 -- CorpusV1 compiled with the feed, then CorpusV2 compiled while an optional feed answers 404.
 corpusGenerations :: FilePath -> IO (FilePath, FilePath)

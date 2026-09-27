@@ -43,6 +43,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout)
+import Ecluse.Test.OsvDb (denyIfEpssRules, stubSourceEnv)
 import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, withStub)
 
 runEnv :: [(String, String)]
@@ -473,10 +474,9 @@ compileEnv epssRule osvStub epssStub =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", "s3://advisories.example.test")
-    , ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", toString (stubBaseUrl osvStub))
-    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
     ]
-        <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}") | epssRule]
+        <> stubSourceEnv osvStub epssStub
+        <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
 
 -- | A shared policy carrying one advisory deny, which needs a store no fixture here configures.
 cveDenyRule :: String

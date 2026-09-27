@@ -263,9 +263,8 @@ newCandidate outDir = do
 removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
 
--- The sources one finished pass read, as they described themselves. The identities are
--- credential-free, because the artifact travels to every consumer. A feed that never arrived
--- described nothing, so an unavailable enrichment records no EPSS source or date.
+-- The sources as they described themselves, credential-free because the artifact reaches every
+-- consumer. A feed that never arrived described nothing, so it records no EPSS source or date.
 passProvenance :: CompileSources -> EpssEnrichment -> OsvAttempt -> AdvisoryProvenance
 passProvenance sources enrichment attempt =
     AdvisoryProvenance

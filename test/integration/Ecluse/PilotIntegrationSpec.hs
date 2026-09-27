@@ -39,7 +39,7 @@ import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), newS3CveSourc
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
-import Ecluse.Test.OsvDb (epssFixtureFile)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
 
@@ -147,10 +147,6 @@ spec = aroundAll withMinistack $ do
                                         withPublished endpoint bucket PyPI EpssOptional (dir </> "data" </> osvDbFileName "pypi") $ \lookup' ->
                                             map arEpss <$> cveAdvisoriesFor lookup' "redis" `shouldReturn` [Nothing]
 
--- A mount rule that makes EPSS required, at the threshold and alignment that still depend on the feed.
-denyIfEpss :: String
-denyIfEpss = "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}"
-
 -- Scores the advisory CorpusV1 shares between npm's corpus-mixed and PyPI's redis.
 scheduledFeed :: LByteString
 scheduledFeed = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.875,0.9\nCVE-2026-10006,0.75,0.9\n"
@@ -162,27 +158,21 @@ oneShotEnv bucket epssRule osvStub epssStub =
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     ]
-        <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpss) | epssRule]
-        <> sourceEnv osvStub epssStub
+        <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
+        <> stubSourceEnv osvStub epssStub
 
 -- npm with an EPSS rule beside PyPI without one, on an interval no case waits out.
 scheduledEnv :: Text -> FilePath -> Stub -> Stub -> [(String, String)]
 scheduledEnv bucket dataDir osvStub epssStub =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__RULES", denyIfEpss)
+    , ("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules)
     , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     , ("ECLUSE_ADVISORIES__DATA_DIR", dataDir)
     , ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")
     ]
-        <> sourceEnv osvStub epssStub
-
-sourceEnv :: Stub -> Stub -> [(String, String)]
-sourceEnv osvStub epssStub =
-    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", toString (stubBaseUrl osvStub))
-    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
-    ]
+        <> stubSourceEnv osvStub epssStub
 
 uploadOptions :: FilePath -> PilotCompileOptions
 uploadOptions outDir =

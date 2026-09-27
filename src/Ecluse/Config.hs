@@ -395,14 +395,10 @@ ageLine eco limit =
         <> renderBasis (maxAdvisoryAgeBasis limit)
 
 {- | Each mount's EPSS requirement, which Pilot and that mount's advisory consumers apply alike.
-With no store configured nothing compiles or syncs, so nothing is reported.
+It is reported with no store too, because @pilot compile@ runs under it without uploading.
 -}
 advisoryEpssLines :: Config -> [Text]
-advisoryEpssLines config =
-    [ epssLine eco (mountEpssRequirement mount)
-    | isJust (advUrl (cfgAdvisories (configApp config)))
-    , (eco, mount) <- Map.toAscList (configMounts config)
-    ]
+advisoryEpssLines config = [epssLine eco (mountEpssRequirement mount) | (eco, mount) <- Map.toAscList (configMounts config)]
 
 epssLine :: Ecosystem -> EpssRequirement -> Text
 epssLine eco = \case

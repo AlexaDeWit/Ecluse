@@ -53,7 +53,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
-import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile)
+import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile, metaOf, scoresOf)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
@@ -491,6 +491,15 @@ epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement
             Map.lookup "epss_status" <$> metaOf scored `shouldReturn` Just "available"
             Map.lookup "epss_status" <$> metaOf failed `shouldReturn` Just "unavailable"
 
+    for_ [EpssRequired, EpssOptional] $ \requirement ->
+        it ("joins the scores a second gzip member carries, " <> show requirement) $
+            withSystemTempDirectory "epss-members" $ \outDir -> do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                let members = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.875,0.9\n" <> GZip.compress "CVE-2024-48913,0.75,0.9\n"
+                dbFile <- compileOsvZipDbWithFeedTo Npm requirement (status200, members) zipData outDir
+                Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "available"
+                scoresOf dbFile `shouldReturn` [Just 0.75]
+
     for_ damagedStreams $ \(label, damaged) ->
         it ("discards the scores decoded ahead of a gzip stream that " <> label) $
             withSystemTempDirectory "epss-partial" $ \outDir -> do
@@ -572,6 +581,8 @@ damagedStreams =
     [ ("is cut in half", \whole -> LBS.take (LBS.length whole `div` 2) whole)
     , ("lacks its trailer", \whole -> LBS.take (LBS.length whole - 8) whole)
     , ("carries a zeroed trailer", \whole -> LBS.take (LBS.length whole - 8) whole <> LBS.replicate 8 0)
+    , ("has its second member cut", \whole -> whole <> LBS.take (LBS.length whole `div` 2) whole)
+    , ("carries trailing bytes after its member", (<> "trailing bytes"))
     ]
 
 -- The user, password, query, and fragment prefixes 'withCredentialSource' writes into its URL.
@@ -644,14 +655,6 @@ compileZipWith logEnv zipData quietTime = do
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
             runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") quietTime)
-
-scoresOf :: FilePath -> IO [Maybe Double]
-scoresOf dbFile = withConnection dbFile $ \conn ->
-    map fromOnly <$> (query_ conn "SELECT epss_score FROM package_vulnerability_ranges" :: IO [Only (Maybe Double)])
-
-metaOf :: FilePath -> IO (Map Text Text)
-metaOf dbFile = withConnection dbFile $ \conn ->
-    Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
 
 packagesOf :: FilePath -> IO [Text]
 packagesOf dbFile = withConnection dbFile $ \conn ->

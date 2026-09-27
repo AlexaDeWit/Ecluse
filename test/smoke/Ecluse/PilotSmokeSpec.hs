@@ -17,6 +17,7 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Config (Config, loadConfig)
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Osv.Compile (PilotEpssRequired (perFailure))
 import Ecluse.Core.Osv.Epss (EpssFeedFailure (EpssFeedStatus, EpssFeedTransport))
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
@@ -78,9 +79,10 @@ defaultConfig = case loadConfig [] Nothing of
     Right c -> pure c
     Left e -> fail ("Config error: " <> show e)
 
--- Only a feed the network could not deliver is an outage. A feed that arrived and failed is a regression.
+{- Only a feed the network could not deliver, or a status a retry could clear, is an outage. A moved
+feed (404, 410) and a feed that arrived and failed are regressions. -}
 feedUnreachable :: EpssFeedFailure -> Bool
 feedUnreachable = \case
-    EpssFeedStatus _ -> True
+    EpssFeedStatus code -> isRetryableStatusCode code
     EpssFeedTransport _ -> True
     _ -> False

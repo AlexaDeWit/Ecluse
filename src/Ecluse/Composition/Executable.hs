@@ -373,9 +373,8 @@ prunerWiringFrom deferredMetrics budgetPort policies cveSync stores =
         , pwBudget = budgetPort
         }
 
-{- The Pilot publishes one artifact per vetted mount, so a configured store with no mount leaves
-it nothing to compile, and a role with no runtime behaviour refuses rather than idling. Each target
-takes the EPSS requirement 'planAdvisorySync' gives that mount's consumers. -}
+{- One artifact per vetted mount, under the EPSS requirement 'planAdvisorySync' gives its consumers.
+A store with no mount leaves nothing to compile, and a role with no work refuses rather than idles. -}
 pilotExportPlan :: ValidatedPlan -> Either [BootError] ExportLoopPlan
 pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan advisories targets)
   where

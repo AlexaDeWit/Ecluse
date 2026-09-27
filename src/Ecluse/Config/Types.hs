@@ -15,6 +15,7 @@ module Ecluse.Config.Types (
     unUrl,
     HttpScheme (..),
     splitHttpScheme,
+    schemeDial,
     StoreTag (..),
     storeTagName,
     Target (..),
@@ -132,6 +133,12 @@ neither @http@ nor @https@. It is the one scheme check the configuration layer s
 splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
+
+-- | The TLS flag and the port a scheme dials when the URL writes no port.
+schemeDial :: HttpScheme -> (Bool, Word16)
+schemeDial = \case
+    Https -> (True, 443)
+    Http -> (False, 80)
 
 {- | Which store backend an endpoint names. The operator declares it as the one key under the
 endpoint, and the load validates the URL against it rather than guessing it from a host shape.

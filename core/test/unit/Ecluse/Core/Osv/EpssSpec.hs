@@ -72,7 +72,7 @@ acquireServed cap status served =
         requests <- length <$> allCaptured stub
         pure (outcome, requests)
 
--- Two scored rows behind the preamble, gzipped whole.
+-- Four thousand rows over two CVEs behind the preamble, as one gzip member.
 wholeFeed :: LByteString
 wholeFeed = GZip.compress (feedPreamble <> mconcat (replicate 2000 "CVE-2026-10001,0.875,0.995\nCVE-2026-10002,0.5,0.900\n"))
 
@@ -179,6 +179,14 @@ spec = do
         it "refuses an empty body, which is no gzip stream at all" $
             fetchRaw [] maxEpssFeedBytes "" `shouldThrow` (== EpssFeedTruncated)
 
+        it "reads every member of a multi-member stream, as gunzip does" $
+            epssScoreCount . efScores <$> fetchRaw [] maxEpssFeedBytes (GZip.compress (feedPreamble <> "CVE-2026-10001,0.875,0.995\n") <> GZip.compress "CVE-2026-10002,0.5,0.900\n")
+                `shouldReturn` 2
+
+        it "refuses a stream whose second member is cut" $
+            fetchRaw [] maxEpssFeedBytes (wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed)
+                `shouldThrow` (== EpssFeedTruncated)
+
     describe "acquireEpssFeed" $ do
         it "returns the fetched feed after one request" $ do
             (outcome, requests) <- acquireServed maxEpssFeedBytes status200 wholeFeed
@@ -190,6 +198,8 @@ spec = do
             , ("a scoreless feed", maxEpssFeedBytes, status200, GZip.compress feedPreamble, EpssFeedNoScores)
             , ("a stream that is not gzip", maxEpssFeedBytes, status200, "not gzip", EpssFeedUndecodable)
             , ("a cut stream", maxEpssFeedBytes, status200, LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
+            , ("a stream with its second member cut", maxEpssFeedBytes, status200, wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
+            , ("a whole member followed by trailing bytes", maxEpssFeedBytes, status200, wholeFeed <> "trailing bytes", EpssFeedUndecodable)
             , ("a served stream past the ceiling", 32, status200, wholeFeed, EpssFeedOversize (CompressedTooLarge 32 0))
             , ("an expansion past the ceiling", 4096, status200, GZip.compress (toLazy (BS.replicate 65536 0x78)), EpssFeedOversize (DecompressedTooLarge 4096 0))
             ]

@@ -48,11 +48,13 @@ import Data.Conduit.Combinators qualified as C
 import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Streaming.Zlib (
+    Popper,
     PopperRes (PRDone, PRError, PRNext),
     WindowBits (WindowBits),
     ZlibException,
     feedInflate,
     finishInflate,
+    getUnusedInflate,
     initInflate,
     isCompleteInflate,
  )
@@ -99,7 +101,7 @@ data EpssFeedEmpty = EpssFeedEmpty
 
 instance Exception EpssFeedEmpty
 
--- | The gzip stream ended before its end-of-stream marker, so the rows it carried may be a fraction.
+-- | A gzip member ended before its end-of-stream marker, so the rows it carried may be a fraction.
 data EpssFeedTruncated = EpssFeedTruncated
     deriving stock (Eq, Show)
 
@@ -229,25 +231,43 @@ decodeEpssFeed cap =
         .| C.linesUnboundedAscii
         .| C.foldl addLine (FeedAccum True (EpssPreamble Nothing Nothing) (mkEpssScores []))
 
--- One gzip member, which must reach its end-of-stream marker. 'Data.Conduit.Zlib.ungzip' passes a
--- cut stream through, and its rows would read downstream as a complete table.
+-- Every gzip member to the end of input, as gunzip reads them. 'Data.Conduit.Zlib.ungzip' stops
+-- after the first member and passes a cut one through, so its rows would read as a whole table.
 ungzipWhole :: (MonadIO m, MonadThrow m) => ConduitT ByteString ByteString m ()
-ungzipWhole = liftIO (initInflate (WindowBits 31)) >>= feed
+ungzipWhole = await >>= maybe truncatedFeed inflateMember
+
+-- One member from the bytes in hand. Input that ends before its end-of-stream marker truncates it.
+inflateMember :: (MonadIO m, MonadThrow m) => ByteString -> ConduitT ByteString ByteString m ()
+inflateMember opening = liftIO (initInflate (WindowBits 31)) >>= (`feed` opening)
   where
-    feed inflate =
-        await >>= \case
-            Nothing -> throwM EpssFeedTruncated
-            Just chunk -> do
-                liftIO (feedInflate inflate chunk) >>= drain
-                complete <- liftIO (isCompleteInflate inflate)
-                if complete
-                    then liftIO (finishInflate inflate) >>= \rest -> unless (BS.null rest) (yield rest)
-                    else feed inflate
-    drain popper =
-        liftIO popper >>= \case
-            PRDone -> pass
-            PRNext out -> yield out >> drain popper
-            PRError err -> throwM err
+    feed inflate chunk = do
+        liftIO (feedInflate inflate chunk) >>= drainInflate
+        complete <- liftIO (isCompleteInflate inflate)
+        if complete
+            then do
+                liftIO (finishInflate inflate) >>= yieldNonEmpty
+                liftIO (getUnusedInflate inflate) >>= afterMember
+            else await >>= maybe truncatedFeed (feed inflate)
+
+-- Any byte after a complete member starts another, so trailing bytes are read, not ignored.
+afterMember :: (MonadIO m, MonadThrow m) => ByteString -> ConduitT ByteString ByteString m ()
+afterMember rest
+    | BS.null rest = await >>= maybe pass afterMember
+    | otherwise = inflateMember rest
+
+drainInflate :: (MonadIO m, MonadThrow m) => Popper -> ConduitT i ByteString m ()
+drainInflate popper =
+    liftIO popper >>= \case
+        PRDone -> pass
+        PRNext out -> yieldNonEmpty out >> drainInflate popper
+        PRError err -> throwM err
+
+yieldNonEmpty :: (Monad m) => ByteString -> ConduitT i ByteString m ()
+yieldNonEmpty out = unless (BS.null out) (yield out)
+
+-- A throw, because only an exception stops the fetch mid-stream. 'acquireEpssFeed' reads it back.
+truncatedFeed :: (MonadThrow m) => ConduitT i o m a
+truncatedFeed = throwM EpssFeedTruncated
 
 -- Only the first line can be the preamble, so a comment further down the feed cannot restate
 -- the score date.

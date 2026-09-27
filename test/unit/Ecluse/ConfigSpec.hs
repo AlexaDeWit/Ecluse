@@ -199,9 +199,10 @@ spec = do
                            , "mount \"pypi\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
                            ]
 
-        it "reports nothing without an advisory store, because nothing compiles or syncs" $ do
+        it "reports the requirement without an advisory store, which a local compile runs under" $ do
             cfg <- configFor privateMountDoc
-            advisoryEpssLines cfg `shouldBe` []
+            advisoryEpssLines cfg
+                `shouldBe` ["mount \"npm\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"]
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do

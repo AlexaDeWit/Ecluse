@@ -5,12 +5,14 @@
 module Ecluse.PilotSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import Data.Text (unpack)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Only (fromOnly), close, open, query_)
+import Database.SQLite.Simple (close, open, query_)
+import Katip (LogEnv)
 import Network.HTTP.Types.Status (Status, status200, status404)
-import System.Directory (doesFileExist)
-import System.FilePath (takeDirectory, (</>))
+import System.Directory (doesFileExist, listDirectory)
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (timeout)
@@ -26,7 +28,7 @@ import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), run
 import Ecluse.Pilot.Plan (ExportTarget (ExportTarget, etEcosystem, etEpss))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv, runQuietKatip)
-import Ecluse.Test.OsvDb (epssFixtureFile)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, metaOf, scoresOf, stubSourceEnv)
 import Ecluse.Test.Stub (Captured (capPath), Stub, allCaptured, stubBaseUrl, withStub)
 
 spec :: Spec
@@ -94,41 +96,48 @@ spec = do
                         close conn
                         rows `shouldBe` [("hono", Just 0.75)]
 
-        for_ [("with", Just denyIfEpss), ("without", Nothing)] $ \(label, rule) ->
+        for_ [("with", Just denyIfEpssRules), ("without", Nothing)] $ \(label, rule) ->
             it ("joins the feed's scores " <> label <> " an EPSS rule, fetching the feed once") $
-                withPolicyCompile rule (status200, Nothing) $ \compile epssStub -> do
-                    dbFile <- compile
-                    scoresIn dbFile `shouldReturn` [Just 0.75]
-                    epssStatusIn dbFile `shouldReturn` ["available"]
-                    map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
+                withSystemTempDirectory "ecluse-pilot-policy" $ \outDir ->
+                    withPolicyCompile outDir rule (status200, Nothing) $ \compile epssStub -> do
+                        dbFile <- newTestLogEnv >>= compile
+                        scoresOf dbFile `shouldReturn` [Just 0.75]
+                        Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "available"
+                        map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
 
         it "publishes nothing and fails when a mount with an EPSS rule meets a failed feed" $
-            withPolicyCompile (Just denyIfEpss) (status200, Nothing) $ \compile _ -> do
-                dbFile <- compile
+            withSystemTempDirectory "ecluse-pilot-policy" $ \outDir -> do
+                dbFile <- withPolicyCompile outDir (Just denyIfEpssRules) (status200, Nothing) $ \compile _ -> newTestLogEnv >>= compile
                 published <- readFileBS dbFile
-                withPolicyCompile (Just denyIfEpss) (status404, Just "") $ \failing epssStub -> do
-                    failing `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
+                withPolicyCompile outDir (Just denyIfEpssRules) (status404, Just "") $ \failing epssStub -> do
+                    (newTestLogEnv >>= failing) `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
                     map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
                 readFileBS dbFile `shouldReturn` published
+                listDirectory outDir `shouldReturn` [takeFileName dbFile]
 
         it "publishes OSV data with unavailable enrichment, and returns, when a mount without one meets a failed feed" $
-            withPolicyCompile Nothing (status404, Just "") $ \compile epssStub -> do
-                (dbFile, logged) <- captureJsonLog (const compile)
-                scoresIn dbFile `shouldReturn` [Nothing]
-                epssStatusIn dbFile `shouldReturn` ["unavailable"]
-                map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
-                logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            withSystemTempDirectory "ecluse-pilot-policy" $ \outDir ->
+                withPolicyCompile outDir Nothing (status404, Just "") $ \compile epssStub -> do
+                    (dbFile, logged) <- captureJsonLog compile
+                    scoresOf dbFile `shouldReturn` [Nothing]
+                    Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "unavailable"
+                    map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
+                    filter (T.isInfixOf "EPSS enrichment unavailable for npm") (lines logged)
+                        `shouldSatisfy` \warned -> length warned == 1 && all (T.isInfixOf "\"sev\":\"Warning\"") warned
+                    logged `shouldSatisfy` (not . T.isInfixOf "Aborting OSV compile")
 
-        it "requires the feed for an ecosystem the configuration does not mount" $ do
-            le <- newTestLogEnv
+        it "requires the feed, and warns, for an ecosystem the configuration does not mount" $ do
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
             withSystemTempDirectory "ecluse-pilot-unmounted" $ \outDir ->
                 withStub status200 zipData $ \osvStub ->
                     withStub status404 "" $ \epssStub -> do
-                        config <- expectConfig (feedEnv osvStub epssStub) Nothing
+                        config <- expectConfig (stubSourceEnv osvStub epssStub) Nothing
                         let opts = (compileOptions "" "" outDir){pcoSource = Nothing, pcoEpssSource = Nothing}
-                        runPilotCompile le telemetryDisabled Nothing config opts
-                            `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
+                        (_, logged) <- captureJsonLog $ \logEnv ->
+                            runPilotCompile logEnv telemetryDisabled Nothing config opts
+                                `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
+                        filter (T.isInfixOf "mounts no npm ecosystem") (lines logged)
+                            `shouldSatisfy` \warned -> length warned == 1 && all (T.isInfixOf "\"sev\":\"Warning\"") warned
                         doesFileExist (outDir </> "npm-osv-schema4.db") `shouldReturn` False
 
         it "fails loudly when an upload is requested without a configured advisory store" $ do
@@ -165,53 +174,26 @@ data FeedDown = FeedDown
 
 instance Exception FeedDown
 
--- A mount-level EPSS rule at the shipped threshold, with the skip alignment that still requires the feed.
-denyIfEpss :: String
-denyIfEpss = "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}"
-
--- Configuration that points both advisory sources at the stubs, so a one-shot run passes no override.
-feedEnv :: Stub -> Stub -> [(String, String)]
-feedEnv osvStub epssStub =
-    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", unpack (stubBaseUrl osvStub))
-    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", unpack (stubBaseUrl epssStub) <> "/epss.csv.gz")
-    ]
-
-{- | Compile npm once against an npm mount whose rules add the given one, with the EPSS stub
-answering this status and body (the fixture feed when 'Nothing'). Every run shares one directory.
+{- | Hand the case a compile of npm into @outDir@, against an npm mount carrying these rules, with the
+EPSS stub answering this status and body (the fixture feed when 'Nothing').
 -}
-withPolicyCompile :: Maybe String -> (Status, Maybe LByteString) -> (IO FilePath -> Stub -> IO a) -> IO a
-withPolicyCompile rule (feedStatus, feedBody) use = do
-    le <- newTestLogEnv
+withPolicyCompile :: FilePath -> Maybe String -> (Status, Maybe LByteString) -> ((LogEnv -> IO FilePath) -> Stub -> IO a) -> IO a
+withPolicyCompile outDir rule (feedStatus, feedBody) use = do
     zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
     epssData <- maybe (LBS.readFile epssFixtureFile) pure feedBody
-    withSystemTempDirectory "ecluse-pilot-policy" $ \outDir ->
-        withStub status200 zipData $ \osvStub ->
-            withStub feedStatus epssData $ \epssStub -> do
-                config <-
-                    expectConfig
-                        ( [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
-                          , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-                          ]
-                            <> [("ECLUSE_MOUNTS__NPM__RULES", r) | Just r <- [rule]]
-                            <> feedEnv osvStub epssStub
-                        )
-                        Nothing
-                let opts = (compileOptions "" "" outDir){pcoSource = Nothing, pcoEpssSource = Nothing}
-                use (runPilotCompile le telemetryDisabled Nothing config opts) epssStub
-
-scoresIn :: FilePath -> IO [Maybe Double]
-scoresIn dbFile = do
-    conn <- open dbFile
-    rows <- query_ conn "SELECT epss_score FROM package_vulnerability_ranges"
-    close conn
-    pure (map fromOnly rows)
-
-epssStatusIn :: FilePath -> IO [Text]
-epssStatusIn dbFile = do
-    conn <- open dbFile
-    rows <- query_ conn "SELECT value FROM meta WHERE key = 'epss_status'"
-    close conn
-    pure (map fromOnly rows)
+    withStub status200 zipData $ \osvStub ->
+        withStub feedStatus epssData $ \epssStub -> do
+            config <-
+                expectConfig
+                    ( [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
+                      , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+                      ]
+                        <> [("ECLUSE_MOUNTS__NPM__RULES", r) | Just r <- [rule]]
+                        <> stubSourceEnv osvStub epssStub
+                    )
+                    Nothing
+            let opts = (compileOptions "" "" outDir){pcoSource = Nothing, pcoEpssSource = Nothing}
+            use (\logEnv -> runPilotCompile logEnv telemetryDisabled Nothing config opts) epssStub
 
 -- No listener answers here, so a fetch that starts fails rather than reaching an upstream.
 unreachable :: Text
