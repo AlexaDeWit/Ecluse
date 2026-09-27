@@ -66,6 +66,7 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
     tag key = TagField key <$> scalar (depth - 2)
     fieldIn fields key = HashMap.findWithDefault mempty key fields
     -- Both unions are left-biased, so a shaped entry wins over the generic one for its key.
+    -- 'HashMap.fromList' keeps the last duplicate, so each list names a key once.
     listFields = HashMap.fromList listWitnesses <> HashMap.filterWithKey (\key _ -> key `elem` versionListFields) releaseFields
     releaseFields = HashMap.fromList shapedFields <> HashMap.fromList [(key, retainedValue (depth - 3)) | key <- versionFields]
     listWitnesses =
