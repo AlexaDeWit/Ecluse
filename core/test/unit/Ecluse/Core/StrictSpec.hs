@@ -16,7 +16,7 @@ spec = describe "strictElements" $
         void (evaluate elements)
         evaluate (strictElements elements) `shouldThrow` (== LaterElement)
 
--- | Thrown by an element that only element-wise evaluation reaches.
+-- Thrown by an element that only element-wise evaluation reaches.
 data LaterElement = LaterElement
     deriving stock (Eq, Show)
 

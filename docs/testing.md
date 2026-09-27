@@ -161,8 +161,10 @@ the same rooted cache entry:
 - the live bytes after the child forces the entry through its derived rendering
 
 The samples may differ by at most 1 KiB in either direction, because a deferred field can hold
-more or less than its value. Rendering a package name allocates pinned memory, and the runtime then
-keeps one pinned block live, so the child renders names before the first sample.
+more or less than its value. The entry's digest sits in a 4 KiB pinned memory block, and the names
+that forcing renders also use pinned memory. Once they fill that block, the runtime starts another
+and both stay live. So the child fills one pinned block before the first sample, and both samples
+count the same blocks.
 
 A second check holds only the typed view. It places weak pointers on the served document, on each
 served release or file object, and on each non-empty member map. Every pointer must clear after a

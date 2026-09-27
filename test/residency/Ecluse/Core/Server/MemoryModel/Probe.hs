@@ -173,9 +173,9 @@ probeEvaluation package = do
     bracket (prepareEntry package) (freeStablePtr . fst) (forceEntry . fst)
     before <- sample
     bracket (prepareEntry package) (freeStablePtr . fst) $ \(root, count) -> do
-        -- Rendering a package name allocates pinned memory, and the runtime then keeps one pinned block
-        -- live. Rendering names first puts that block in both samples.
-        void (forceShown (replicate 256 (cpPackage package)))
+        -- Forcing renders names into pinned memory, which retires the pinned block holding the digest.
+        -- 128 strings of 16 bytes, 32 each with their header, fill a 4 KiB block first, so both samples count it.
+        forM_ [1 .. 128 :: Int] $ \i -> evaluate (BS.replicate 16 (fromIntegral i))
         weakHead <- live <$> sample
         forceEntry root
         forced <- live <$> sample

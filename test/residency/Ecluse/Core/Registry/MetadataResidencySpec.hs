@@ -42,11 +42,11 @@ spec = describe "metadata read evaluation" $ forM_ packages $ \package -> do
             alive keys `shouldReturn` 0
             deRefStablePtr typed >>= (`shouldSatisfy` (> 0)) . Map.size . infoVersions
 
--- | The largest change forcing may make to live bytes, in either direction.
+-- The largest change forcing may make to live bytes, in either direction.
 allowance :: Integer
 allowance = 1024
 
--- | Live bytes that forcing the rooted result added, or released when negative.
+-- Live bytes that forcing the rooted result added, or released when negative.
 forcing :: Evaluated -> Integer
 forcing result = toInteger (evaluatedForced result) - toInteger (evaluatedWeakHead result)
 

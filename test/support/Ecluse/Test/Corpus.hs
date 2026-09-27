@@ -90,9 +90,11 @@ data CaptureUpstream = CaptureUpstream
     -- ^ The artifact hosts the registry may name besides its own.
     }
 
+-- | The npm registry the npm captures came from.
 npmCaptureUpstream :: CaptureUpstream
 npmCaptureUpstream = CaptureUpstream "https://registry.npmjs.org" (ecosystemArtifactAuthorities npmArtifactHosts)
 
+-- | The PyPI Simple index the PyPI captures came from.
 pypiCaptureUpstream :: CaptureUpstream
 pypiCaptureUpstream = CaptureUpstream "https://pypi.org/simple" (ecosystemArtifactAuthorities pypiArtifactHosts)
 
