@@ -91,7 +91,7 @@ import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Cve.Sync (AdvisoryNeed (AdvisoryNeed, anDatabase, anEcosystem, anEpss, anMaxAge), CveSyncHandle, cveRuleDepsFor, katipOutageReporter, planCveSync)
-import Ecluse.Pilot.Plan (ExportLoopPlan, exportLoopPlan)
+import Ecluse.Pilot.Plan (ExportLoopPlan, ExportTarget (ExportTarget, etEcosystem, etEpss), exportLoopPlan)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredBreakerReporter,
@@ -373,13 +373,16 @@ prunerWiringFrom deferredMetrics budgetPort policies cveSync stores =
         , pwBudget = budgetPort
         }
 
-{- The Pilot publishes one artifact per vetted mount, so a configured store with no mount leaves
-it nothing to compile, and a role with no runtime behaviour refuses rather than idling. -}
+{- One artifact per vetted mount, under the EPSS requirement 'planAdvisorySync' gives its consumers.
+A store with no mount leaves nothing to compile, and a role with no work refuses rather than idles. -}
 pilotExportPlan :: ValidatedPlan -> Either [BootError] ExportLoopPlan
-pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan advisories mounted)
+pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan advisories targets)
   where
     advisories = cfgAdvisories (vpSettings validated)
-    mounted = map vmEcosystem (vpMounts validated)
+    targets =
+        [ ExportTarget{etEcosystem = vmEcosystem vetted, etEpss = mountEpssRequirement (vmMount vetted)}
+        | vetted <- vpMounts validated
+        ]
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}

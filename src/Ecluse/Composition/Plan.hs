@@ -55,16 +55,17 @@ import Ecluse.Composition.MirrorQueue (
  )
 import Ecluse.Composition.MirrorRole (mirrorRoleRefusal)
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
-import Ecluse.Composition.Types (BootRole, bootInvocation, everyBootRole, pipelineRoleOf, registryRoleOf)
+import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), bootInvocation, everyBootRole, pipelineRoleOf, registryRoleOf)
 import Ecluse.Composition.Validate (ValidatedPlan, vetBoot)
 import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
+    AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),
     LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
     MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     advisoryAgeLines,
+    advisoryEpssLines,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -72,6 +73,7 @@ import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv, ambientS3Endpoint)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Text (nonBlank)
+import Ecluse.Pilot.Plan (epssAttemptLine)
 import Ecluse.Rts (EffectiveRuntimePlan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
@@ -226,6 +228,8 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) (mdRuntime mirror)
                 , mountPostureLines config
                 , advisoryAgeLines config
+                , advisoryEpssLines config
+                , [epssAttemptLine (cfgAdvisories app) | role == BootWithoutPipeline]
                 ]
         , bpWarnings = mpDegradations memoryPlan <> mirrorRuntimeWarnings (mdRuntime mirror)
         }

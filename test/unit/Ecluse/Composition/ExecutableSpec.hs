@@ -45,8 +45,8 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection),
@@ -63,7 +63,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
-import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
+import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo), ExportTarget (etEcosystem, etEpss))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Env (withAmbientAws)
@@ -271,8 +271,25 @@ spec = describe "planExecutable" $ do
         pilot <- expectExecutableWith advisoryStoreEnv BootWithoutPipeline mountBindingFor inertQueue inertStore
         plan <- expectPilotPlan pilot
         case plan of
-            ExportTo _ ecosystems -> ecosystems `shouldBe` Npm :| []
+            ExportTo _ targets -> fmap etEcosystem targets `shouldBe` Npm :| []
             ExportIdle -> expectationFailure "expected a configured store to turn the export loop on"
+
+    it "gives each export target the EPSS requirement its mount's advisory consumers enforce" $
+        withSystemTempDirectory "epss-export-plan" $ \dir -> withAmbientAws $ do
+            let envVars =
+                    overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
+                        overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl $
+                            overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
+                                overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"risk\":{\"enabled\":false}}" $
+                                    overrideEnv "ECLUSE_RULES" "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}" staticEnvVars
+            mirror <- expectExecutableWith envVars (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue inertStore >>= expectMirrorWiring
+            targets <-
+                expectExecutableWith envVars BootWithoutPipeline mountBindingFor inertQueue inertStore >>= expectPilotPlan >>= \case
+                    ExportTo _ planned -> pure (toList planned)
+                    ExportIdle -> fail "expected a configured store to turn the export loop on"
+            let consumers = Map.map (syncEpssRequirement . csEnv) (mwCveSync mirror)
+            consumers `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
+            Map.fromList [(etEcosystem target, etEpss target) | target <- targets] `shouldBe` consumers
 
     it "refuses a pilot with an advisory store and no mount to compile for" $ do
         -- A role with no coherent runtime behaviour gets no runtime: the store is configured,

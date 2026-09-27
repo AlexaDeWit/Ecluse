@@ -21,6 +21,7 @@ import Ecluse.Config (
     QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
     advisoryAgeLines,
+    advisoryEpssLines,
     defaultPolicy,
     loadConfig,
     mountAdvisoryDenials,
@@ -189,6 +190,19 @@ spec = do
         it "does not require EPSS for the shipped policy" $ do
             cfg <- configFor privateMountDoc
             Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.singleton Npm EpssOptional
+
+    describe "the EPSS requirement reported at boot" $ do
+        it "names each mount's requirement from its own resolved rules" $ do
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}}}}")
+            advisoryEpssLines cfg
+                `shouldBe` [ "mount \"npm\": EPSS enrichment is required, because a DenyIfEpss rule is active. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
+                           , "mount \"pypi\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+                           ]
+
+        it "reports the requirement without an advisory store, which a local compile runs under" $ do
+            cfg <- configFor privateMountDoc
+            advisoryEpssLines cfg
+                `shouldBe` ["mount \"npm\": EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"]
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do

@@ -60,11 +60,12 @@ governs retained evidence.
 
 An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
 Without an accepted qualified generation, its slot stays empty, and its readiness keeps awaiting the advisory database.
-Other ecosystems can accept marker-free artifacts and become routable independently.
+Other ecosystems accept marker-free artifacts, and artifacts Pilot published with
+`epss_status=unavailable` during an EPSS outage, and become routable independently.
 A running consumer keeps its accepted qualified generation after a rejected replacement.
 Restarting creates empty slots, even when canonical files remain on disk.
-Publish marked artifacts before you enable an EPSS-dependent rule, following
-[the onboarding order](@/docs/configuration.md#onboarding-the-advisory-denies).
+Before you enable an EPSS-dependent rule, publish an artifact with `epss_status=available`, following
+[the onboarding steps](@/docs/configuration.md#when-the-epss-feed-fails).
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
 returns `501` by design, because search is a discovery convenience, not an install path.
@@ -134,7 +135,8 @@ fragment removed, so neither carries a credential. Sync logs only parsed compila
 count from metadata, including when it reads older artifacts with complete source URLs. On each
 swap it adds one `info` line naming where the serving artifact came from: the object's publication
 time, the OSV source as `host:port`, its newest advisory date, and the EPSS score date. A value the
-artifact never recorded reads as `<unrecorded>`. Malformed or oversized display values appear as
+artifact never recorded reads as `<unrecorded>`, which is how the EPSS score date reads on an
+artifact published with `epss_status=unavailable`. Malformed or oversized display values appear as
 absent without changing artifact acceptance.
 
 The boot configuration echo prints configured endpoint
@@ -156,6 +158,9 @@ even when a later retry can recover. They include:
   ([Advisory quiet time](@/docs/operations.md#advisory-quiet-time)).
 - An advisory database a mount's rules cannot consult, when the outage begins and every 15
   minutes while it lasts ([Advisory outages](@/docs/operations.md#advisory-outages)).
+- A Pilot compile that published nothing because its ecosystem has an active `DenyIfEpss` and
+  the EPSS feed failed. The line starts `Aborting OSV compile:` and names the feed as `host:port`
+  and the cause ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)).
 
 Use the severity together with the event and its repetition:
 
@@ -172,6 +177,9 @@ Typical `warn` lines record:
 - A mirror job left to redeliver.
 - A store call Écluse is retrying.
 - A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
+- An EPSS feed that failed for an ecosystem with no active `DenyIfEpss`. The line starts
+  `EPSS enrichment unavailable`, and Pilot publishes that ecosystem's artifact without scores.
+  An EPSS outage repeats it on every compile.
 - A background loop backing off.
 
 A loop that keeps failing warns on every attempt, so `error` alone does not catch a slow death.
@@ -224,7 +232,8 @@ a look.
 
 Pilot reads how old its sources say their data is, and tells you when one stops changing. After
 each compile it logs the age of the ecosystem's newest advisory record and of the EPSS feed's
-declared score date, at `info`. When either age passes its threshold, the same line repeats at
+declared score date, at `info`. A compile that published with `epss_status=unavailable` has no
+EPSS score date, so it logs no EPSS age. When either age passes its threshold, the same line repeats at
 `error` and names the ecosystem, the credential-free source URL, the age in seconds, and the
 threshold in seconds.
 
@@ -511,9 +520,12 @@ or client-cached bytes remain outside registry revocation.
 
 ### Policy rollout order
 
-Use the same intended configuration across roles. When tightening policy, update admission and
-writer roles before Dredger. When relaxing a deny, update Dredger before writers can rely on the
-new permission. These are ordering recommendations, not an atomic cutover requirement.
+Use the same intended configuration across roles, Pilot included. Pilot reads its own copy to decide
+whether a failed EPSS feed stops an ecosystem's artifact. When tightening policy, update admission
+and writer roles before Dredger. When you add a `DenyIfEpss`, update Pilot before them all
+([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). When relaxing a
+deny, update Dredger before writers can rely on the new permission. These are ordering
+recommendations, not an atomic cutover requirement.
 
 Old writes outlive the role that queued them. A mirror worker still on the old policy decides a
 queued job by its own rules, so it can publish a version a newly started proxy denies. That proxy

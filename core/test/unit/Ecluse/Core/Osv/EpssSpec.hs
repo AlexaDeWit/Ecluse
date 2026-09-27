@@ -6,28 +6,45 @@
 module Ecluse.Core.Osv.EpssSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.Streaming.Zlib (ZlibException (ZlibException))
+import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
+import Network.HTTP.Client (HttpException (HttpExceptionRequest, InvalidUrlException), HttpExceptionContent (..), defaultRequest)
 import Network.HTTP.Types (Header)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (status200)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
+import Network.HTTP.Types.Status (Status, status200, status404)
+import System.IO.Error (doesNotExistErrorType, mkIOError)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import UnliftIO.Exception (evaluate)
 
-import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
 import Ecluse.Core.Osv.Epss (
+    EpssEnrichment (..),
     EpssFeed (..),
     EpssFeedEmpty (..),
+    EpssFeedFailure (..),
     EpssFeedTooLarge (..),
+    EpssFeedTruncated (..),
     EpssPreamble (..),
+    acquireEpssFeed,
+    classifyEpssFailure,
+    enrichmentStatus,
     epssForIds,
     epssScoreCount,
     fetchEpssScores,
     maxEpssFeedBytes,
+    maxEpssLineBytes,
     mkEpssScores,
     parseEpssLine,
     parseEpssPreamble,
+    resolveEnrichment,
  )
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), EpssStatus (..))
 import Ecluse.Test.Osv (runOsvTestM)
-import Ecluse.Test.Stub (stubBaseUrl, withStubHeaders)
+import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub, withStubHeaders)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- The feed's own preamble, in the shape FIRST.org publishes: a metadata comment, then a header.
 feedPreamble :: LByteString
@@ -41,9 +58,29 @@ fetchFeed :: Int -> LByteString -> IO EpssFeed
 fetchFeed = fetchFeedWith []
 
 fetchFeedWith :: [Header] -> Int -> LByteString -> IO EpssFeed
-fetchFeedWith extraHeaders cap body =
-    withStubHeaders status200 extraHeaders (GZip.compress body) $ \stub ->
+fetchFeedWith extraHeaders cap body = fetchRaw extraHeaders cap (GZip.compress body)
+
+-- Fetch bytes exactly as served, so a case can damage the gzip stream itself.
+fetchRaw :: [Header] -> Int -> LByteString -> IO EpssFeed
+fetchRaw extraHeaders cap served =
+    withStubHeaders status200 extraHeaders served $ \stub ->
         runOsvTestM (fetchEpssScores cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
+
+-- One attempt under the retry policy, with the number of requests the stub saw.
+acquireServed :: Int -> Status -> LByteString -> IO (Either EpssFeedFailure EpssFeed, Int)
+acquireServed cap status served =
+    withStub status served $ \stub -> do
+        outcome <- runOsvTestM (acquireEpssFeed cap (toString (stubBaseUrl stub) <> "/epss.csv.gz"))
+        requests <- length <$> allCaptured stub
+        pure (outcome, requests)
+
+-- Four thousand rows over two CVEs behind the preamble, as one gzip member.
+wholeFeed :: LByteString
+wholeFeed = GZip.compress (feedPreamble <> mconcat (replicate 2000 "CVE-2026-10001,0.875,0.995\nCVE-2026-10002,0.5,0.900\n"))
+
+-- A request-scoped client failure, as http-client wraps one.
+requestFailure :: HttpExceptionContent -> SomeException
+requestFailure = toException . HttpExceptionRequest defaultRequest
 
 spec :: Spec
 spec = do
@@ -130,6 +167,107 @@ spec = do
                 `shouldThrow` (== EpssFeedEmpty)
             fetchServed maxEpssFeedBytes feedPreamble `shouldThrow` (== EpssFeedEmpty)
 
+        it "passes a whole gzip stream" $
+            epssScoreCount . efScores <$> fetchRaw [] maxEpssFeedBytes wholeFeed `shouldReturn` 2
+
+        it "refuses a gzip stream cut in half, whose rows would read as a short table" $
+            fetchRaw [] maxEpssFeedBytes (LBS.take (LBS.length wholeFeed `div` 2) wholeFeed)
+                `shouldThrow` (== EpssFeedTruncated)
+
+        it "refuses a gzip stream that lacks its trailer" $
+            fetchRaw [] maxEpssFeedBytes (LBS.take (LBS.length wholeFeed - 8) wholeFeed)
+                `shouldThrow` (== EpssFeedTruncated)
+
+        it "refuses an empty body, which is no gzip stream at all" $
+            fetchRaw [] maxEpssFeedBytes "" `shouldThrow` (== EpssFeedTruncated)
+
+        it "reads every member of a multi-member stream" $
+            epssScoreCount . efScores <$> fetchRaw [] maxEpssFeedBytes (GZip.compress (feedPreamble <> "CVE-2026-10001,0.875,0.995\n") <> GZip.compress "CVE-2026-10002,0.5,0.900\n")
+                `shouldReturn` 2
+
+        it "refuses a stream whose second member is cut" $
+            fetchRaw [] maxEpssFeedBytes (wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed)
+                `shouldThrow` (== EpssFeedTruncated)
+
+        it "refuses a line past the line ceiling, which no scored row approaches" $
+            fetchFeed maxEpssFeedBytes (feedPreamble <> LBS.replicate (fromIntegral maxEpssLineBytes + 1) 0x78 <> "\n")
+                `shouldThrow` (\case LineTooLarge cap seen -> cap == maxEpssLineBytes && seen > cap; _ -> False)
+
+        it "refuses tiny members that never reach a newline once one line's worth arrives" $ do
+            -- Each one-byte member expands to one byte, so the ceiling trips long before the body ends.
+            member <- evaluate (LBS.toStrict (GZip.compress "x"))
+            fetchRaw [] maxEpssFeedBytes (LBS.fromChunks (replicate 200_000 member))
+                `shouldThrow` (\case LineTooLarge cap seen -> cap == maxEpssLineBytes && seen == cap + 1; _ -> False)
+
+    describe "acquireEpssFeed" $ do
+        it "returns the fetched feed after one request" $ do
+            (outcome, requests) <- acquireServed maxEpssFeedBytes status200 wholeFeed
+            fmap (epssScoreCount . efScores) outcome `shouldBe` Right 2
+            requests `shouldBe` 1
+
+        for_
+            [ ("a 404", maxEpssFeedBytes, status404, "", EpssFeedStatus 404)
+            , ("a scoreless feed", maxEpssFeedBytes, status200, GZip.compress feedPreamble, EpssFeedNoScores)
+            , ("a stream that is not gzip", maxEpssFeedBytes, status200, "not gzip", EpssFeedUndecodable)
+            , ("a cut stream", maxEpssFeedBytes, status200, LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
+            , ("a stream with its second member cut", maxEpssFeedBytes, status200, wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
+            , ("a whole member followed by trailing bytes", maxEpssFeedBytes, status200, wholeFeed <> "trailing bytes", EpssFeedUndecodable)
+            , ("a whole member followed by zero padding", maxEpssFeedBytes, status200, wholeFeed <> LBS.replicate 512 0, EpssFeedUndecodable)
+            , ("a line past the line ceiling", maxEpssFeedBytes, status200, GZip.compress (LBS.replicate 8192 0x78), EpssFeedOversize (LineTooLarge maxEpssLineBytes 0))
+            , ("a served stream past the ceiling", 32, status200, wholeFeed, EpssFeedOversize (CompressedTooLarge 32 0))
+            , ("an expansion past the ceiling", 4096, status200, GZip.compress (toLazy (BS.replicate 65536 0x78)), EpssFeedOversize (DecompressedTooLarge 4096 0))
+            ]
+            $ \(label, cap, status, served, expected) ->
+                it ("returns " <> label <> " as a failure after a single request") $ do
+                    (outcome, requests) <- acquireServed cap status served
+                    first withoutSeen outcome `shouldBe` Left expected
+                    requests `shouldBe` 1
+
+        it "propagates an invalid feed URL, a configuration fault rather than an outage" $
+            runOsvTestM (acquireEpssFeed maxEpssFeedBytes "not a url")
+                `shouldThrow` (\case InvalidUrlException{} -> True; _ -> False)
+
+    describe "classifyEpssFailure" $ do
+        it "reads a transport failure through its shared cause" $ do
+            classifyEpssFailure (requestFailure ConnectionTimeout) `shouldBe` Just (EpssFeedTransport TransportTimeout)
+            classifyEpssFailure (requestFailure ResponseTimeout) `shouldBe` Just (EpssFeedTransport TransportTimeout)
+            classifyEpssFailure (requestFailure (ConnectionFailure (toException (TestContractEscape "refused")))) `shouldBe` Just (EpssFeedTransport TransportUnreachable)
+            classifyEpssFailure (requestFailure ConnectionClosed) `shouldBe` Just (EpssFeedTransport TransportUnreachable)
+
+        it "tolerates every other request failure http-client reports" $
+            for_ [TooManyRedirects [], OverlongHeaders, InvalidStatusLine "bad", InvalidHeader "bad", InvalidChunkHeaders, IncompleteHeaders, InvalidDestinationHost "bad", TlsNotSupported] $ \content ->
+                classifyEpssFailure (requestFailure content) `shouldBe` Just (EpssFeedTransport TransportProtocol)
+
+        it "names the feed's own failures" $ do
+            classifyEpssFailure (toException (CompressedTooLarge 1 2)) `shouldBe` Just (EpssFeedOversize (CompressedTooLarge 1 2))
+            classifyEpssFailure (toException (DecompressedTooLarge 1 2)) `shouldBe` Just (EpssFeedOversize (DecompressedTooLarge 1 2))
+            classifyEpssFailure (toException EpssFeedEmpty) `shouldBe` Just EpssFeedNoScores
+            classifyEpssFailure (toException EpssFeedTruncated) `shouldBe` Just EpssFeedUndecodable
+
+        it "reads every gzip error as an undecodable feed" $
+            for_ [-2, -3, -4, -5] $ \code ->
+                classifyEpssFailure (toException (ZlibException code)) `shouldBe` Just EpssFeedUndecodable
+
+        it "leaves an invalid URL, a cancellation, and an unnamed fault to propagate" $ do
+            classifyEpssFailure (toException (InvalidUrlException "bad source" "invalid")) `shouldBe` Nothing
+            classifyEpssFailure (toException ThreadKilled) `shouldBe` Nothing
+            classifyEpssFailure (toException (TestContractEscape "a decode bug")) `shouldBe` Nothing
+            classifyEpssFailure (toException (mkIOError doesNotExistErrorType "a local file" Nothing Nothing)) `shouldBe` Nothing
+
+    describe "resolveEnrichment" $ do
+        let feed = EpssFeed (mkEpssScores [("CVE-A", 0.5)]) Nothing Nothing Nothing
+        it "joins a fetched feed whatever the requirement" $
+            for_ [EpssRequired, EpssOptional] $ \requirement ->
+                resolveEnrichment requirement (Right feed) `shouldBe` Right (EpssEnriched feed)
+
+        it "keeps a failure fatal where the ecosystem requires enrichment" $
+            resolveEnrichment EpssRequired (Left EpssFeedNoScores) `shouldBe` Left EpssFeedNoScores
+
+        it "records a failure as unavailable enrichment where it is optional" $ do
+            let resolved = resolveEnrichment EpssOptional (Left EpssFeedNoScores)
+            resolved `shouldBe` Right (EpssUnavailable EpssFeedNoScores)
+            fmap enrichmentStatus resolved `shouldSatisfy` (== Right EnrichmentUnavailable)
+
     describe "parseEpssPreamble" $ do
         it "reads the score date and the model version FIRST.org writes" $ do
             let preamble = parseEpssPreamble "#model_version:v2026.08.01,score_date:2026-08-29T00:00:00+0000"
@@ -151,3 +289,11 @@ spec = do
             let preamble = parseEpssPreamble "cve,epss,percentile"
             epScoreDate preamble `shouldBe` Nothing
             epModelVersion preamble `shouldBe` Nothing
+
+-- The bytes a ceiling saw when it tripped depend on chunking, so a case compares the ceiling alone.
+withoutSeen :: EpssFeedFailure -> EpssFeedFailure
+withoutSeen = \case
+    EpssFeedOversize (CompressedTooLarge cap _) -> EpssFeedOversize (CompressedTooLarge cap 0)
+    EpssFeedOversize (DecompressedTooLarge cap _) -> EpssFeedOversize (DecompressedTooLarge cap 0)
+    EpssFeedOversize (LineTooLarge cap _) -> EpssFeedOversize (LineTooLarge cap 0)
+    other -> other

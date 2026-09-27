@@ -238,10 +238,23 @@ advisories through their aliases, and writes the result to the artifact's `epss_
 ([`Ecluse.Core.Osv.Epss`](../../core/src/Ecluse/Core/Osv/Epss.hs)). The download is bounded twice, on
 the served stream and again on its gzip expansion, so neither an endless stream nor a compression
 bomb can hang or exhaust the pass. A feed past either bound is refused whole rather than truncated,
-because a short table is indistinguishable from a complete one downstream. A pass that cannot fetch
-the feed, or that decodes no scores from it at all, fails without publication.
-Configuration-dependent optional failure remains separate work in
-[#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+because a short table is indistinguishable from a complete one downstream. For the same reason a
+gzip stream must reach its end-of-stream marker, so a feed cut short is refused rather than read.
+
+Every pass attempts the feed, whatever the rules. What a failed feed means depends on the
+ecosystem's resolved policy, the same requirement its consumers enforce. An ecosystem with an
+active `DenyIfEpss` requires enrichment, so its pass fails and publishes nothing, and consumers keep
+their last accepted artifact. Any other ecosystem publishes its OSV data with
+`epss_status=unavailable`, so a new advisory and its fix still reach consumers during an EPSS
+outage. The scheduled loop runs each ecosystem on its own, so one ecosystem's required failure
+holds back no other. A one-shot compile of an ecosystem the configuration does not mount requires
+the feed, because it prepares a dataset ahead of that mount. A failed fetch, a byte ceiling, an
+empty feed, and a gzip error count as a failed feed. An invalid feed URL and any other fault still
+fail the pass, whatever the requirement.
+
+Pilot cannot see a consumer's rules, only its own configuration. The shared configuration is the
+contract: when Pilot's copy omits a consumer's `DenyIfEpss`, the consumer refuses the unavailable
+artifact that results and keeps its last accepted one.
 
 Each ecosystem's resolved policy decides whether its consumers require EPSS enrichment.
 An active `DenyIfEpss` requires the exact `epss_status=available` metadata marker, including with
@@ -318,7 +331,9 @@ valid feed omits optional dates or has no scores matching this artifact's adviso
 records whole-feed enrichment. An individual `epss_score` can still be absent. The added key
 preserves epoch 4. Consumers enforce their resolved policy's requirement before accepting an artifact.
 Older epoch 4 artifacts can lack the marker and remain acceptable only without EPSS-dependent rules.
-Optional-failure publication remains disabled.
+A pass whose optional feed failed records `epss_status=unavailable`, no scores, and no EPSS source
+or dates. That whole-feed state is distinct from an available feed that scores none of the
+artifact's advisories, and only an ecosystem without EPSS-dependent rules accepts it.
 
 Epoch 4 stores canonical package names: PEP 503 for PyPI, verbatim for npm and RubyGems.
 Rules query the same canonical key for denial and remediation. Dredger parses the stored keys

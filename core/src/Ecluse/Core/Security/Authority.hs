@@ -24,6 +24,7 @@ module Ecluse.Core.Security.Authority (
 
     -- * Log-safe rendering
     authorityLabel,
+    dialledAuthorityLabel,
     credentialFreeUrl,
 ) where
 
@@ -75,7 +76,20 @@ attacker-influenced or credential-bearing URL must never reach a log line or a s
 "registry.npmjs.org:443"
 -}
 authorityLabel :: Text -> Text
-authorityLabel = maybe unresolvedAuthority renderHostPort . hostPortAddress
+authorityLabel = authorityLabelWithDefault 443
+
+{- | 'authorityLabel' for a URL a client dials as written, so a portless @http://@ URL names port 80.
+
+>>> dialledAuthorityLabel "HTTP://mirror.example.test/epss.csv.gz"
+"mirror.example.test:80"
+-}
+dialledAuthorityLabel :: Text -> Text
+dialledAuthorityLabel raw = authorityLabelWithDefault portless raw
+  where
+    portless = if T.toLower (T.take 7 raw) == "http://" then 80 else 443
+
+authorityLabelWithDefault :: Word16 -> Text -> Text
+authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . hostPortAddressWithDefault portless
 
 {- | A fetched URL with every credential carrier removed: userinfo, query, and fragment, the
 last two whole, because either can hold a signed-URL credential.

@@ -57,7 +57,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
 import Ecluse.Core.Osv.Schema (EpssRequirement, MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
@@ -465,7 +465,7 @@ renderAdvisorySource source =
     "pushed_at="
         <> renderStamp (asPushedAt source)
         <> " osv_source="
-        <> maybe unrecordedValue authorityLabel (apOsvSource prov)
+        <> maybe unrecordedValue dialledAuthorityLabel (apOsvSource prov)
         <> " osv_newest_modified="
         <> renderStamp (apOsvNewestModified prov)
         <> " epss_score_date="

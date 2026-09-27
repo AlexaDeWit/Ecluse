@@ -15,8 +15,9 @@ import Data.Conduit.Combinators qualified as C
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
+import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Katip (KatipContextT)
+import Network.HTTP.Types.Status (status404)
 import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -60,9 +61,9 @@ import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvZipOf)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvCorpusZip, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip)
-import Ecluse.Test.OsvDb (compileOsvZipDbTo, withOsvZipDb)
+import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, withOsvZipDb)
 import Ecluse.Test.Package (sampleDetails, sampleManifest, unscopedNpm)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (
@@ -71,7 +72,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, isAllow, isDeny, isNoDecision)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -267,18 +268,19 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                         verdict `shouldSatisfy` \case
                             Deny _ _ -> True
                             _ -> False
-                    sweepWithdrawal deps rule False "withdrawal-only" `shouldReturn` not active
-                    sweepWithdrawal deps rule False "withdrawal-overlap" `shouldReturn` False
-                    sweepWithdrawal deps rule True "withdrawal-overlap" `shouldReturn` True
+                    survivesSweep deps rule False "withdrawal-only" `shouldReturn` not active
+                    survivesSweep deps rule False "withdrawal-overlap" `shouldReturn` False
+                    survivesSweep deps rule True "withdrawal-overlap" `shouldReturn` True
                 fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0")))
                 case fixVerdict of
                     Allow _ -> active `shouldBe` True
                     NoDecision _ -> active `shouldBe` False
                     other -> expectationFailure ("unexpected withdrawal remediation verdict: " <> show other)
-            sweepWithdrawal deps (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
+            survivesSweep deps (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
 
-sweepWithdrawal :: RuleDeps -> Rule -> Bool -> Text -> IO Bool
-sweepWithdrawal deps rule firstParty rawName = do
+-- Sweep one stored version, 1.0.0, under a single rule, and report whether it is still stored.
+survivesSweep :: RuleDeps -> Rule -> Bool -> Text -> IO Bool
+survivesSweep deps rule firstParty rawName = do
     let name = unscopedNpm rawName
         version = mkVersion Npm "1.0.0"
         stored = [StoredVersion version VersionServed Nothing]
@@ -298,9 +300,80 @@ sweepWithdrawal deps rule firstParty rawName = do
     contents <- readFakeContents store
     pure (maybe False (not . null) (Map.lookup name contents))
 
+-- The consumer half of an optional EPSS failure: Pilot published CorpusV2 with no scores.
+unavailableEnrichmentSpec :: Spec
+unavailableEnrichmentSpec = describe "an artifact published with unavailable EPSS enrichment" $ do
+    it "leaves a consumer that requires EPSS on its last qualified generation until an available one arrives" $
+        withSyncEnv $ \dir slot envWith -> do
+            (qualified, unavailable) <- corpusGenerations dir
+            let required etag offset path = (servingAt envWith etag offset path){syncEpssRequirement = EpssRequired}
+            syncStep (required "qualified" 0 qualified) Nothing >>= expectSwap "qualified"
+            bytes <- readFileBS (syncDbPath (required "qualified" 0 qualified))
+            source <- installedSource slot
+            installed <- generationInstalledAt slot
+            syncStep (required "unavailable" 60 unavailable) (Just (DbEtag "qualified")) >>= \case
+                SyncRejected etag rejection -> do
+                    etag `shouldBe` DbEtag "unavailable"
+                    rejection `shouldBe` CveDbEpssNotEstablished
+                other -> expectationFailure ("expected the unavailable artifact refused, got " <> show other)
+            readFileBS (syncDbPath (required "qualified" 0 qualified)) `shouldReturn` bytes
+            installedSource slot `shouldReturn` source
+            generationInstalledAt slot `shouldReturn` installed
+            currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "qualified")
+            withSlotGeneration slot $ \case
+                Nothing -> expectationFailure "the refusal lost the qualified generation"
+                Just (_, lookup') -> do
+                    cveRemediationProbe lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
+                    cveAdvisoriesFor lookup' "corpus-revoked" `shouldReturn` []
+            available <- osvCorpusZip CorpusV2 >>= \archive -> compileOsvZipDbTo Npm archive (dir </> "available")
+            syncStep (required "available" 120 available) (Just (DbEtag "unavailable")) >>= expectSwap "available"
+            withSlotGeneration slot $ \case
+                Nothing -> expectationFailure "the available generation was not installed"
+                Just (_, lookup') -> cveAdvisoriesFor lookup' "corpus-revoked" >>= (`shouldSatisfy` not . null)
+
+    it "gives a consumer without EPSS rules the new advisory and its fix" $
+        withSyncEnv $ \dir slot envWith -> do
+            (qualified, unavailable) <- corpusGenerations dir
+            let deps = inertRuleDeps{rdWithCveLookup = withSlotGeneration slot, rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+                deny = DenyIfCve (DenyIfCveParams 5 FailDeny)
+                verdictOn rule name version = do
+                    ctx <- mkEvalContext (pure publishedAt) (currentAdvisoryEtag slot)
+                    evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm name) (mkVersion Npm version)))
+            syncStep (servingAt envWith "qualified" 0 qualified) Nothing >>= expectSwap "qualified"
+            verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isNoDecision)
+            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isNoDecision)
+            verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isNoDecision)
+            survivesSweep deps deny False "corpus-revoked" `shouldReturn` True
+            syncStep (servingAt envWith "unavailable" 60 unavailable) (Just (DbEtag "qualified")) >>= \case
+                SyncSwapped etag meta -> do
+                    etag `shouldBe` DbEtag "unavailable"
+                    lookup "epss_status" meta `shouldBe` Just "unavailable"
+                other -> expectationFailure ("expected the unavailable artifact installed, got " <> show other)
+            verdictOn deny "corpus-revoked" "1.0.0" >>= (`shouldSatisfy` isDeny)
+            verdictOn AllowIfRemediatesCve "corpus-revoked" "1.2.0" >>= (`shouldSatisfy` isAllow)
+            verdictOn deny "corpus-clean" "1.0.0" >>= (`shouldSatisfy` isDeny)
+            survivesSweep deps deny False "corpus-revoked" `shouldReturn` False
+
+-- CorpusV1 compiled with the feed, then CorpusV2 compiled while an optional feed answers 404.
+corpusGenerations :: FilePath -> IO (FilePath, FilePath)
+corpusGenerations dir = do
+    qualified <- osvCorpusZip CorpusV1 >>= \archive -> compileOsvZipDbTo Npm archive (dir </> "qualified")
+    unavailable <- osvCorpusZip CorpusV2 >>= \archive -> compileOsvZipDbWithFeedTo Npm EpssOptional (status404, "") archive (dir </> "unavailable")
+    pure (qualified, unavailable)
+
+-- A sync environment serving a compiled artifact under an ETag, published this many seconds late.
+servingAt :: (CveFetch -> SyncEnv) -> Text -> NominalDiffTime -> FilePath -> SyncEnv
+servingAt envWith etag offset path = envWith (fetchServingAt (Just (addUTCTime offset publishedAt)) (Just etag) (copyFile path))
+
+expectSwap :: Text -> SyncOutcome -> Expectation
+expectSwap expected = \case
+    SyncSwapped etag _ -> etag `shouldBe` DbEtag expected
+    other -> expectationFailure ("expected a swap to " <> toString expected <> ", got " <> show other)
+
 spec :: Spec
 spec = do
     withdrawalSpec
+    unavailableEnrichmentSpec
     describe "sync provenance logging" $ do
         for_ [("2026-09-08T12:34:56Z", "42", "(Just 2026-09-08 12:34:56 UTC,Just 42)"), ("SECRET-time", "SECRET-count", "(Nothing,Nothing)"), (T.replicate 65 "9", T.replicate 21 "9", "(Nothing,Nothing)"), ("invalid", "18446744073709551616", "(Nothing,Nothing)"), ("invalid", "-1", "(Nothing,Nothing)"), ("invalid", "", "(Nothing,Nothing)")] $ \(builtAt, rowCount, summary) ->
             it ("logs only parsed values for built_at=" <> toString builtAt <> " and row_count=" <> toString rowCount) $
@@ -338,6 +411,12 @@ spec = do
                 logged `shouldSatisfy` T.isInfixOf "osv_source=osv.example.test:443"
                 logged `shouldSatisfy` T.isInfixOf "osv_newest_modified=2026-08-30T00:00:00Z"
                 logged `shouldSatisfy` T.isInfixOf "epss_score_date=2026-08-29T00:00:00Z"
+
+        it "names the port a portless http source dials" $
+            withSyncEnv $ \_ _ envWith -> do
+                let write dest = mkMinimalValidDbWithMeta dest "pkg-a" [("osv_source", "http://osv.example.test/npm/all.zip")]
+                logged <- captureSwapLog (envWith (fetchServingAt (Just publishedAt) (Just "e1") write))
+                logged `shouldSatisfy` T.isInfixOf "osv_source=osv.example.test:80"
 
         it "reads a value an older artifact never recorded as absent, not as a zero" $
             withSyncEnv $ \_ _ envWith -> do

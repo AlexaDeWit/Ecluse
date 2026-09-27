@@ -223,8 +223,7 @@ beside the verdict, so you can alert on staleness as well as on the `503`
 
 `ecluse pilot` runs as a long-lived loop. A Pilot pod does not need to idle between runs, though:
 `ecluse pilot compile --out DIR` runs one OSV compilation and exits. It fetches one ecosystem's
-advisory export and the EPSS feed, writes `<ecosystem>-osv-schema4.db` into `DIR`, and exits
-non-zero on failure.
+advisory export and the EPSS feed, and writes `<ecosystem>-osv-schema4.db` into `DIR`.
 
 | Flag | Effect |
 |---|---|
@@ -233,6 +232,18 @@ non-zero on failure.
 | `--source URL` | The complete export URL, in place of the one derived from `advisories.osvExportBaseUrl` |
 | `--epss-source URL` | Overrides `advisories.epssFeedUrl` |
 | `--upload` | Also publishes the artifact to the advisory store, a full sync cycle in one run. Aborts before compiling when no store is configured |
+
+The loaded configuration decides what a failed EPSS feed means, as it does for the scheduled loop
+([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). An ecosystem the
+configuration does not mount counts as one with a `DenyIfEpss`, because a compile run ahead of a new
+mount should hold the full dataset. Pilot logs a warning naming that ecosystem.
+
+| Outcome | Exit status |
+|---|---|
+| The artifact was written, and uploaded if asked | `0` |
+| The EPSS feed failed where the ecosystem has no `DenyIfEpss`, and the artifact was written with `epss_status=unavailable` | `0`, with a `warn` line |
+| The EPSS feed failed where the ecosystem has a `DenyIfEpss`, or is not mounted | `1`. The previous artifact stays in place |
+| The OSV export failed or was refused | `1`. The previous artifact stays in place |
 
 Run the one-shot as a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`, which keeps it a
 single instance, and schedule it less often than the proxy polls. Give the pod its role identity
@@ -484,9 +495,11 @@ network access.
 The default public endpoints are `registry.npmjs.org` for npm metadata and artifacts, `pypi.org` for
 PyPI metadata, and `files.pythonhosted.org` for PyPI distributions. Private artifact hosts depend on
 the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` and
-`epss.empiricalsecurity.com` by default, and it fetches the EPSS feed even when no EPSS rule is
-enabled. On a `5xx`, `408`, or `429` from either host, Pilot retries with capped, jittered backoff,
-so a transient outage does not get your NAT address rate-limited.
+`epss.empiricalsecurity.com` by default. It attempts the EPSS feed on every compile, even when no
+EPSS rule is enabled, so allow that egress whatever your rules. `ecluse check-config` prints the
+feed's `host:port` on a line that starts `pilot: every compile attempts the EPSS feed at`. On a
+`5xx`, `408`, or `429` from either host, Pilot retries with capped, jittered backoff, so a transient
+outage does not get your NAT address rate-limited.
 
 Allow CodeArtifact API access for token minting on every role that mints: `ecluse proxy`,
 `ecluse mirror`, and Dredger. `ecluse proxy --no-worker` mints no mirror-write token. Dredger also
