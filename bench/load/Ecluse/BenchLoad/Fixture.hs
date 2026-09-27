@@ -58,6 +58,7 @@ withProxyConfigured ecosystem knobs configure privateApp publicApp mkMix body =
             { psServeMaxInFlight = lkServeMaxInFlight knobs
             , psPublicConnections = lkPublicConnectionsPerHost knobs
             , psPrivateConnections = lkPrivateConnectionsPerHost knobs
+            , psAdvisories = lkAdvisories knobs
             }
 
 -- | The target for a duration-driven load over the URL mix.

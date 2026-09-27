@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the scrape reading the in-flight gauge and the cache evidence depend on.
+-- | Pin the scrape reading the advisory wait, the in-flight gauge, and the cache evidence depend on.
 module Ecluse.BenchLoad.ExpositionSpec (spec) where
 
 import Test.Hspec
@@ -11,14 +11,17 @@ import Ecluse.BenchLoad.Exposition (
     CacheOutcomes (..),
     GaugeSummary (..),
     Sample (..),
+    advisoryDatabaseInstalled,
     cacheWindow,
     commonLabels,
     parseExposition,
     renderSample,
+    ruleFailuresWindow,
     seriesTotal,
     storeOutcomes,
     summariseGauge,
  )
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore, VersionStore))
 
 exposition :: Text
@@ -53,6 +56,19 @@ spec = do
             seriesTotal "ecluse_metadata_cache_version_requests" [("result", "hit")] samples `shouldBe` Just 7
         it "keeps an absent metric apart from a zero one" $
             seriesTotal "ecluse_missing" [] samples `shouldBe` Nothing
+    describe "advisoryDatabaseInstalled" $ do
+        let installed = parseExposition "ecluse_advisory_database_age_seconds{job=\"ecluse\",ecosystem=\"npm\"} 0\n"
+        it "reads the ecosystem's database age, even a zero one, as an installed database" $
+            advisoryDatabaseInstalled Npm installed `shouldBe` True
+        it "waits while the age is absent or names another ecosystem" $ do
+            advisoryDatabaseInstalled PyPI installed `shouldBe` False
+            advisoryDatabaseInstalled Npm (parseExposition exposition) `shouldBe` False
+    describe "ruleFailuresWindow" $ do
+        let failures n = parseExposition ("ecluse_rule_effectful_failures{cause=\"transient\"} " <> show (n :: Int) <> "\necluse_rule_effectful_failures{cause=\"permanent\"} 1\n")
+        it "counts the failures recorded between the two scrapes across every cause" $
+            ruleFailuresWindow (failures 2) (failures 9) `shouldBe` 7
+        it "reads a counter not yet created as zero" $
+            ruleFailuresWindow [] (failures 0) `shouldBe` 1
     describe "renderSample" $
         it "drops the labels every series repeats" $ do
             let samples = parseExposition exposition

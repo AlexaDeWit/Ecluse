@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PEP 691 index, wheel relay, and cache load scenarios over local upstreams.
+{- | PEP 691 index, wheel relay, cache, and advisory database load scenarios over local upstreams.
 PyPI worker-mirroring remains a named gap until #765 supplies the async mirror worker.
 -}
 module Ecluse.BenchLoad.PyPI (
@@ -21,6 +21,7 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, responseLBS)
 
+import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
@@ -40,9 +41,12 @@ pypiFixture =
     UpstreamFixture
         { fixtureEcosystem = PyPI
         , fixtureScenarios =
-            [ indexScenario "index-cold" "GET the weighted Simple-index corpus with public cache TTL 0. Each request merges a live private overlay and filters files. Concurrent public misses share an in-flight fetch and decode." 0
+            [ indexColdScenario
+            , shippedAdvisories PyPI indexColdScenario
+            , allRulesAdvisories PyPI indexColdScenario
             , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
             , revalidateScenario
+            , shippedAdvisories PyPI revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario
             , wheelScenario PrivateWheel
@@ -73,6 +77,10 @@ pypiLoadNotes knobs =
         <> ").\n"
   where
     count = length (workingSet knobs)
+
+indexColdScenario :: Scenario
+indexColdScenario =
+    indexScenario "index-cold" "GET the weighted Simple-index corpus with public cache TTL 0. Each request merges a live private overlay and filters files. Concurrent public misses share an in-flight fetch and decode." 0
 
 indexScenario :: Text -> Text -> Int -> Scenario
 indexScenario name description ttl =

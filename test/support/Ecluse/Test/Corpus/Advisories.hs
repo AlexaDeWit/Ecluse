@@ -5,10 +5,13 @@
 {- | Advisory inputs for the benchmark corpus: the OSV records and EPSS rows captured under
 @bench/corpus/advisories/@, and a generated worst case with many ranges per package. Both take
 the served shape, an OSV export archive and a gzipped EPSS feed, for Pilot's compiler to read.
+The benchmarks and the load harness deny on them at the same suggested thresholds.
 -}
 module Ecluse.Test.Corpus.Advisories (
     AdvisoryInputs (..),
     corpusAdvisories,
+    suggestedDenyIfCve,
+    suggestedDenyIfEpss,
     SyntheticTarget (..),
     fillerTargets,
     syntheticAdvisories,
@@ -26,6 +29,7 @@ import System.FilePath (takeFileName, (</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny))
 import Ecluse.Core.Version (parseVersionKey)
 import Ecluse.Test.Corpus (readCorpusPins)
 import Ecluse.Test.Osv (osvZipOf)
@@ -44,6 +48,14 @@ corpusAdvisories eco = do
     archive <- osvZipOf entries
     feed <- readPinned epss
     pure AdvisoryInputs{aiOsvZip = archive, aiEpssFeed = GZip.compress feed}
+
+-- | @DenyIfCve@ at the CVSS threshold @config/default.yaml@ suggests, failing closed.
+suggestedDenyIfCve :: DenyIfCveParams
+suggestedDenyIfCve = DenyIfCveParams 8 FailDeny
+
+-- | @DenyIfEpss@ at the EPSS threshold @config/default.yaml@ suggests, failing closed.
+suggestedDenyIfEpss :: DenyIfEpssParams
+suggestedDenyIfEpss = DenyIfEpssParams 0.5 FailDeny
 
 -- A committed fixture file, by its path under @bench/corpus/@, with its pinned size and SHA-256.
 data FilePin = FilePin

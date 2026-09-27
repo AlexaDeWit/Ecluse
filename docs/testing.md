@@ -487,6 +487,30 @@ drives heavy-tier listings that never reuse an assembled response. `npm/ramp` st
 400 connections, one configured duration per step, and reports each step. None of the four joins
 the concurrency-one pass.
 
+Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
+shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
+under `bench/corpus/advisories/` through Pilot's compiler, and fails when they compile to no range.
+It then serves the artifact from a loopback stub of the object store, outside the proxy's cgroup.
+`advisories.url` names the stub's bucket, and `AWS_ENDPOINT_URL` points the proxy's S3 client at
+the stub, so the proxy syncs the artifact as it would from S3. The harness takes the idle floor and
+starts the scenario only once the proxy's scrape shows the database's
+`ecluse.advisory.database.age.seconds`. It fails the scenario when that takes more than a minute
+or the proxy exits first. Each scenario is otherwise its no-database counterpart, and the report
+lists it right after that counterpart, so their allocations per success sit side by side.
+
+| Scenario | No-database counterpart | Rule policy | What the database lookups find |
+|---|---|---|---|
+| `npm/merge-cold-advisories` | `npm/merge-cold` | The shipped policy | Advisories for `@babel/core`, `express`, `lodash`, `react`, `request`, and `webpack`, and none for the other captures |
+| `npm/merge-cold-all-advisory-rules` | `npm/merge-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `npm/merge-cold-advisories`. The highest EPSS score in the corpus is 0.213, so `DenyIfEpss` never denies and adds only its evaluation cost |
+| `npm/revalidate-not-modified-advisories` | `npm/revalidate-not-modified` | The shipped policy | Nothing: `@types/node` has no advisory, so this measures a present database and an absent package |
+| `pypi/index-cold-advisories` | `pypi/index-cold` | The shipped policy | Advisories for `numpy` and `requests`, and none for `boto3` |
+| `pypi/index-cold-all-advisory-rules` | `pypi/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `pypi/index-cold-advisories`, with `DenyIfEpss` never denying for the same reason |
+| `pypi/revalidate-not-modified-advisories` | `pypi/revalidate-not-modified` | The shipped policy | Nothing: `boto3` has no advisory, so this measures a present database and an absent package |
+
+A fail-closed advisory rule answers a version it cannot decide with 503, and the report counts
+that 503 with the admission refusals. When the proxy records such a failure in
+`ecluse.rule.effectful.failures` during the window, the scenario's section flags the count.
+
 `BENCH_LOAD_SCENARIOS` runs a comma-separated subset, such as `npm/merge-cold,npm/herd`.
 `BENCH_LOAD_THRASH_LIMITS_MIB` runs the GC-thrash probe instead of the passes: one scenario
 (`BENCH_LOAD_THRASH_SCENARIO`, `npm/heavy-private` unless set) at `BENCH_LOAD_THRASH_CPUS` cores

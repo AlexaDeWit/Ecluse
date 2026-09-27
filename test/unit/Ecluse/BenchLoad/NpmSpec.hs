@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The npm stubs' artifact paths, and the pattern knobs refused before any proxy boots.
+-- | The npm stubs' artifact paths, the advisory variants' order, and the pattern knobs refused before any proxy boots.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
 import Data.Aeson ((.=))
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (status200, status404)
@@ -20,7 +21,16 @@ import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 spec :: Spec
-spec = describe "npm artifact fixture paths" $ do
+spec = do
+    describe "npm advisory variants" $
+        it "run right after their no-database counterparts" $ do
+            let names = map scenarioName (fixtureScenarios npmFixture)
+            names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules"]
+            names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
+    fixturePathSpec
+
+fixturePathSpec :: Spec
+fixturePathSpec = describe "npm artifact fixture paths" $ do
     it "misses captured public tarballs privately while retaining the trusted hot path" $
         testWithApplication (pure (privateOverlayStub 0 "trusted")) $ \port -> do
             publicMiss <- fetchChecked status404 [] (localhost port <> "/request/-/request-2.88.2.tgz")

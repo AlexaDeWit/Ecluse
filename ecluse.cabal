@@ -983,6 +983,8 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit bench/load
   other-modules:
     Ecluse.AcceptanceSpec
+    Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.ExpositionSpec
     Ecluse.BenchLoad.LatencySpec
@@ -991,6 +993,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
     Ecluse.BenchLoad.ProxyProcess
@@ -1463,6 +1467,7 @@ executable bench-load
   if !flag(dev-http-egress)
     buildable: False
   other-modules:
+    Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
