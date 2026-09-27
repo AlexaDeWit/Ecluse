@@ -5,7 +5,7 @@
 -- | Direct encoding writes the bytes of the rendered JSON object, files in source order.
 module Ecluse.Core.Registry.PyPI.DocumentSpec (spec) where
 
-import Data.Aeson (Value (Null, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Null, Object, String), encode, object, (.=))
 import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Hedgehog (forAll, (===))
@@ -17,7 +17,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding)
 import Ecluse.Test.Json (genKey, genValue)
-import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, simpleValue)
 
 spec :: Spec
 spec = describe "simpleEncoding" $ do
@@ -35,7 +35,7 @@ spec = describe "simpleEncoding" $ do
             hedgehog $ do
                 envelope <- forAll (KeyMap.fromList <$> Gen.list (Range.linear 0 12) ((,) <$> genKey keyPool <*> genValue keyPool))
                 files <- forAll (Gen.list (Range.linear 0 40) (genValue keyPool))
-                let document = simpleDocument envelope (zipWith (\position value -> (ArrayEntry position, value)) [0 ..] files)
+                let document = documentFromValue (Object (KeyMap.insert "files" (Array (fromList files)) envelope))
                 encoded document === encode (simpleValue document)
 
 encoded :: SimpleDocument -> LByteString
