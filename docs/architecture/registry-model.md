@@ -457,9 +457,11 @@ are CodeArtifact, any host that speaks the protocol, and Verdaccio for developme
 ### Incremental npm extraction
 
 npm reads run `json-stream` inside the HTTP response lifetime. The reader feeds chunks of at most
-32 KiB, counts decompressed bytes and updates SHA-256 from the same source bytes. A successful
-result consumes the complete response, including data after extraction finishes. Transport failure,
-body limits and cancellation still close the response through `withResponse`.
+32 KiB and counts decompressed bytes. A full read passes the response body through a digesting
+source, which updates SHA-256 from each chunk the reader consumes. A selected read reads the body
+directly, because a selected release carries no source digest. A successful result consumes the
+complete response, including data after extraction finishes. Transport failure, body limits and
+cancellation still close the response through `withResponse`.
 
 Each retained release produces its typed policy record as it arrives. Separate timestamp and tag
 maps join those records at the end, so source member order does not affect release association.

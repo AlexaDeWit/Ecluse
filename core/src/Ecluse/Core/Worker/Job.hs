@@ -40,11 +40,11 @@ import Ecluse.Core.Package.Admission (
  )
 import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion))
 import Ecluse.Core.Registry (
+    BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     ParseError (ParseError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
-    isSuccessStatus,
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
@@ -57,7 +57,6 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
-    VersionListResponse (..),
  )
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
@@ -176,13 +175,10 @@ probeInventory policy job = do
     probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
     pure $ case probed of
         Left fault -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
-        Right response
-            | versionListStatus response == 404 -> Right []
-            | not (isSuccessStatus (versionListStatus response)) ->
-                Left (Retried BeforePublish (probeStatusReason job (versionListStatus response)))
-            | otherwise -> case versionListResult response of
-                Left (ParseError detail) -> Left (Retried BeforePublish (probeParseReason job detail))
-                Right versions -> Right versions
+        Right (SuccessBody _ (Left (ParseError detail))) -> Left (Retried BeforePublish (probeParseReason job detail))
+        Right (SuccessBody _ (Right versions)) -> Right versions
+        Right (UnreadStatus 404) -> Right []
+        Right (UnreadStatus code) -> Left (Retried BeforePublish (probeStatusReason job code))
 
 probeFaultReason :: MirrorJob -> FetchFault -> Text
 probeFaultReason job = \case

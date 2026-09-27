@@ -20,7 +20,7 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * Errors
     MetadataError (..),
-    metadataFetchError,
+    metadataResponse,
 
     -- * Single-version resolution
     VersionEvaluation (..),
@@ -30,7 +30,7 @@ module Ecluse.Core.Registry.Metadata (
 ) where
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
+import Ecluse.Core.Registry (BodyOutcome (SuccessBody, UnreadStatus), FetchFault (FetchBoundExceeded), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (..))
@@ -130,7 +130,17 @@ versionTransience = \case
     VersionMissing -> Just WontResolve
     VersionPresent{} -> Nothing
 
--- | Keep body/transport faults distinct from structural bounds enforced during incremental extraction.
+-- | Classify a metadata exchange. A 404 cannot establish identity, and a refusal keeps its status.
+metadataResponse :: Either FetchFault (BodyOutcome a) -> Either MetadataError a
+metadataResponse = \case
+    Left fault -> Left (metadataFetchError fault)
+    Right (SuccessBody _ parsed) -> Right parsed
+    Right (UnreadStatus 404) -> Left MetadataAbsent
+    Right (UnreadStatus code)
+        | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
+        | otherwise -> Left (MetadataHttpFailure code)
+
+-- Keep body and transport faults distinct from structural bounds enforced during incremental extraction.
 metadataFetchError :: FetchFault -> MetadataError
 metadataFetchError fault = case fault of
     FetchBoundExceeded limit -> case limit of

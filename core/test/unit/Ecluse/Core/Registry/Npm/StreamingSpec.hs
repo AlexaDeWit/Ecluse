@@ -148,7 +148,6 @@ spec = describe "npmFields" $ do
                     events `shouldContain` [TagField "clé" (String key)]
                     events `shouldContain` [TimeField key (String person)]
                 when (mode == SelectedRead key) $ events `shouldContain` [TimeField key (String person)]
-                streamDigest result `shouldBe` digestOf bytes
                 streamBytes result `shouldBe` BS.length bytes
 
     it "joins timestamps and tags when they precede versions across one-byte chunks" $ do

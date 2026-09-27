@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Chunk boundaries, source identity and cancellation for incremental registry reads.
+-- | Chunk boundaries, source size and cancellation for incremental registry reads.
 module Ecluse.Core.Registry.JsonStreamSpec (spec) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, String), encode, object, (.=))
@@ -17,10 +17,9 @@ import UnliftIO.Exception (finally)
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
-import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
--- | Verify retained-depth boundaries, source identity and response cancellation.
+-- | Verify retained-depth boundaries, source size and response cancellation.
 spec :: Spec
 spec = describe "readJsonStream" $ do
     forM_ [("ASCII", "plain", "value"), ("Unicode", "clé😀", "été𝄞"), ("escaped", "key\\\"\n", "value\t\\\""), ("long", T.replicate 40000 "k", T.replicate 40000 "v")] $ \(label, key, value) ->
@@ -31,7 +30,6 @@ spec = describe "readJsonStream" $ do
                 let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt size rest)) body
                 result <- expectRight (decode (retainedValue 2) chunks)
                 streamValue result `shouldBe` Right (Just expected)
-                streamDigest result `shouldBe` digestOf body
                 streamBytes result `shouldBe` BS.length body
 
     it "equates escaped Unicode keys and preserves their first value at every boundary" $ do
@@ -82,7 +80,6 @@ spec = describe "readJsonStream" $ do
             decode parser [BS.take position body, BS.drop position body] `shouldBe` baseline
         result <- expectRight baseline
         streamValue result `shouldBe` Right (Just (object ["keep" .= object ["list" .= [Number 1, Bool True, Null, String "a\\b\xE9"]]]))
-        streamDigest result `shouldBe` digestOf body
         streamBytes result `shouldBe` BS.length body
 
     it "skips an unrecognised object before constructing retained values" $ do
@@ -94,13 +91,11 @@ spec = describe "readJsonStream" $ do
                 )
         streamValue result `shouldBe` Right (Just (object ["keep" .= ("yes" :: Text)]))
 
-    it "drains and hashes trailing chunks after the selected JSON object ends" $ do
+    it "drains trailing chunks after the selected JSON object ends" $ do
         let chunks = ["{\"name\":\"thing\"}", " trailing", " bytes"]
-            body = BS.concat chunks
         result <- expectRight (decode (J.objectWithKey "name" (retainedValue 1)) chunks)
         streamValue result `shouldBe` Right (Just (String "thing"))
-        streamDigest result `shouldBe` digestOf body
-        streamBytes result `shouldBe` BS.length body
+        streamBytes result `shouldBe` BS.length (BS.concat chunks)
 
     it "applies the decompressed body ceiling to ignored trailing bytes" $
         parseJsonChunks (MetadataBodyLimit 2) (retainedValue 3) (\_ value -> Right (Just value)) Nothing ["{}", "x"]

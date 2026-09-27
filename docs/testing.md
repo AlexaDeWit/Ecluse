@@ -160,6 +160,7 @@ Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected
 `StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
 bytes to the new parser, separating input buffering from projection changes. The streamed modes
 read the file in 32 KiB chunks through the production driver. `StreamedVersions` is npm-only.
+Every streamed mode hashes the source to report it. Production selected reads skip that hash.
 
 Each invocation makes one read with no warm-up. Accounting walks force the retained result without
 `Show` or output encoding. `read_project_ns` covers that read, projection and forcing.
@@ -472,14 +473,14 @@ The harness separately validates each capture through the production adapter bef
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
 The projection groups measure decoding from held bytes, including the structural guards.
-They do not measure the production HTTP wrappers.
+They do not measure source hashing or the production HTTP wrappers.
 
 The cold-read group calls `fetchFullManifest` and `fetchVersionMetadata` through uncached production
 clients. Each iteration includes request formation, loopback HTTP, bounded response consumption,
-source hashing, extraction, projection, and artifact-location checks. The manager redirects every
-request to the local replay server and disables proxies. No timed request reaches a live registry.
-Source bytes and artifact URLs stay unchanged. Metadata is always cold, although the HTTP manager
-can reuse connections. The group measures neither cache hits nor cache admission.
+source hashing on full reads, extraction, projection, and artifact-location checks. The manager
+redirects every request to the local replay server and disables proxies. No timed request reaches a
+live registry. Source bytes and artifact URLs stay unchanged. Metadata is always cold, although the
+HTTP manager can reuse connections. The group measures neither cache hits nor cache admission.
 
 Each row reports time and RTS allocation per capture in `bench-results.csv`.
 Rows name the body ceiling and distinguish successful reads from body-limit refusals.

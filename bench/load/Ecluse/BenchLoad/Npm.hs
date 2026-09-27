@@ -51,7 +51,8 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), VersionListResponse (..))
+import Ecluse.Core.Registry (BodyOutcome (UnreadStatus))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
@@ -395,7 +396,7 @@ succeedingPublishClient counter =
         { mpPublishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , mpProbeMetadata = const (pure (Right (VersionListResponse 404 (Right []))))
+        , mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
         }
 
 jobHashes :: LByteString -> NonEmpty Hash

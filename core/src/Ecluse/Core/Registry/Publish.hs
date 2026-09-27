@@ -15,7 +15,6 @@ module Ecluse.Core.Registry.Publish (
 
     -- * The adapter's protocol codec
     PublishCodec (..),
-    VersionListResponse (..),
     fetchVersionList,
 
     -- * The shared transport
@@ -33,9 +32,10 @@ import Network.HTTP.Client (Manager, Request)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
+    BodyOutcome,
     FetchFault (FetchUrlUnformable),
     MirrorArtifact,
-    ParseError (ParseError),
+    ParseError,
     PublishFault (PublishFetch),
     UrlFormationError,
  )
@@ -95,7 +95,7 @@ data MirrorTransport = MirrorTransport
 mint. The worker never sees the codec, the transport, or the adapter.
 -}
 data MirrorPublish = MirrorPublish
-    { mpProbeMetadata :: PackageName -> IO (Either FetchFault VersionListResponse)
+    { mpProbeMetadata :: PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
     -- ^ Every failure is a 'FetchFault' value, so the probe's fall-through match is total.
     , mpPublishArtifact :: PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Every failure is a 'PublishFault' value, so the worker's retry-vs-drop decision is
@@ -117,7 +117,7 @@ newMirrorPublish transport target codec =
 
 -- Execute the codec's probe read over the transport: mint, form, seal, dial, and read the
 -- body bounded, with every failure folded into the typed 'FetchFault' channel.
-probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault VersionListResponse)
+probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
 probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
     formThen
@@ -126,21 +126,11 @@ probeMetadata transport targetUrl codec name = do
         (sealRequest <$> pcProbeRequest codec targetUrl token name)
 
 -- | Read a codec's identifiers inside the response lifetime, preserving transport and HTTP outcomes.
-fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault VersionListResponse)
+fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
 fetchVersionList manager limits parser request =
-    fmap project <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
+    fmap (fmap versions) <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
   where
-    project (status, result) = VersionListResponse status $
-        case result of
-            Nothing -> Left (ParseError "no successful version-list body")
-            Just streamed -> streamValue streamed >>= finishVersionList
-
--- | HTTP status and usable identifiers from a bounded selective read.
-data VersionListResponse = VersionListResponse
-    { versionListStatus :: Int
-    , versionListResult :: Either ParseError [Version]
-    }
-    deriving stock (Eq, Show)
+    versions streamed = streamValue streamed >>= finishVersionList
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name plan artifact bytes = do

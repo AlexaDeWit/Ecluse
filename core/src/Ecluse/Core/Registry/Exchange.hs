@@ -11,13 +11,17 @@ module Ecluse.Core.Registry.Exchange (
     singleAttemptSettings,
     boundedFetch,
     boundedJsonFetch,
-    boundedJsonFetchWith,
+    withSuccessBody,
     boundedRelay,
+
+    -- * Source digests
+    digestingRead,
 
     -- * Request formation
     formThen,
 ) where
 
+import Crypto.Hash (hashInit, hashUpdate)
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (
@@ -35,6 +39,7 @@ import UnliftIO (try)
 
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
+    BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport),
     PublishRelayResponse (..),
     RegistryResponse (RegistryResponse),
@@ -44,6 +49,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError, boundedRead)
+import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 
 -- | Destructive clients must return uncertain transport failures for reassessment before retry.
 singleAttemptSettings :: ManagerSettings -> ManagerSettings
@@ -89,22 +95,26 @@ readBounded project limits response =
     fmap (uncurry (project (statusCode (responseStatus response))))
         <$> boundedRead limits (brRead (responseBody response))
 
--- | Extract successful metadata within the response lifetime. Refusals do not parse error bodies.
-boundedJsonFetch :: Manager -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (Int, Maybe (StreamResult s)))
-boundedJsonFetch = boundedJsonFetchWith id
+-- | Extract selected values from a 2xx body within the response lifetime. Other statuses are never parsed.
+boundedJsonFetch :: Manager -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (BodyOutcome (StreamResult s)))
+boundedJsonFetch manager limits parser step initial = withSuccessBody manager (readJsonStream limits parser step initial)
 
--- | Bracket successful-body extraction after response headers. Error statuses never enter the observer.
-boundedJsonFetchWith ::
-    (IO (Either LimitError (StreamResult s)) -> IO (Either LimitError (StreamResult s))) ->
-    Manager ->
-    BodyLimit ->
-    J.Parser a ->
-    (s -> a -> Either LimitError s) ->
-    s ->
-    Request ->
-    IO (Either FetchFault (Int, Maybe (StreamResult s)))
-boundedJsonFetchWith observe manager limits parser step initial request = runExchange manager request $ \response -> do
+-- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
+withSuccessBody :: Manager -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
+withSuccessBody manager consume request = runExchange manager request $ \response -> do
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
-        then fmap ((code,) . Just) <$> observe (readJsonStream limits parser step initial (brRead (responseBody response)))
-        else pure (Right (code, Nothing))
+        then fmap (SuccessBody code) <$> consume (brRead (responseBody response))
+        else pure (Right (UnreadStatus code))
+
+{- | Run a consumer over a source that hashes each chunk it passes on. A successful result carries
+the digest of every chunk the consumer read.
+-}
+digestingRead :: (IO ByteString -> IO (Either e a)) -> IO ByteString -> IO (Either e (a, ContentDigest))
+digestingRead consume readChunk = do
+    context <- newIORef hashInit
+    let next = do
+            chunk <- readChunk
+            modifyIORef' context (`hashUpdate` chunk)
+            pure chunk
+    consume next >>= traverse (\result -> (result,) . digestFromContext <$> readIORef context)

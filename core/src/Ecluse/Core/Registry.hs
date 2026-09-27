@@ -8,6 +8,7 @@ Read responses retain the HTTP status so metadata projection cannot erase access
 module Ecluse.Core.Registry (
     -- * Fetch payload
     RegistryResponse (..),
+    BodyOutcome (..),
     isAuthorisationFailure,
     isSuccessStatus,
 
@@ -40,6 +41,14 @@ data RegistryResponse = RegistryResponse
     -- ^ The bounded response body, omitted for explicit access refusals.
     }
     deriving stock (Eq, Show)
+
+-- | The answer to a read that consumes only a 2xx body.
+data BodyOutcome a
+    = -- | The 2xx status and the consumer's result.
+      SuccessBody Int a
+    | -- | A status outside 2xx. The consumer never ran, so no result exists.
+      UnreadStatus Int
+    deriving stock (Eq, Show, Functor)
 
 -- | Whether an upstream status explicitly refuses authentication or authorisation.
 isAuthorisationFailure :: Int -> Bool
