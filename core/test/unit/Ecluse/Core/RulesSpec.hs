@@ -7,10 +7,13 @@ Advisory regressions preserve ecosystem identity and display spelling.
 -}
 module Ecluse.Core.RulesSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Aeson (Value (String))
 import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
+import Data.Universe.Class (Universe (universe))
 import Database.SQLite.Simple (Connection, Only, query, withConnection)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -24,14 +27,14 @@ import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (finally, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, initialBreaker, recordFailure)
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), insideAffectedRange, openCveDb, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
+import Ecluse.Test.Cve (fakeCveLookup, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
@@ -391,8 +394,8 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
             unconfigured <- decideWith inertRuleDeps shipped ev
             decideWith unloadedDeps shipped ev >>= (`shouldBe` unconfigured)
 
-{- | The reference: an SQL fix probe and a range read for every version, the per-version form one
-read per request must reproduce verdict for verdict.
+{- | The reference: an SQL fix probe and a range read for every version, each range checked by parsing
+the version and its bounds again. One read per request must reproduce it verdict for verdict.
 -}
 perVersionVerdict :: DbEtag -> (Text -> Text -> IO Bool) -> CveLookup -> Rule -> RuleEvidence -> IO RuleVerdict
 perVersionVerdict etag probe cve rule ev = case rule of
@@ -409,13 +412,13 @@ perVersionVerdict etag probe cve rule ev = case rule of
     version = renderVersion (evVersion ev)
     remediation ranges =
         let remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
-            stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
+            stillOpen = ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar]
          in case (remediated, stillOpen) of
                 (_, _ : _) -> NoDecision ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
                 ([], []) -> NoDecision "no advisory names this version as its fix"
                 (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
     deny missing metric threshold scoreOf ranges =
-        case ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar, scoreAtLeast missing threshold (scoreOf ar)] of
+        case ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)] of
             [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
             ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
 
@@ -438,8 +441,8 @@ differentialRules =
         : [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
             <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.25, 0.5, 0.95, 1]]
 
-{- | Rows covering every bound shape the reader decodes: segment pairs, both bound columns on one row,
-exact and unorderable points, prereleases, unparseable and oddly spelt fixes, and missing scores.
+{- | Rows covering every bound shape the reader decodes: segment pairs, both bound columns on one
+row, points, prereleases, build metadata, "v" prefixes, unparseable bounds, and missing scores.
 -}
 edgeCaseRows :: [RangeRow]
 edgeCaseRows =
@@ -459,6 +462,14 @@ edgeCaseRows =
     , ("fix-pkg", "GHSA-f-0005", Just "1.0.0", Just "1.0.0", Nothing, Just 2.0, Just 0.01)
     , ("unfixed-pkg", "GHSA-u-0001", Just "1.0.0", Nothing, Nothing, Just 10.0, Just 0.5)
     , ("@scope/pkg", "GHSA-s-0001", Nothing, Just "1.0.0", Nothing, Just 3.9, Just 0.25)
+    , ("bound-pkg", "GHSA-b-0001", Just "garbage", Just "6.0.0", Nothing, Just 9.0, Just 0.6)
+    , ("bound-pkg", "GHSA-b-0001", Just "10.0.0", Just "10.2.0", Nothing, Just 9.0, Just 0.6)
+    , ("bound-pkg", "GHSA-b-0002", Just "6.1.0", Nothing, Just "bogus", Just 8.0, Just 0.3)
+    , ("bound-pkg", "GHSA-b-0003", Just "v7.0.0", Just "v7.1.0", Nothing, Just 7.5, Just 0.55)
+    , ("bound-pkg", "MAL-b-0004", Just "v8.0.0", Nothing, Just "v8.0.0", Nothing, Nothing)
+    , ("bound-pkg", "GHSA-b-0005", Just "9.0.0-beta.2", Nothing, Just "9.0.0+meta.1", Just 6.0, Just 0.8)
+    , ("bound-pkg", "GHSA-b-0006", Just "9.5.0+meta", Nothing, Just "9.5.0+meta", Just 9.9, Nothing)
+    , ("open-pkg", "MAL-o-0001", Nothing, Nothing, Nothing, Nothing, Nothing)
     ]
 
 -- | Versions around every fixture bound, plus spellings only an exact text match tells apart.
@@ -494,7 +505,20 @@ spreadVersions =
     , "5.0.0"
     , "weird"
     , "not.a.version"
+    , "v1.0.0"
+    , "1.0.0+build.1"
+    , "6.0.0"
+    , "6.5.0"
+    , "7.0.5"
+    , "v7.0.5"
+    , "8.0.0"
+    , "9.0.0-beta.1"
+    , "9.0.0"
+    , "9.0.1"
+    , "9.5.0"
+    , "9.5.0+other"
     , "10.0.0"
+    , "10.1.0"
     ]
 
 -- | The versions to decide for one package: the spread, and every bound its rows carry.
@@ -515,8 +539,9 @@ policy's shared evaluator matches a fresh one per version. Returns the verdicts 
 agreesOn :: (Text -> Text -> IO Bool) -> CveLookup -> [PackageName] -> IO [RuleVerdict]
 agreesOn probe cve names =
     fmap (concat . concat) . forM (names <> [unscopedNpm "no-such-package"]) $ \name -> do
-        versions <- versionsFor cve name
-        let evidence = [completeEvidence (sampleDetails name (mkVersion Npm v)) | v <- versions]
+        -- A version built under another ecosystem's grammar reaches the matcher's re-parse.
+        versions <- (\vs -> [(v, builtUnder) | v <- vs, builtUnder <- universe]) <$> versionsFor cve name
+        let evidence = [completeEvidence (sampleDetails name (mkVersion builtUnder v)) | (v, builtUnder) <- versions]
         compared <- forM differentialRules $ \rule -> do
             perVersion <- traverse (perVersionVerdict etag probe cve rule) evidence
             perRequest <- perRequestVerdicts deps rule name evidence

@@ -5,12 +5,20 @@
 -- | Opening an advisory artifact, the lookups it serves, and the pure range matching.
 module Ecluse.Core.CveSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.List (isSuffixOf)
+import Data.Universe.Class (Universe (universe))
 import Database.SQLite.Simple (Only (..), Query (Query), close, execute, execute_, open)
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (bracket, catchAny, finally, try)
 
 import Ecluse.Core.Cve (
@@ -20,14 +28,18 @@ import Ecluse.Core.Cve (
     CveLookup (..),
     CveQueryFault (cqfQuery),
     MissingScorePolicy (..),
-    insideAffectedRange,
+    affecting,
+    fixedAt,
+    keepAdvisories,
     openCveDb,
+    packageAdvisories,
     scoreAtLeast,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Test.Cve (fakeCveLookup, namesFix)
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Cve (fakeCveLookup, namesFix, referenceInside)
 import Ecluse.Test.Osv (
     CorpusVersion (CorpusV1),
     mkDbWithCorruptPage,
@@ -39,6 +51,7 @@ import Ecluse.Test.Osv (
     mkDbWithoutEpssColumn,
  )
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
+import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
 -- Keep these fake rows aligned with the committed corpus pins in Ecluse.Test.OsvSpec.
 corpusRows :: [(Text, AdvisoryRange)]
@@ -122,8 +135,35 @@ through intro lastAffected = range intro (LastAffected lastAffected)
 point :: Text -> AdvisoryRange
 point v = through (Just v) v
 
+-- One segment through the matcher, for a version built under the segment's ecosystem.
+insideOn :: Ecosystem -> Text -> AdvisoryRange -> Bool
+insideOn eco version ar = not (null (affecting (packageAdvisories eco [ar]) (mkVersion eco version)))
+
 inside :: Text -> AdvisoryRange -> Bool
-inside = insideAffectedRange Npm
+inside = insideOn Npm
+
+-- Text each grammar parses, and spellings only another grammar or none parses.
+genVersionText :: Gen Text
+genVersionText =
+    Gen.choice
+        [ genNpm
+        , genPyPI
+        , genGem
+        , Gen.element ["0", "v1.2.3", "1.0.0+build.7", "1.0.0-rc.1", "1.0", "weird", "not.a.version", "0.1-bulbasaur", ""]
+        ]
+
+-- A segment whose bounds come from a small pool, so bounds and versions collide often.
+genSegment :: [Text] -> Gen AdvisoryRange
+genSegment pool = do
+    cveId <- Gen.element ["GHSA-a", "GHSA-b", "MAL-c"]
+    segment <-
+        Gen.choice
+            [ point <$> Gen.element pool
+            , range
+                <$> Gen.maybe (Gen.element pool)
+                <*> Gen.choice [FixedBefore <$> Gen.element pool, LastAffected <$> Gen.element pool, pure Unbounded]
+            ]
+    pure segment{arCveId = cveId}
 
 spec :: Spec
 spec = do
@@ -313,7 +353,39 @@ spec = do
             scoreAtLeast AbstainMissingScore 0.5 (Just 0.5) `shouldBe` True
             scoreAtLeast AbstainMissingScore 0.5 (Just 0.75) `shouldBe` True
 
-    describe "insideAffectedRange" $ do
+    describe "fixedAt" $
+        it "is every row whose fixed bound is the version's exact text, in row order, duplicates included" $
+            hedgehog $ do
+                pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
+                ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
+                let fixes = [fixed | FixedBefore fixed <- map arUpperBound ranges]
+                version <- forAll (Gen.frequency ([(2, Gen.element pool), (1, genVersionText)] <> [(3, Gen.element fixes) | not (null fixes)]))
+                let expected = [ar | ar <- ranges, arUpperBound ar == FixedBefore version]
+                H.cover 5 "some row names the version as its fix" (not (null expected))
+                fixedAt (packageAdvisories Npm ranges) (mkVersion Npm version) === expected
+
+    describe "affecting" $ do
+        it "agrees with the per-row reference, whatever ecosystem built the version" $
+            hedgehog $ do
+                eco <- forAll (Gen.element universe)
+                builtUnder <- forAll (Gen.element universe)
+                pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
+                ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
+                version <- forAll (Gen.choice [Gen.element pool, genVersionText])
+                let expected = filter (referenceInside eco version) ranges
+                H.cover 10 "some segment holds the version" (not (null expected))
+                H.cover 10 "some segment does not" (length expected < length ranges)
+                affecting (packageAdvisories eco ranges) (mkVersion builtUnder version) === expected
+
+        it "keeps only the rows that pass a test, in row order" $
+            hedgehog $ do
+                pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
+                ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
+                version <- forAll (Gen.element pool)
+                let prepared = packageAdvisories Npm ranges
+                    keep = (/= "GHSA-a") . arCveId
+                affecting (keepAdvisories keep prepared) (mkVersion Npm version) === filter keep (affecting prepared (mkVersion Npm version))
+
         describe "the half-open interval [introduced, fixed)" $ do
             it "contains a version strictly between the bounds" $
                 inside "1.5.0" (range (Just "1.0.0") (FixedBefore "2.0.0")) `shouldBe` True
@@ -385,15 +457,15 @@ spec = do
                 inside "2.0.1" (range Nothing (FixedBefore "2.0.0")) `shouldBe` False
 
             it "denies below the fix and admits at and above it, on PyPI" $ do
-                insideAffectedRange PyPI "1.9.9" (range Nothing (FixedBefore "2.0")) `shouldBe` True
-                insideAffectedRange PyPI "2.0" (range Nothing (FixedBefore "2.0")) `shouldBe` False
-                insideAffectedRange PyPI "2.0.post1" (range Nothing (FixedBefore "2.0")) `shouldBe` False
+                insideOn PyPI "1.9.9" (range Nothing (FixedBefore "2.0")) `shouldBe` True
+                insideOn PyPI "2.0" (range Nothing (FixedBefore "2.0")) `shouldBe` False
+                insideOn PyPI "2.0.post1" (range Nothing (FixedBefore "2.0")) `shouldBe` False
 
             it "covers a PyPI pre-release of the zero version, which a \"0\" bound excluded" $ do
                 -- PEP 440 orders 0rc1 below 0, so the raw bound left it outside the range it
                 -- belongs to. With no lower bound it is inside.
-                insideAffectedRange PyPI "0rc1" (range (Just "0") (FixedBefore "2.0")) `shouldBe` False
-                insideAffectedRange PyPI "0rc1" (range Nothing (FixedBefore "2.0")) `shouldBe` True
+                insideOn PyPI "0rc1" (range (Just "0") (FixedBefore "2.0")) `shouldBe` False
+                insideOn PyPI "0rc1" (range Nothing (FixedBefore "2.0")) `shouldBe` True
 
         describe "a point segment naming a version no grammar can order" $ do
             it "is affected at exactly its own string" $
@@ -408,7 +480,7 @@ spec = do
                 inside "1.0.1" (point "1.0.0") `shouldBe` False
                 -- Ordered equality, not string equality. Both hold only while a bound the
                 -- grammar parses keeps the point arm out of the way.
-                insideAffectedRange PyPI "1.0.0" (point "1.0") `shouldBe` True
+                insideOn PyPI "1.0.0" (point "1.0") `shouldBe` True
                 inside "1.0.0+build" (point "1.0.0") `shouldBe` True
 
             it "does not read a range with two different unorderable bounds as a point" $

@@ -35,9 +35,11 @@ security boundary: untrusted config can only name a built-in constructor, never 
 evaluator. Most rules decide a version from its evidence alone. The three advisory rules decide it
 from their package's advisory rows. One evaluator decides a request's versions. The first advisory
 rule a request reaches reads the package's rows once, and every advisory rule then decides every
-version from that one read with no further IO. A rule is **effectful** when that read runs under a
-resilience policy, which is when an advisory database is configured. Without one, an advisory
-rule's verdict is fixed at boot, and the read does no IO.
+version from that one read with no further IO. A request parses each row's bounds at most once, and
+the rules' working memory grows with the package's advisory rows, never with its version count. A
+rule is **effectful** when that read runs under a resilience policy, which is when an advisory
+database is configured. Without one, an advisory rule's verdict is fixed at boot, and the read does
+no IO.
 
 ### Evaluation model
 

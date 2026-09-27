@@ -30,6 +30,14 @@ spec = do
         it "parses a valid version into a key" $
             versionKey (mkVersion Npm "1.2.3") `shouldSatisfy` isJust
 
+    describe "versionKeyIn" $
+        it "is the key mkVersion builds under that ecosystem, whichever ecosystem built the version" $
+            hedgehog $ do
+                raw <- forAll (Gen.choice (Gen.element ["1.0", "1.0.0+build", "1.0.0.pre", "v1", "bogus"] : map snd ecosystemGens))
+                eco <- forAll (Gen.element (map fst ecosystemGens))
+                builtUnder <- forAll (Gen.element (map fst ecosystemGens))
+                versionKeyIn eco (mkVersion builtUnder raw) === versionKey (mkVersion eco raw)
+
     describe "parseVersionKey" $
         for_ parseableEcosystems $ \(eco, valid, invalid, refusalName, gen) ->
             describe (show eco) $ do

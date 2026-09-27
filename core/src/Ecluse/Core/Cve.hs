@@ -17,11 +17,16 @@ module Ecluse.Core.Cve (
     CveQueryFault (..),
 
     -- * Pure range matching
-    insideAffectedRange,
+    PackageAdvisories,
+    packageAdvisories,
+    keepAdvisories,
+    affecting,
+    fixedAt,
     MissingScorePolicy (..),
     scoreAtLeast,
 ) where
 
+import Data.Map.Strict qualified as Map
 import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, provenanceQuery)
@@ -29,7 +34,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Version (compareVersions, mkVersion, parseVersionKey)
+import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion, versionKeyIn)
 
 import Database.SQLite.Simple (Connection, SQLError, close)
 
@@ -93,9 +98,7 @@ mkCveDb conn meta =
                 { cveAdvisoriesFor = taggedQuery "advisories-for" . advisoriesQuery conn
                 , cveCoveredNames = taggedQuery "covered-names" (coveredNamesQuery conn)
                 }
-        , -- Total by construction: the connection is going away either way (see
-          -- 'cveDbClose').
-          cveDbClose = close conn `catchAny` const pass
+        , cveDbClose = close conn `catchAny` const pass
         , cveDbMeta = meta
         , cveDbProvenance = decodeProvenance meta
         }
@@ -105,47 +108,90 @@ mkCveDb conn meta =
 taggedQuery :: Text -> IO a -> IO a
 taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault tag (show err))
 
-{- | Is this version inside the advisory segment's affected interval, under the ecosystem's
-ordering? __Fail-closed:__ an unprovable comparison counts as __inside__, bar an 'unorderablePoint'.
+{- | One package's advisory segments, each with its bounds parsed once under the package's
+ecosystem, so every version of the package tests against ordering keys.
 -}
-insideAffectedRange :: Ecosystem -> Text -> AdvisoryRange -> Bool
-insideAffectedRange eco versionText ar = case unorderablePoint eco ar of
-    Just only -> versionText == only
-    Nothing -> atOrAboveIntroduced && withinUpperBound
+data PackageAdvisories = PackageAdvisories
+    { paEcosystem :: Ecosystem
+    , paSegments :: [Segment]
+    , -- Lazy: only the remediation rule reads it, so a deny rule's filtered copy never builds it.
+      paFixes :: ~(Map Text [AdvisoryRange])
+    }
+
+-- One advisory row and the bounds matching reads from it.
+data Segment = Segment
+    { segRange :: AdvisoryRange
+    , -- Lazy: parsed when a version is first matched, so a request that matches none parses nothing.
+      segBounds :: ~SegmentBounds
+    }
+
+-- A bound the grammar cannot parse is no bound, so no version can be shown to be outside it.
+data SegmentBounds
+    = -- A point whose one string the grammar rejects, matched as text.
+      OnlyText Text
+    | -- The inclusive lower bound and the upper bound.
+      Ordered (Maybe VersionKey) UpperKey
+
+data UpperKey = Below VersionKey | AtMost VersionKey | NoUpper
+
+-- | Parse every segment's bounds at most once, under the package's ecosystem.
+packageAdvisories :: Ecosystem -> [AdvisoryRange] -> PackageAdvisories
+packageAdvisories eco = fromSegments eco . map (\ar -> Segment ar (segmentBounds eco ar))
+
+-- | Keep only the segments whose row passes the test.
+keepAdvisories :: (AdvisoryRange -> Bool) -> PackageAdvisories -> PackageAdvisories
+keepAdvisories keep advisories = fromSegments (paEcosystem advisories) (filter (keep . segRange) (paSegments advisories))
+
+-- The fixes index keeps row order within each fixed version.
+fromSegments :: Ecosystem -> [Segment] -> PackageAdvisories
+fromSegments eco segments =
+    PackageAdvisories
+        { paEcosystem = eco
+        , paSegments = segments
+        , paFixes = Map.fromListWith (flip (<>)) [(fixed, [segRange s]) | s <- segments, FixedBefore fixed <- [arUpperBound (segRange s)]]
+        }
+
+{- | The rows whose fixed bound is this version's exact text, in row order. A row with a fixed bound
+always decodes to 'FixedBefore', so this is an exact match on the artifact's @fixed_version@.
+-}
+fixedAt :: PackageAdvisories -> Version -> [AdvisoryRange]
+fixedAt advisories version = Map.findWithDefault [] (renderVersion version) (paFixes advisories)
+
+{- | The rows whose affected interval holds a version of the package, in row order. __Fail-closed:__
+an unprovable comparison counts as __inside__, bar a point the grammar cannot order.
+-}
+affecting :: PackageAdvisories -> Version -> [AdvisoryRange]
+affecting advisories version = [segRange s | s <- paSegments advisories, holds (segBounds s)]
   where
-    v = mkVersion eco versionText
+    key = versionKeyIn (paEcosystem advisories) version
+    holds = \case
+        OnlyText only -> renderVersion version == only
+        Ordered lower upper -> maybe True (\k -> atOrAbove k lower && withinUpper k upper) key
 
-    atOrAboveIntroduced = case arIntroduced ar of
-        -- No introduced bound: the range starts at the beginning.
-        Nothing -> True
-        Just i -> case compareVersions v (mkVersion eco i) of
-            Just LT -> False
-            Just _ -> True
-            Nothing -> True
+atOrAbove :: VersionKey -> Maybe VersionKey -> Bool
+atOrAbove k = maybe True (k >=)
 
-    withinUpperBound = case arUpperBound ar of
-        -- A fix is an exclusive upper bound: affected while v < fixed.
-        FixedBefore f -> case compareVersions v (mkVersion eco f) of
-            Just LT -> True
-            Just _ -> False
-            Nothing -> True
-        -- last_affected is an inclusive upper bound: affected while v <= it.
-        LastAffected la -> case compareVersions v (mkVersion eco la) of
-            Just GT -> False
-            Just _ -> True
-            Nothing -> True
-        -- No upper bound: the range never ends.
-        Unbounded -> True
+-- A fix is an exclusive upper bound and last_affected an inclusive one.
+withinUpper :: VersionKey -> UpperKey -> Bool
+withinUpper k = \case
+    Below fixed -> k < fixed
+    AtMost lastAffected -> k <= lastAffected
+    NoUpper -> True
 
--- OSV writes an enumerated version as introduced == last_affected. When the grammar rejects that
--- string, the segment names it literally, since nothing can order it against anything.
-unorderablePoint :: Ecosystem -> AdvisoryRange -> Maybe Text
-unorderablePoint eco ar = case (arIntroduced ar, arUpperBound ar) of
+{- OSV writes an enumerated version as introduced == last_affected. When the grammar rejects that
+string, the segment names it literally, since nothing can order it against anything. -}
+segmentBounds :: Ecosystem -> AdvisoryRange -> SegmentBounds
+segmentBounds eco ar = case (arIntroduced ar, arUpperBound ar) of
     (Just introduced, LastAffected lastAffected)
-        | introduced == lastAffected
-        , isLeft (parseVersionKey eco introduced) ->
-            Just introduced
-    _ -> Nothing
+        | introduced == lastAffected -> maybe (OnlyText introduced) (\k -> Ordered (Just k) (AtMost k)) introducedKey
+    (_, upper) -> Ordered introducedKey (upperKey upper)
+  where
+    keyOf = rightToMaybe . parseVersionKey eco
+    introducedKey = keyOf =<< arIntroduced ar
+    upperKey = \case
+        FixedBefore fixed -> maybe NoUpper Below (keyOf fixed)
+        LastAffected lastAffected -> maybe NoUpper AtMost (keyOf lastAffected)
+        Unbounded -> NoUpper
 
 -- | Whether an individual absent score supplies threshold evidence.
 data MissingScorePolicy

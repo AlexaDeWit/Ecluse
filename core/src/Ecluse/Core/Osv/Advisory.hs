@@ -231,7 +231,7 @@ extractFromAdvisory scores adv = do
     epss = epssForIds scores (osvId adv : fromMaybe [] (osvAliases adv))
 
 {- | Does every bound this segment carries parse under the ecosystem's version grammar? A bound
-that does not leaves 'Ecluse.Core.Cve.insideAffectedRange' matching every version, fail-closed.
+that does not leaves 'Ecluse.Core.Cve.affecting' matching every version, fail-closed.
 -}
 orderableBounds :: Ecosystem -> ExtractedOsv -> Bool
 orderableBounds eco = null . unorderableBounds eco
