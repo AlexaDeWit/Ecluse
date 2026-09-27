@@ -23,14 +23,16 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules (
+    AdvisoryDatabase (AdvisoryDatabase),
     PreparedRule (..),
-    RuleDeps (rdWithCveLookup),
+    RuleDeps (rdAdvisoryDatabase),
     SourceHealth (..),
     SourceReporter (..),
     evalRule,
     evalRules,
     noSourceReporter,
     runEffectfulRule,
+    withCveLookup,
  )
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
@@ -46,6 +48,7 @@ import Ecluse.Test.Rules (
     isApproved,
     isUnavailable,
     isUndecidable,
+    servingRuleDeps,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestClock)
@@ -536,9 +539,9 @@ provenanceSpec = describe "advisory evidence across concurrent evaluations" $ do
             retryDeps = advisoryRuleDeps "retry" "RETRY" pass
             deps =
                 inertRuleDeps
-                    { rdWithCveLookup = \use -> do
+                    { rdAdvisoryDatabase = AdvisoryDatabase $ \use -> do
                         attempt <- atomicModifyIORef' attempts (\n -> (n + 1, n))
-                        rdWithCveLookup (if attempt == 0 then firstDeps else retryDeps) use
+                        withCveLookup (if attempt == 0 then firstDeps else retryDeps) use
                     }
         rule <- mkRule "CVSS" 300 fastConfig{ecBackoff = [0]} FailDeny (evalRule deps ctx cveRule)
         evalRules ctx [rule] (pkg Nothing 0)
@@ -551,7 +554,7 @@ provenanceSpec = describe "advisory evidence across concurrent evaluations" $ do
         waiting <- newEmptyMVar
         let winnerDeps = advisoryRuleDeps "winner" "WINNER" (takeMVar entered)
             blockedDeps = advisoryRuleDeps "cancelled" "CANCELLED" (putMVar entered () *> takeMVar waiting)
-            laterDeps = blockedDeps{rdWithCveLookup = bracket_ pass (writeIORef released True) . rdWithCveLookup blockedDeps}
+            laterDeps = blockedDeps{rdAdvisoryDatabase = AdvisoryDatabase (bracket_ pass (writeIORef released True) . withCveLookup blockedDeps)}
         winner <- mkRule "CVSS" 300 fastConfig FailDeny (evalRule winnerDeps ctx cveRule)
         later <- mkRule "EPSS" 300 fastConfig FailDeny (evalRule laterDeps ctx epssRule)
         evalRules ctx [winner, later] (pkg Nothing 0)
@@ -559,8 +562,7 @@ provenanceSpec = describe "advisory evidence across concurrent evaluations" $ do
         readIORef released `shouldReturn` True
 
 advisoryRuleDeps :: Text -> Text -> IO () -> RuleDeps
-advisoryRuleDeps etag identifier beforeQuery =
-    inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag etag, lookup'))}
+advisoryRuleDeps etag identifier beforeQuery = servingRuleDeps (DbEtag etag) lookup'
   where
     original = fakeCveLookup [("thing", AdvisoryRange identifier (Just 9.8) (Just "0") Unbounded (Just 0.95))]
     lookup' = original{cveAdvisoriesFor = \name -> beforeQuery *> cveAdvisoriesFor original name}

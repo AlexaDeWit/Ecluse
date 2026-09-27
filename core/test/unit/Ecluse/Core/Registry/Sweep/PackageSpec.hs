@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepStore (ssExecute, ssObserve),
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness), prepare)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
@@ -63,7 +63,7 @@ import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
-import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
 epoch :: UTCTime
@@ -489,10 +489,7 @@ advisorySweep freshness = do
 -- Capabilities whose database affects the fixture version, under the given push-age reading.
 advisoryDeps :: IO AdvisoryFreshness -> RuleDeps
 advisoryDeps freshness =
-    inertRuleDeps
-        { rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup [("left-pad", affectingRange)]))
-        , rdAdvisoryFreshness = freshness
-        }
+    (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", affectingRange)])){rdAdvisoryFreshness = freshness}
 
 affectingRange :: AdvisoryRange
 affectingRange = AdvisoryRange "GHSA-affect-0001" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing

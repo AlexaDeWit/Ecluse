@@ -30,7 +30,7 @@ import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), evalRules, prepare)
+import Ecluse.Core.Rules (PreparedRule (prepResilience), RuleDeps (rdAdvisoryFreshness), evalRules, prepare, withCveLookup)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (AdvisoryAge),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
@@ -38,7 +38,7 @@ import Ecluse.Core.Rules.Freshness (
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy))
-import Ecluse.Core.Rules.Types (Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
+import Ecluse.Core.Rules.Types (Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -126,13 +126,20 @@ spec = do
             handle <- stubSyncHandle
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
-            rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
+            withCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
-            rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
+            withCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
+
+        it "prepares the advisory rules to run directly for an ecosystem the plan does not carry" $ do
+            handle <- stubSyncHandle
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
+                advisoryPolicy = [PrecededRule (defaultPrecedence r) r | r <- [AllowIfRemediatesCve, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
+            prepare (deps PyPI) advisoryPolicy >>= (`shouldBe` [False, False]) . map (isJust . prepResilience)
+            prepare (deps Npm) advisoryPolicy >>= (`shouldBe` [True, True]) . map (isJust . prepResilience)
 
     describe "cveRuleDepsFor -- bounded outage reporting for the rules" $ do
         it "reports an absent database once as an outage, not once per evaluation, and its recovery" $ do

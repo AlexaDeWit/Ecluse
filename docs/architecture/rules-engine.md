@@ -35,7 +35,8 @@ security boundary: untrusted config can only name a built-in constructor, never 
 evaluator. A rule is **pure or effectful** by whether it carries a resilience policy, which
 depends only on where its signal lives. So `DenyInstallTimeExecution` is pure for npm's
 `hasInstallScript` but effectful for a RubyGems native `extensions` signal that appears only
-inside the `.gem`.
+inside the `.gem`. An advisory rule is effectful only where an advisory database is configured.
+Without one its verdict is fixed at boot, so it runs as a pure rule.
 
 ### Evaluation model
 

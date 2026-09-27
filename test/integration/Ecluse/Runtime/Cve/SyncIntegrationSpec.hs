@@ -24,12 +24,10 @@ import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
 import Ecluse.Config (loadConfig)
-import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Rules (RuleDeps (..), noSourceReporter, prepare)
-import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -50,7 +48,7 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
@@ -77,14 +75,7 @@ spec =
                             -- One proxy wiring: the slot, the fast-lane policy over it,
                             -- and the sync task polling the (empty) bucket.
                             slot <- newCveSlot
-                            let ruleDeps =
-                                    RuleDeps
-                                        { rdWithCveLookup = withSlotGeneration slot
-                                        , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
-                                        , rdBreakerReporter = noBreakerReporter
-                                        , rdSourceReporter = noSourceReporter
-                                        , rdAdvisoryFreshness = pure AdvisoryFresh
-                                        }
+                            let ruleDeps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
                                 syncEnv =
                                     SyncEnv
                                         { syncFetch = s3CveFetchFor cveSource bucket "npm-osv-schema4.db" (512 * 1024 * 1024)

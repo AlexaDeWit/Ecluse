@@ -44,7 +44,7 @@ import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
-import Ecluse.Core.Rules (RuleDeps (..), SourceReporter, noSourceReporter)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), RuleDeps (..), SourceReporter, noSourceReporter)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryFreshness (AdvisoryFresh),
@@ -75,12 +75,12 @@ import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf,
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
-ecosystem's advisory database, and abstain and report nowhere when the plan carries no handle for it.
+ecosystem's advisory database. One the plan carries no handle for has none configured, and reports nowhere.
 -}
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> (Ecosystem -> OutageReport -> IO ()) -> Ecosystem -> RuleDeps
 cveRuleDepsFor plan reporter reportOutage eco =
     RuleDeps
-        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotGeneration . syncSlot . csEnv) handle
+        { rdAdvisoryDatabase = maybe NoAdvisoryDatabase slotDatabase handle
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) handle
         , rdBreakerReporter = reporter
         , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) handle
@@ -88,6 +88,7 @@ cveRuleDepsFor plan reporter reportOutage eco =
         }
   where
     handle = Map.lookup eco plan
+    slotDatabase h = AdvisoryDatabase (withSlotGeneration (syncSlot (csEnv h)))
 
 -- One handle's reporter, over the outage state every mount of the ecosystem shares.
 sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter

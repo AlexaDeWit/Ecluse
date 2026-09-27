@@ -18,7 +18,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Breaker (Breaker, initialBreaker, noBreakerReporter, recordFailure)
+import Ecluse.Core.Breaker (Breaker, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -37,6 +37,7 @@ import Ecluse.Test.Rules (
     isDeny,
     isNoDecision,
     isUndecidable,
+    servingRuleDeps,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -67,14 +68,15 @@ decide = decideWith inertRuleDeps
 
 -- | Rule capabilities whose advisory database is the given fake's rows.
 depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
-depsWith rows =
-    RuleDeps
-        { rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup rows))
-        , rdCurrentAdvisoryEtag = pure Nothing
-        , rdBreakerReporter = noBreakerReporter
-        , rdSourceReporter = noSourceReporter
-        , rdAdvisoryFreshness = pure AdvisoryFresh
-        }
+depsWith rows = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup rows)
+
+-- | Rule capabilities with a database configured and no generation loaded, as before the first sync.
+unloadedDeps :: RuleDeps
+unloadedDeps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use Nothing)}
+
+-- | Rule capabilities with a database configured whose every lookup throws.
+faultingDeps :: Text -> RuleDeps
+faultingDeps detail = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> throwIO (TestContractEscape detail))}
 
 {- | One advisory naming @thing\@1.0.0@ (the version 'pkg' builds) as its exact
 fixed bound, with no other advisory leaving the package affected.
@@ -249,12 +251,11 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
             `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (no advisory database loaded))"
 
     it "keeps a skipped lookup fault, with the generic reason the client also sees" $ do
-        let broken = inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")}
-        decision <- decideWith broken skipPolicy (pkg Nothing 30)
+        decision <- decideWith (faultingDeps "advisory database exploded") skipPolicy (pkg Nothing 30)
         skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule could not be evaluated"]
 
     it "keeps a skip behind an open breaker" $ do
-        prepared <- prepare inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "down")} skipPolicy
+        prepared <- prepare (faultingDeps "down") skipPolicy
         opened <- traverse openBreakerOn prepared
         decision <- evalRules ctx opened (pkg Nothing 30)
         skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule source circuit breaker is open"]
@@ -323,7 +324,7 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
             other -> expectationFailure ("expected one unavailability, got " <> show other)
 
     it "reports a lookup fault once, with its detail, and nothing again for the decided verdict" $ do
-        (deps, reports) <- observedDeps inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")}
+        (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
         void (decideWith deps skipPolicy (pkg Nothing 30))
         reported reports >>= \case
             [SourceUnavailable "DenyIfCve" detail] -> detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
@@ -339,11 +340,42 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
         void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
         reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
 
+{- | Each advisory rule's verdict when no generation answers, verbatim. A deployment with no database
+configured and one awaiting its first sync must read the same.
+-}
+noDatabaseVerdicts :: [(Text, Rule, RuleVerdict)]
+noDatabaseVerdicts =
+    [ ("AllowIfRemediatesCve", AllowIfRemediatesCve, NoDecision "no advisory database is loaded")
+    , ("DenyIfCve set to deny", denyCveAt 8.0, CannotVet FailDeny "DenyIfCve: no advisory database loaded")
+    , ("DenyIfCve set to skip", DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), CannotVet FailNoDecision "DenyIfCve: no advisory database loaded")
+    , ("DenyIfEpss set to deny", denyEpssAt 0.5, CannotVet FailDeny "DenyIfEpss: no advisory database loaded")
+    , ("DenyIfEpss set to skip", DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), CannotVet FailNoDecision "DenyIfEpss: no advisory database loaded")
+    ]
+
+noDatabaseSpec :: Spec
+noDatabaseSpec = describe "an advisory rule with no database configured" $ do
+    it "is prepared to run directly, with no timeout, retry, or breaker" $ do
+        rules <- prepare inertRuleDeps [atDefaultPrecedence rule | (_, rule, _) <- noDatabaseVerdicts]
+        map (isJust . prepResilience) rules `shouldBe` (False <$ noDatabaseVerdicts)
+
+    for_ noDatabaseVerdicts $ \(label, rule, verdict) ->
+        it (toString (label <> " keeps the verdict it reaches before the first sync")) $
+            for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
+                prepared <- prepare deps [atDefaultPrecedence rule]
+                traverse (\r -> runEffectfulRule ctx r (pkg Nothing 0)) prepared >>= (`shouldBe` [Decided verdict])
+
+    it "decides the shipped policy as it does before the first sync" $ do
+        let shipped = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+        for_ [pkg Nothing 1, pkg Nothing 30] $ \ev -> do
+            unconfigured <- decideWith inertRuleDeps shipped ev
+            decideWith unloadedDeps shipped ev >>= (`shouldBe` unconfigured)
+
 spec :: Spec
 spec = do
     expirySpec
     evidenceSpec
     sourceHealthSpec
+    noDatabaseSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
@@ -609,7 +641,7 @@ spec = do
         it "attaches the fail-open resilience (and its breaker) to AllowIfRemediatesCve" $
             -- The one thing a reviewer must check on the remediation lane: an
             -- uncomputable lookup abstains (FailNoDecision) and never admits or 503s.
-            prepare inertRuleDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
+            prepare unloadedDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
                 [r] -> fmap resAlignment (prepResilience r) `shouldBe` Just FailNoDecision
                 other -> expectationFailure ("expected one prepared rule, got " <> show (length other))
         it "prepares every pure built-in to run directly, with no resilience" $ do
@@ -725,14 +757,7 @@ spec = do
         it "a failing advisory lookup abstains: the quarantine still governs, and nothing turns Undecidable" $ do
             -- The deliberate failure asymmetry: an unconfirmable remediation costs the fix its fast
             -- lane, never availability and never an admission.
-            let broken =
-                    RuleDeps
-                        { rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")
-                        , rdCurrentAdvisoryEtag = pure Nothing
-                        , rdBreakerReporter = noBreakerReporter
-                        , rdSourceReporter = noSourceReporter
-                        , rdAdvisoryFreshness = pure AdvisoryFresh
-                        }
+            let broken = faultingDeps "advisory database exploded"
                 policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
             -- An old enough version still rides the ordinary allow.
             decideWith broken policy (pkg Nothing 30)
