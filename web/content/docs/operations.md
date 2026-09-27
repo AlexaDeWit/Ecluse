@@ -419,9 +419,9 @@ expiry observation.
 ## Memory plan and runtime sizing
 
 Run each Écluse pod with at least 1 GiB of memory. Écluse does not support smaller pods. At
-512 MiB a proxy under load overflows its heap repeatedly, and each overflow ends the process with
-exit code `1` and the line `ecluse: service exited: heap overflow`. The boot does not refuse a
-smaller pod, so keep the minimum in your pod specification.
+512 MiB a proxy under load often overflows its heap. Each overflow ends the process with exit code
+`1` and the line `ecluse: service exited: heap overflow`. The boot does not refuse a smaller pod,
+so keep the minimum in your pod specification.
 
 Check the effective plan in the boot log or `ecluse check-config` before changing pod resources.
 Both use the same plan renderer. The checker predicts the runtime posture, while boot measures
@@ -649,9 +649,9 @@ They show nursery arithmetic, not a workload guarantee:
 | 4 CPU / 1 GiB | Default `-A64m` | 256 MiB | Effective controls, the capability count after any shed and peak process memory |
 | 4 CPU / 2 GiB | Default `-A64m` | 256 MiB | Effective controls and collection headroom under the package mix |
 
-When the nursery exceeds a quarter of the heap ceiling, Écluse sheds capabilities until it fits,
-and the boot log says `memory plan: capability count shed to` with the new count. The pod then
-runs on fewer cores than its CPU limit grants. To keep every core, give the pod more memory or set
+When the nursery exceeds a quarter of the heap ceiling, Écluse sheds capabilities until it fits.
+The boot log reports `memory plan: capability count shed to` and the new count, and the pod runs
+on fewer cores than it would otherwise claim. To keep every core, give the pod more memory or set
 a smaller allocation area through `GHCRTS`.
 
 Read the effective allocation area and admission controls from the boot log after each change.
