@@ -6,7 +6,7 @@
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
 import Crypto.Hash (Digest, SHA256, hash)
-import Data.Aeson (Object, eitherDecodeStrict, encode, object, (.:), (.=))
+import Data.Aeson (Object, encode, object, (.:), (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Parser)
 import Data.ByteString qualified as BS
@@ -35,9 +35,11 @@ spec = describe "metadata retained heap" $ do
         forM_ [minBound .. maxBound] $ \shape ->
             it (toString (cpName package) <> "/" <> show shape) $ do
                 (size, digest) <- authenticate package
-                result <- measureInChild "--metadata-probe" (show shape) package
-                report package digest shape result
-                checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
+                measureInChild ["--metadata-probe", show shape] package >>= \case
+                    Left failure -> expectationFailure failure
+                    Right result -> do
+                        report package digest shape result
+                        checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do

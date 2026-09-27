@@ -19,11 +19,10 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), pypiFields)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Corpus (cpPath, pypiCorpusPackages)
+import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
@@ -54,8 +53,7 @@ corpusRead :: CorpusRead
 corpusRead =
     CorpusRead
         { crProject = \package -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits package
-        , crOrigin = "https://pypi.org/simple"
-        , crAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
+        , crUpstream = pypiCaptureUpstream
         , crMetadata = adapterMetadata pypiAdapter
         , crVersionReads = \package raw _ key -> [("selected", rendered (projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]
         , crDocumentReads = \_ _ -> []

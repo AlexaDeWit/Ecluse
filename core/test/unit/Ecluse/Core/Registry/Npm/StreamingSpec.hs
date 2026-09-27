@@ -26,16 +26,15 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
-import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath)
+import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
@@ -472,8 +471,7 @@ corpusRead :: ByteString -> CorpusRead
 corpusRead bytes =
     CorpusRead
         { crProject = \package -> fmap (second (fst npmCached)) . projectNpmManifest limits package
-        , crOrigin = "https://registry.npmjs.org"
-        , crAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
+        , crUpstream = npmCaptureUpstream
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \package raw document key ->
             let version = mkVersion Npm key

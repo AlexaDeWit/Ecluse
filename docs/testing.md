@@ -152,21 +152,22 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 ### Read evaluation
 
-`MetadataResidencySpec` checks that a full read hands back a fully evaluated result.
-It reads each capture through the production projection in two fresh child processes, with the
-warm-up and baseline above:
+`MetadataResidencySpec` checks that a full read hands back a fully evaluated result. For each
+capture, a fresh child process reads through the production projection and enforces artifact
+locations against the capture's registry, as a production fetch does. It then takes two samples of
+the same rooted cache entry:
 
-- One child roots the shared entry at weak head normal form, as production holds a read result.
-- The other roots the entry after forcing its derived rendering.
+- the live bytes with the entry at weak head normal form, as production holds a read result
+- the live bytes after the child forces the entry through its derived rendering
 
-The two retained samples may differ by at most 4 KiB, plus 128 bytes a release for PyPI.
-Both directions fail, because a deferred field can hold more or less than its value.
-PyPI releases still defer PEP 440 key parts, yank reasons and some file fields, under 120 bytes a
-release in the corpus.
+The samples may differ by at most 1 KiB in either direction, because a deferred field can hold
+more or less than its value. Rendering a package name allocates pinned memory, and the runtime then
+keeps one pinned block live, so the child renders names before the first sample.
 
-A second check holds only the typed view and places weak pointers on the served document and on
-each served release or file object. Every pointer must clear after a major collection. While the
-document is also rooted, every pointer must survive one, so the check can observe liveness.
+A second check holds only the typed view. It places weak pointers on the served document, on each
+served release or file object, and on each non-empty member map. Every pointer must clear after a
+major collection. While the document is also rooted, every pointer must survive one, so the check
+can observe liveness.
 
 ### Streaming source probes
 

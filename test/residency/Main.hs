@@ -10,7 +10,7 @@ module Main (main) where
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
 import Ecluse.Core.Server.MemoryModel.MaterialProbe qualified as MaterialProbe
-import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, probe, probeEvaluation)
+import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, evaluationMain, probe)
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import System.Environment qualified as Environment
@@ -20,7 +20,7 @@ main :: IO ()
 main =
     Environment.getArgs >>= \case
         ["--metadata-probe", shape, path] -> childMain probe shape path
-        ["--metadata-evaluation-probe", evaluation, path] -> childMain probeEvaluation evaluation path
+        ["--metadata-evaluation-probe", path] -> evaluationMain path
         ["--metadata-source-probe", mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain "npm" mode name version limit path
         ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain ecosystem mode name version limit path
         ["--metadata-material-probe", ecosystem, mode, name, version, limit, path] -> MaterialProbe.materialMain ecosystem mode name version limit path

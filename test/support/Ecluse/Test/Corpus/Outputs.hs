@@ -25,20 +25,18 @@ import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), merge
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataError)
-import Ecluse.Core.Security (AllowedHostPorts)
 import Ecluse.Core.Server.Conditional (renderETag)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), fingerprintPiece)
 import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName, syntheticProxyBase)
+import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage), cpName, syntheticProxyBase)
 import Ecluse.Test.Snapshot (digestOf)
 
 -- | One ecosystem's reads of a capture, bound to the upstream it was captured from.
 data CorpusRead = CorpusRead
     { crProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
     -- ^ The full read, before artifact-location enforcement.
-    , crOrigin :: Text
-    , crAuthorities :: AllowedHostPorts
+    , crUpstream :: CaptureUpstream
     , crMetadata :: AdapterMetadata
     , crVersionReads :: PackageName -> ByteString -> CachedDoc -> Text -> [(Text, LByteString)]
     -- ^ Labelled outputs of the reads that select one version key.
@@ -52,7 +50,8 @@ all versions, the least key and the greatest key, each served alone and merged w
 captureOutputs :: CorpusRead -> CorpusPackage -> ByteString -> Either Text [Text]
 captureOutputs corpus package raw = do
     (projected, document) <- first show (crProject corpus name raw)
-    let info = enforceArtifactLocations (crAuthorities corpus) (crOrigin corpus) projected
+    let upstream = crUpstream corpus
+        info = enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream) projected
         keys = Map.keysSet (infoVersions info)
         ends = [("first", Set.lookupMin keys), ("last", Set.lookupMax keys)]
         survivorSets = ("all", keys) : [(label, maybe mempty Set.singleton key) | (label, key) <- ends]
@@ -76,7 +75,7 @@ servedOutputs corpus name raw document info (label, survivors) =
         plan <- maybeToRight "no merge plan" (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
         let bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest s) (srcValue s) | s <- sources])
             body = metadataSerialise (crMetadata corpus) (metadataAssemble (crMetadata corpus) syntheticProxyBase bySource plan (Just document))
-            etag = packumentETag syntheticProxyBase (crOrigin corpus <$ sources) name (map fingerprintPiece sources)
+            etag = packumentETag syntheticProxyBase (upstreamOrigin (crUpstream corpus) <$ sources) name (map fingerprintPiece sources)
             prefix = shape <> "/" <> label <> "/"
         pure [(prefix <> "plan", rendered plan), (prefix <> "served", body), (prefix <> "etag", encodeUtf8 (renderETag etag))]
 
