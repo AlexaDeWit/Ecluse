@@ -45,10 +45,14 @@ allRulesAdvisories ecosystem =
         ecosystem
         "all-advisory-rules"
         ( "The proxy syncs an advisory database compiled from the captured corpus advisories, and its policy adds DenyIfCve at CVSS "
-            <> show (dicMinCvss suggestedDenyIfCve)
-            <> " and DenyIfEpss at "
-            <> show (dieMinEpss suggestedDenyIfEpss)
-            <> "."
+            <> threshold (dicMinCvss suggestedDenyIfCve)
+            <> " (onUnavailable "
+            <> alignment (dicOnUnavailable suggestedDenyIfCve)
+            <> ") and DenyIfEpss at "
+            <> threshold (dieMinEpss suggestedDenyIfEpss)
+            <> " (onUnavailable "
+            <> alignment (dieOnUnavailable suggestedDenyIfEpss)
+            <> ")."
         )
         advisoryDenyRules
 
@@ -77,10 +81,18 @@ advisoryDenyRules =
     [ "deny-known-cves" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= dicMinCvss suggestedDenyIfCve, "onUnavailable" .= alignment (dicOnUnavailable suggestedDenyIfCve)]
     , "deny-exploitable-cves" .= object ["type" .= ("DenyIfEpss" :: Text), "minEpss" .= dieMinEpss suggestedDenyIfEpss, "onUnavailable" .= alignment (dieOnUnavailable suggestedDenyIfEpss)]
     ]
+
+-- The @onUnavailable@ spelling the rules configuration reads.
+alignment :: FailureAlignment -> Text
+alignment = \case
+    FailDeny -> "deny"
+    FailNoDecision -> "skip"
+
+-- A threshold as the docs write it: 8 rather than 8.0.
+threshold :: Double -> Text
+threshold d = maybe (show d) show (wholeNumber d)
   where
-    alignment = \case
-        FailDeny -> "deny" :: Text
-        FailNoDecision -> "skip"
+    wholeNumber x = let n = truncate x :: Int in if fromIntegral n == x then Just n else Nothing
 
 -- Compile the ecosystem's corpus advisories and serve the artifact on a loopback port for the action.
 withAdvisoryStore :: Ecosystem -> (Int -> IO a) -> IO a
