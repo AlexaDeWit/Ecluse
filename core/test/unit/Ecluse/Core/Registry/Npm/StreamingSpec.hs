@@ -106,6 +106,18 @@ spec = describe "npmFields" $ do
             (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
             (fieldAt "versions" compact >>= fieldAt "1.0.0" >>= fieldAt "bin") `shouldBe` Just bin
 
+    forM_ [(FullRead, versionFields, unshapedFields), (SelectedRead "1.0.0", versionFields, unshapedFields), (VersionListRead, versionListFields, [])] $ \(mode, supported, whole) ->
+        it ("retains nested values whole only for supported fields without their own shape in " <> show mode) $ do
+            let nested = object ["nested" .= object ["deeper" .= True]]
+                bytes = toStrict (encode (object ["versions" .= object ["1.0.0" .= object [(Key.fromText key, nested) | key <- "unknown" : versionFields]]]))
+            result <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmFields 12 mode) (\events event -> Right (event : events)) [] [bytes])
+            events <- expectRight (streamValue result)
+            retained <- case [fields | VersionField "1.0.0" (Just (Object fields)) <- events] of
+                [fields] -> pure fields
+                other -> fail ("expected one release object, got " <> show other)
+            sort (map Key.toText (KeyMap.keys retained)) `shouldBe` sort supported
+            sort [Key.toText key | (key, value) <- KeyMap.toList retained, value == nested] `shouldBe` sort whole
+
     it "preserves array workspaces on the selected path" $ do
         let workspaces = toJSON (["packages/*", "tools/*"] :: [Text])
             bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("workspaces", workspaces)] release]]))
@@ -229,6 +241,10 @@ release =
 
 typesVersions :: Value
 typesVersions = object [">=4" .= object ["*" .= (["ts4/*"] :: [Text])]]
+
+-- Supported release fields that the policy keeps whole, whatever their nesting.
+unshapedFields :: [Text]
+unshapedFields = ["bundleDependencies", "bundledDependencies", "os", "cpu", "libc", "man", "exports", "imports", "typesVersions", "files", "config", "sideEffects"]
 
 invalidScripts :: Value
 invalidScripts = case release of
