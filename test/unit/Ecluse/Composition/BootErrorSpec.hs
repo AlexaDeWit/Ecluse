@@ -136,10 +136,14 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is 1s, beneath the floor of 2s"
         renderBootError (DredgerChunkPauseBeneathFloor 1 2)
             `shouldSatisfy` infixed "may be raised and never lowered"
-        renderBootError (UpstreamIdleTimeoutNotBelowRequest 60 60)
-            `shouldSatisfy` infixed "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT (limits.upstreamIdleTimeout) is 60, not below the 60-second request timeout"
-        renderBootError (UpstreamIdleTimeoutNotBelowRequest 60 60)
-            `shouldSatisfy` infixed "so set it below 60"
+        renderBootError (ProgressWindowNotPositive 0)
+            `shouldSatisfy` infixed "ECLUSE_LIMITS__PROGRESS_WINDOW (limits.progressWindow) is 0: the window"
+        renderBootError (ProgressWindowNotBelowServeCap 50 50)
+            `shouldSatisfy` infixed "ECLUSE_LIMITS__PROGRESS_WINDOW (limits.progressWindow) is 50, not below the 50-second cap"
+        renderBootError (ProgressWindowNotBelowServeCap 50 50)
+            `shouldSatisfy` infixed "so set it below 50"
+        renderBootError (MinProgressBytesNotPositive 0)
+            `shouldSatisfy` infixed "ECLUSE_LIMITS__MIN_PROGRESS_BYTES (limits.minProgressBytes) is 0: the bytes"
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
             `shouldSatisfy` infixed "one.example.test:443 and two.example.test:443 both define the capacity pool \"shared\""
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")

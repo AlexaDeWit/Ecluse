@@ -57,6 +57,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
@@ -67,7 +68,7 @@ import Ecluse.Core.Server.Context (
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
  )
-import Ecluse.Core.Server.Metadata (MetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient)
+import Ecluse.Core.Server.Metadata (MetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Version (Version)
 
@@ -164,8 +165,8 @@ fetchPublicOrigin deps rt name = do
                 fetchFullManifest client name
     pure (originResultOf resolved)
 
-{- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the
-request's @katip@ context into the failure logs, and the fetch holds the mount's 'Limits'. -}
+{- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the request's
+@katip@ context into the failure logs, and each read holds to the mount's 'Limits' and the serve cap. -}
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
@@ -175,7 +176,7 @@ withMetadataClient ::
     Handler a
 withMetadataClient rt deps settle origin k =
     withRunInIO $ \runInIO ->
-        k . settle $
+        k . settle . withinRequestCap (progressFloor (pdLimits deps)) $
             metadataNewReads
                 (pdMetadata deps)
                 (srTracing rt)

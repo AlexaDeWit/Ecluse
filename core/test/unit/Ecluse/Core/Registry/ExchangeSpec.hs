@@ -2,21 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Destructive requests are not replayed, digesting reads cover every consumed chunk, and a
-silent or endless upstream body fails with the transport timeout.
+{- | Destructive requests are not replayed, digesting reads cover every consumed chunk, an exchange
+below the progress floor in either direction fails with the transport timeout on a closed
+connection, and only a serve-path exchange is capped.
 -}
 module Ecluse.Core.Registry.ExchangeSpec (spec) where
 
 import Data.Aeson (Value (String))
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (byteString)
 import Data.JsonStream.Parser qualified as J
 import Data.Time (NominalDiffTime)
 import GHC.Clock (getMonotonicTime)
-import Network.HTTP.Client (Manager, Request (method), defaultManagerSettings, httpLbs, newManager, parseRequest)
+import Network.HTTP.Client (Manager, Request (method, requestBody), RequestBody (RequestBodyBS), defaultManagerSettings, httpLbs, newManager, parseRequest)
 import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseLBS, responseRaw, responseStream)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai (Application, pathInfo, responseLBS, responseRaw)
+import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import Test.Hspec
 import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
@@ -24,19 +24,21 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfCause))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Exchange (boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), ExchangeDeadline, LimitError (BodyTooLarge), boundedRead, mkExchangeDeadline)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), ProgressFloor, boundedRead, mkProgressFloor)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
 import Ecluse.Core.Snapshot (ContentDigest)
+import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRightIO)
+import Ecluse.Test.Wai (countingUpstream, pacedBody)
 
 spec :: Spec
 spec = do
     singleAttemptSpec
     digestingReadSpec
-    deadlineSpec
+    floorSpec
 
 singleAttemptSpec :: Spec
 singleAttemptSpec = describe "singleAttemptSettings" $
@@ -83,25 +85,83 @@ readDigested bound chunks = do
             chunk : rest -> (rest, chunk)
     digestingRead (readJsonStream bound (J.objectWithKey "keep" (retainedValue 1)) (\_ value -> Right (Just value)) Nothing) next
 
--- Each case runs a real Warp stub, because the deadlines bound reads on a live socket.
-deadlineSpec :: Spec
-deadlineSpec = describe "exchange deadlines" $ do
-    it "fails a body that stalls after its headers with the transport timeout, inside the idle interval" $ do
-        deadline <- deadlineOf 30 0.3
-        (outcome, elapsed) <- timedExchange deadline (paced [(0, "{\"a\":"), (stallMicros, "1}")])
+-- Each case runs a real Warp stub, because the floor bounds transfers on a live socket. Every
+-- bound on elapsed time leaves a wide margin for a loaded runner.
+floorSpec :: Spec
+floorSpec = describe "the progress floor and the serve-path cap" $ do
+    it "fails a body that stops after its headers within about one window" $ do
+        progress <- floorOf 30 0.5 1024
+        (outcome, elapsed) <- timedExchange id progress (pacedBody [(0, "{\"a\":"), (stallMicros, "1}")])
         timeoutCause outcome `shouldBe` Just TransportTimeout
-        elapsed `shouldSatisfy` (\seconds -> seconds >= 0.3 && seconds < 10)
+        elapsed `shouldSatisfy` between 0.5 10
 
-    it "hands single-flight followers the leader's timeout without waiting out the stall" $ do
-        deadline <- deadlineOf 30 1
+    it "fails a trickle below the floor within about one window" $ do
+        progress <- floorOf 30 1 65536
+        -- 100 bytes every 50 ms: bytes keep arriving, at 2 KB a second against a 64 KiB floor.
+        (outcome, elapsed) <- timedExchange id progress (pacedBody (replicate 400 (50_000, BS.replicate 100 0x61)))
+        timeoutCause outcome `shouldBe` Just TransportTimeout
+        elapsed `shouldSatisfy` between 1 10
+
+    it "completes a healthy body above the floor that takes several windows, byte for byte" $ do
+        progress <- floorOf 30 1 1000
+        let body = steadyBody 16
+        (outcome, elapsed) <- timedExchange id progress (pacedBody body)
+        outcome `shouldBe` Right (mconcat (map snd body))
+        elapsed `shouldSatisfy` (> 2)
+
+    it "completes a worker-path transfer that outlives the serve cap, which the worker never takes" $ do
+        progress <- floorOf 2 1 1000
+        let body = steadyBody 24
+        (outcome, elapsed) <- timedExchange id progress (pacedBody body)
+        outcome `shouldBe` Right (mconcat (map snd body))
+        elapsed `shouldSatisfy` (> 2)
+
+    it "fails a serve-path exchange at the cap while its body still arrives above the floor" $ do
+        progress <- floorOf 2 1 1000
+        (outcome, elapsed) <- timedExchange (withinServeCap progress id) progress (pacedBody (steadyBody 80))
+        timeoutCause outcome `shouldBe` Just TransportTimeout
+        elapsed `shouldSatisfy` between 2 8
+
+    it "fails an upload the target stops reading within about one window, with no cap" $ do
+        progress <- floorOf 30 1 1048576
+        -- The target never reads, so once the socket buffers fill the upload moves no bytes.
+        let silentTarget _ respond = threadDelay stallMicros >> respond (responseLBS status200 [] "")
+        withStub silentTarget $ \manager url -> do
+            request <- parseRequest url
+            let upload = request{method = "PUT", requestBody = RequestBodyBS (BS.replicate (32 * 1024 * 1024) 0x61)}
+            started <- getMonotonicTime
+            outcome <- exchangeBody manager progress upload
+            finished <- getMonotonicTime
+            timeoutCause outcome `shouldBe` Just TransportTimeout
+            (finished - started) `shouldSatisfy` between 1 10
+
+    it "closes a connection that missed the floor instead of returning it to the pool" $ do
+        progress <- floorOf 30 0.5 65536
+        opened <- newIORef (0 :: Int)
+        let settings = setOnOpen (\_ -> atomicModifyIORef' opened (\n -> (n + 1, True))) defaultSettings
+            application request = case pathInfo request of
+                ["trickle"] -> pacedBody (replicate 400 (50_000, "x")) request
+                _ -> pacedBody [(0, "{}")] request
+        testWithApplicationSettings settings (pure application) $ \port -> do
+            manager <- newManager defaultManagerSettings
+            let fetch path = parseRequest ("http://127.0.0.1:" <> show port <> "/" <> path) >>= exchangeBody manager progress
+            replicateM_ 2 (fetch "healthy" `shouldReturn` Right "{}")
+            readIORef opened `shouldReturn` 1
+            (timeoutCause <$> fetch "trickle") `shouldReturn` Just TransportTimeout
+            readIORef opened `shouldReturn` 1
+            fetch "healthy" `shouldReturn` Right "{}"
+            readIORef opened `shouldReturn` 2
+
+    it "hands single-flight followers the leader's fault without waiting out the stall" $ do
+        progress <- floorOf 30 1 1024
         hits <- newIORef (0 :: Int)
-        withStub (counted hits (paced [(0, "{\"a\":"), (stallMicros, "1}")])) $ \manager url -> do
+        withStub (countingUpstream hits (pacedBody [(0, "{\"a\":"), (stallMicros, "1}")])) $ \manager url -> do
             flight <- newSingleFlightWithBackend Nothing :: IO (SingleFlight FetchFault Text ByteString)
             request <- parseRequest url
-            let run = resolveSingleFlight (const pass) (const pass) pass flight "stalled" (exchangeBody manager deadline request)
+            let run = resolveSingleFlight (const pass) (const pass) pass flight "stalled" (exchangeBody manager progress request)
             started <- getMonotonicTime
             leader <- async run
-            waitForHit hits
+            awaitUntil 5_000_000 10_000 ((> 0) <$> readIORef hits) `shouldReturn` True
             followers <- traverse (const (async run)) [1 .. 3 :: Int]
             outcomes <- traverse wait (leader : followers)
             finished <- getMonotonicTime
@@ -109,49 +169,29 @@ deadlineSpec = describe "exchange deadlines" $ do
             (finished - started) `shouldSatisfy` (< 10)
             readIORef hits `shouldReturn` 1
 
-    it "completes a body that trickles inside the idle interval, byte for byte" $ do
-        deadline <- deadlineOf 30 0.5
-        let chunks = ["{\"versions\":", "[1,", "2,", "3]", "}"]
-        (outcome, _) <- timedExchange deadline (paced [(100_000, chunk) | chunk <- chunks])
-        outcome `shouldBe` Right (mconcat chunks)
-
-    it "does not count the consumer's own time between reads as silence" $ do
-        deadline <- deadlineOf 30 0.3
+    it "does not count the consumer's own time between reads against the window" $ do
+        progress <- floorOf 30 0.3 1_000_000
         let chunks = ["first", "second"]
-        withStub (paced [(0, chunk) | chunk <- chunks]) $ \manager url -> do
+        withStub (pacedBody [(0, chunk) | chunk <- chunks]) $ \manager url -> do
             request <- parseRequest url
             let slowConsumer readChunk = boundedRead (MetadataBodyLimit 1024) (threadDelay 500_000 >> readChunk)
-            withSuccessBody manager deadline slowConsumer request
+            withSuccessBody manager progress slowConsumer request
                 `shouldReturn` Right (SuccessBody 200 (BS.length (mconcat chunks), mconcat chunks))
 
-    it "caps a body that keeps trickling past the whole-exchange deadline" $ do
-        deadline <- deadlineOf 1.5 0.5
-        (outcome, elapsed) <- timedExchange deadline (paced (replicate 100 (100_000, "x")))
-        timeoutCause outcome `shouldBe` Just TransportTimeout
-        elapsed `shouldSatisfy` (\seconds -> seconds >= 1 && seconds < 5)
-
--- A stall long enough that finishing before it proves a deadline fired.
+-- A stall long enough that finishing before it proves the floor fired.
 stallMicros :: Int
 stallMicros = 20_000_000
 
-deadlineOf :: NominalDiffTime -> NominalDiffTime -> IO ExchangeDeadline
-deadlineOf requestTimeout idle =
-    maybe (fail "the test deadline must be positive and below its request timeout") pure (mkExchangeDeadline requestTimeout idle)
+-- 2 KB every 150 ms: each chunk alone clears a 1000-byte floor, far inside a 1 s window.
+steadyBody :: Int -> [(Int, ByteString)]
+steadyBody count = [(150_000, BS.replicate 2000 (0x61 + fromIntegral (i `mod` 26))) | i <- [0 .. count - 1]]
 
--- A 200 whose body arrives as chunks, each after its own pause. The first pause follows the headers.
-paced :: [(Int, ByteString)] -> Application
-paced chunks _ respond =
-    respond . responseStream status200 [] $ \write flush ->
-        for_ chunks $ \(pause, chunk) -> threadDelay pause >> write (byteString chunk) >> flush
+between :: Double -> Double -> Double -> Bool
+between low high seconds = seconds >= low && seconds < high
 
-counted :: IORef Int -> Application -> Application
-counted hits application request respond =
-    atomicModifyIORef' hits (\n -> (n + 1, ())) >> application request respond
-
-waitForHit :: IORef Int -> IO ()
-waitForHit hits = do
-    seen <- readIORef hits
-    when (seen == 0) (threadDelay 10_000 >> waitForHit hits)
+-- A floor from a serve-path cap, a window, and a byte count.
+floorOf :: NominalDiffTime -> NominalDiffTime -> Int -> IO ProgressFloor
+floorOf serveCap window minBytes = either (fail . show) pure (mkProgressFloor serveCap window minBytes)
 
 withStub :: Application -> (Manager -> String -> IO a) -> IO a
 withStub application action =
@@ -159,16 +199,20 @@ withStub application action =
         manager <- newManager defaultManagerSettings
         action manager ("http://127.0.0.1:" <> show port <> "/")
 
-exchangeBody :: Manager -> ExchangeDeadline -> Request -> IO (Either FetchFault ByteString)
-exchangeBody manager deadline = boundedExchange (\_ _ body -> body) manager deadline (MetadataBodyLimit 1_000_000)
+exchangeBody :: Manager -> ProgressFloor -> Request -> IO (Either FetchFault ByteString)
+exchangeBody manager progress = boundedExchange (\_ _ body -> body) manager progress (MetadataBodyLimit 1_000_000)
 
--- One exchange against the stub, with the seconds it took.
-timedExchange :: ExchangeDeadline -> Application -> IO (Either FetchFault ByteString, Double)
-timedExchange deadline application =
+-- One exchange against the stub, run through the given wrapper, with the seconds it took.
+timedExchange ::
+    (IO (Either FetchFault ByteString) -> IO (Either FetchFault ByteString)) ->
+    ProgressFloor ->
+    Application ->
+    IO (Either FetchFault ByteString, Double)
+timedExchange wrap progress application =
     withStub application $ \manager url -> do
         request <- parseRequest url
         started <- getMonotonicTime
-        outcome <- exchangeBody manager deadline request
+        outcome <- wrap (exchangeBody manager progress request)
         finished <- getMonotonicTime
         pure (outcome, finished - started)
 

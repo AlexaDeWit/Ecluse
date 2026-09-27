@@ -3,9 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Bounded registry exchanges and their transport-fault classification.
-Read exchanges retain explicit access refusals before reading an error body. Every exchange is
-held to an 'ExchangeDeadline': a body read that waits out the idle interval, or an exchange that
-outlives the cap, fails with the transport timeout the response-header timeout also raises.
+Read exchanges retain explicit access refusals before reading an error body. Every exchange runs
+under the "Ecluse.Core.Registry.Progress" watchdog: one that moves fewer than the floor's body
+bytes, up or down, in a window of waiting fails with the transport timeout, and its connection
+closes rather than returning to the pool. The serve path also wraps its exchanges in
+'withinServeCap', which ends each one before the request timeout.
 -}
 module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
@@ -15,6 +17,9 @@ module Ecluse.Core.Registry.Exchange (
     boundedJsonFetch,
     withSuccessBody,
     boundedRelay,
+
+    -- * The serve-path cap
+    withinServeCap,
 
     -- * Source digests
     digestingRead,
@@ -28,20 +33,19 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (
     BodyReader,
-    HttpException (HttpExceptionRequest),
-    HttpExceptionContent (ResponseTimeout),
     Manager,
     ManagerSettings (managerRetryableException),
-    Request,
+    Request (requestBody),
     Response (responseStatus),
     brRead,
     responseBody,
     withResponse,
  )
 import Network.HTTP.Types.Status (statusCode)
-import UnliftIO (throwIO, try)
+import UnliftIO (try)
 import UnliftIO.Timeout (timeout)
 
+import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
     BodyOutcome (SuccessBody, UnreadStatus),
@@ -53,13 +57,15 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
+import Ecluse.Core.Registry.Progress (BelowProgressFloor (BelowProgressFloor), meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (
     BodyLimit,
-    ExchangeDeadline,
     LimitError,
+    ProgressFloor,
     boundedRead,
-    deadlineExchangeMicros,
-    deadlineIdleMicros,
+    floorMinBytes,
+    floorServeCapMicros,
+    floorWindowMicros,
  )
 import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 
@@ -68,37 +74,52 @@ singleAttemptSettings :: ManagerSettings -> ManagerSettings
 singleAttemptSettings settings = settings{managerRetryableException = const False}
 
 -- | Project status, decompressed byte count, and body. Transport failures retain their typed cause.
-boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ExchangeDeadline -> BodyLimit -> Request -> IO (Either FetchFault a)
-boundedExchange project manager deadline limits request =
-    runExchange manager deadline request (readBounded project limits)
+boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault a)
+boundedExchange project manager progress limits request =
+    runExchange manager progress request (readBounded project limits)
 
-runExchange :: Manager -> ExchangeDeadline -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
-runExchange manager deadline request readResponse =
-    timeout (deadlineExchangeMicros deadline) (try (withResponse request manager (readResponse . fmap idleBounded)))
+runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
+runExchange manager progress request readResponse =
+    try (try (watched progress (\watch -> withResponse (metered watch) manager (readResponse . fmap (meteredReader watch)))))
         <&> \case
-            Nothing -> Left (FetchTransport (classifyTransport timedOut))
-            Just (Left httpErr) -> Left (FetchTransport (classifyTransport httpErr))
-            Just (Right (Left limitErr)) -> Left (FetchBoundExceeded limitErr)
-            Just (Right (Right projected)) -> Right projected
+            Left BelowProgressFloor -> Left (belowFloor progress)
+            Right (Left httpErr) -> Left (FetchTransport (classifyTransport httpErr))
+            Right (Right (Left limitErr)) -> Left (FetchBoundExceeded limitErr)
+            Right (Right (Right projected)) -> Right projected
   where
-    timedOut = HttpExceptionRequest request ResponseTimeout
-    idleBounded = failSilentRead (deadlineIdleMicros deadline) timedOut
+    metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
-{- A body reader that throws once one read waits out the interval. It throws because a reader
-fails on http-client's exception channel, the one a mid-body connection reset already takes. -}
-failSilentRead :: Int -> HttpException -> BodyReader -> BodyReader
-failSilentRead micros expired readChunk = timeout micros readChunk >>= maybe (throwIO expired) pure
+{- | Fail an action that outlives the floor's serve-path cap with the transport timeout. The serve
+path wraps its exchanges in it, and the mirror worker and the Dredger do not.
+-}
+withinServeCap :: ProgressFloor -> (FetchFault -> e) -> IO (Either e a) -> IO (Either e a)
+withinServeCap progress inject action =
+    fromMaybe (Left (inject capExceeded)) <$> timeout (floorServeCapMicros progress) action
+  where
+    capExceeded = FetchTransport (transportFault TransportTimeout ("the upstream exchange outlived its " <> seconds (floorServeCapMicros progress) <> "-second serve-path cap"))
+
+belowFloor :: ProgressFloor -> FetchFault
+belowFloor progress =
+    FetchTransport . transportFault TransportTimeout $
+        "the exchange moved fewer than "
+            <> show (floorMinBytes progress)
+            <> " body bytes in either direction in a "
+            <> seconds (floorWindowMicros progress)
+            <> "-second progress window"
+
+seconds :: Int -> Text
+seconds micros = show (fromIntegral micros / 1_000_000 :: Double)
 
 -- | Preserve explicit auth refusals without reading their untrusted error bodies.
-boundedFetch :: Manager -> ExchangeDeadline -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
-boundedFetch manager deadline limits request = runExchange manager deadline request $ \response ->
+boundedFetch :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
+boundedFetch manager progress limits request = runExchange manager progress request $ \response ->
     let code = statusCode (responseStatus response)
      in if isAuthorisationFailure code
             then pure (Right (RegistryResponse code 0 ""))
             else readBounded RegistryResponse limits response
 
 -- | The exchange keeping the answered status alongside the body, for the first-party relay.
-boundedRelay :: Manager -> ExchangeDeadline -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
+boundedRelay :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
 boundedRelay =
     boundedExchange $ \status _ body ->
         PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
@@ -117,12 +138,12 @@ readBounded project limits response =
         <$> boundedRead limits (brRead (responseBody response))
 
 -- | Extract selected values from a 2xx body within the response lifetime. Other statuses are never parsed.
-boundedJsonFetch :: Manager -> ExchangeDeadline -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (BodyOutcome (StreamResult s)))
-boundedJsonFetch manager deadline limits parser step initial = withSuccessBody manager deadline (readJsonStream limits parser step initial)
+boundedJsonFetch :: Manager -> ProgressFloor -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (BodyOutcome (StreamResult s)))
+boundedJsonFetch manager progress limits parser step initial = withSuccessBody manager progress (readJsonStream limits parser step initial)
 
 -- | Consume a 2xx body within the response lifetime. A status outside 2xx never reaches the consumer.
-withSuccessBody :: Manager -> ExchangeDeadline -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
-withSuccessBody manager deadline consume request = runExchange manager deadline request $ \response -> do
+withSuccessBody :: Manager -> ProgressFloor -> (IO ByteString -> IO (Either LimitError a)) -> Request -> IO (Either FetchFault (BodyOutcome a))
+withSuccessBody manager progress consume request = runExchange manager progress request $ \response -> do
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
         then fmap (SuccessBody code) <$> consume (brRead (responseBody response))

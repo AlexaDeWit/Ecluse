@@ -148,7 +148,8 @@ limitsDecoder =
         <*> requiredKey "maxAdvisoryDatabaseBytes" parsePositiveInt
         <*> optionalKey "maxRequestBytes" parsePositiveInt
         <*> optionalKey "maxArtifactBytes" parsePositiveInt
-        <*> requiredKey "upstreamIdleTimeout" parsePositiveInt
+        <*> plainKey "progressWindow"
+        <*> plainKey "minProgressBytes"
 
 cacheDecoder :: GroupDecoder CacheSettings
 cacheDecoder =

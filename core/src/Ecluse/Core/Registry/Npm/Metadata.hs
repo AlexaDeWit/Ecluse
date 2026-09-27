@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (exchangeDeadline), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -77,7 +77,7 @@ fetchNpmBody tracing origin name consume =
         <$> spanMetadataFetch
             tracing
             name
-            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (exchangeDeadline (ocLimits origin)) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
 
 decodeNpm :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
 decodeNpm tracing origin name mode =

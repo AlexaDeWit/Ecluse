@@ -157,10 +157,14 @@ data BootError
       to compile an artifact for and would publish nothing.
       -}
       PilotWithoutEcosystem
-    | {- | The upstream idle timeout is not below the request timeout, so no exchange cap fits
-      under the request timeout. Carries both, in seconds.
+    | -- | The progress window is zero or negative. Carries the configured seconds.
+      ProgressWindowNotPositive Int
+    | {- | The progress window is not below the serve-path cap, so the floor could never fire
+      first on a served request. Carries the window and the cap, in seconds.
       -}
-      UpstreamIdleTimeoutNotBelowRequest Int Int
+      ProgressWindowNotBelowServeCap Int Int
+    | -- | The progress floor's byte count is zero or negative. Carries the configured count.
+      MinProgressBytesNotPositive Int
     deriving stock (Eq, Show)
 
 -- | Why a mount's mirror target reached no store maintenance handle.
@@ -366,13 +370,21 @@ renderBootError = \case
             <> ", but ECLUSE_ADVISORIES__URL (advisories.url) is unset: those rules have no advisory database to read, so every version they evaluate would refuse. Set the advisory store and run ecluse pilot to publish an artifact for this mount, or remove these rules from its policy"
     PilotWithoutEcosystem ->
         "ECLUSE_ADVISORIES__URL is set but no mount is declared, so ecluse pilot has no ecosystem to compile an advisory artifact for: declare the mounts this deployment serves under ECLUSE_MOUNTS__<ECOSYSTEM>__, or run a role this configuration has work for"
-    UpstreamIdleTimeoutNotBelowRequest configured requestTimeout ->
-        "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT (limits.upstreamIdleTimeout) is "
+    ProgressWindowNotPositive configured ->
+        "ECLUSE_LIMITS__PROGRESS_WINDOW (limits.progressWindow) is "
+            <> show configured
+            <> ": the window within which an upstream must deliver its minimum bytes must be a positive number of seconds"
+    ProgressWindowNotBelowServeCap configured cap ->
+        "ECLUSE_LIMITS__PROGRESS_WINDOW (limits.progressWindow) is "
             <> show configured
             <> ", not below the "
-            <> show requestTimeout
-            <> "-second request timeout: an upstream exchange gets the request timeout minus this interval, so set it below "
-            <> show requestTimeout
+            <> show cap
+            <> "-second cap on each upstream exchange of a served request: a slow upstream must fail the floor before the cap ends it, so set it below "
+            <> show cap
+    MinProgressBytesNotPositive configured ->
+        "ECLUSE_LIMITS__MIN_PROGRESS_BYTES (limits.minProgressBytes) is "
+            <> show configured
+            <> ": the bytes an upstream must deliver in each progress window must be a positive count"
 
 renderStoreMaintenanceReason :: Ecosystem -> StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason eco = \case

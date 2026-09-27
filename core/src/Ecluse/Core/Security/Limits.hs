@@ -18,12 +18,16 @@ module Ecluse.Core.Security.Limits (
     checkVersionCountOf,
     checkArtifactCount,
 
-    -- * Upstream exchange deadlines
-    ExchangeDeadline,
-    mkExchangeDeadline,
-    deadlineIdleMicros,
-    deadlineExchangeMicros,
+    -- * Upstream progress
+    ProgressFloor,
+    ProgressFloorError (..),
+    mkProgressFloor,
+    floorWindowMicros,
+    floorMinBytes,
+    floorServeCapMicros,
     requestTimeoutSeconds,
+    serveCapMarginSeconds,
+    serveCapSeconds,
 ) where
 
 import Data.ByteString qualified as BS
@@ -34,7 +38,7 @@ import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (PackageInfo, infoVersions, pkgArtifacts)
 
--- | Byte ceilings by operation, structural metadata backstops, and the upstream exchange deadline.
+-- | Byte ceilings by operation, structural metadata backstops, and the upstream progress floor.
 data Limits = Limits
     { maxMetadataBytes :: Int
     -- ^ Decompressed registry metadata and control-response bytes.
@@ -48,8 +52,8 @@ data Limits = Limits
     -- ^ Valid projected artifacts. Selected PyPI uses its source-file scan count instead.
     , maxNestingDepth :: Int
     -- ^ Retained JSON nesting depth. Skipped metadata fields do not use this bound.
-    , exchangeDeadline :: ExchangeDeadline
-    -- ^ How long an upstream body may stay silent, and how long one exchange may run.
+    , progressFloor :: ProgressFloor
+    -- ^ The body bytes an upstream exchange must deliver per window, and the serve path's cap.
     }
     deriving stock (Eq, Show)
 
@@ -63,7 +67,7 @@ defaultLimits =
         , maxVersionCount = 1_000_000
         , maxArtifactCount = 1_000_000
         , maxNestingDepth = 64
-        , exchangeDeadline = deadlineUnder (toMicros (fromIntegral requestTimeoutSeconds)) (toMicros 10)
+        , progressFloor = ProgressFloor (fromInteger (toMicros 10)) (1024 * 1024) (fromInteger (toMicros (fromIntegral serveCapSeconds)))
         }
 
 -- | The selected body role and its byte ceiling, shared by reads and failures.
@@ -137,33 +141,53 @@ fetch, bounded so a stuck upstream cannot pin a handler indefinitely.
 requestTimeoutSeconds :: Int
 requestTimeoutSeconds = 60
 
--- | The idle interval and whole-exchange cap, in microseconds. The private constructor keeps the cap derived.
-data ExchangeDeadline = ExchangeDeadline Int Int
+-- | Seconds the serve-path cap leaves under the request timeout for admission waits and the work around an exchange.
+serveCapMarginSeconds :: Int
+serveCapMarginSeconds = 10
+
+-- | How long one serve-path upstream exchange may run, in seconds: the request timeout less its margin.
+serveCapSeconds :: Int
+serveCapSeconds = requestTimeoutSeconds - serveCapMarginSeconds
+
+{- | A progress window, the body bytes a transfer must move within it, and the serve-path cap the
+window must stay below. The private constructor keeps the three consistent.
+-}
+data ProgressFloor = ProgressFloor Int Int Int
     deriving stock (Eq, Show)
 
-{- | The deadline for a request timeout and an idle interval, in that order. The exchange cap is the
-request timeout minus the interval, which must be positive and below it.
--}
-mkExchangeDeadline :: NominalDiffTime -> NominalDiffTime -> Maybe ExchangeDeadline
-mkExchangeDeadline requestTimeout idle
-    | 0 < idleMicros && idleMicros < requestMicros = Just (deadlineUnder requestMicros idleMicros)
-    | otherwise = Nothing
+-- | Why a window and a byte count make no 'ProgressFloor'.
+data ProgressFloorError
+    = -- | The window is zero or negative.
+      WindowNotPositive
+    | -- | The window is not below the serve-path cap, so the floor could never fire before the cap.
+      WindowNotBelowServeCap
+    | -- | The byte count is zero or negative.
+      MinBytesNotPositive
+    deriving stock (Eq, Show)
+
+-- | The floor for a serve-path cap, a window, and a byte count, in that order, with every refusal.
+mkProgressFloor :: NominalDiffTime -> NominalDiffTime -> Int -> Either (NonEmpty ProgressFloorError) ProgressFloor
+mkProgressFloor serveCap window minBytes =
+    maybe (Right (ProgressFloor (fromInteger windowMicros) minBytes (fromInteger capMicros))) Left (nonEmpty refusals)
   where
-    idleMicros = toMicros idle
-    requestMicros = toMicros requestTimeout
+    windowMicros = toMicros window
+    capMicros = toMicros serveCap
+    refusals =
+        [WindowNotPositive | windowMicros <= 0]
+            <> [WindowNotBelowServeCap | windowMicros > 0, windowMicros >= capMicros]
+            <> [MinBytesNotPositive | minBytes <= 0]
 
--- | How long one body read may wait for its next chunk, in microseconds.
-deadlineIdleMicros :: ExchangeDeadline -> Int
-deadlineIdleMicros (ExchangeDeadline idle _) = idle
+-- | The waiting time, in microseconds, within which a transfer must move 'floorMinBytes'.
+floorWindowMicros :: ProgressFloor -> Int
+floorWindowMicros (ProgressFloor window _ _) = window
 
--- | How long one exchange may run, from the request to the end of its body, in microseconds.
-deadlineExchangeMicros :: ExchangeDeadline -> Int
-deadlineExchangeMicros (ExchangeDeadline _ cap) = cap
+-- | The body bytes a transfer must move within each window.
+floorMinBytes :: ProgressFloor -> Int
+floorMinBytes (ProgressFloor _ minBytes _) = minBytes
 
--- The one derivation both builders share. Each caller keeps the interval below the timeout.
-deadlineUnder :: Integer -> Integer -> ExchangeDeadline
-deadlineUnder requestMicros idleMicros =
-    ExchangeDeadline (fromInteger idleMicros) (fromInteger (requestMicros - idleMicros))
+-- | How long one serve-path exchange may run, in microseconds.
+floorServeCapMicros :: ProgressFloor -> Int
+floorServeCapMicros (ProgressFloor _ _ cap) = cap
 
 toMicros :: NominalDiffTime -> Integer
 toMicros seconds = round (seconds * 1_000_000)

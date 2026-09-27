@@ -287,15 +287,16 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"cache\":{\"ttl\":\"" <> spelling <> "\"}}")))
                 `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
-    it "rejects a non-positive limits.upstreamIdleTimeout, through both layers" $ do
-        loadConfig [] (Just "{\"limits\":{\"upstreamIdleTimeout\":0}}")
-            `shouldSatisfy` decodeErrorMentions "limits.upstreamIdleTimeout must be a positive integer"
-        loadConfig [("ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT", "-5")] Nothing
-            `shouldSatisfy` decodeErrorMentions "limits.upstreamIdleTimeout must be a positive integer"
+    it "ships a floor of 1 MiB per 10-second progress window, each overridable from the environment" $ do
+        let floorOf = fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits)
+        floorOf (expectAppConfig [] Nothing) `shouldReturn` (10, 1048576)
+        floorOf (expectAppConfig [("ECLUSE_LIMITS__PROGRESS_WINDOW", "5"), ("ECLUSE_LIMITS__MIN_PROGRESS_BYTES", "4096")] Nothing)
+            `shouldReturn` (5, 4096)
 
-    it "ships a 10-second upstream idle timeout, overridable from the environment" $ do
-        (limUpstreamIdleTimeout . cfgLimits <$> expectAppConfig [] Nothing) `shouldReturn` 10
-        (limUpstreamIdleTimeout . cfgLimits <$> expectAppConfig [("ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT", "5")] Nothing) `shouldReturn` 5
+    -- The boot vet refuses a zero or negative value with every other refusal, so the load keeps it.
+    it "loads a zero or negative progress window and byte count for the boot vet to refuse" $
+        fmap ((limProgressWindow &&& limMinProgressBytes) . cfgLimits) (expectAppConfig [] (Just "{\"limits\":{\"progressWindow\":0,\"minProgressBytes\":-1}}"))
+            `shouldReturn` (0, -1)
 
     it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")

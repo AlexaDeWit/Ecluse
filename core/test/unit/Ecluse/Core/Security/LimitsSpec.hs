@@ -31,13 +31,18 @@ import Ecluse.Core.Security (
     BodyLimit (..),
     LimitError (..),
     Limits (..),
+    ProgressFloorError (..),
     boundedRead,
     checkArtifactCount,
     checkVersionCountOf,
-    deadlineExchangeMicros,
-    deadlineIdleMicros,
     defaultLimits,
-    mkExchangeDeadline,
+    floorMinBytes,
+    floorServeCapMicros,
+    floorWindowMicros,
+    mkProgressFloor,
+    requestTimeoutSeconds,
+    serveCapMarginSeconds,
+    serveCapSeconds,
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
@@ -62,7 +67,7 @@ runBounded limits = evalState (boundedRead (MetadataBodyLimit (maxMetadataBytes 
 spec :: Spec
 spec = do
     defaultLimitsSpec
-    exchangeDeadlineSpec
+    progressFloorSpec
     boundedReadSpec
     versionCountSpec
     artifactCountSpec
@@ -83,22 +88,30 @@ defaultLimitsSpec =
             )
                 `shouldBe` (128 * 1024 * 1024, 1_000_000, 1_000_000, 64)
 
-exchangeDeadlineSpec :: Spec
-exchangeDeadlineSpec = describe "mkExchangeDeadline" $ do
-    let micros deadline = (deadlineIdleMicros deadline, deadlineExchangeMicros deadline)
+progressFloorSpec :: Spec
+progressFloorSpec = describe "mkProgressFloor" $ do
+    let parts progress = (floorWindowMicros progress, floorMinBytes progress, floorServeCapMicros progress)
 
-    it "gives the whole exchange the request timeout minus the idle interval" $
-        micros <$> mkExchangeDeadline 60 10 `shouldBe` Just (10_000_000, 50_000_000)
+    it "keeps the window, the byte count, and the serve-path cap" $
+        parts <$> mkProgressFloor 50 10 1048576 `shouldBe` Right (10_000_000, 1048576, 50_000_000)
 
-    it "keeps a sub-second interval exact" $
-        micros <$> mkExchangeDeadline 1.5 0.25 `shouldBe` Just (250_000, 1_250_000)
+    it "keeps a sub-second window exact" $
+        parts <$> mkProgressFloor 1.5 0.25 64 `shouldBe` Right (250_000, 64, 1_500_000)
 
-    it "refuses an interval that is not positive or not below the request timeout" $
-        forM_ [0, -1, 60, 61] $ \idle ->
-            mkExchangeDeadline 60 idle `shouldBe` Nothing
+    it "refuses a window that is not positive or not below the serve-path cap" $ do
+        forM_ [0, -1] $ \window ->
+            mkProgressFloor 50 window 1 `shouldBe` Left (WindowNotPositive :| [])
+        forM_ [50, 51] $ \window ->
+            mkProgressFloor 50 window 1 `shouldBe` Left (WindowNotBelowServeCap :| [])
 
-    it "ships a 10-second interval under the 60-second request timeout by default" $
-        micros (exchangeDeadline defaultLimits) `shouldBe` (10_000_000, 50_000_000)
+    it "reports a byte count that is not positive beside a bad window" $
+        mkProgressFloor 50 0 0 `shouldBe` Left (WindowNotPositive :| [MinBytesNotPositive])
+
+    it "leaves the serve-path cap the request timeout less a fixed margin, whatever the window" $
+        (serveCapSeconds, requestTimeoutSeconds - serveCapMarginSeconds) `shouldBe` (50, 50)
+
+    it "ships 1 MiB per 10-second window under the 50-second serve-path cap by default" $
+        parts (progressFloor defaultLimits) `shouldBe` (10_000_000, 1048576, 50_000_000)
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do

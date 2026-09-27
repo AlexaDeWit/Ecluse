@@ -26,6 +26,12 @@ as fast as the client drains, in __constant memory whatever the artifact's size_
 first chunk is flushed, for a prompt first byte: at relay byte rates a per-chunk flush
 degenerates into one socket send per upstream read (see @docs\/architecture\/web-layer.md@ →
 "Streaming and resource lifetime").
+
+== Progress
+
+The pump reads under the "Ecluse.Core.Registry.Progress" watchdog, which counts only the time
+spent waiting on upstream. An upstream that falls below the floor aborts the relay mid-stream,
+and a client that drains slowly does not.
 -}
 module Ecluse.Core.Server.Stream (
     -- * A typed relay responder
@@ -47,6 +53,8 @@ import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
 import UnliftIO.Exception (finally, mask, tryAny)
 
+import Ecluse.Core.Registry.Progress (meteredReader, watched)
+import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 
 {- | The two ways an upstream relay can answer, over the caller's route-scoped response value. WAI
@@ -76,6 +84,7 @@ miss that commits nothing, and a failure after the commit propagates rather than
 -}
 withUpstreamWhen ::
     Manager ->
+    ProgressFloor ->
     Request ->
     UpstreamBody ->
     -- | Whether upstream's status is a hit. A rejected status is a clean miss.
@@ -86,7 +95,7 @@ withUpstreamWhen ::
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
     IO (Maybe (verdict, response))
-withUpstreamWhen manager request body accept relay respond =
+withUpstreamWhen manager progress request body accept relay respond =
     -- Masked from 'responseOpen' to 'finally' arming 'responseClose', so an async exception
     -- between the two cannot strand the connection. 'restore' keeps the relay interruptible.
     mask $ \restore ->
@@ -106,7 +115,8 @@ withUpstreamWhen manager request body accept relay respond =
       where
         upstreamStatus = responseStatus upstream
         bodiless = body == NoBody || isNotModified upstreamStatus
-        pump = pumpBody (brRead (HTTP.responseBody upstream))
+        pump write flush =
+            watched progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush)
 
 {- | Pump a chunked body from a reader to a WAI stream sink in constant memory. An empty chunk
 is @http-client@'s 'BodyReader' end-of-body terminator, and the pump never writes it.

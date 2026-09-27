@@ -31,6 +31,7 @@ import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType
 
 import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 import Ecluse.Core.Server.Stream (RelayResponder, UpstreamBody (NoBody, StreamBody), withUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -68,13 +69,14 @@ recoverable-miss and committed split, so a @HEAD@ falls through a private miss a
 relayUpstreamWhen ::
     ArtifactServe ->
     Manager ->
+    ProgressFloor ->
     HTTP.Request ->
     (Status -> Bool) ->
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
     IO (Maybe (verdict, response))
-relayUpstreamWhen mode manager request =
-    withUpstreamWhen manager request $ case mode of
+relayUpstreamWhen mode manager progress request =
+    withUpstreamWhen manager progress request $ case mode of
         ServeFull -> StreamBody
         ServeHead -> NoBody
 

@@ -72,13 +72,22 @@ limits:
   # declared length fails fast and the streaming download enforces the cap. It bounds a
   # stream to disk rather than a heap tenant, which is why the plan does not size it.
   maxAdvisoryDatabaseBytes: 536870912
-  # Seconds an upstream body read may wait for its next byte. Past it, the read fails with
-  # the same upstream timeout as an upstream that never answers. It measures silence, not
-  # transfer time, so a slow body that keeps sending completes. It must stay below the
-  # 60-second request timeout, because one upstream exchange runs for at most the request
-  # timeout minus this interval. A stalled fetch therefore fails, and frees the requests
-  # waiting on it, before those requests time out.
-  upstreamIdleTimeout: 10
+  # The progress floor every transfer over a registry protocol keeps: request and
+  # response body bytes together, at least minProgressBytes (1 MiB, response bytes counted
+  # after decompression) within each progressWindow seconds spent waiting on the upstream. Time
+  # Écluse spends on bytes it already holds, and the wait for the status line and headers,
+  # do not count. A transfer below the floor, a silent one included, fails with the same
+  # upstream timeout as an upstream that never answers, and its connection closes rather
+  # than returning to the pool. The floor covers metadata reads, publish relays, the
+  # mirror worker's fetches, probes and publishes, the Dredger's calls to a store it
+  # reaches over the registry protocol, and the artifact stream relayed to a client.
+  # Apart from the artifact stream, each upstream exchange a served request makes also
+  # ends 50 seconds in: the 60-second request timeout less a 10-second margin. That frees
+  # the requests waiting on a slow fetch before they time out. The mirror worker and the
+  # Dredger have no such cap. The window must be positive and below 50, and the byte count
+  # positive.
+  progressWindow: 10
+  minProgressBytes: 1048576
   # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
   # concurrency and the material estimate budget. Reads fail closed past this limit.
   # A positive explicit value stays exact. Boot and check-config warn that accepting

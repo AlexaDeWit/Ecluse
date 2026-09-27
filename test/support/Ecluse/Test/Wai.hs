@@ -2,7 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Readers for an in-process WAI stub and the responses a proxy serves from it.
+{- | Readers for an in-process WAI stub and the responses a proxy serves from it, and the
+shared stub shapes: a counted stub and a body paced over time.
 
 The integration pipeline fixture, the publish spec, and the load bench all address
 loopback stubs the same way and read the same fields off a served response, so the
@@ -15,6 +16,10 @@ module Ecluse.Test.Wai (
     selfBaseUrlOf,
     rebaseAuthority,
     freePort,
+
+    -- * Stub shapes
+    countingUpstream,
+    pacedBody,
 
     -- * Reading a request
     lookupAuth,
@@ -35,18 +40,20 @@ import Data.Aeson (Value (Null, Object), eitherDecodeStrict)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (byteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
 import Data.Text qualified as T
-import Network.HTTP.Types (Header, hAuthorization, statusCode, statusMessage)
+import Network.HTTP.Types (Header, hAuthorization, status200, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
 import Network.Socket (close)
-import Network.Wai (Request (requestHeaders))
+import Network.Wai (Application, Request (requestHeaders), responseStream)
 import Network.Wai.Handler.Warp (Port, openFreePort)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec.Wai.Matcher (MatchBody (MatchBody))
 import UnliftIO (bracket)
+import UnliftIO.Concurrent (threadDelay)
 
 -- | The base URL of a loopback stub on the given port, by the @localhost@ DNS name.
 localhost :: Int -> Text
@@ -74,6 +81,16 @@ it itself. A brief race with another process is tolerable on loopback.
 -}
 freePort :: IO Port
 freePort = bracket openFreePort (close . snd) (pure . fst)
+
+-- | Count every request that reaches the wrapped stub.
+countingUpstream :: IORef Int -> Application -> Application
+countingUpstream hits app req respond = atomicModifyIORef' hits (\n -> (n + 1, ())) >> app req respond
+
+-- | A 200 whose body arrives as chunks, each after its own pause in microseconds. The first pause follows the headers.
+pacedBody :: [(Int, ByteString)] -> Application
+pacedBody chunks _ respond =
+    respond . responseStream status200 [] $ \write flush ->
+        for_ chunks $ \(pause, chunk) -> threadDelay pause >> write (byteString chunk) >> flush
 
 -- | The @Authorization@ header value a request carried, if any.
 lookupAuth :: [Header] -> Maybe ByteString

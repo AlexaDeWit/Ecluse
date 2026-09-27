@@ -86,6 +86,7 @@ import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMaterialAdmission)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
+import Ecluse.Test.Wai (countingUpstream)
 import Network.HTTP.Types.Header (RequestHeaders, hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -938,9 +939,6 @@ upstreamApp req respond =
         _ -> respond (responseLBS status404 [] "")
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
-
-countingUpstream :: IORef Int -> Application -> Application
-countingUpstream hits app req respond = modifyIORef' hits (+ 1) >> app req respond
 
 artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"

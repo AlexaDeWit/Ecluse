@@ -14,7 +14,7 @@ import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Publish (MirrorTransport (ptLimits))
-import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), defaultLimits)
+import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes, progressFloor), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdFirstParty, pdLimits, pdMinIntegrity))
 import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
@@ -86,6 +86,17 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         let transport = mirrorTransportFor env deps target
         ptLimits transport `shouldBe` pdLimits deps
         ptLimits transport `shouldNotBe` defaultLimits
+
+    it "fetches a job's artifact under the mount's own progress floor, not the default one" $ do
+        -- The same class of wiring slip as the probe bound above: a fresh default in place of the
+        -- mount's resolved limits would drop the configured floor on the worker's largest transfer.
+        tightFloor <- either (fail . show) pure (mkProgressFloor 50 5 4096)
+        (env, bindings, targets) <- composedFixturesWith defaultLimits{progressFloor = tightFloor}
+        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+            Nothing -> expectationFailure "expected an npm bundle"
+            Just policy -> do
+                progressFloor (wpArtifactLimits policy) `shouldBe` tightFloor
+                maxMirrorArtifactBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
 -- 'staticEnvVars' with one declared npm namespace, so the wiring assertion reads a
 -- predicate that owns something rather than the deny-by-default constant.

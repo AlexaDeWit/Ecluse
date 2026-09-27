@@ -75,7 +75,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), fetchVersionList)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (exchangeDeadline), maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
 {- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
@@ -187,7 +187,7 @@ listPackages store =
         first storeFaultOfFetch
             <$> boundedJsonFetch
                 (ocManager origin)
-                (exchangeDeadline (ocLimits origin))
+                (progressFloor (ocLimits origin))
                 (MetadataBodyLimit (maxMetadataBytes (ocLimits origin)))
                 (listingParser (prListing store))
                 (\_ names -> Right names)
@@ -275,7 +275,7 @@ refused version refusal = Right [(version, VersionRefused refusal)]
 send :: ProtocolRead -> Request -> IO (Either StoreFault (Int, ByteString))
 send store request =
     first storeFaultOfFetch
-        <$> boundedExchange (\status _ body -> (status, body)) (ocManager origin) (exchangeDeadline (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) request
+        <$> boundedExchange (\status _ body -> (status, body)) (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) request
   where
     origin = prOrigin store
 

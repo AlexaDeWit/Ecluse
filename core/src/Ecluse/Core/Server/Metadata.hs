@@ -14,6 +14,7 @@ module Ecluse.Core.Server.Metadata (
     -- * Constructing a per-request read handle
     MetadataReads,
     newMetadataReads,
+    withinRequestCap,
     publicMetadataClient,
     preparePublicVersion,
     privateMetadataClient,
@@ -26,6 +27,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
+import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
@@ -33,6 +35,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
+import Ecluse.Core.Security (ProgressFloor)
 
 import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw),
@@ -86,6 +89,17 @@ newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion
             }
   where
     client = originClientOf origin
+
+{- | Hold each raw read to the floor's serve-path cap, so a single-flight leader fails before the
+request timeout ends its request.
+-}
+withinRequestCap :: ProgressFloor -> MetadataReads posture -> MetadataReads posture
+withinRequestCap progress (MetadataReads settle) = MetadataReads $ \upstream caching ->
+    let wiring = settle upstream caching
+     in wiring
+            { cwFetch = withinServeCap progress MetadataFetch . cwFetch wiring
+            , cwFetchVersion = \name -> withinServeCap progress MetadataFetch . cwFetchVersion wiring name
+            }
 
 -- | The anonymous origin's handle, resolving through the shared cache under its 'Source' key.
 publicMetadataClient :: MetadataCache -> Source -> MetadataReads Public -> MetadataClient

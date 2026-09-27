@@ -22,8 +22,9 @@ import Ecluse.Core.Credential (ClientCredential, bareCredential)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay))
+import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
-import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes), boundedRead)
+import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -101,7 +102,7 @@ readAndRelay replies deps target name request =
         Left _ -> pure (publishTooLarge replies deps)
         Right (_, body) -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
             Just declared -> pure (bodyNameMismatch replies deps name declared)
-            Nothing -> renderRelay replies deps <$> publishRelay (pubAdapter deps) target name body
+            Nothing -> renderRelay replies deps <$> withinServeCap (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target name body)
 
 publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
 publicationTarget deps rt clientToken =
