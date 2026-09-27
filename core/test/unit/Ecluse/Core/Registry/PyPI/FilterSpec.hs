@@ -2,13 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | PyPI assembly preserves admitted entries and refuses locations it cannot rebase.
+-- | PyPI assembly preserves admitted entries, refuses locations it cannot rebase, and keeps served bytes.
 module Ecluse.Core.Registry.PyPI.FilterSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Number, Object, String), object, toJSON, (.=))
+import Data.Aeson (Value (Array, Bool, Number, Object, String), encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -16,15 +18,16 @@ import Ecluse.Core.Package (
     HashAlg (SHA1),
     InvalidEntry (invalidKey, invalidKind),
     InvalidEntryKind (InvalidIndexFile),
-    PackageInfo (infoInvalidEntries),
+    PackageInfo (infoInvalidEntries, infoVersions),
     PackageName,
     mkPackageName,
  )
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (ArrayEntry))
-import Ecluse.Core.Package.Filter (enforceArtifactLocations)
+import Ecluse.Core.Package.Filter (enforceArtifactLocations, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource, TrustedSource), SourceId, mergePackuments)
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleValue)
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Filter qualified as Filter
 import Ecluse.Core.Registry.PyPI.Project (projectName)
 import Ecluse.Core.Security (defaultLimits, ecosystemArtifactAuthorities)
@@ -34,15 +37,16 @@ import Ecluse.Core.Server.Response (
     Rejection (Rejection),
     ServeDecision (Reject),
  )
-import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
+import Ecluse.Test.Corpus (cpPackage, cpPath, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict, fieldAt, isObject)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, requestsName, validSha1, validSha256)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
--- | Pin PyPI source selection, artifact rebasing, and sidecar removal.
+-- | Pin PyPI source selection, artifact rebasing, sidecar removal, and served bytes.
 spec :: Spec
 spec = do
     relaySpec
@@ -50,6 +54,7 @@ spec = do
     admissionSpec
     rebaseSpec
     sidecarSpec
+    serialiseSpec
 
 relaySpec :: Spec
 relaySpec = describe "what the assembly relays from the base document" $ do
@@ -266,6 +271,29 @@ sidecarSpec = describe "the PEP 658 sidecar keys" $ do
         (entry >>= KeyMap.lookup "core-metadata") `shouldBe` Nothing
         (entry >>= KeyMap.lookup "dist-info-metadata") `shouldBe` Nothing
         (entry >>= KeyMap.lookup "data-dist-info-metadata") `shouldBe` Nothing
+
+serialiseSpec :: Spec
+serialiseSpec = describe "the served bytes" $ do
+    it "encodes another ecosystem's document as an empty object" $
+        Filter.serialiseSimpleDocument (fst npmCached (object ["name" .= ("requests" :: Text)])) `shouldBe` "{}"
+
+    for_ pypiCorpusPackages $ \package ->
+        it ("encodes the full and single-release listings of " <> cpPath package <> " as the rendered JSON object") $ do
+            bytes <- readFileBS (cpPath package)
+            (info, document) <- expectRight (projectPyPIIndex defaultLimits (cpPackage package) bytes)
+            let source = Snapshot (digestOf bytes) (fst pypiSimpleCached document)
+                releases = Map.keysSet (infoVersions info)
+                selections = releases : map Set.singleton (toList (Set.lookupMin releases) <> toList (Set.lookupMax releases))
+            for_ selections $ \survivors -> do
+                plan <- expectRight (maybeToRight ("expected a merge plan" :: Text) (mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)]))
+                let served = Filter.assembleSimpleDocument mountBase (Map.singleton 0 source) plan (Just (snapshotValue source))
+                assembled <- expectRight (maybeToRight ("expected a PyPI document" :: Text) (snd pypiSimpleCached served))
+                simpleFiles assembled `shouldSatisfy` (not . null)
+                fingerprint (Filter.serialiseSimpleDocument served) `shouldBe` fingerprint (encode (simpleValue assembled))
+
+-- A digest keeps a multi-megabyte mismatch report readable.
+fingerprint :: LByteString -> (Int64, ContentDigest)
+fingerprint bytes = (BSL.length bytes, digestOf (toStrict bytes))
 
 mountBase :: Text
 mountBase = "https://ecluse.test/pypi"

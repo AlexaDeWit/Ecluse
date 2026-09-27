@@ -27,7 +27,8 @@ module Ecluse.Core.Registry.ServedDocument (
     adjustField,
 ) where
 
-import Data.Aeson (Value (Object, String), encode)
+import Data.Aeson (Encoding, Value (Object, String))
+import Data.Aeson.Encoding (emptyObject_, encodingToLazyByteString)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -61,8 +62,8 @@ assembleAcross (inject, project) assemble mountBase bySource plan base =
         )
 
 -- | Encode a served document to its compact wire bytes, an empty object for a foreign one.
-serialiseAcross :: (CachedDoc -> Maybe Value) -> CachedDoc -> LByteString
-serialiseAcross project = encode . fromMaybe (Object mempty) . project
+serialiseAcross :: (CachedDoc -> Maybe Encoding) -> CachedDoc -> LByteString
+serialiseAcross project = encodingToLazyByteString . fromMaybe emptyObject_ . project
 
 {- | Select exact admitted entries from the winning source snapshot, preserving each source's order.
 Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.

@@ -8,12 +8,12 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleDocument,
     simpleEnvelope,
     simpleFiles,
-    simpleValue,
+    simpleEncoding,
 ) where
 
-import Data.Aeson (Object, Value (Array, Object))
+import Data.Aeson (Encoding, Object, Value, toEncoding)
+import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Vector qualified as V
 
 import Ecluse.Core.Package.Entry (EntryKey)
 
@@ -30,7 +30,9 @@ data SimpleDocument = SimpleDocument
 simpleDocument :: Object -> [(EntryKey, Value)] -> SimpleDocument
 simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
--- | Render the retained fields. Source coordinates remain internal to admission and assembly.
-simpleValue :: SimpleDocument -> Value
-simpleValue document =
-    Object (KeyMap.insert "files" (Array (V.fromList (map snd (simpleFiles document)))) (simpleEnvelope document))
+-- | Encode the envelope with the retained files in source order. Source coordinates stay internal.
+simpleEncoding :: SimpleDocument -> Encoding
+simpleEncoding document =
+    Encoding.pairs (KeyMap.foldMapWithKey Encoding.pair (KeyMap.insert "files" files (toEncoding <$> simpleEnvelope document)))
+  where
+    files = Encoding.list (toEncoding . snd) (simpleFiles document)
