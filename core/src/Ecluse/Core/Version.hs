@@ -15,6 +15,7 @@ module Ecluse.Core.Version (
     -- * Versions
     Version,
     versionKey,
+    versionKeyIn,
     mkVersion,
     renderVersion,
     compareVersions,
@@ -63,6 +64,14 @@ mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
 renderVersion :: Version -> Text
 renderVersion = versionRaw
 
+{- | The version's key under an ecosystem's grammar, as 'mkVersion' for that ecosystem builds it.
+It reuses the key the version carries when that key is the ecosystem's, and parses otherwise.
+-}
+versionKeyIn :: Ecosystem -> Version -> Maybe VersionKey
+versionKeyIn eco version = case versionKey version of
+    Just key | keyEcosystem key == eco -> Just key
+    _ -> rightToMaybe (parseVersionKey eco (versionRaw version))
+
 {- | Compare two versions by their canonical keys. 'Nothing' when either version has no
 key, in which case an ordering-based rule abstains.
 -}
@@ -88,6 +97,13 @@ parseVersionKey eco raw = case eco of
     RubyGems -> note (RubyGemsKey <$> parseGem raw)
   where
     note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
+
+-- 'parseVersionKey' builds each ecosystem's key with its own constructor.
+keyEcosystem :: VersionKey -> Ecosystem
+keyEcosystem = \case
+    NpmKey _ -> Npm
+    PyPIKey _ -> PyPI
+    RubyGemsKey _ -> RubyGems
 
 -- | Why a version string failed to parse.
 newtype VersionError = VersionError

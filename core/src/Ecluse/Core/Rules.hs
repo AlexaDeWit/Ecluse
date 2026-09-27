@@ -51,10 +51,8 @@ import UnliftIO (tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), insideAffectedRange, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), PackageAdvisories, affecting, fixedAt, keepAdvisories, packageAdvisories, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag)
-import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
     ReadFault (..),
@@ -101,12 +99,14 @@ withCveLookup deps use = case rdAdvisoryDatabase deps of
     AdvisoryDatabase borrow -> borrow use
 
 -- | One package's advisory rows and the generation that served them, or 'Nothing' while none is loaded.
-type AdvisoryRows = Maybe (DbEtag, [AdvisoryRange])
+type AdvisoryRows = Maybe (DbEtag, PackageAdvisories)
 
--- | Pin a generation and read one package's rows through it. A query fault escapes to the caller.
+{- | Pin a generation and read one package's rows through it, their bounds parsed once for all its
+versions. A query fault escapes to the caller.
+-}
 readAdvisories :: RuleDeps -> PackageName -> IO AdvisoryRows
 readAdvisories deps name =
-    withCveLookup deps (traverse (\(etag, cve) -> (etag,) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name))))
+    withCveLookup deps (traverse (\(etag, cve) -> (etag,) . packageAdvisories (pkgEcosystem name) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name))))
 
 -- | Where a built-in rule's verdict comes from.
 data VerdictSource
@@ -154,14 +154,14 @@ verdictSource = \case
     -- Expiry abstains on the remediation allow, so a deny's refusal is what the version meets.
     AllowIfRemediatesCve -> FromAdvisories (AdvisoryAlignment FailNoDecision FailNoDecision) $ \case
         Nothing -> const (NoDecision "no advisory database is loaded")
-        Just (_, ranges) -> \ev -> classifyRanges (pkgEcosystem (evName ev)) (renderVersion (evVersion ev)) ranges
+        Just (_, advisories) -> classifyRanges advisories
     -- A deny's configured alignment governs a faulted read and an unloaded database alike.
     DenyIfCve params -> FromAdvisories (AdvisoryAlignment FailDeny (dicOnUnavailable params)) $ \case
         Nothing -> const (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just (etag, ranges) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity ranges
+        Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity advisories
     DenyIfEpss params -> FromAdvisories (AdvisoryAlignment FailDeny (dieOnUnavailable params)) $ \case
         Nothing -> const (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just (etag, ranges) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss ranges
+        Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss advisories
 
 {- The minimum-age verdict for a version whose publish time the evidence carries. The quarantine
 holds a new version until the registry has had time to yank a malicious publish. -}
@@ -182,14 +182,16 @@ fault, because no in-process retry could load one, so the harness never retries 
 noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
 noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
--- The score filter runs once per read, so each version tests only the ranges that clear it.
-advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> [AdvisoryRange] -> RuleEvidence -> RuleVerdict
-advisoryDenyVerdict etag missing metric threshold scoreOf ranges = \ev ->
-    case ordNub [arCveId ar | ar <- scored, insideAffectedRange (pkgEcosystem (evName ev)) (renderVersion (evVersion ev)) ar] of
-        [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
-        ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
+-- The score filter and the reason texts no version changes are built once per read.
+advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
+advisoryDenyVerdict etag missing metric threshold scoreOf advisories = \ev ->
+    case ordNub (map arCveId (affecting scored (evVersion ev))) of
+        [] -> unaffected
+        ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> thresholdNote)
   where
-    scored = filter (scoreAtLeast missing threshold . scoreOf) ranges
+    scored = keepAdvisories (scoreAtLeast missing threshold . scoreOf) advisories
+    unaffected = NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
+    thresholdNote = " (" <> metric <> " >= " <> show threshold <> ")"
 
 -- | Read the advisory identifiers from a scored denial reason, or return none.
 cveIdsInReason :: Text -> [Text]
@@ -203,18 +205,17 @@ cveIdsInReason message
     body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
     (ids, afterThreshold) = T.breakOn " (" body
 
-{- A version still inside any advisory's affected range, an unfixed one included, must not
-fast-track. A row with a fixed bound always decodes to 'FixedBefore', so the fix test is exact. -}
-classifyRanges :: Ecosystem -> Text -> [AdvisoryRange] -> RuleVerdict
-classifyRanges eco version ranges =
+-- A version still inside any advisory's affected range, an unfixed one included, must not fast-track.
+classifyRanges :: PackageAdvisories -> RuleEvidence -> RuleVerdict
+classifyRanges advisories ev =
     case (remediated, stillOpen) of
         ([], _) -> NoDecision "no advisory names this version as its fix"
         (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
         (ids, open) ->
             NoDecision ("fixes " <> T.intercalate ", " ids <> " but is still affected by " <> T.intercalate ", " open)
   where
-    remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
-    stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
+    remediated = ordNub (map arCveId (fixedAt advisories (evVersion ev)))
+    stillOpen = ordNub (map arCveId (affecting advisories (evVersion ev)))
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.

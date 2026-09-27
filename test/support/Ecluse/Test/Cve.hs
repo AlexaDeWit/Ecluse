@@ -2,23 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | An in-memory 'CveLookup' for pure-tier tests.
+{- | An in-memory 'CveLookup' for pure-tier tests, and a per-row reference for range matching.
 
-Rule-evaluation specs in the core suite use this fake instead of SQLite. The
-app-tier conformance spec runs the same behavioural cases against this fake
-and the real handle, so the two cannot drift apart.
+Rule-evaluation specs use this fake instead of SQLite. "Ecluse.Core.CveSpec" runs the same
+behavioural cases against this fake and the real handle, so the two cannot drift apart.
 -}
 module Ecluse.Test.Cve (
     fakeCveLookup,
     fakeCveDb,
     namesFix,
     unscoredEpssCases,
+    referenceInside,
 ) where
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Epss (epssForIds, mkEpssScores, parseEpssLine)
 import Ecluse.Core.Osv.Provenance (noProvenance)
-import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
+import Ecluse.Core.Version (compareVersions, mkVersion, parseVersionKey)
 
 -- | Build the fake from (package name, range) rows.
 fakeCveLookup :: [(Text, AdvisoryRange)] -> CveLookup
@@ -50,3 +52,29 @@ unscoredEpssCases =
         epssForIds
             (mkEpssScores (mapMaybe parseEpssLine ("CVE-2026-10002,0.75,0.9" : rows)))
             ids
+
+{- | The per-row reference for 'Ecluse.Core.Cve.affecting': it parses the version and both bounds on
+every call, so a spec can hold the matcher that parses them once per package to it.
+-}
+referenceInside :: Ecosystem -> Text -> AdvisoryRange -> Bool
+referenceInside eco versionText ar = case referencePoint of
+    Just only -> versionText == only
+    Nothing -> atOrAboveIntroduced && withinUpperBound
+  where
+    v = mkVersion eco versionText
+    referencePoint = case (arIntroduced ar, arUpperBound ar) of
+        (Just introduced, LastAffected lastAffected)
+            | introduced == lastAffected
+            , isLeft (parseVersionKey eco introduced) ->
+                Just introduced
+        _ -> Nothing
+    atOrAboveIntroduced = case arIntroduced ar of
+        Nothing -> True
+        Just i -> compareVersions v (mkVersion eco i) /= Just LT
+    withinUpperBound = case arUpperBound ar of
+        FixedBefore f -> case compareVersions v (mkVersion eco f) of
+            Just LT -> True
+            Just _ -> False
+            Nothing -> True
+        LastAffected la -> compareVersions v (mkVersion eco la) /= Just GT
+        Unbounded -> True
