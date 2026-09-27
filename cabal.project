@@ -105,4 +105,4 @@ package ecluse
 source-repository-package
   type: git
   location: https://github.com/AlexaDeWit/json-stream.git
-  tag: 0c77cbf35486bbb72f5d2706fcbfb7ce1064d986
+  tag: 520e25758baa5b2665b45eee71ecf8e6a9759868

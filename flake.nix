@@ -194,8 +194,8 @@
           json-stream = hlib.dontCheck (hself.callCabal2nix "json-stream" (pkgs.fetchFromGitHub {
             owner = "AlexaDeWit";
             repo = "json-stream";
-            rev = "0c77cbf35486bbb72f5d2706fcbfb7ce1064d986";
-            hash = "sha256-BciDEgUiO/rBHNy1j5gOkKwysiuhRbFBp2TeU0Kqu0g=";
+            rev = "520e25758baa5b2665b45eee71ecf8e6a9759868";
+            hash = "sha256-LtgBrwGxR7Sw3BR6xF6Z/J+t7tRUX2EwXMLinC6MjJ0=";
           }) { });
         };
 
