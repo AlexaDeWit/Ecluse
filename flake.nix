@@ -134,24 +134,25 @@
           # http-client data-plane child spans. The http-client instrumentation pulls
           # the conduit instrumentation as a 1.0 dependency, so it travels on the line
           # too. Their only OTel deps, api and semantic-conventions, are above.
+          # dontCheck skips upstream tests as with cvss above.
           hs-opentelemetry-instrumentation-wai =
-            hself.callHackageDirect {
+            hlib.dontCheck (hself.callHackageDirect {
               pkg = "hs-opentelemetry-instrumentation-wai";
               ver = "1.0.0.0";
               sha256 = "sha256-gPU9k2H1MpMEGh0F1Oi5ri8gdsZMCvQBRTnXgDhVAa0=";
-            } { };
+            } { });
           hs-opentelemetry-instrumentation-conduit =
-            hself.callHackageDirect {
+            hlib.dontCheck (hself.callHackageDirect {
               pkg = "hs-opentelemetry-instrumentation-conduit";
               ver = "1.0.0.0";
               sha256 = "sha256-J4iv0uTsnmntoXOb6tf8CBnKa0KsspomwLN/mJ2ypTA=";
-            } { };
+            } { });
           hs-opentelemetry-instrumentation-http-client =
-            hself.callHackageDirect {
+            hlib.dontCheck (hself.callHackageDirect {
               pkg = "hs-opentelemetry-instrumentation-http-client";
               ver = "1.0.0.0";
               sha256 = "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
-            } { };
+            } { });
         };
 
         # amazonka, built from source at the exact rev the cabal path pins in
