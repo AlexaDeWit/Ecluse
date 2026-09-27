@@ -56,6 +56,7 @@ import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (race_)
 import UnliftIO.Exception (catchAny, throwIO)
 
+import Ecluse.Core.Security (requestTimeoutSeconds)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (..),
@@ -90,7 +91,6 @@ import Ecluse.Runtime.Server.Middleware (
     goingAwayMiddleware,
     jsonResponse,
     probeApplication,
-    timeoutSeconds,
  )
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
@@ -283,7 +283,7 @@ it would throw across the request perimeter, and @Autohead@ and @Gzip@ fight str
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
     realIp
-        . timeout timeoutSeconds
+        . timeout requestTimeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
 {- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,

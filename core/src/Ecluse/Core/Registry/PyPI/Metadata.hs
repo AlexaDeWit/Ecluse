@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (exchangeDeadline), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -63,7 +63,7 @@ fetchPyPIBody tracing origin name consume =
         <$> spanMetadataFetch
             tracing
             name
-            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (exchangeDeadline (ocLimits origin)) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
 
 decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
 decodePyPI tracing origin name mode =

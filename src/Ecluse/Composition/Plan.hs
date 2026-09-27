@@ -56,7 +56,7 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Composition.MirrorRole (mirrorRoleRefusal)
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), bootInvocation, everyBootRole, pipelineRoleOf, registryRoleOf)
-import Ecluse.Composition.Validate (ValidatedPlan, vetBoot)
+import Ecluse.Composition.Validate (ValidatedPlan (vpExchangeDeadline), vetBoot)
 import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
@@ -216,6 +216,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , maxVersionCount = limMaxVersionCount (cfgLimits app)
                 , maxArtifactCount = limMaxArtifactCount (cfgLimits app)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits app)
+                , exchangeDeadline = vpExchangeDeadline validated
                 }
         , bpCacheConfig = planCacheConfig (cfgCache app) memoryPlan
         , bpS3Endpoint = s3Endpoint

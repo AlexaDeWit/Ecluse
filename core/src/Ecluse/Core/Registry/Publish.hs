@@ -44,7 +44,7 @@ import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThe
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (exchangeDeadline), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
@@ -128,7 +128,7 @@ probeMetadata transport targetUrl codec name = do
 -- | Read a codec's identifiers inside the response lifetime, preserving transport and HTTP outcomes.
 fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
 fetchVersionList manager limits parser request =
-    fmap (fmap versions) <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
+    fmap (fmap versions) <$> boundedJsonFetch manager (exchangeDeadline limits) (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
@@ -144,7 +144,7 @@ publishArtifact transport targetUrl codec name plan artifact bytes = do
 -- target's body, which the write has no use for, and the exchange bounds it either way.
 writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
 writeArtifact transport codec request =
-    boundedExchange (\status _ _ -> status) (ptManager transport) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
+    boundedExchange (\status _ _ -> status) (ptManager transport) (exchangeDeadline (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
         <&> \case
             Left fault -> Left (PublishFetch fault)
             Right status -> pcPublishOutcome codec status

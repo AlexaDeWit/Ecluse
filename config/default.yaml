@@ -72,6 +72,13 @@ limits:
   # declared length fails fast and the streaming download enforces the cap. It bounds a
   # stream to disk rather than a heap tenant, which is why the plan does not size it.
   maxAdvisoryDatabaseBytes: 536870912
+  # Seconds an upstream body read may wait for its next byte. Past it, the read fails with
+  # the same upstream timeout as an upstream that never answers. It measures silence, not
+  # transfer time, so a slow body that keeps sending completes. It must stay below the
+  # 60-second request timeout, because one upstream exchange runs for at most the request
+  # timeout minus this interval. A stalled fetch therefore fails, and frees the requests
+  # waiting on it, before those requests time out.
+  upstreamIdleTimeout: 10
   # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
   # concurrency and the material estimate budget. Reads fail closed past this limit.
   # A positive explicit value stays exact. Boot and check-config warn that accepting

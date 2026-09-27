@@ -34,7 +34,10 @@ import Ecluse.Core.Security (
     boundedRead,
     checkArtifactCount,
     checkVersionCountOf,
+    deadlineExchangeMicros,
+    deadlineIdleMicros,
     defaultLimits,
+    mkExchangeDeadline,
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
@@ -59,6 +62,7 @@ runBounded limits = evalState (boundedRead (MetadataBodyLimit (maxMetadataBytes 
 spec :: Spec
 spec = do
     defaultLimitsSpec
+    exchangeDeadlineSpec
     boundedReadSpec
     versionCountSpec
     artifactCountSpec
@@ -78,6 +82,23 @@ defaultLimitsSpec =
             , maxNestingDepth defaultLimits
             )
                 `shouldBe` (128 * 1024 * 1024, 1_000_000, 1_000_000, 64)
+
+exchangeDeadlineSpec :: Spec
+exchangeDeadlineSpec = describe "mkExchangeDeadline" $ do
+    let micros deadline = (deadlineIdleMicros deadline, deadlineExchangeMicros deadline)
+
+    it "gives the whole exchange the request timeout minus the idle interval" $
+        micros <$> mkExchangeDeadline 60 10 `shouldBe` Just (10_000_000, 50_000_000)
+
+    it "keeps a sub-second interval exact" $
+        micros <$> mkExchangeDeadline 1.5 0.25 `shouldBe` Just (250_000, 1_250_000)
+
+    it "refuses an interval that is not positive or not below the request timeout" $
+        forM_ [0, -1, 60, 61] $ \idle ->
+            mkExchangeDeadline 60 idle `shouldBe` Nothing
+
+    it "ships a 10-second interval under the 60-second request timeout by default" $
+        micros (exchangeDeadline defaultLimits) `shouldBe` (10_000_000, 50_000_000)
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do

@@ -287,6 +287,16 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"cache\":{\"ttl\":\"" <> spelling <> "\"}}")))
                 `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
+    it "rejects a non-positive limits.upstreamIdleTimeout, through both layers" $ do
+        loadConfig [] (Just "{\"limits\":{\"upstreamIdleTimeout\":0}}")
+            `shouldSatisfy` decodeErrorMentions "limits.upstreamIdleTimeout must be a positive integer"
+        loadConfig [("ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT", "-5")] Nothing
+            `shouldSatisfy` decodeErrorMentions "limits.upstreamIdleTimeout must be a positive integer"
+
+    it "ships a 10-second upstream idle timeout, overridable from the environment" $ do
+        (limUpstreamIdleTimeout . cfgLimits <$> expectAppConfig [] Nothing) `shouldReturn` 10
+        (limUpstreamIdleTimeout . cfgLimits <$> expectAppConfig [("ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT", "5")] Nothing) `shouldReturn` 5
+
     it "rejects a non-positive limits.maxAdvisoryDatabaseBytes" $
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"

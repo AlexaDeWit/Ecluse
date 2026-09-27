@@ -7,7 +7,7 @@ The composition root builds only from 'ValidatedPlan'. Unvetted settings remain 
 -}
 module Ecluse.Composition.Validate (
     -- * The validate phase
-    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpSettings),
+    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpExchangeDeadline, vpSettings),
     vetBoot,
 
     -- * What it clears
@@ -28,7 +28,8 @@ import Ecluse.Composition.BootError (
         MirrorTargetWithoutPublish,
         MissingAdapter,
         PublicationTargetWithoutPublish,
-        PublishStaticCredentialNeedsEdge
+        PublishStaticCredentialNeedsEdge,
+        UpstreamIdleTimeoutNotBelowRequest
     ),
  )
 import Ecluse.Composition.Endpoints (
@@ -37,13 +38,14 @@ import Ecluse.Composition.Endpoints (
     vetEndpoints,
  )
 import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
-import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, rule)
+import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (
     AdvisoriesSettings (advUrl),
-    AppConfig (cfgAdvisories, cfgDredger, cfgMounts, cfgServer),
+    AppConfig (cfgAdvisories, cfgDredger, cfgLimits, cfgMounts, cfgServer),
     Config (configApp, configMounts),
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
+    LimitsSettings (limUpstreamIdleTimeout),
     MirrorTarget (mtUrl),
     Mount,
     MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
@@ -62,6 +64,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Security (ExchangeDeadline, mkExchangeDeadline, requestTimeoutSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
 {- | What the pure boot pass cleared: the mounts a role may serve, the endpoints it may use, and
@@ -76,6 +79,8 @@ data ValidatedPlan = ValidatedPlan
     -- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass clears one.
     , vpPrivateCaches :: Map Ecosystem (Maybe StoreBackend, ClearedBackend)
     -- ^ Private caches cleared for this role with their own credential plans.
+    , vpExchangeDeadline :: ExchangeDeadline
+    -- ^ The upstream exchange deadline the configured idle timeout derives under the request timeout.
     , vpSettings :: AppConfig
     {- ^ The settings no rule vets. The mounts it carries are the raw declarations, and 'vpMounts'
     holds the vetted ones the runtime reads.
@@ -108,6 +113,7 @@ vetBoot config =
         <*> vetEndpoints (cfgMounts app)
         <*> vetStoreBackends adapterFor (configMounts config)
         <*> vetPrivateCaches adapterFor (cfgMounts app) (configMounts config)
+        <*> vetExchangeDeadline app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
         <* vetQuotaOverrides config
@@ -115,16 +121,26 @@ vetBoot config =
   where
     app = configApp config
 
-    assemble mounts policies endpoints backends caches =
+    assemble mounts policies endpoints backends caches deadline =
         ValidatedPlan
             { vpMounts = mounts
             , vpPublications = Map.intersectionWith cleared (vePublicationTargets endpoints) policies
             , vpMirrorStores = backends
             , vpPrivateCaches = caches
+            , vpExchangeDeadline = deadline
             , vpSettings = app
             }
 
     cleared target (firstParty, staticToken) = VettedPublication target firstParty staticToken
+
+{- Every role dials upstreams, so every role refuses an idle timeout that leaves an exchange no
+time under the request timeout. -}
+vetExchangeDeadline :: AppConfig -> Vet ExchangeDeadline
+vetExchangeDeadline app =
+    decided (maybeToRight [UpstreamIdleTimeoutNotBelowRequest idle requestTimeoutSeconds] deadline)
+  where
+    idle = limUpstreamIdleTimeout (cfgLimits app)
+    deadline = mkExchangeDeadline (fromIntegral requestTimeoutSeconds) (fromIntegral idle)
 
 {- The floor under the sweep's own pace. Deletion is permanent, so both store roles refuse a
 pause that would sweep faster than an operator can stop it, and every other role reads none. -}

@@ -14,7 +14,7 @@ import Network.HTTP.Client (Request)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse (responseBody), UrlFormationError)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
-import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits, maxMirrorArtifactBytes)
+import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (exchangeDeadline), maxMirrorArtifactBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
 
@@ -31,6 +31,6 @@ fetchArtifactBytes limits buildRequest url = do
     liftIO
         ( formThen
             FetchUrlUnformable
-            (fmap (fmap responseBody) . boundedFetch manager (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits)))
+            (fmap (fmap responseBody) . boundedFetch manager (exchangeDeadline limits) (MirrorArtifactBodyLimit (maxMirrorArtifactBytes limits)))
             (buildRequest Nothing (registryUrlText url))
         )

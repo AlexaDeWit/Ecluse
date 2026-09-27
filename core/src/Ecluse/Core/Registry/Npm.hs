@@ -17,7 +17,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Exchange (boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (exchangeDeadline), maxMetadataBytes)
 
 -- | Relay a client's npm publish document to the publication target and return its own response.
 relayPublishDocument ::
@@ -28,5 +28,5 @@ relayPublishDocument ::
 relayPublishDocument origin name document =
     formThen
         FetchUrlUnformable
-        (boundedRelay (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+        (boundedRelay (ocManager origin) (exchangeDeadline (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (publishRequest (originBaseUrl origin) (ocToken origin) name document)

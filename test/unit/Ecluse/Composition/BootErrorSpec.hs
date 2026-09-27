@@ -136,6 +136,10 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is 1s, beneath the floor of 2s"
         renderBootError (DredgerChunkPauseBeneathFloor 1 2)
             `shouldSatisfy` infixed "may be raised and never lowered"
+        renderBootError (UpstreamIdleTimeoutNotBelowRequest 60 60)
+            `shouldSatisfy` infixed "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT (limits.upstreamIdleTimeout) is 60, not below the 60-second request timeout"
+        renderBootError (UpstreamIdleTimeoutNotBelowRequest 60 60)
+            `shouldSatisfy` infixed "so set it below 60"
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
             `shouldSatisfy` infixed "one.example.test:443 and two.example.test:443 both define the capacity pool \"shared\""
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")

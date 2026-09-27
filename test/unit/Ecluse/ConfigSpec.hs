@@ -61,6 +61,7 @@ spec = do
             [ ("server.port", "ECLUSE_SERVER__PORT", "{\"server\":{\"port\":\"bad\"}}")
             , ("server.shutdownDrainTimeout", "ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "{\"server\":{\"shutdownDrainTimeout\":\"bad\"}}")
             , ("limits.maxVersionCount", "ECLUSE_LIMITS__MAX_VERSION_COUNT", "{\"limits\":{\"maxVersionCount\":\"bad\"}}")
+            , ("limits.upstreamIdleTimeout", "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT", "{\"limits\":{\"upstreamIdleTimeout\":\"bad\"}}")
             , ("runtime.cores", "ECLUSE_RUNTIME__CORES", "{\"runtime\":{\"cores\":\"bad\"}}")
             ]
             $ \(field, envKey, doc) ->

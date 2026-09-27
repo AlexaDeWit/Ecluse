@@ -20,7 +20,8 @@ import Ecluse.Composition.BootError (
         PublicationTargetOnPublicUpstream,
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
-        StoreTagConflict
+        StoreTagConflict,
+        UpstreamIdleTimeoutNotBelowRequest
     ),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
@@ -38,7 +39,7 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
+    ValidatedPlan (vpExchangeDeadline, vpMirrorStores, vpMounts, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
     VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
     vetBoot,
@@ -55,6 +56,7 @@ import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Security (mkExchangeDeadline, requestTimeoutSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
@@ -174,6 +176,10 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         plan <- expectVetted MirrorWriter codeArtifactEnvVars
         Map.keys (vpMirrorStores plan) `shouldBe` []
 
+    it "clears the exchange deadline the configured idle timeout derives under the request timeout" $ do
+        plan <- expectVetted MirrorWriter (overrideEnv "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT" "5" staticEnvVars)
+        Just (vpExchangeDeadline plan) `shouldBe` mkExchangeDeadline (fromIntegral requestTimeoutSeconds) 5
+
     it "clears a writing role a mirror target this build cannot sweep, and says nothing of it" $ do
         config <- expectConfig staticEnvVars Nothing
         let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
@@ -224,6 +230,12 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
     it "refuses the deleting role a chunk pause beneath the sweep's floor" $
         refusalsFor MirrorPruner (beneathThePauseFloor codeArtifactEnvVars)
             `shouldReturn` [DredgerChunkPauseBeneathFloor 1 minimumChunkPause]
+
+    forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role ->
+        it ("refuses under " <> show role <> " an idle timeout that is not below the request timeout") $
+            forM_ [requestTimeoutSeconds, requestTimeoutSeconds + 1] $ \idle ->
+                refusalsFor role (overrideEnv "ECLUSE_LIMITS__UPSTREAM_IDLE_TIMEOUT" (show idle) codeArtifactEnvVars)
+                    `shouldReturn` [UpstreamIdleTimeoutNotBelowRequest idle requestTimeoutSeconds]
 
     it "clears a writing role that same pause, because no writing role sweeps" $
         refusalsFor MirrorWriter (beneathThePauseFloor codeArtifactEnvVars) `shouldReturn` []

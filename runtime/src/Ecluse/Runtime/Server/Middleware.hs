@@ -3,18 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The front door's cross-cutting middleware pieces and the control-plane health
-endpoints. Those are the drain-aware going-away header, the per-request timeout knob,
-and the @\/livez@ \/ @\/readyz@ probe application. "Ecluse.Runtime.Server"'s @serverMiddleware@
-composes the pieces around the proxy 'Application'. Its dispatch answers the probes
-through 'probeApplication'. The request-body cap is not here: it is a route concern,
-enforced at the read site by the only body-consuming route (publish).
+endpoints. Those are the drain-aware going-away header and the @\/livez@ \/ @\/readyz@ probe
+application. "Ecluse.Runtime.Server"'s @serverMiddleware@ composes the pieces around the proxy
+'Application'. Its dispatch answers the probes through 'probeApplication'. The request-body cap
+is not here: it is a route concern, enforced at the read site by the only body-consuming route
+(publish).
 -}
 module Ecluse.Runtime.Server.Middleware (
     -- * Drain-aware going-away header
     goingAwayMiddleware,
-
-    -- * Per-request timeout
-    timeoutSeconds,
 
     -- * Control-plane health probes
     probeApplication,
@@ -51,12 +48,6 @@ goingAwayMiddleware drain app request respond = do
 -- A streaming response keeps streaming: only its headers are rewritten.
 closeConnection :: Response -> Response
 closeConnection = mapResponseHeaders ((hConnection, "close") :)
-
-{- | The per-request timeout, in seconds. Generous enough for a large packument
-fetch, bounded so a stuck upstream cannot pin a handler indefinitely.
--}
-timeoutSeconds :: Int
-timeoutSeconds = 60
 
 {- | The control-plane health probes, answered above any mount: @\/livez@ from the injected
 liveness check, @\/readyz@ from the drain signal and startup gate. Any other path is a @404@.
