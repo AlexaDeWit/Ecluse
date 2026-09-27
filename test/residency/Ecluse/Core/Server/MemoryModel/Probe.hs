@@ -316,16 +316,16 @@ readNpmSource mode limits name version next = case mode of
 readPyPISource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readPyPISource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (parseJsonChunks bound parser step PyPIProjection.emptyProjection [body]) >>= fullResult)
-    StreamedFull -> fmap (first show) (readJsonStream bound parser step PyPIProjection.emptyProjection next) <&> (>>= fullResult)
+    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (parseJsonChunks bound parser step (PyPIProjection.emptyProjection name) [body]) >>= fullResult)
+    StreamedFull -> fmap (first show) (readJsonStream bound parser step (PyPIProjection.emptyProjection name) next) <&> (>>= fullResult)
     StreamedSelected ->
         let selectedMode = PyPIStream.SelectedRead name (renderVersion version)
-         in fmap (first show) (readJsonStream bound (PyPIStream.pypiFields (maxNestingDepth limits) selectedMode) (PyPIProjection.collectField limits name selectedMode) PyPIProjection.emptyProjection next) <&> (>>= selectedResult)
+         in fmap (first show) (readJsonStream bound (PyPIStream.pypiFields (maxNestingDepth limits) selectedMode) (PyPIProjection.collectField limits selectedMode) (PyPIProjection.emptyProjection name) next) <&> (>>= selectedResult)
     StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
     parser = PyPIStream.pypiFields (maxNestingDepth limits) PyPIStream.FullRead
-    step = PyPIProjection.collectField limits name PyPIStream.FullRead
+    step = PyPIProjection.collectField limits PyPIStream.FullRead
     fullResult streamed = do
         (info, document) <- first show (projectPyPIStream limits name streamed)
         pure (HeldShared (CacheEntry info (fst pypiSimpleCached document) (streamBytes streamed) (streamDigest streamed)), streamBytes streamed, streamDigest streamed)

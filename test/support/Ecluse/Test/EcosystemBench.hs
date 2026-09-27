@@ -30,7 +30,7 @@ import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleValue)
-import Ecluse.Core.Registry.PyPI.Project (fileVersionKey)
+import Ecluse.Core.Registry.PyPI.Project (fileProject, fileVersionKey)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
 import Ecluse.Core.Security (defaultLimits)
@@ -88,7 +88,7 @@ pypiBench =
         , ebCorpus = []
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
-        , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey name . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
+        , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         , ebSelective = projectPyPIVersion defaultLimits
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)

@@ -11,7 +11,11 @@ import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Conc (getAllocationCounter)
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO (evaluate)
 
 import Ecluse.Core.Package (
@@ -33,9 +37,12 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.PyPI.Project (
     FileCoordinate (..),
     fileCoordinate,
+    fileProject,
     fileVersionKey,
+    filenameMemo,
     isCanonicalName,
     projectName,
+    readCoordinate,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Version (renderVersion)
@@ -43,12 +50,14 @@ import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validS
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Version (genPyPI)
 
 spec :: Spec
 spec = do
     projectNameSpec
     canonicalNameSpec
     coordinateSpec
+    memoSpec
     allocationSpec
     projectionSpec
     versionFoldSpec
@@ -132,7 +141,7 @@ coordinateSpec = describe "fileCoordinate" $ do
         fileCoordinate emptyName "1.tar.gz" `shouldBe` Nothing
 
     it "canonicalises the release, so two spellings of it key alike" $
-        fileVersionKey requestsName "requests-2.34.tar.gz" `shouldBe` fileVersionKey requestsName "requests-2.34.0.tar.gz"
+        fileVersionKey (fileProject requestsName) "requests-2.34.tar.gz" `shouldBe` fileVersionKey (fileProject requestsName) "requests-2.34.0.tar.gz"
 
     it "refuses a file naming another project, which on the artifact route is path confusion" $
         fileCoordinate requestsName "urllib3-2.0.0.tar.gz" `shouldBe` Nothing
@@ -148,6 +157,37 @@ coordinateSpec = describe "fileCoordinate" $ do
 
     it "refuses a wheel with too few tag parts to be one" $
         fileCoordinate requestsName "requests-2.34.2-py3.whl" `shouldBe` Nothing
+
+memoSpec :: Spec
+memoSpec = describe "filenameMemo" $ do
+    it "reads each filename as fileCoordinate does, whatever the memo remembered before" $
+        hedgehog $ do
+            files <- forAll (Gen.list (Range.linear 0 60) genFilename)
+            let remembered = snd (mapAccumL (\memo file -> swap (readCoordinate memo file)) (filenameMemo azureStorageBlob) files)
+            remembered === map (fileCoordinate azureStorageBlob) files
+
+    it "reads a release key as fileCoordinate does" $
+        hedgehog $ do
+            file <- forAll genFilename
+            fileVersionKey (fileProject azureStorageBlob) file === (fcVersionKey <$> fileCoordinate azureStorageBlob file)
+
+    it "keeps each file's artifact kind when two files share a version text" $ do
+        let (wheel, memo) = readCoordinate (filenameMemo requestsName) "requests-2.34.2-py3-none-any.whl"
+        wheel `shouldBe` Just (FileCoordinate "2.34.2" (Wheel "py3-none-any"))
+        fst (readCoordinate memo "requests-2.34.2.tar.gz") `shouldBe` Just (FileCoordinate "2.34.2" Sdist)
+
+-- Repeated version spellings make later files reuse a remembered version text.
+genFilename :: Gen Text
+genFilename = do
+    project <- Gen.element ["azure-storage-blob", "azure_storage_blob", "Azure.Storage.Blob", "azure-storage", "requests", ""]
+    version <- Gen.choice [Gen.element ["1.0", "1.0.0", "1.0RC1", "1.0rc1", "v1.0", "1.0-1", "2!1.0", "1.0+Local.7", "nightly", "", "1..0"], genPyPI]
+    Gen.element
+        [ project <> "-" <> version <> "-py3-none-any.whl"
+        , project <> "-" <> version <> "-1-py3-none-any.whl"
+        , project <> "-" <> version <> ".tar.gz"
+        , project <> "-" <> version <> ".zip"
+        , project <> "-" <> version <> ".egg"
+        ]
 
 allocationSpec :: Spec
 allocationSpec = describe "filename allocation growth" $

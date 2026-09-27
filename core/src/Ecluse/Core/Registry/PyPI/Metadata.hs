@@ -76,8 +76,8 @@ fetchPyPIStream tracing origin name mode =
                 (ocManager origin)
                 (MetadataBodyLimit (maxMetadataBytes limits))
                 (pypiFields (maxNestingDepth limits) mode)
-                (collectField limits name mode)
-                emptyProjection
+                (collectField limits mode)
+                (emptyProjection name)
             )
             (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 

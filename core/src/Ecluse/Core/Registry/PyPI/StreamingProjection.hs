@@ -16,20 +16,21 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Set qualified as Set
 
-import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry, renderPackageName)
+import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
-import Ecluse.Core.Registry.PyPI.Project (fileVersionKey, projectName, projectSimpleIndex)
+import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersionKey), FilenameMemo, filenameMemo, projectName, projectSimpleIndex, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename), SimpleIndex (..), checkApiVersion, decodeIndexFiles)
+import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename), checkApiVersion, decodeIndexFiles)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (maxArtifactCount), checkVersionCountOf)
 
--- | Parsed files share their retained scalar values with the compact serving records.
+-- | Parsed files keep their read coordinate and share retained scalars with the compact serving records.
 data PyPIProjection = PyPIProjection
     { projectedEnvelope :: KeyMap.KeyMap Value
-    , projectedFiles :: [(IndexFile, Value)]
+    , projectedFiles :: [(IndexFile, Maybe FileCoordinate, Value)]
+    , projectedMemo :: FilenameMemo
     , projectedFileDrops :: [InvalidEntry]
     , projectedVersionDrops :: [InvalidEntry]
     , projectedVersions :: Set Text
@@ -42,13 +43,13 @@ data PyPIProjection = PyPIProjection
     , projectedVersionsActive :: Bool
     }
 
--- | Start one source without retaining any input chunks.
-emptyProjection :: PyPIProjection
-emptyProjection = PyPIProjection mempty [] [] [] mempty 0 Nothing True False False False False
+-- | Start one project's source without retaining any input chunks.
+emptyProjection :: PackageName -> PyPIProjection
+emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] mempty 0 Nothing True False False False False
 
 -- | Decode one compact file and stop retaining payloads after an existing structural limit trips.
-collectField :: Limits -> PackageName -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
-collectField limits name mode acc =
+collectField :: Limits -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
+collectField limits mode acc =
     Right . \case
         IgnoredField -> acc
         EnvelopeField key value
@@ -78,10 +79,11 @@ collectField limits name mode acc =
             | isNothing (projectedBound current) = current{projectedFileDrops = reverse drops <> projectedFileDrops current}
             | otherwise = current
     retain value current file =
-        let next
-                | isNothing (projectedBound current) = current{projectedFiles = (file, value) : projectedFiles current}
+        let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)
+            next
+                | isNothing (projectedBound current) = current{projectedFiles = (file, coordinate, value) : projectedFiles current, projectedMemo = memo}
                 | otherwise = current
-         in case (mode, fileVersionKey name (ifFilename file)) of
+         in case (mode, fcVersionKey <$> coordinate) of
                 (FullRead, Just version) ->
                     let versions = Set.insert version (projectedVersions current)
                         count = projectedArtifactCount current + 1
@@ -101,8 +103,8 @@ finishProjection requested acc = do
     unless (projectedShape acc) (Left MetadataUndecodable)
     traverse_ (Left . MetadataBoundExceeded) (projectedBound acc)
     let files = reverse (projectedFiles acc)
-        index = SimpleIndex (renderPackageName reported) (map fst files) (reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc))
+        invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
     pure
-        ( projectSimpleIndex reported index
-        , simpleDocument (projectedEnvelope acc) [(ifEntryKey file, value) | (file, value) <- files]
+        ( projectSimpleIndex reported invalid [(file, coordinate) | (file, coordinate, _) <- files]
+        , simpleDocument (projectedEnvelope acc) [(ifEntryKey file, value) | (file, _, value) <- files]
         )

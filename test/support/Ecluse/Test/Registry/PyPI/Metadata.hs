@@ -44,8 +44,8 @@ projectPyPIChunks limits name mode =
         . parseJsonChunks
             (MetadataBodyLimit (maxMetadataBytes limits))
             (pypiFields (maxNestingDepth limits) mode)
-            (collectField limits name mode)
-            emptyProjection
+            (collectField limits mode)
+            (emptyProjection name)
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.
 documentFromValue :: Value -> SimpleDocument

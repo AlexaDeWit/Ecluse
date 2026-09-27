@@ -10,8 +10,8 @@ import Data.Aeson.Types (parseEither, parseJSON)
 
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (ParseError (ParseError))
-import Ecluse.Core.Registry.PyPI.Project (projectName, projectSimpleIndex)
-import Ecluse.Core.Registry.PyPI.Wire (SimpleIndex (siName))
+import Ecluse.Core.Registry.PyPI.Project (fileCoordinate, projectName, projectSimpleIndex)
+import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (..))
 import Ecluse.Core.Registry.WireSupport (Projection, checkNameAgreement)
 
 -- | Project caller-owned JSON with the same typed file semantics as the streaming reader.
@@ -19,4 +19,5 @@ projectSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projec
 projectSimpleIndexFromValue requested value = do
     index <- first (ParseError . toText) (parseEither parseJSON value)
     reported <- projectName (siName index)
-    pure (checkNameAgreement requested reported (projectSimpleIndex reported index))
+    let files = [(file, fileCoordinate reported (ifFilename file)) | file <- siFiles index]
+    pure (checkNameAgreement requested reported (projectSimpleIndex reported (siInvalidEntries index) files))

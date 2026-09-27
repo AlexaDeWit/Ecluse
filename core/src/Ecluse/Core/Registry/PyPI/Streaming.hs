@@ -18,7 +18,7 @@ import Data.JsonStream.Parser qualified as J
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
-import Ecluse.Core.Registry.PyPI.Project (fileVersionKey)
+import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject, fileVersionKey)
 
 -- | Select all files or one canonical release while counting every input file.
 data PyPIRead = FullRead | SelectedRead PackageName Text
@@ -64,7 +64,7 @@ pypiFields depth mode
         | depth <= 2 = Nothing <$ retainedValue 0
         | otherwise = case mode of
             FullRead -> Just <$> retainedObjectOr Null fileField
-            SelectedRead name wanted -> selectedFile (depth - 3) name wanted
+            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted
     versions = case mode of
         SelectedRead{} -> mempty
         FullRead ->
@@ -105,8 +105,8 @@ data SelectedFile
     = RejectedFile
     | CandidateFile Bool [(Key.Key, Value)] (Maybe Value) Bool
 
-selectedFile :: Int -> PackageName -> Text -> J.Parser (Maybe Value)
-selectedFile budget name wanted = finishSelected <$> J.foldI (collectSelected name wanted) initial (J.objectKeyValues field)
+selectedFile :: Int -> FileProject -> Text -> J.Parser (Maybe Value)
+selectedFile budget project wanted = finishSelected <$> J.foldI (collectSelected project wanted) initial (J.objectKeyValues field)
   where
     initial = CandidateFile False [] Nothing False
     field "hashes"
@@ -119,14 +119,14 @@ selectedFile budget name wanted = finishSelected <$> J.foldI (collectSelected na
         | otherwise = mempty
     hashField key = HashField (Key.fromText key) <$> scalar (budget - 1)
 
-collectSelected :: PackageName -> Text -> SelectedFile -> SelectedFileEvent -> SelectedFile
+collectSelected :: FileProject -> Text -> SelectedFile -> SelectedFileEvent -> SelectedFile
 collectSelected _ _ RejectedFile _ = RejectedFile
-collectSelected name wanted current@(CandidateFile matched scalars hashes active) event = case event of
+collectSelected project wanted current@(CandidateFile matched scalars hashes active) event = case event of
     FileScalar key value
         | any ((== key) . fst) scalars -> current
         | key == "filename" -> case value of
             String filename
-                | fileVersionKey name filename == Just wanted ->
+                | fileVersionKey project filename == Just wanted ->
                     CandidateFile True ((key, value) : scalars) hashes active
             _ -> RejectedFile
         | otherwise -> CandidateFile matched ((key, value) : scalars) hashes active
