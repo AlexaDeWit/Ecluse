@@ -4,9 +4,10 @@
 
 {- | The memory budget's feedback: how one sample of the collector and the heap moves the budget.
 
-The budget shrinks by any live data the charges do not explain, halves when the collector takes too
-much of the CPU or the heap nears overflow, and grows back in small steps while the collector stays
-calm, up to a fixed cap. The sampler in "Ecluse.Rts.Sampler" reads the statistics and applies this.
+After each major collection the brake measures the live data outside the charges, so the budget may
+grow until charges and that measured remainder reach the live ceiling. It halves the budget when the
+collector takes too much of the CPU or the heap nears overflow, and grows it back in small steps
+while the collector stays calm. The sampler in "Ecluse.Rts.Sampler" reads the statistics.
 -}
 module Ecluse.Core.Server.Admission.Brake (
     -- * The marks
@@ -46,8 +47,8 @@ data BrakeMarks = BrakeMarks
     -- ^ Consecutive calm samples before one growth step.
     , bmGrowPermille :: Int
     -- ^ One growth step, as a share of the current budget.
-    , bmCorrectionDecayPermille :: Int
-    -- ^ How much of a closing gap the live correction gives back per major collection.
+    , bmReturnPermille :: Int
+    -- ^ How much of a fall in the measured outside live data one major collection gives back.
     }
     deriving stock (Eq, Show)
 
@@ -63,19 +64,21 @@ defaultBrakeMarks =
         , bmOverflowGuardPermille = 800
         , bmCalmSamples = 10
         , bmGrowPermille = 125
-        , bmCorrectionDecayPermille = 250
+        , bmReturnPermille = 250
         }
 
 -- | What the boot fixed for this process.
 data BrakeBounds = BrakeBounds
     { bbBootBytes :: Int
-    -- ^ The budget the boot computed, where the live target is met.
+    -- ^ The budget the boot computed, and the ceiling when no heap ceiling binds.
     , bbFloorBytes :: Int
     -- ^ The budget never falls below this.
-    , bbCapBytes :: Int
-    -- ^ The budget never grows above this.
+    , bbLiveCeilingBytes :: Maybe Int
+    -- ^ The live data charges and the measured remainder may reach together, when a heap ceiling binds.
+    , bbFixedLiveBytes :: Int
+    -- ^ The least live data ever counted outside the charges: the idle process.
     , bbExplainedBytes :: Int
-    -- ^ The live data the boot expects outside the budget: the idle floor and the retained tenants.
+    -- ^ The boot's estimate of live data outside the charges, used until a major collection measures it.
     , bbOverflowLiveBytes :: Maybe Int
     -- ^ The live data at which the copying collector overflows the heap ceiling, when one binds.
     , bbGrowFloorBytes :: Int
@@ -103,17 +106,17 @@ brakeLevelCode = \case
 -- | The brake's memory between samples.
 data BrakeState = BrakeState
     { bsBudget :: Int
-    , bsCorrection :: Int
-    -- ^ Live data the charges did not explain at recent major collections.
+    , bsOutside :: Maybe Int
+    -- ^ Live data outside the charges at recent major collections. 'Nothing' before the first.
     , bsCalmSamples :: Int
     , bsLevel :: BrakeLevel
     }
     deriving stock (Eq, Show)
 
--- | Start at the boot budget with nothing to correct.
+-- | Start at the boot budget, with nothing measured yet.
 initialBrakeState :: BrakeBounds -> BrakeState
 initialBrakeState bounds =
-    BrakeState{bsBudget = clampBudget bounds (bbBootBytes bounds), bsCorrection = 0, bsCalmSamples = 0, bsLevel = Calm}
+    BrakeState{bsBudget = min (budgetCeiling bounds Nothing) (bbBootBytes bounds), bsOutside = Nothing, bsCalmSamples = 0, bsLevel = Calm}
 
 -- | One sample's readings. A missing reading leaves its rule out of this step.
 data GcSample = GcSample
@@ -128,42 +131,48 @@ data GcSample = GcSample
     }
     deriving stock (Eq, Show)
 
-{- | Move the budget by one sample. The live correction applies first, then pressure halves the
-budget, and only a calm stretch grows it. The result always stays within the floor and the cap.
+{- | Move the budget by one sample: pressure halves it, a lower ceiling cuts it at once, and only a
+calm stretch grows it. The result always stays between the floor and the ceiling.
 -}
 brakeStep :: BrakeMarks -> BrakeBounds -> BrakeState -> GcSample -> BrakeState
 brakeStep marks bounds before sample =
     BrakeState
-        { bsBudget = clampBudget bounds grown
-        , bsCorrection = correction
+        { bsBudget = grown
+        , bsOutside = outside
         , bsCalmSamples = if level == Calm && not growNow then calm else 0
         , bsLevel = level
         }
   where
-    correction = maybe (bsCorrection before) (correctionAfterMajor marks bounds before sample) (gsLiveAfterMajor sample)
-    corrected = bsBudget before - max 0 (correction - bsCorrection before)
-    ceilingNow = max (bbFloorBytes bounds) (bbCapBytes bounds - correction)
+    outside = maybe (bsOutside before) (Just . measuredOutside marks before (gsChargedBytes sample)) (gsLiveAfterMajor sample)
+    ceilingNow = budgetCeiling bounds outside
     level
         | pressed marks bounds sample = Braking
         | all (< bmGcLowPermille marks) (gsGcSharePermille sample) = Calm
         | otherwise = Holding
     calm = bsCalmSamples before + 1
     growNow = level == Calm && calm >= bmCalmSamples marks
+    kept = min ceilingNow (bsBudget before)
     held = case level of
-        Braking -> corrected `div` 2
-        _ -> min ceilingNow corrected
+        Braking -> max (bbFloorBytes bounds) (kept `div` 2)
+        _ -> kept
     grown
         | growNow = min ceilingNow (held + max (bbGrowFloorBytes bounds) (held * bmGrowPermille marks `div` 1000))
         | otherwise = held
 
--- A new gap raises the correction at once. A closing gap returns it a fraction at a time.
-correctionAfterMajor :: BrakeMarks -> BrakeBounds -> BrakeState -> GcSample -> Int -> Int
-correctionAfterMajor marks bounds before sample live
-    | gap >= previous = gap
-    | otherwise = previous - (previous - gap) * bmCorrectionDecayPermille marks `div` 1000
+{- The most the budget may reach: the live ceiling less the live data outside the charges, never
+below the idle process's share, or the boot budget when no heap ceiling binds. -}
+budgetCeiling :: BrakeBounds -> Maybe Int -> Int
+budgetCeiling bounds outside = max (bbFloorBytes bounds) $ case bbLiveCeilingBytes bounds of
+    Nothing -> bbBootBytes bounds
+    Just live -> live - max (bbFixedLiveBytes bounds) (fromMaybe (bbExplainedBytes bounds) outside)
+
+-- A rise in the remainder counts at once. A fall is given back a fraction at a time.
+measuredOutside :: BrakeMarks -> BrakeState -> Int -> Int -> Int
+measuredOutside marks before charged live = case bsOutside before of
+    Just previous | measured < previous -> previous - (previous - measured) * bmReturnPermille marks `div` 1000
+    _ -> measured
   where
-    previous = bsCorrection before
-    gap = max 0 (live - bbExplainedBytes bounds - gsChargedBytes sample)
+    measured = live - charged
 
 pressed :: BrakeMarks -> BrakeBounds -> GcSample -> Bool
 pressed marks bounds sample =
@@ -174,9 +183,6 @@ pressed marks bounds sample =
     nearOverflow = case (gsLiveAfterMajor sample, bbOverflowLiveBytes bounds) of
         (Just live, Just overflow) -> live * 1000 > overflow * bmOverflowGuardPermille marks
         _ -> False
-
-clampBudget :: BrakeBounds -> Int -> Int
-clampBudget bounds = max (bbFloorBytes bounds) . min (max (bbFloorBytes bounds) (bbCapBytes bounds))
 
 -- | The collector's cumulative counters at one sample.
 data CollectorReading = CollectorReading

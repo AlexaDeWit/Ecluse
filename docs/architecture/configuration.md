@@ -147,10 +147,12 @@ So a request pays per byte as it reads, and pays for its response before it buil
 read pauses rather than failing, which avoids wasting its upstream transfer and inviting a retry
 storm.
 
-The charges model the memory the heap holds, and the collector's own view corrects them. A sampler
-shrinks the budget by live data the charges do not explain, halves it when the collector takes more
-than half the CPU, and grows it back toward a third of the heap while the collector stays calm. The
-per-byte factors come from the retained-byte gate in
+The charges model the memory the heap holds, and the collector's own view corrects them. After each
+major collection a sampler measures the live data outside the charges, so the budget may grow until
+charges and that remainder reach a third of the heap, whether the charges run high or low. It halves
+the budget when the collector takes more than half the CPU. The charges act the moment work starts
+and the measurement arrives seconds later, so neither alone holds the line. The per-byte factors
+come from the retained-byte gate in
 [`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating), set a little above the
 load mix's average rather than at the worst package.
 

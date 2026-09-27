@@ -472,13 +472,15 @@ the collector and the cgroup ten times a second and moves the budget:
 - It halves the budget when the collector takes more than half the CPU over the last second, when
   live data after a major collection passes 80% of the point where the heap overflows, or when the
   cgroup's memory use, less reclaimable page cache, passes 90% of its limit.
-- It shrinks the budget by any live data the charges do not explain, and gives that back a
-  quarter at a time as the gap closes.
-- After a calm second, with the collector under 35% of the CPU, it grows the budget by an eighth,
-  up to a third of the heap the nursery leaves, less the same deductions.
+- After each major collection it measures the live data outside the charges: the cache, the idle
+  process and any error in the charges. The budget may grow until the charges and that remainder
+  reach a third of the heap the nursery leaves, and it drops at once when a larger remainder lowers
+  that ceiling. A smaller remainder counts a quarter at a time.
+- After a calm second, with the collector under 35% of the CPU, it grows the budget by an eighth
+  toward that ceiling.
 
 The `memory plan: transient budget` boot line names the starting budget, its live target, the
-deductions and the bounds. Without a heap ceiling the budget starts at 1 GiB, and only the
+deductions, the floor and the live ceiling. Without a heap ceiling the budget starts at 1 GiB, and only the
 collector's share moves it.
 
 | Metric | What it reports |

@@ -80,37 +80,61 @@ stepSpec = describe "brakeStep" $ do
     it "halves the budget when the cgroup nears its limit" $
         bsLevel (brakeStep defaultBrakeMarks bounds start (calm{gsKernelPermille = Just 950})) `shouldBe` Braking
 
-    it "shrinks by the live data the charges do not explain" $ do
-        -- 20 units explained, 10 charged, 50 live: 20 units nobody accounted for.
-        let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (50 * unit), gsChargedBytes = 10 * unit})
-        bsCorrection stepped `shouldBe` 20 * unit
-        bsBudget stepped `shouldBe` 80 * unit
+    it "cuts the budget to what the live ceiling leaves beside the measured remainder" $ do
+        -- 150 units live with 20 charged leaves 130 outside the charges: 200 - 130 = 70.
+        let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (150 * unit), gsChargedBytes = 20 * unit})
+        bsOutside stepped `shouldBe` Just (130 * unit)
+        bsBudget stepped `shouldBe` 70 * unit
 
-    it "grows by a step only after a calm stretch, and never past the cap" $ do
+    it "grows past the boot estimate when the charges explain the live data" $ do
+        -- 40 of 60 live units are charged, so the ceiling rises from 200 - 60 to 200 - 20.
+        let measured = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (60 * unit), gsChargedBytes = 40 * unit})
+            settled = iterate (\s -> brakeStep defaultBrakeMarks bounds s calm) measured !!? 1000
+        (bsBudget <$> settled) `shouldBe` Just (180 * unit)
+
+    it "never counts less than the idle process outside the charges" $ do
+        -- Charges above the live data measure a negative remainder, which the idle floor replaces.
+        let measured = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (30 * unit), gsChargedBytes = 100 * unit})
+            settled = iterate (\s -> brakeStep defaultBrakeMarks bounds s calm) measured !!? 1000
+        (bsBudget <$> settled) `shouldBe` Just (190 * unit)
+
+    it "gives back a falling remainder a quarter at a time" $ do
+        let high = brakeStep defaultBrakeMarks bounds start (calm{gsLiveAfterMajor = Just (130 * unit)})
+            lower = brakeStep defaultBrakeMarks bounds high (calm{gsLiveAfterMajor = Just (30 * unit)})
+        bsOutside lower `shouldBe` Just (105 * unit)
+
+    it "grows by a step only after a calm stretch, and never past the boot estimate's ceiling" $ do
         let run = iterate (\s -> brakeStep defaultBrakeMarks bounds s calm) start
             afterStretch = run !!? bmCalmSamples defaultBrakeMarks
             afterMany = run !!? 1000
         (bsBudget <$> run !!? 1) `shouldBe` Just (100 * unit)
         (bsBudget <$> afterStretch) `shouldBe` Just (112 * unit + unit `div` 2)
-        (bsBudget <$> afterMany) `shouldBe` Just (bbCapBytes bounds)
+        (bsBudget <$> afterMany) `shouldBe` Just (140 * unit)
 
     it "holds the budget between the marks" $ do
         let stepped = brakeStep defaultBrakeMarks bounds start (calm{gsGcSharePermille = Just 400})
         bsBudget stepped `shouldBe` 100 * unit
         bsLevel stepped `shouldBe` Holding
 
-    it "keeps the budget within the floor and the cap for any samples (property)" $ hedgehog $ do
+    it "keeps the budget between the floor and the live ceiling less the idle process (property)" $ hedgehog $ do
         samples <- forAll (Gen.list (Range.linear 1 200) genSample)
         let states = scanl (brakeStep defaultBrakeMarks bounds) start samples
-        assert (all (\s -> bsBudget s >= bbFloorBytes bounds && bsBudget s <= bbCapBytes bounds) states)
+        assert (all (\s -> bsBudget s >= bbFloorBytes bounds && bsBudget s <= 190 * unit) states)
+
+    it "stays at the boot budget's ceiling without a heap ceiling" $ do
+        let unbounded = bounds{bbLiveCeilingBytes = Nothing, bbOverflowLiveBytes = Nothing}
+            settled = iterate (\s -> brakeStep defaultBrakeMarks unbounded s calm) (initialBrakeState unbounded) !!? 1000
+        (bsBudget <$> settled) `shouldBe` Just (bbBootBytes unbounded)
   where
     unit = 1024 * 1024
+    -- A live ceiling of 200 units, an idle process of 10 and a boot estimate of 60 outside the charges.
     bounds =
         BrakeBounds
             { bbBootBytes = 100 * unit
             , bbFloorBytes = 16 * unit
-            , bbCapBytes = 150 * unit
-            , bbExplainedBytes = 20 * unit
+            , bbLiveCeilingBytes = Just (200 * unit)
+            , bbFixedLiveBytes = 10 * unit
+            , bbExplainedBytes = 60 * unit
             , bbOverflowLiveBytes = Just (1000 * unit)
             , bbGrowFloorBytes = unit
             }

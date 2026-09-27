@@ -28,16 +28,18 @@ spec = describe "runMemorySampler" $ do
         snapshot <- sampledFor thrashing
         snapshot `shouldBe` MeterSnapshot{snBudgetBytes = bbFloorBytes bounds, snChargedBytes = 0, snBrakeLevel = Braking}
 
-    it "grows the meter's budget to its cap while nothing presses on it" $ do
+    it "grows the meter's budget to its ceiling while nothing presses on it" $ do
+        -- Without statistics nothing measures the remainder, so the boot estimate sets the ceiling.
         snapshot <- sampledFor (pure Nothing)
-        snapshot `shouldBe` MeterSnapshot{snBudgetBytes = bbCapBytes bounds, snChargedBytes = 0, snBrakeLevel = Calm}
+        snapshot `shouldBe` MeterSnapshot{snBudgetBytes = 150, snChargedBytes = 0, snBrakeLevel = Calm}
   where
     bounds =
         BrakeBounds
             { bbBootBytes = 100
             , bbFloorBytes = 16
-            , bbCapBytes = 150
-            , bbExplainedBytes = 0
+            , bbLiveCeilingBytes = Just 200
+            , bbFixedLiveBytes = 10
+            , bbExplainedBytes = 50
             , bbOverflowLiveBytes = Nothing
             , bbGrowFloorBytes = 1
             }

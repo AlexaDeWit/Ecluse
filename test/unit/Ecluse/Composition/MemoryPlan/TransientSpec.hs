@@ -31,10 +31,10 @@ spec = describe "transientBudget" $ do
         tbBootBytes budget `shouldBe` 88 * mib - idleLiveFloorBytes - 26 * mib
         tbOverflowLiveBytes budget `shouldBe` Just (176 * mib)
 
-    it "lets the sampler grow to a third of that heap, never below the boot value" $ do
+    it "sets the live ceiling the sampler grows toward at a third of that heap" $ do
         let budget = transientBudget (Just (1728 * mib)) 4 (64 * mib) (100 * mib)
-        tbCapBytes budget `shouldBe` (1728 - 256) * mib `div` 3 - idleLiveFloorBytes - 100 * mib
-        assert' (tbCapBytes budget >= tbBootBytes budget)
+        tbLiveCeilingBytes budget `shouldBe` Just ((1728 - 256) * mib `div` 3)
+        assert' (tbBootBytes budget + tbExplainedBytes budget <= (1728 - 256) * mib `div` 3)
 
     it "floors a small pod's budget" $
         tbBootBytes (transientBudget (Just (208 * mib)) 2 (16 * mib) (40 * mib)) `shouldBe` transientFloorBytes
@@ -42,16 +42,16 @@ spec = describe "transientBudget" $ do
     it "falls back to a large constant with no heap ceiling" $ do
         let budget = transientBudget Nothing 3 (64 * mib) (256 * mib)
         tbBootBytes budget `shouldBe` noCeilingTransientBytes
-        tbCapBytes budget `shouldBe` noCeilingTransientBytes
+        tbLiveCeilingBytes budget `shouldBe` Nothing
         tbLiveTargetBytes budget `shouldBe` Nothing
 
-    it "keeps floor <= boot <= cap for every pod (property)" $ hedgehog $ do
+    it "keeps the boot budget between the floor and the live ceiling for every pod (property)" $ hedgehog $ do
         ceiling' <- forAll (Gen.int (Range.linear (64 * mib) (64 * 1024 * mib)))
         caps <- forAll (Gen.int (Range.linear 1 64))
         area <- forAll (Gen.int (Range.linear (4 * mib) (64 * mib)))
         retained <- forAll (Gen.int (Range.linear 0 (4096 * mib)))
         let budget = transientBudget (Just ceiling') caps area retained
         assert (tbFloorBytes budget <= tbBootBytes budget)
-        assert (tbBootBytes budget <= tbCapBytes budget)
+        assert (tbBootBytes budget == tbFloorBytes budget || all (tbBootBytes budget + tbExplainedBytes budget <=) (tbLiveCeilingBytes budget))
   where
     assert' condition = condition `shouldBe` True

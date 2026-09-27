@@ -7,8 +7,9 @@ the collector can hold without strain.
 
 A busy copying collector keeps about four times its live data, plus the nursery, so the live target
 is a quarter of the heap ceiling less the nursery. The idle process and the retained tenants come off
-the target first, and what remains is the budget the meter starts from. The sampler may raise it to a
-third of that heap, two thirds of the point where copying overflows.
+the target first, and what remains is the budget the meter starts from. The sampler may raise it
+until charges and the live data it measures outside them reach a third of that heap, two thirds of
+the point where copying overflows.
 -}
 module Ecluse.Composition.MemoryPlan.Transient (
     TransientBudget (..),
@@ -36,8 +37,8 @@ data TransientBudget = TransientBudget
     -- ^ Live data outside the budget: the idle floor and the retained tenants.
     , tbBootBytes :: Int
     -- ^ The budget at boot.
-    , tbCapBytes :: Int
-    -- ^ The most the sampler may grow the budget to.
+    , tbLiveCeilingBytes :: Maybe Int
+    -- ^ The live data the sampler lets charges and the measured remainder reach together.
     , tbFloorBytes :: Int
     -- ^ The least the sampler may shrink the budget to.
     , tbOverflowLiveBytes :: Maybe Int
@@ -55,7 +56,7 @@ transientBudget heapCeiling capabilities allocArea retained = case heapCeiling o
             { tbLiveTargetBytes = Nothing
             , tbExplainedBytes = explained
             , tbBootBytes = noCeilingTransientBytes
-            , tbCapBytes = noCeilingTransientBytes
+            , tbLiveCeilingBytes = Nothing
             , tbFloorBytes = transientFloorBytes
             , tbOverflowLiveBytes = Nothing
             }
@@ -66,7 +67,7 @@ transientBudget heapCeiling capabilities allocArea retained = case heapCeiling o
                 { tbLiveTargetBytes = Just (copyable `div` 4)
                 , tbExplainedBytes = explained
                 , tbBootBytes = boot
-                , tbCapBytes = max boot (copyable `div` 3 - explained)
+                , tbLiveCeilingBytes = Just (copyable `div` 3)
                 , tbFloorBytes = transientFloorBytes
                 , tbOverflowLiveBytes = Just (copyable `div` 2)
                 }
@@ -85,10 +86,9 @@ renderTransientBudget budget = case tbLiveTargetBytes budget of
             <> show target
             <> " less "
             <> show (tbExplainedBytes budget)
-            <> " idle and retained; bounds "
+            <> " idle and retained; floor "
             <> show (tbFloorBytes budget)
-            <> " and "
-            <> show (tbCapBytes budget)
+            <> maybe "" (\ceiling' -> "; live ceiling " <> show ceiling') (tbLiveCeilingBytes budget)
             <> ")"
 
 -- | The fixed bounds the sampler's brake steers the budget within.
@@ -97,7 +97,8 @@ brakeBounds budget =
     BrakeBounds
         { bbBootBytes = tbBootBytes budget
         , bbFloorBytes = tbFloorBytes budget
-        , bbCapBytes = tbCapBytes budget
+        , bbLiveCeilingBytes = tbLiveCeilingBytes budget
+        , bbFixedLiveBytes = idleLiveFloorBytes
         , bbExplainedBytes = tbExplainedBytes budget
         , bbOverflowLiveBytes = tbOverflowLiveBytes budget
         , bbGrowFloorBytes = meterStepBytes
