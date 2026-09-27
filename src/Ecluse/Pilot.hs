@@ -49,7 +49,6 @@ import Ecluse.Pilot.Plan (
     PilotUploadUnconfigured (..),
     UploadPlan (UploadSkipped, UploadTo),
     compileEpssRequirement,
-    compileSources,
     configuredSources,
     exportCadenceMicros,
     idleCadenceMicros,
@@ -158,12 +157,13 @@ runPilotCompile logEnv telemetry s3Endpoint config opts = do
                     compileMetrics
                     (telemetryTracerProvider telemetry)
                     (pcoOutDir opts)
-                    (osvEcosystemNamed (pcoEcosystem opts))
+                    osvEco
                     (compileEpssRequirement (configMounts config) opts)
-                    (compileSources advisories opts)
+                    (configuredSources advisories osvEco)
                     (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
             runUploadPlan telemetry s3Endpoint plan dbFile
             pure dbFile
   where
     advisories = cfgAdvisories (configApp config)
+    osvEco = osvEcosystemNamed (pcoEcosystem opts)
     planned = uploadPlan opts (advUrl advisories)

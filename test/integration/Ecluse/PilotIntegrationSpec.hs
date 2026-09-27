@@ -39,7 +39,7 @@ import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (fetchDownload), newS3CveSourc
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
-import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv)
+import Ecluse.Test.OsvDb (denyIfEpssRules, epssFixtureFile, stubSourceEnv, withSourceStubs)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Ecluse.Test.Stub (Captured (capMethod, capPath), Stub, allCaptured, stubBaseUrl, withStub)
 
@@ -53,25 +53,14 @@ spec = aroundAll withMinistack $ do
                         let endpoint = endpointFor container
                             bucket = "pilot-" <> toText label <> if hasPrevious then "-replacement" else "-first"
                         aws <- createStore endpoint bucket
-                        config <- either (fail . show) pure (loadConfig [("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))] Nothing)
                         logEnv <- quietLogEnv
                         epssData <- LBS.readFile epssFixtureFile
                         goodZip <- osvCorpusZip CorpusV1
                         badZip <- rejectedZip
-                        let compile target zipData = withStub status200 zipData $ \stub ->
-                                withStub status200 epssData $ \epssStub ->
-                                    runPilotCompile
-                                        logEnv
-                                        telemetryDisabled
-                                        (Just target)
-                                        config
-                                        PilotCompileOptions
-                                            { pcoEcosystem = "pypi"
-                                            , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
-                                            , pcoEpssSource = Just (toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
-                                            , pcoOutDir = outDir
-                                            , pcoUpload = True
-                                            }
+                        let compile target zipData = withSourceStubs zipData (status200, epssData) $ \sources _ -> do
+                                let env = ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket)) : sources
+                                config <- either (fail . show) pure (loadConfig env Nothing)
+                                runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir){pcoEcosystem = "pypi"}
                         when hasPrevious (void (compile endpoint goodZip))
                         before <- snapshot aws bucket
                         length before `shouldBe` if hasPrevious then 1 else 0
@@ -96,12 +85,11 @@ spec = aroundAll withMinistack $ do
                     epss <- LBS.readFile epssFixtureFile
                     let compile target version (feedStatus, feed) = do
                             archive <- osvCorpusZip version
-                            withStub status200 archive $ \osvStub ->
-                                withStub feedStatus feed $ \epssStub -> do
-                                    config <- either (fail . show) pure (loadConfig (oneShotEnv bucket epssRule osvStub epssStub) Nothing)
-                                    outcome <- try (runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir))
-                                    map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
-                                    pure (outcome :: Either PilotEpssRequired FilePath)
+                            withSourceStubs archive (feedStatus, feed) $ \sources epssStub -> do
+                                config <- either (fail . show) pure (loadConfig (oneShotEnv bucket epssRule sources) Nothing)
+                                outcome <- try (runPilotCompile logEnv telemetryDisabled (Just target) config (uploadOptions outDir))
+                                map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
+                                pure (outcome :: Either PilotEpssRequired FilePath)
                     path <- compile endpoint CorpusV1 (status200, epss) >>= either (fail . displayException) pure
                     before <- snapshot aws bucket
                     length before `shouldBe` 1
@@ -151,15 +139,15 @@ spec = aroundAll withMinistack $ do
 scheduledFeed :: LByteString
 scheduledFeed = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.875,0.9\nCVE-2026-10006,0.75,0.9\n"
 
--- An npm mount, with or without an EPSS rule, whose advisory sources are the stubs.
-oneShotEnv :: Text -> Bool -> Stub -> Stub -> [(String, String)]
-oneShotEnv bucket epssRule osvStub epssStub =
+-- An npm mount, with or without an EPSS rule, reading its advisory sources from @sources@.
+oneShotEnv :: Text -> Bool -> [(String, String)] -> [(String, String)]
+oneShotEnv bucket epssRule sources =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     ]
         <> [("ECLUSE_MOUNTS__NPM__RULES", denyIfEpssRules) | epssRule]
-        <> stubSourceEnv osvStub epssStub
+        <> sources
 
 -- npm with an EPSS rule beside PyPI without one, on an interval no case waits out.
 scheduledEnv :: Text -> FilePath -> Stub -> Stub -> [(String, String)]
@@ -175,14 +163,7 @@ scheduledEnv bucket dataDir osvStub epssStub =
         <> stubSourceEnv osvStub epssStub
 
 uploadOptions :: FilePath -> PilotCompileOptions
-uploadOptions outDir =
-    PilotCompileOptions
-        { pcoEcosystem = "npm"
-        , pcoSource = Nothing
-        , pcoEpssSource = Nothing
-        , pcoOutDir = outDir
-        , pcoUpload = True
-        }
+uploadOptions outDir = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = outDir, pcoUpload = True}
 
 -- Publish a qualified npm artifact ahead of the scheduled loop, from a feed that answers.
 seedNpm :: AwsEndpoint -> Text -> FilePath -> Stub -> IO ()
@@ -190,7 +171,7 @@ seedNpm endpoint bucket dir osvStub = do
     logEnv <- quietLogEnv
     epss <- LBS.readFile epssFixtureFile
     withStub status200 epss $ \epssStub -> do
-        config <- either (fail . show) pure (loadConfig (oneShotEnv bucket True osvStub epssStub) Nothing)
+        config <- either (fail . show) pure (loadConfig (oneShotEnv bucket True (stubSourceEnv osvStub epssStub)) Nothing)
         void (runPilotCompile logEnv telemetryDisabled (Just endpoint) config (uploadOptions (dir </> "seed")))
 
 createStore :: AwsEndpoint -> Text -> IO AWS.Env

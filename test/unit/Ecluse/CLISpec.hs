@@ -4,7 +4,8 @@
 
 module Ecluse.CLISpec (spec) where
 
-import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, helper, idm, info)
+import Data.List (isInfixOf)
+import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, helper, idm, info, renderFailure)
 import Test.Hspec
 
 import Ecluse.CLI (AppCommand (..), commandParser)
@@ -31,9 +32,15 @@ spec = describe "CLI commandParser" $ do
             Success cmd -> expectationFailure ("expected a parse failure, got " <> show cmd)
             _ -> pass
 
-{- | Every invocation the parser accepts, and the command it settles on. The name carries what
-the invocation means to an operator, which the argument list alone does not say.
--}
+    -- The configuration names both feeds, so its credential refusal covers every URL a compile dials.
+    for_ ["--source", "--epss-source"] $ \feedFlag ->
+        it ("rejects " <> feedFlag <> " on 'pilot compile' as an unknown option") $
+            case parseCLI ["pilot", "compile", feedFlag, "https://feed.example.test/all.zip", "--out", "out"] of
+                Failure failure -> fst (renderFailure failure "ecluse") `shouldSatisfy` isInfixOf ("Invalid option `" <> feedFlag <> "'")
+                _ -> expectationFailure "expected an unknown-option failure"
+
+{- Every invocation the parser accepts, and the command it settles on. The name carries what the
+invocation means to an operator, which the argument list alone does not say. -}
 acceptedInvocations :: [(String, [String], AppCommand)]
 acceptedInvocations =
     [ ("defaults to the serve-and-mirror role when no arguments are provided", [], RunService ServeAndMirror)
@@ -53,32 +60,18 @@ acceptedInvocations =
         , RunDredger DredgerOptions{doMode = SweepPreviews, doRepetition = SweepOnce}
         )
     ,
-        ( "parses 'pilot compile' with the default ecosystem and canonical source"
+        ( "parses 'pilot compile' with the default ecosystem, keeping the artifact local"
         , ["pilot", "compile", "--out", "/tmp/osv"]
-        , RunPilotCompile
-            PilotCompileOptions
-                { pcoEcosystem = "npm"
-                , pcoSource = Nothing
-                , pcoEpssSource = Nothing
-                , pcoOutDir = "/tmp/osv"
-                , pcoUpload = False
-                }
+        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/osv", pcoUpload = False}
         )
     ,
-        ( "parses 'pilot compile' with ecosystem, both source overrides, and upload"
-        , ["pilot", "compile", "--ecosystem", "npm", "--source", "http://127.0.0.1:9/all.zip", "--epss-source", "http://127.0.0.1:9/epss.csv.gz", "--out", "out", "--upload"]
-        , RunPilotCompile
-            PilotCompileOptions
-                { pcoEcosystem = "npm"
-                , pcoSource = Just "http://127.0.0.1:9/all.zip"
-                , pcoEpssSource = Just "http://127.0.0.1:9/epss.csv.gz"
-                , pcoOutDir = "out"
-                , pcoUpload = True
-                }
+        ( "parses 'pilot compile' with an ecosystem and an upload"
+        , ["pilot", "compile", "--ecosystem", "pypi", "--out", "out", "--upload"]
+        , RunPilotCompile PilotCompileOptions{pcoEcosystem = "pypi", pcoOutDir = "out", pcoUpload = True}
         )
     ]
 
--- | Every invocation the parser must refuse rather than settle on a nearby command.
+-- Every invocation the parser must refuse rather than settle on a nearby command.
 refusedInvocations :: [(String, [String])]
 refusedInvocations =
     [ ("rejects --no-worker on the dedicated worker, which has no worker to drop", ["mirror", "--no-worker"])

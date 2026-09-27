@@ -473,8 +473,8 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget.registry.url: registry URL must not carry userinfo"
 
     describe "non-registry configured URLs (the same boot echo prints these keys)" $ do
-        -- server.publicUrl, advisories.osvExportBaseUrl, and queue.url are not registry endpoints,
-        -- so the mount-side refusal above never sees them. Each carries the refusal under its own key.
+        -- server.publicUrl, the two advisory feeds, and queue.url are not registry endpoints, so the
+        -- mount-side refusal above never sees them. Each carries the refusal under its own key.
         it "rejects server.publicUrl carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://deploy:hunter2@registry.example.test")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry userinfo"
@@ -495,18 +495,15 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just "{\"server\":{\"publicUrl\":\"https://registry.example.test#frag\"}}")
                 `shouldSatisfy` decodeErrorMentions "server.publicUrl must not carry a fragment"
 
-        it "rejects advisories.osvExportBaseUrl carrying userinfo, naming the key and not the credential" $ do
-            let outcome = loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://deploy:hunter2@osv.example.test")] Nothing
-            outcome `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry userinfo"
-            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
-
-        it "rejects advisories.osvExportBaseUrl carrying a query string, naming the key" $
-            loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test?sig=abc")] Nothing
-                `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry a query string"
-
-        it "rejects advisories.osvExportBaseUrl carrying a fragment, naming the key" $
-            loadConfig [] (Just "{\"advisories\":{\"osvExportBaseUrl\":\"https://osv.example.test#frag\"}}")
-                `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry a fragment"
+        -- Pilot dials these two feeds on every compile, and only the configuration names them.
+        for_ [("osvExportBaseUrl", "OSV_EXPORT_BASE_URL"), ("epssFeedUrl", "EPSS_FEED_URL")] $ \(key, envSuffix) ->
+            for_ credentialMaterial $ \(material, url) -> do
+                let refusedFrom layer outcome =
+                        it ("refuses advisories." <> key <> " carrying " <> material <> " from the " <> layer <> ", naming the key and not the value") $ do
+                            outcome `shouldSatisfy` decodeErrorMentions ("advisories." <> toText key <> " must not carry " <> toText material)
+                            outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
+                refusedFrom "document" (loadConfig [] (Just (advisoriesDoc key url)))
+                refusedFrom "environment" (loadConfig [("ECLUSE_ADVISORIES__" <> envSuffix, url)] Nothing)
 
         it "accepts a plain advisories.osvExportBaseUrl through both layers" $ do
             let exportBaseUrl env doc = unUrl . advOsvExportBaseUrl <$> advisoriesOf env doc
@@ -710,6 +707,17 @@ mountDocWithExtraKey extra =
         [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
         , "\"" <> extra <> "\":\"x\""
         ]
+
+-- Each kind of credential material a configured URL can carry, spelled as the refusal names it.
+credentialMaterial :: [(String, String)]
+credentialMaterial =
+    [ ("userinfo", "https://deploy:hunter2@feed.example.test/feed")
+    , ("a query string", "https://feed.example.test/feed?token=hunter2")
+    , ("a fragment", "https://feed.example.test/feed#hunter2")
+    ]
+
+advisoriesDoc :: String -> String -> ByteString
+advisoriesDoc key url = encodeUtf8 ("{\"advisories\":{\"" <> key <> "\":\"" <> url <> "\"}}")
 
 decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs

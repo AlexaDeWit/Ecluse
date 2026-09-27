@@ -18,6 +18,7 @@ module Ecluse.Test.OsvDb (
 
     -- * Pilot configuration over the stubs
     stubSourceEnv,
+    withSourceStubs,
     denyIfEpssRules,
 ) where
 
@@ -92,12 +93,21 @@ metaOf :: FilePath -> IO (Map Text Text)
 metaOf dbFile = withConnection dbFile $ \conn ->
     Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
 
--- | Configuration that points both advisory sources at stubs, so a run passes no override.
+-- | Configuration that points both advisory sources at stubs.
 stubSourceEnv :: Stub -> Stub -> [(String, String)]
 stubSourceEnv osvStub epssStub =
     [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", toString (stubBaseUrl osvStub))
     , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
     ]
+
+{- | Serve this OSV archive, and an EPSS feed answering this status and body, from stubs. The case
+gets their 'stubSourceEnv' and the EPSS stub.
+-}
+withSourceStubs :: LByteString -> (Status, LByteString) -> ([(String, String)] -> Stub -> IO a) -> IO a
+withSourceStubs zipBytes (feedStatus, feedBytes) use =
+    withStub status200 zipBytes $ \osvStub ->
+        withStub feedStatus feedBytes $ \epssStub ->
+            use (stubSourceEnv osvStub epssStub) epssStub
 
 -- | A rule set with one @DenyIfEpss@, at the threshold and alignment that still require the feed.
 denyIfEpssRules :: String

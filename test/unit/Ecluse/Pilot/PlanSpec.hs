@@ -26,7 +26,6 @@ import Ecluse.Pilot.Plan (
     PilotUploadUnconfigured (PilotUploadUnconfigured),
     UploadPlan (UploadSkipped, UploadTo),
     compileEpssRequirement,
-    compileSources,
     configuredSources,
     epssAttemptLine,
     exportCadenceMicros,
@@ -46,16 +45,9 @@ advisoriesWith env = cfgAdvisories <$> expectAppConfig env Nothing
 storeAt :: Text -> IO AdvisoryStoreUrl
 storeAt raw = either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" raw)
 
--- A one-shot run that compiles npm and neither overrides nor uploads.
+-- A one-shot run that compiles npm and does not upload.
 bareOptions :: PilotCompileOptions
-bareOptions =
-    PilotCompileOptions
-        { pcoEcosystem = "npm"
-        , pcoSource = Nothing
-        , pcoEpssSource = Nothing
-        , pcoOutDir = "/tmp/ecluse-pilot"
-        , pcoUpload = False
-        }
+bareOptions = PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = "/tmp/ecluse-pilot", pcoUpload = False}
 
 -- A scheduled target under the requirement a mount without EPSS rules resolves to.
 optionalTarget :: Ecosystem -> ExportTarget
@@ -152,7 +144,7 @@ spec = do
         it "sleeps a day, because only a reboot picks up an added store" $
             idleCadenceMicros `shouldBe` 24 * 60 * 60 * 1000000
 
-    describe "configuredSources -- the upstreams a scheduled cycle reads" $ do
+    describe "configuredSources -- the upstreams a compile reads" $ do
         it "builds the ecosystem's export URL under the configured base" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test")]
             csOsvExportUrl (configuredSources advisories (osvEcosystemFor Npm))
@@ -169,36 +161,6 @@ spec = do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test")]
             csOsvExportUrl (configuredSources advisories (osvEcosystemFor PyPI))
                 `shouldBe` "https://osv.example.test/PyPI/all.zip"
-
-    describe "compileSources -- a one-shot run's overrides over the configured pair" $ do
-        it "takes both feeds from config when the run overrides neither" $ do
-            advisories <- advisoriesWith []
-            compileSources advisories bareOptions `shouldBe` configuredSources advisories (osvEcosystemFor Npm)
-
-        it "overrides the export URL alone, leaving the EPSS feed configured" $ do
-            advisories <- advisoriesWith []
-            let opts = bareOptions{pcoSource = Just "https://pinned.example.test/all.zip"}
-            compileSources advisories opts
-                `shouldBe` (configuredSources advisories (osvEcosystemFor Npm)){csOsvExportUrl = "https://pinned.example.test/all.zip"}
-
-        it "overrides the EPSS feed alone, leaving the export URL configured" $ do
-            advisories <- advisoriesWith []
-            let opts = bareOptions{pcoEpssSource = Just "https://pinned.example.test/epss.csv.gz"}
-            compileSources advisories opts
-                `shouldBe` (configuredSources advisories (osvEcosystemFor Npm)){csEpssFeedUrl = "https://pinned.example.test/epss.csv.gz"}
-
-        it "overrides both when the run pins both" $ do
-            advisories <- advisoriesWith []
-            let opts =
-                    bareOptions
-                        { pcoSource = Just "https://a.example.test/all.zip"
-                        , pcoEpssSource = Just "https://b.example.test/epss.csv.gz"
-                        }
-            compileSources advisories opts
-                `shouldBe` CompileSources
-                    { csOsvExportUrl = "https://a.example.test/all.zip"
-                    , csEpssFeedUrl = "https://b.example.test/epss.csv.gz"
-                    }
 
     describe "uploadPlan -- whether a one-shot run publishes" $ do
         it "skips the upload the run did not ask for, store or no store" $ do
