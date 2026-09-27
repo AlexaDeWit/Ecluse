@@ -397,7 +397,7 @@ just built or restored the executable, so its text pages are already cached when
 and are not charged to it. The harness does not enforce that.
 
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
-`2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
+`2cpu-1gib` or `4cpu-2gib`. Under a limited shape the proxy starts inside its own cgroup, a child
 of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
 zero, and `cpu.max` at the cores. The load generator and the stubs stay outside that cgroup. The
 proxy links the shipped RTS options and gets only `-T`, for its statistics, through `GHCRTS` at
@@ -406,7 +406,7 @@ plan as it would in a pod. The unlimited shape sets `runtime.cores` to the harne
 count instead. The workflow delegates the cgroup subtree with `sudo` before the run, enables the
 cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
 outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
-retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-512mib`,
+retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-1gib`,
 `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
