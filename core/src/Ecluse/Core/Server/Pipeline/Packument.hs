@@ -53,17 +53,19 @@ import Ecluse.Core.Package.Merge (
     integrityDivergences,
     mergePackuments,
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataChargeFactors, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
-    Manifest (manifestDigest, manifestInfo, manifestRaw),
+    Manifest (manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission (withServeAdmission)
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors (cfOutputPermille), scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, chargeOnce, withMemoryEntry)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -212,12 +214,18 @@ serveWithinGuards serving clientToken
         withAdmissionResultOrShed
             (servingMetrics serving)
             (liftIO (respond (packumentUnavailable replies [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-            (withServeAdmission (servingMetrics serving) (srAdmission runtime) (serveAdmittedPackument serving clientToken))
+            ( fmap join . withMemoryEntry (servingMetrics serving) (srMemoryMeter runtime) $ \ticket ->
+                withServeAdmission (servingMetrics serving) (srAdmission runtime) (serveAdmittedPackument (withTicket ticket serving) clientToken)
+            )
             pure
   where
     replies = psvReplies serving
     respond = psvRespond serving
     runtime = psvRuntime serving
+
+-- The request's own ticket rides its runtime, so every read and build below pays into it.
+withTicket :: MemoryTicket -> PackumentServing response -> PackumentServing response
+withTicket ticket serving = serving{psvRuntime = (psvRuntime serving){srMemoryTicket = ticket}}
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
 serveAdmittedPackument serving clientToken = do
@@ -280,7 +288,7 @@ admitTrusted minTrusted = \case
                 admitByIntegrity minTrusted trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
          in if Map.null (infoVersions admissible)
                 then (Nothing, integrityRefusals)
-                else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest)), integrityRefusals)
+                else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)), integrityRefusals)
 
 data PublicAdmission = PublicAdmission
     { paContribution :: Maybe Contribution
@@ -307,7 +315,7 @@ gatePublic tracing metrics deps name ctx trustedVersions = \case
                      in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts deniedEvidence
                 else
                     PublicAdmission
-                        (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest)))
+                        (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
                         integrityRefusals
                         []
                         deniedEvidence
@@ -404,11 +412,14 @@ etagProvenanceTag = \case
 -- A render escape breaks the totality contract and is wrapped only on a cache miss.
 servedBytes :: ServeRuntime -> PackumentDeps -> [Contribution] -> MergePlan -> ETag -> IO ByteString
 servedBytes rt deps sources plan etag =
-    resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
+    resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $ do
+        chargeOnce (srMemoryTicket rt) outputCharge
         markRenderEscape $
             pure $!
                 LBS.toStrict (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
   where
+    -- Paid only on an assembly miss, before the merged document and its encoding exist.
+    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (sum (map srcBodyBytes sources))
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 

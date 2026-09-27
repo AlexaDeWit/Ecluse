@@ -39,7 +39,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Merge (Provenance)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataNewReads))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -56,8 +56,10 @@ import Ecluse.Core.Registry.Metadata (
     ),
     VersionRead,
  )
-import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, meteredOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors (cfReadPermille), scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (chargeRead)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Server.Context (
@@ -77,6 +79,8 @@ data Contribution = Contribution
     , srcInfo :: PackageInfo
     , srcValue :: CachedDoc
     , srcDigest :: ContentDigest
+    , srcBodyBytes :: Int
+    -- ^ The decompressed source size, which the listing's output charge scales.
     }
 
 -- | Scope surviving versions and exact artifact coordinates to their source digest and provenance.
@@ -183,9 +187,13 @@ withMetadataClient rt deps settle origin k =
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
-                origin
+                (meteredOrigin (readCharge rt deps) origin)
   where
     baseUrl = originBaseUrl (originClientOf origin)
+
+-- The request's ticket pays for each chunk at the mount's read factor. Zero passes through as the end of a read.
+readCharge :: ServeRuntime -> PackumentDeps -> Int -> IO ()
+readCharge rt deps = chargeRead (srMemoryTicket rt) . scaleCharge (cfReadPermille (metadataChargeFactors (pdMetadata deps)))
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a

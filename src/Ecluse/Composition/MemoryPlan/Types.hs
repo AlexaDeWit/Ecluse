@@ -14,6 +14,7 @@ module Ecluse.Composition.MemoryPlan.Types (
     queueTenantDemand,
 ) where
 
+import Ecluse.Composition.MemoryPlan.Transient (TransientBudget)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), MirrorRuntimePlan (MirrorWith, NoMirroring))
 
 {- | Whether the memory plan owes the in-memory queue a tenant, projected from the
@@ -75,6 +76,8 @@ data MemoryPlan = MemoryPlan
     -- ^ Tenant 6: the bytes the depth charges. Zero unless the memory backend runs.
     , mpFixedBufferBytes :: Int
     -- ^ Tenant 2: the enqueue buffer, charged whenever any mount mirrors.
+    , mpTransientBudget :: TransientBudget
+    -- ^ The live data metadata requests may hold at once, which the memory meter enforces.
     , mpDegradations :: [Text]
     -- ^ Shed-ladder and explicit-control warnings.
     , mpOverrideViolations :: [Text]

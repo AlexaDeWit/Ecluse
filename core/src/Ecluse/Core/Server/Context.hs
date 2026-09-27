@@ -62,6 +62,7 @@ import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballH
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MemoryTicket)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
 import Ecluse.Core.Server.Response (HelpMessage)
@@ -80,6 +81,12 @@ import Ecluse.Core.Telemetry.Span (TracingPort)
 data ServeRuntime = ServeRuntime
     { srAdmission :: ServeAdmission
     -- ^ Bounds concurrent metadata work, excluding private artifact reads and artifact relay.
+    , srMemoryMeter :: MemoryMeter
+    -- ^ The transient memory budget metadata requests pay into as they read and build.
+    , srMemoryTicket :: MemoryTicket
+    {- ^ The current request's account with the meter. The boot runtime carries an unmetered one,
+    and a metered request replaces it for its own lifetime.
+    -}
     , srPublicManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
     metadata fetch and every artifact stream.

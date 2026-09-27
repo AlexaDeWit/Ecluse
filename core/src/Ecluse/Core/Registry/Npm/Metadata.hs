@@ -29,14 +29,14 @@ import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderP
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocReadCharge, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
@@ -77,7 +77,7 @@ fetchNpmBody tracing origin name consume =
         <$> spanMetadataFetch
             tracing
             name
-            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (consume . chargedRead (ocReadCharge origin))) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
 
 decodeNpm :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
 decodeNpm tracing origin name mode =

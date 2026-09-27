@@ -36,10 +36,11 @@ import Ecluse.Composition.MemoryPlan.Bounds (
  )
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opArtifact, opCache, opDepth, opRequest),
-    PlanInputs (piCache, piCpuAdmission, piLimits, piPublishConfigured, piQueueDemand),
+    PlanInputs (piAllocAreaBytes, piCache, piCapabilities, piCpuAdmission, piLimits, piPublishConfigured, piQueueDemand),
     TenantDemands (..),
  )
 import Ecluse.Composition.MemoryPlan.Override (configuredPins)
+import Ecluse.Composition.MemoryPlan.Transient (liveCacheShareBytes)
 import Ecluse.Config (CacheSettings (csMaxEntries), LimitsSettings (limMaxResponseBytes))
 import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
@@ -51,7 +52,7 @@ tenantDemands inputs h =
         , tdReserve = reserve
         , tdFixedBuffers = fixedBufferBytes demand
         , tdPins = pins
-        , tdCacheDesired = fromMaybe (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100)) (opCache pins)
+        , tdCacheDesired = fromMaybe (min liveCacheBytes (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100))) (opCache pins)
         , tdCacheEntriesExplicit = csMaxEntries (piCache inputs)
         , tdAdmissionDesired = piCpuAdmission inputs
         , tdResponseFinal = fromMaybe responseBytesFallback (limMaxResponseBytes (piLimits inputs))
@@ -70,6 +71,8 @@ tenantDemands inputs h =
     pins = configuredPins inputs
     reserve = max runtimeReserveFloorBytes (h `div` runtimeReserveShareDiv)
     appHeap = max 0 (h - reserve)
+    -- The cache is live data, so it takes its share of the live target, not of the heap.
+    liveCacheBytes = liveCacheShareBytes h (piCapabilities inputs) (piAllocAreaBytes inputs)
     requestComputed = clamp (requestBytesFloor, requestBytesCap) (appHeap * publishSharePercent `div` 100)
     requestFinal = fromMaybe requestComputed (opRequest pins)
     -- The charged envelope is the cap times the envelope multiplier, so dividing the

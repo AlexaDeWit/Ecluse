@@ -64,6 +64,14 @@ data MetricsPort = MetricsPort
     -}
     , mpPublishBodyShed :: IO ()
     -- ^ Record one publish shed at the body-byte budget (@ecluse.publish.body.shed@).
+    , mpMemoryEntryQueued :: IO ()
+    -- ^ Record one request that waited for its memory entry step (@ecluse.memory.entry.queued@).
+    , mpMemoryEntryShed :: IO ()
+    -- ^ Record one request shed at the memory door (@ecluse.memory.entry.shed@).
+    , mpMemoryGrowthPaused :: IO ()
+    -- ^ Record one started read that paused for memory (@ecluse.memory.growth.paused@).
+    , mpMemoryOverdraw :: IO ()
+    -- ^ Record one step taken past the memory budget (@ecluse.memory.overdraws@).
     , mpMergeDivergence :: IO ()
     {- ^ Record one cross-upstream integrity divergence in the packument merge, once per
     contradicting version (@ecluse.registry.merge.divergence@).

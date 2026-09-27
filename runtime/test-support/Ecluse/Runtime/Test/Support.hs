@@ -24,7 +24,7 @@ import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
-import Ecluse.Test.Support (testServeAdmission)
+import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
 
 {- | The default test environment: the memory queue, a standard HTTP manager, and
 telemetry disabled.
@@ -51,4 +51,5 @@ newTestEnvLogging logEnv queue (manager, privateManager) telemetry = do
     metadataCache <- newMetadataCache defaultCacheConfig
     heartbeat <- newWorkerHeartbeat
     admission <- testServeAdmission
-    newEnvWithAdmission admission queue manager privateManager metadataCache logEnv telemetry heartbeat
+    meter <- testMemoryMeter
+    newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat

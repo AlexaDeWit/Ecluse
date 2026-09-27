@@ -50,6 +50,7 @@ import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkE
 import Ecluse.Core.Security (Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (withServeAdmission)
+import Ecluse.Core.Server.Admission.Meter (withMemoryEntry)
 import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -112,8 +113,10 @@ servePublicArtifact ctx = do
     withAdmissionResultOrShed
         metrics
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-        ( withServeAdmission metrics (srAdmission rt) $
-            preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ctx advisoryEtag
+        ( fmap join . withMemoryEntry metrics (srMemoryMeter rt) $ \ticket -> do
+            let metered = ctx{arRuntime = rt{srMemoryTicket = ticket}}
+            withServeAdmission metrics (srAdmission rt) $
+                preparePublicMetadata (arRuntime metered) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion metered advisoryEtag
         )
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped

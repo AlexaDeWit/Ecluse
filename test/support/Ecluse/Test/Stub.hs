@@ -123,6 +123,7 @@ stubConfig egressUrl stub = do
             , ocManager = manager
             , ocToken = Nothing
             , ocLimits = defaultLimits
+            , ocReadCharge = const pass
             }
 
 -- | Look up a header (case-insensitively) in a captured request.

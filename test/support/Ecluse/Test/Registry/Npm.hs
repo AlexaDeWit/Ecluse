@@ -279,6 +279,7 @@ defaultNpmConfig baseUrl manager =
         , ocManager = manager
         , ocToken = Nothing
         , ocLimits = defaultLimits
+        , ocReadCharge = const pass
         }
 
 {- | 'defaultNpmConfig' carrying the mirror-write token as a bare credential, at caller-chosen
@@ -289,6 +290,7 @@ writeTokenNpmConfig baseUrl manager limits =
     (defaultNpmConfig baseUrl manager)
         { ocToken = Just (bareCredential mirrorWriteToken)
         , ocLimits = limits
+        , ocReadCharge = const pass
         }
 
 -- | The standing mirror-write secret the store fixtures present.

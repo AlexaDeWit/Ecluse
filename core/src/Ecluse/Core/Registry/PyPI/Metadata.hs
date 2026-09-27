@@ -15,11 +15,11 @@ import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageNam
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocReadCharge, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
@@ -63,7 +63,7 @@ fetchPyPIBody tracing origin name consume =
         <$> spanMetadataFetch
             tracing
             name
-            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
+            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (consume . chargedRead (ocReadCharge origin))) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
 
 decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
 decodePyPI tracing origin name mode =

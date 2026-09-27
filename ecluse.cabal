@@ -212,7 +212,9 @@ library ecluse-core
     Ecluse.Core.Server.Cache.VersionWeight
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
+    Ecluse.Core.Server.Admission.Meter
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
@@ -372,6 +374,7 @@ library
     Ecluse.Composition.MemoryPlan.Override
     Ecluse.Composition.MemoryPlan.Render
     Ecluse.Composition.MemoryPlan.Shed
+    Ecluse.Composition.MemoryPlan.Transient
     Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
@@ -848,7 +851,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
+    Ecluse.Core.Server.Admission.BudgetSpec
     Ecluse.Core.Server.Admission.BytesSpec
+    Ecluse.Core.Server.Admission.MeterSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
@@ -1006,6 +1011,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MaintenanceSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlan.ShedSpec
+    Ecluse.Composition.MemoryPlan.TransientSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec

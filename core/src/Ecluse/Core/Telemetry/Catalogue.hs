@@ -103,6 +103,20 @@ data MetricName
       AdvisoryCompileDropped
     | -- | @ecluse.advisory.compile.runs@: compile passes by ecosystem and result (counter).
       AdvisoryCompileRuns
+    | -- | @ecluse.memory.budget_bytes@: the transient memory budget (observable gauge).
+      MemoryBudgetBytes
+    | -- | @ecluse.memory.charged_bytes@: bytes charged against the budget (observable gauge).
+      MemoryChargedBytes
+    | -- | @ecluse.memory.brake.level@: 0 calm, 1 holding, 2 braking (observable gauge).
+      MemoryBrakeLevel
+    | -- | @ecluse.memory.entry.queued@: requests that waited for their entry step (counter).
+      MemoryEntryQueued
+    | -- | @ecluse.memory.entry.shed@: requests shed at the memory door (counter).
+      MemoryEntryShed
+    | -- | @ecluse.memory.growth.paused@: started reads that paused for memory (counter).
+      MemoryGrowthPaused
+    | -- | @ecluse.memory.overdraws@: steps taken past the budget by the token holder (counter).
+      MemoryOverdraws
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Universe MetricName where universe = universeGeneric
@@ -147,3 +161,10 @@ metricName = \case
     AdvisoryCompileAccepted -> "ecluse.advisory.compile.accepted"
     AdvisoryCompileDropped -> "ecluse.advisory.compile.dropped"
     AdvisoryCompileRuns -> "ecluse.advisory.compile.runs"
+    MemoryBudgetBytes -> "ecluse.memory.budget_bytes"
+    MemoryChargedBytes -> "ecluse.memory.charged_bytes"
+    MemoryBrakeLevel -> "ecluse.memory.brake.level"
+    MemoryEntryQueued -> "ecluse.memory.entry.queued"
+    MemoryEntryShed -> "ecluse.memory.entry.shed"
+    MemoryGrowthPaused -> "ecluse.memory.growth.paused"
+    MemoryOverdraws -> "ecluse.memory.overdraws"

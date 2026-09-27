@@ -45,6 +45,7 @@ import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
+import Ecluse.Core.Server.Admission.Meter (unmeteredTicket)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -82,6 +83,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
+import Ecluse.Test.Support (testMemoryMeter)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
@@ -762,7 +764,8 @@ mkRuntimeWith admission metricsPort = do
     manager <- newManager defaultManagerSettings
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
-    pure (ServeRuntime admission manager manager cache queue metricsPort passthroughTracingPort)
+    meter <- testMemoryMeter
+    pure (ServeRuntime admission meter unmeteredTicket manager manager cache queue metricsPort passthroughTracingPort)
 
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential

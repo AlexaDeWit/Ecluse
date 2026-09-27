@@ -30,6 +30,13 @@ import Ecluse.Core.Registry.PyPI.Metadata (fetchPyPIManifest, newPyPIMetadataRea
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors (..))
+
+{- | PyPI's live heap per source byte. The typed projection holds at most 1.821 bytes per source
+byte in the residency gate. The output factor matches npm's until a probe measures it.
+-}
+pypiChargeFactors :: ChargeFactors
+pypiChargeFactors = ChargeFactors{cfReadPermille = 2000, cfOutputPermille = 1300}
 
 -- | PyPI's capability record.
 pypiAdapter :: RegistryAdapter
@@ -48,6 +55,7 @@ pypiAdapter =
                 , metadataAssemble = assembleSimpleDocument
                 , metadataSerialise = serialiseSimpleDocument
                 , metadataFetchManifest = fetchPyPIManifest
+                , metadataChargeFactors = pypiChargeFactors
                 }
         , adapterArtifact =
             AdapterArtifact

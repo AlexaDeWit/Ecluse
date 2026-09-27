@@ -56,6 +56,9 @@ module Ecluse.Runtime.Telemetry.Instruments.Internal (
     registerAdvisorySourceAge,
     reportAdvisorySourceAge,
 
+    -- * Memory budget (observable)
+    registerMemoryMeter,
+
     -- * Advisory compile
     recordAdvisoryCompileAccepted,
     recordAdvisoryCompileDropped,
@@ -84,6 +87,7 @@ import OpenTelemetry.Metric.Core (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Server.Admission.Meter (MeterSnapshot (snBrakeLevel, snBudgetBytes, snChargedBytes))
 import Ecluse.Core.Telemetry.Catalogue (
     MetricName (..),
     metricName,
@@ -154,6 +158,13 @@ data Metrics = Metrics
     , mAdvisoryCompileAccepted :: Counter Int64
     , mAdvisoryCompileDropped :: Counter Int64
     , mAdvisoryCompileRuns :: Counter Int64
+    , mMemoryBudgetBytes :: ObservableGauge Int64
+    , mMemoryChargedBytes :: ObservableGauge Int64
+    , mMemoryBrakeLevel :: ObservableGauge Int64
+    , mMemoryEntryQueued :: Counter Int64
+    , mMemoryEntryShed :: Counter Int64
+    , mMemoryGrowthPaused :: Counter Int64
+    , mMemoryOverdraws :: Counter Int64
     }
 
 -- | Build instruments on the telemetry meter, or the SDK's no-op meter when disabled.
@@ -199,6 +210,13 @@ newMetrics telemetry = do
         <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
         <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
         <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
+        <*> observableGauge meter MemoryBudgetBytes "the transient memory budget in bytes"
+        <*> observableGauge meter MemoryChargedBytes "bytes charged against the transient memory budget"
+        <*> observableGauge meter MemoryBrakeLevel "memory brake level (0 calm, 1 holding, 2 braking)"
+        <*> counter meter MemoryEntryQueued "{request}" "requests that waited for their memory entry step"
+        <*> counter meter MemoryEntryShed "{request}" "requests shed at the memory door"
+        <*> counter meter MemoryGrowthPaused "{read}" "started reads that paused for memory"
+        <*> counter meter MemoryOverdraws "{step}" "steps taken past the memory budget"
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
 counter meter name unit description =
@@ -232,6 +250,10 @@ metricsPortOf m =
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
         , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
         , mpPublishBodyShed = addOne (mPublishBodyShed m) []
+        , mpMemoryEntryQueued = addOne (mMemoryEntryQueued m) []
+        , mpMemoryEntryShed = addOne (mMemoryEntryShed m) []
+        , mpMemoryGrowthPaused = addOne (mMemoryGrowthPaused m) []
+        , mpMemoryOverdraw = addOne (mMemoryOverdraws m) []
         , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
@@ -474,6 +496,19 @@ reportAdvisorySourceAge eco pushedAt result = do
 -- An age is never negative, whatever a clock or a stamp says.
 observeAge :: ObservableResult Int64 -> Ecosystem -> Int64 -> IO ()
 observeAge result eco seconds = observe result (max 0 seconds) (metricAttributes [LEcosystem eco])
+
+{- | Attach the memory meter's budget, charge and brake level to their gauges. The SDK reads
+them at each collection, so the served path records nothing.
+-}
+registerMemoryMeter :: Metrics -> IO MeterSnapshot -> IO ()
+registerMemoryMeter m readMeter = do
+    let observeWith pick instrument =
+            void . observableGaugeRegisterCallback instrument $ \result -> do
+                current <- readMeter
+                observe result (fromIntegral (pick current)) (metricAttributes [])
+    observeWith snBudgetBytes (mMemoryBudgetBytes m)
+    observeWith snChargedBytes (mMemoryChargedBytes m)
+    observeWith snBrakeLevel (mMemoryBrakeLevel m)
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

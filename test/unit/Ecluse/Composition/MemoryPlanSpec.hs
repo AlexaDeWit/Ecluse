@@ -124,7 +124,7 @@ spec = describe "resolveMemoryPlan" $ do
         it "sheds the mirror-artifact cap on a small mirroring pod, warning loudly" $ do
             -- The background back-fill leg gives way first under memory pressure: the cap
             -- sheds toward zero and the boot log names it.
-            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (36 * mib))) MemoryQueueTenant False
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "mirror artifact byte cap shed")
             (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 0
 
@@ -138,9 +138,9 @@ spec = describe "resolveMemoryPlan" $ do
 
     describe "the graceful-degradation ladder" $ do
         it "sheds the cache first on a small pod, warning loudly, and still boots" $ do
-            -- 64 MiB: the floors overshoot, the cache gives way (its floor is
-            -- 64 MiB), and nothing refuses.
-            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+            -- 36 MiB: the floors overshoot, the cache gives way after the mirror cap, and
+            -- nothing refuses.
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (36 * mib))) MemoryQueueTenant False
             mpOverrideViolations plan `shouldBe` []
             mpDegradations plan `shouldSatisfy` (not . null)
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "cache aggregate shed")
@@ -205,11 +205,12 @@ spec = describe "resolveMemoryPlan" $ do
                        , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
-                       , "memory plan: cache byte bound 257698038" <> ceilingClause
-                       , "memory plan: cache entry bound 15728" <> ceilingClause
+                       , "memory plan: cache byte bound 79272345" <> ceilingClause
+                       , "memory plan: cache entry bound 4838" <> ceilingClause
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
                        , "memory plan: memory-queue depth 41943" <> ceilingClause
                        , "memory plan: mirror artifact byte cap 8589934" <> ceilingClause
+                       , "memory plan: transient budget 115804775 (live target 264241152 less 148436377 idle and retained; bounds 16777216 and 203885159)"
                        ]
 
     describe "the combined invariant (property)" $

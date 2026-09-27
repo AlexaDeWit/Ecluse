@@ -43,6 +43,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors)
 import Ecluse.Core.Server.Metadata (MetadataReads)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -74,6 +75,8 @@ data AdapterMetadata = AdapterMetadata
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
     , metadataFetchManifest :: ManifestFetch
     -- ^ The raw read under 'metadataNewReads', without its caching and metrics, for a store sweep.
+    , metadataChargeFactors :: ChargeFactors
+    -- ^ What this ecosystem's reads and listings charge the memory budget per source byte.
     }
 
 {- | Fetching and projecting one package's full manifest from an origin. Every failure is a

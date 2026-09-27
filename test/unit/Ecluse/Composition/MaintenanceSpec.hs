@@ -102,7 +102,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Safe, Undecidable, Unsafe),
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocReadCharge, ocToken))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -308,6 +308,7 @@ nowhere manager =
         , ocManager = manager
         , ocToken = Nothing
         , ocLimits = defaultLimits
+        , ocReadCharge = const pass
         }
 
 absentRead :: Text

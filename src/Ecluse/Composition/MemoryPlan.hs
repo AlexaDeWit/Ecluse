@@ -13,6 +13,7 @@ module Ecluse.Composition.MemoryPlan (
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
+    TransientBudget (..),
 
     -- * Resolution
     resolveMemoryPlan,
@@ -44,6 +45,7 @@ import Ecluse.Composition.MemoryPlan.Internal (OverridePins (..), PlanInputs (..
 import Ecluse.Composition.MemoryPlan.Override (configuredPins, overrideViolationsFor)
 import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, renderControlWarnings, renderDegradations, renderPlanLines)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedToFit)
+import Ecluse.Composition.MemoryPlan.Transient (TransientBudget (..), renderTransientBudget, transientBudget)
 import Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
     MirrorArtifactTenant (..),
@@ -106,13 +108,16 @@ solvedPlan inputs h =
         , mpQueueMemoryMaxDepth = soDepthFinal outcomes
         , mpQueueTenantBytes = soQueueTenantBytes outcomes
         , mpFixedBufferBytes = tdFixedBuffers demands
+        , mpTransientBudget = transient
         , mpDegradations = renderDegradations demands outcomes
         , mpOverrideViolations = overrideViolationsFor demands outcomes
         }
-    , renderPlanLines inputs demands outcomes
+    , renderPlanLines inputs demands outcomes <> [renderTransientBudget transient]
     )
   where
     demands = tenantDemands inputs h
+    retained = soCacheFinal outcomes + soQueueTenantBytes outcomes + tdFixedBuffers demands
+    transient = transientBudget (Just h) (piCapabilities inputs) (piAllocAreaBytes inputs) retained
     outcomes = shedToFit demands
 
 {- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.
@@ -131,13 +136,16 @@ fallbackPlan inputs =
         , mpQueueMemoryMaxDepth = queueDepth
         , mpQueueTenantBytes = queueCharge (memoryQueueCharged demand) queueDepth
         , mpFixedBufferBytes = fixedBufferBytes demand
+        , mpTransientBudget = transient
         , mpDegradations = renderControlWarnings pins (piCpuAdmission inputs) responseBytes
         , mpOverrideViolations = []
         }
     , [localCachePolicyLine, piCpuAdmissionLine inputs, responseLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
         <> [artifactLine | anyMountMirrors demand]
+        <> [renderTransientBudget transient]
     )
   where
+    transient = transientBudget Nothing (piCapabilities inputs) (piAllocAreaBytes inputs) (cacheBytes + queueCharge (memoryQueueCharged demand) queueDepth + fixedBufferBytes demand)
     demand = piQueueDemand inputs
     pins = configuredPins inputs
     (responseBytes, responseLine) = resolveSized "memory plan: metadata ingest ceiling" (opResponse pins) responseBytesFallback "built-in default, independent of heap and CPU"

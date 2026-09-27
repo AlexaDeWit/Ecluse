@@ -27,6 +27,14 @@ import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors (..))
+
+{- | npm's live heap per source byte, starting slightly above the average. The typed projection
+holds at most 0.585 bytes per source byte in the residency gate. The listing output holds the
+merged document and its encoding, about 0.66 of the source each.
+-}
+npmChargeFactors :: ChargeFactors
+npmChargeFactors = ChargeFactors{cfReadPermille = 750, cfOutputPermille = 1300}
 
 -- | npm's capability record.
 npmAdapter :: RegistryAdapter
@@ -45,6 +53,7 @@ npmAdapter =
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
                 , metadataFetchManifest = fetchNpmManifest
+                , metadataChargeFactors = npmChargeFactors
                 }
         , adapterArtifact =
             AdapterArtifact
