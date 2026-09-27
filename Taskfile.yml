@@ -549,8 +549,10 @@ tasks:
       - nix flake check
   docker-build:
     desc: Build the lean OCI image via Nix
+    # release-build.yml runs this too. The build logs name a stalled phase, and 20
+    # silent minutes fail the build long before the job's 90-minute timeout.
     cmds:
-      - nix build .#dockerImage
+      - nix build --print-build-logs --option max-silent-time 1200 .#dockerImage
   sbom:
     desc: Generate the image SBOM
     cmds:
