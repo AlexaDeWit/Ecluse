@@ -413,10 +413,8 @@ bootDrained manager attempts port command = do
 
 data Readiness = Booting | Ready | ExitedDuringBoot ExitCode
 
-{- Stop the process and wait for the drains to reach the end of its output. SIGTERM starts the
-proxy's graceful drain, and a process still alive after thirty seconds is killed. The waits poll
-rather than use 'timeout', because a cleanup handler runs uninterruptibly masked and a timeout
-could not fire there. -}
+{- The waits poll rather than use 'timeout': a cleanup handler runs under 'uninterruptibleMask',
+where a timeout cannot fire. -}
 stopDrained :: Drained -> IO (ExitCode, Bool)
 stopDrained drained = do
     let process = drProcess drained

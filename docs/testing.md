@@ -392,8 +392,8 @@ statistics on a loopback control port. Telemetry is on, with the Prometheus scra
 exporter, so the harness can sample the admission gauges. The proxy logs into pipes that the
 harness drains, keeping only the head and tail of each stream, so its cgroup is charged for unread
 pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI the build step has
-just written the executable, so its text pages are already cached when the proxy starts and are
-not charged to it. The harness does not enforce that.
+just built or restored the executable, so its text pages are already cached when the proxy starts
+and are not charged to it. The harness does not enforce that.
 
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
 `2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
