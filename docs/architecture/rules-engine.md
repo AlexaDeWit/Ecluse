@@ -33,10 +33,10 @@ A `Rule` is closed `Eq`/`Show` data with no evaluation. `evalRule` is the single
 it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
 security boundary: untrusted config can only name a built-in constructor, never supply an
 evaluator. A rule is **pure or effectful** by whether it carries a resilience policy, which
-depends only on where its signal lives. So `DenyInstallTimeExecution` is pure for npm's
-`hasInstallScript` but effectful for a RubyGems native `extensions` signal that appears only
-inside the `.gem`. An advisory rule is effectful only where an advisory database is configured.
-Without one its verdict is fixed at boot, so it runs as a pure rule.
+depends on where its signal lives and, for an advisory rule, on whether a database is configured.
+So `DenyInstallTimeExecution` is pure for npm's `hasInstallScript` but effectful for a RubyGems
+native `extensions` signal that appears only inside the `.gem`. Without a database an advisory
+rule's verdict is fixed at boot, so it runs as a pure rule.
 
 ### Evaluation model
 

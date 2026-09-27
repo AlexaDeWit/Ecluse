@@ -644,20 +644,21 @@ spec = do
             prepare unloadedDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
                 [r] -> fmap resAlignment (prepResilience r) `shouldBe` Just FailNoDecision
                 other -> expectationFailure ("expected one prepared rule, got " <> show (length other))
-        it "prepares every pure built-in to run directly, with no resilience" $ do
-            rules <-
-                prepare
-                    inertRuleDeps
-                    ( map
-                        atDefaultPrecedence
-                        [ AllowScope (mkScope "myorg")
-                        , AllowIfOlderThan (7 * nominalDay)
-                        , AllowByIdentity "thing"
-                        , DenyInstallTimeExecution
-                        , DenyByIdentity "thing"
-                        ]
-                    )
-            map (isJust . prepResilience) rules `shouldBe` replicate 5 False
+        it "prepares every pure built-in to run directly, with no resilience, database or not" $
+            for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
+                rules <-
+                    prepare
+                        deps
+                        ( map
+                            atDefaultPrecedence
+                            [ AllowScope (mkScope "myorg")
+                            , AllowIfOlderThan (7 * nominalDay)
+                            , AllowByIdentity "thing"
+                            , DenyInstallTimeExecution
+                            , DenyByIdentity "thing"
+                            ]
+                        )
+                map (isJust . prepResilience) rules `shouldBe` replicate 5 False
 
     describe "bootOrder" $ do
         it "orders highest precedence first, then rule name ascending" $ do

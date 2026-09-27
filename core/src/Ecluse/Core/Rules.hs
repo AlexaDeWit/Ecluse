@@ -84,9 +84,7 @@ data RuleDeps = RuleDeps
     -}
     }
 
-{- | An ecosystem's advisory database, as configuration fixes it at boot. With none configured,
-each advisory rule's verdict is fixed, so 'prepare' runs it directly.
--}
+-- | An ecosystem's advisory database, as configuration fixes it at boot.
 data AdvisoryDatabase
     = NoAdvisoryDatabase
     | -- | Bracketed access to the lookup and ETag acquired together, 'Nothing' until a generation loads.
