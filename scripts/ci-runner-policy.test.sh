@@ -11,18 +11,24 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 fail=0
+mkdir "$work/wf"
 
-# Assert the verdict for one fixture workflow. $1 name, $2 expected exit, $3 the file
-# name the fixture takes (the allow-list keys on it), then the workflow on stdin.
+# Add a further workflow to the next check's directory. $1 the file name, then stdin.
+fixture() {
+  cat > "$work/wf/$1"
+}
+
+# Assert the verdict over file $3 (from stdin) and any fixture() files, then clear them.
+# $1 name, $2 expected exit, $4 optional text the output must contain.
 check() {
-  local name="$1" want="$2" file="$3" got=0
-  rm -rf "$work/wf" && mkdir "$work/wf"
+  local name="$1" want="$2" file="$3" text="${4:-}" got=0 out
   cat > "$work/wf/$file"
-  bash "$script" "$work/wf" >/dev/null 2>&1 || got=$?
-  if [ "$got" = "$want" ]; then
+  out="$(bash "$script" "$work/wf" 2>&1)" || got=$?
+  rm -rf "$work/wf" && mkdir "$work/wf"
+  if [ "$got" = "$want" ] && { [ -z "$text" ] || grep -qF -- "$text" <<< "$out"; }; then
     printf 'ok   - %s\n' "$name"
   else
-    printf 'FAIL - %s (want exit %s, got %s)\n' "$name" "$want" "$got"
+    printf 'FAIL - %s (want exit %s and "%s", got %s)\n' "$name" "$want" "$text" "$got"
     fail=1
   fi
 }
@@ -133,7 +139,12 @@ jobs:
     steps: []
 YAML
 
-check "a reusable-workflow call has no runner to check" 0 ci.yml <<'YAML'
+fixture release-build.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+YAML
+check "a call to a local workflow this run checks passes" 0 ci.yml <<'YAML'
 jobs:
   dry-run:
     uses: ./.github/workflows/release-build.yml
@@ -331,6 +342,113 @@ x-runner: &runner ubuntu-latest
 jobs:
   build:
     runs-on: *runner
+YAML
+
+check "an anchored arm64 runner resolves through its alias" 0 ci.yml <<'YAML'
+jobs:
+  first:
+    runs-on: &runner ubuntu-24.04-arm
+  second:
+    runs-on: *runner
+YAML
+
+check "a YAML merge key fails by name" 1 ci.yml "uses a YAML merge key" <<'YAML'
+x-base: &base
+  runs-on: ubuntu-24.04-arm
+jobs:
+  build:
+    <<: *base
+YAML
+
+fixture z.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+YAML
+check "a merge-key file does not stop the files after it" 1 ci.yml "FAILED  z.yml build" <<'YAML'
+x-base: &base
+  runs-on: ubuntu-24.04-arm
+jobs:
+  build:
+    <<: *base
+YAML
+
+check "a dotfile workflow off arm64 fails" 1 .evil.yml "FAILED  .evil.yml build" <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+YAML
+
+check "an upper-case extension off arm64 fails" 1 build.YML "FAILED  build.YML build" <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+YAML
+
+fixture .callee.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+YAML
+check "a local call to a dotfile callee off arm64 fails" 1 ci.yml "FAILED  .callee.yml build" <<'YAML'
+jobs:
+  call:
+    uses: ./.github/workflows/.callee.yml
+YAML
+
+check "a local call to a missing workflow fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+jobs:
+  call:
+    uses: ./.github/workflows/absent.yml
+YAML
+
+fixture callee.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+YAML
+check "a local call into a subdirectory fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+jobs:
+  call:
+    uses: ./.github/workflows/sub/callee.yml
+YAML
+
+fixture callee.YML <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+YAML
+check "a local call whose name differs in case from the file fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
+jobs:
+  call:
+    uses: ./.github/workflows/callee.yml
+YAML
+
+check "a literal arm64 runner passes beside a matrix expression" 0 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+YAML
+
+check "a matrix path matches its dimension ignoring case" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ MATRIX.Runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-latest]
+YAML
+
+check "a matrix path in another case resolves to an arm64 runner" 0 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.Platform.Runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04-arm
 YAML
 
 check "a workflow yq cannot parse fails" 1 ci.yml <<'YAML'

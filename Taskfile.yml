@@ -304,6 +304,9 @@ tasks:
     desc: Lint GitHub Actions workflows and check their runners
     sources:
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
+      - '.github/workflows/.*.yml'
+      - '.github/workflows/.*.yaml'
       - 'scripts/ci-runner-policy.sh'
       - 'flake.lock'
     cmds:

@@ -3,8 +3,8 @@
 # arm64, so a job runs on ubuntu-24.04-arm unless the allow-list below names its
 # workflow, job, and runner with a reason. A `runs-on: ${{ matrix.<a>[.<b>] }}` job is
 # checked against every value its matrix and its include entries give that path.
-# Anything the script cannot resolve fails. A job that calls a local reusable workflow
-# is checked in that workflow, and a remote one fails unless allow-listed.
+# Anything the script cannot resolve fails. A local reusable-workflow call must name a
+# workflow file this run reads, and a remote one fails unless allow-listed.
 #
 # yq turns each workflow into JSON and jq decides. Needs yq-go and jq (the dev shells).
 #
@@ -32,16 +32,21 @@ def holds_expr: any(.. ; type == "string" and test("\\$\\{\\{"));
 def string_or_error($what): if type == "string" then . else {error: "\($what) is not a string"} end;
 def path_name($a; $b): "matrix.\($a)" + (if $b == null then "" else ".\($b)" end);
 
+# The value under every key that equals $k ignoring case, as GitHub reads context properties.
+def at_ci($k): to_entries[] | select(.key | ascii_downcase == ($k | ascii_downcase)) | .value;
+
 # The values one matrix path takes in the dimension named $a, as strings or {error}.
 def dimension_values($m; $a; $b):
-  if ($m | has($a) | not) then empty
-  elif ($m[$a] | type) != "array" then {error: "matrix.\($a) is not a list"}
-  else $m[$a][]
-    | if $b == null then string_or_error("an item of matrix.\($a)")
-      elif type == "object" and has($b) then .[$b] | string_or_error(path_name($a; $b))
-      else {error: "an item of matrix.\($a) lacks \($b)"}
-      end
-  end;
+  $m | to_entries[]
+  | select(.key != "include" and .key != "exclude" and (.key | ascii_downcase) == ($a | ascii_downcase))
+  | .value
+  | if type != "array" then {error: "matrix.\($a) is not a list"}
+    else .[]
+      | if $b == null then string_or_error("an item of matrix.\($a)")
+        elif type == "object" and ([at_ci($b)] | length) > 0 then at_ci($b) | string_or_error(path_name($a; $b))
+        else {error: "an item of matrix.\($a) lacks \($b)"}
+        end
+    end;
 
 # An include entry can add a combination with any value, so each one must give the path.
 def include_values($m; $a; $b):
@@ -49,28 +54,34 @@ def include_values($m; $a; $b):
   elif ($m.include | type) != "array" then {error: "matrix.include is not a list"}
   else $m.include[]
     | if type != "object" then {error: "an include entry is not a mapping"}
-      elif has($a) | not then {error: "an include entry lacks \(path_name($a; $b))"}
-      elif $b == null then .[$a] | string_or_error("an include entry's \($a)")
-      elif (.[$a] | type) == "object" and (.[$a] | has($b)) then .[$a][$b] | string_or_error("an include entry's \($a).\($b)")
-      else {error: "an include entry lacks \(path_name($a; $b))"}
+      elif ([at_ci($a)] | length) == 0 then {error: "an include entry lacks \(path_name($a; $b))"}
+      elif $b == null then at_ci($a) | string_or_error("an include entry's \($a)")
+      else at_ci($a)
+        | if type == "object" and ([at_ci($b)] | length) > 0 then at_ci($b) | string_or_error("an include entry's \($a).\($b)")
+          else {error: "an include entry lacks \(path_name($a; $b))"}
+          end
       end
   end;
 
 def matrix_rows($job; $j; $a; $b):
-  if ($j.strategy | type) != "object" or ($j.strategy.matrix | type) != "object" then
-    fail($job; "runs-on reads \(path_name($a; $b)), but the job has no matrix mapping")
-  else
-    [dimension_values($j.strategy.matrix; $a; $b), include_values($j.strategy.matrix; $a; $b)] as $values
-    | if ($values | length) == 0 then fail($job; "no matrix value for \(path_name($a; $b))")
-      else $values[] | if type == "string" then row($job; "runner"; .) else fail($job; .error) end
-      end
-  end;
+  $j.strategy as $s
+  | if ($s | type) == "null" then fail($job; "runs-on reads \(path_name($a; $b)), but the job has no matrix")
+    elif ($s | type) != "object" then fail($job; "runs-on reads the matrix, but the strategy is not a mapping")
+    elif ($s.matrix | type) == "null" then fail($job; "runs-on reads \(path_name($a; $b)), but the job has no matrix")
+    elif ($s.matrix | type) != "object" then fail($job; "runs-on reads the matrix, but the matrix is not a mapping")
+    elif ($s.matrix | holds_expr) then fail($job; "runs-on reads the matrix, which holds an expression")
+    else
+      [dimension_values($s.matrix; $a; $b), include_values($s.matrix; $a; $b)] as $values
+      | if ($values | length) == 0 then fail($job; "no matrix value for \(path_name($a; $b))")
+        else $values[] | if type == "string" then row($job; "runner"; .) else fail($job; .error) end
+        end
+    end;
 
 def runner_rows($job; $j; $spec):
   if ($spec | type) == "string" then
     if ($spec | test("\\$\\{\\{") | not) then row($job; "runner"; $spec)
     else
-      ([$spec | capture("^\\$\\{\\{\\s*matrix\\.(?<a>[A-Za-z0-9_-]+)(\\.(?<b>[A-Za-z0-9_-]+))?\\s*\\}\\}$")] | first) as $p
+      ([$spec | capture("^\\$\\{\\{\\s*matrix\\.(?<a>[A-Za-z0-9_-]+)(\\.(?<b>[A-Za-z0-9_-]+))?\\s*\\}\\}$"; "i")] | first) as $p
       | if $p == null then fail($job; "unresolvable runs-on expression \($spec)")
         else matrix_rows($job; $j; $p.a; $p.b)
         end
@@ -90,13 +101,6 @@ def runner_rows($job; $j; $spec):
 def job_rows($job; $j):
   if ($j | type) != "object" then fail($job; "the job is not a mapping")
   else
-    ( if ($j | has("strategy") | not) then empty
-      elif ($j.strategy | type) != "object" then fail($job; "the strategy is an expression")
-      elif ($j.strategy | has("matrix") | not) then empty
-      elif ($j.strategy.matrix | type) != "object" then fail($job; "the matrix is an expression")
-      elif ($j.strategy.matrix | holds_expr) then fail($job; "the matrix holds an expression")
-      else empty
-      end ),
     ( if ($j | has("uses")) then
         if ($j.uses | type) == "string" and ($j.uses | startswith("./")) then row($job; "local"; $j.uses)
         else row($job; "uses"; $j.uses | tostring)
@@ -126,21 +130,44 @@ reason_for() {
   return 1
 }
 
+# A local call resolves only to a workflow file this run reads.
+declare -A read_files=()
+calls_read_file() {
+  [[ "$1" =~ ^\./\.github/workflows/([^/]+)$ ]] && [ -n "${read_files[${BASH_REMATCH[1]}]:-}" ]
+}
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
 verdict=0
-shopt -s nullglob
+shopt -s nullglob dotglob nocaseglob
 paths=("$dir"/*.yml "$dir"/*.yaml)
 if [ "${#paths[@]}" -eq 0 ]; then
   echo "FAILED  no workflow files in $dir"
   exit 1
 fi
 for path in "${paths[@]}"; do
+  read_files["$(basename "$path")"]=1
+done
+
+for path in "${paths[@]}"; do
   file="$(basename "$path")"
-  if ! json="$(yq -o=json 'explode(.)' "$path" 2>&1)"; then
-    echo "FAILED  $file: yq cannot parse it: $json"
+  if ! merges="$(yq ea '[.. | select(key == "<<")] | length' "$path" 2>"$err")" ||
+    ! json="$(yq -o=json 'explode(.)' "$path" 2>"$err")"; then
+    echo "FAILED  $file: yq cannot parse it: $(cat "$err")"
     verdict=1
     continue
   fi
-  rows="$(printf '%s\n' "$json" | jq -r "$decide")"
+  if [ "$merges" != "0" ]; then
+    echo "FAILED  $file: it uses a YAML merge key (<<), which GitHub Actions does not support"
+    verdict=1
+    continue
+  fi
+  if ! rows="$(printf '%s\n' "$json" | jq -r "$decide" 2>"$err")"; then
+    echo "FAILED  $file: jq cannot decide it: $(cat "$err")"
+    verdict=1
+    continue
+  fi
   if [ -z "$rows" ]; then
     echo "FAILED  $file (file): no jobs found"
     verdict=1
@@ -159,7 +186,12 @@ for path in "${paths[@]}"; do
         fi
         ;;
       local)
-        echo "ok      $file $job: calls $value, checked as its own workflow"
+        if calls_read_file "$value"; then
+          echo "ok      $file $job: calls $value, which this run checks"
+        else
+          echo "FAILED  $file $job: calls $value, which is not a workflow file this run reads"
+          verdict=1
+        fi
         ;;
       uses)
         if reason="$(reason_for "$file:$job:$value")"; then
