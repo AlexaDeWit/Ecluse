@@ -147,7 +147,7 @@ defaultCoresCeiling :: Int
 defaultCoresCeiling = 8
 
 {- | The capability count a memory budget can feed. The nursery charge is capabilities x the
-allocation area, and a count the budget cannot feed is the surge shape that ends in an OOM kill.
+allocation area, and a count the budget cannot feed is the surge shape that overflows the heap.
 -}
 nurseryFittedCapabilities :: Int -> Int -> Int
 nurseryFittedCapabilities budgetBytes allocAreaBytes =
@@ -168,7 +168,7 @@ deriveMaxHeapBytes memMax allocAreaBytes =
     -- The RTS checks @-M@ only at a collection, and large objects allocated in between can
     -- reach @-AL@, which defaults to @-A@.
     overshoot = allocAreaBytes
-    -- Memory @-M@ does not see: connection buffers, decoder state, socket buffers and stacks.
+    -- Memory @-M@ does not see: socket buffers, OS thread stacks and native zlib state.
     slack = memMax `div` 10
 
 {- A heap ceiling rounded down to the RTS's 4 KiB block granularity. The RTS stores @-M@ in
