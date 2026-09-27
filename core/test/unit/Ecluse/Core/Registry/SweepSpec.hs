@@ -67,7 +67,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepShape (SweepCandidates, SweepEverything),
     deletingCache,
  )
-import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
@@ -80,7 +80,7 @@ import Ecluse.Test.Maintenance (
     withBucket,
  )
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
-import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Sweep (
     RecordedSweep (..),
     previewMount,
@@ -280,7 +280,7 @@ previewMountFor store =
 
 -- A generation the sweep can read, which leaves the identity half to pin the candidate names.
 loadedDeps :: RuleDeps
-loadedDeps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup []))}
+loadedDeps = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [])
 
 {- One retry after the wait the fault itself advises. A fault that survives it halts the cycle,
 and the next cycle re-attempts, so an outage reports once per interval and clears on its own. -}
@@ -699,7 +699,7 @@ sweepAdvisories :: [AdvisoryRange] -> [Rule] -> IO (CycleOutcome, Map PackageNam
 sweepAdvisories ranges configured = do
     store <- seededStore
     rec' <- recordingPorts generation
-    let deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup [("left-pad", ar) | ar <- ranges]))}
+    let deps = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", ar) | ar <- ranges])
     prepared <- prepare deps (map atDefaultPrecedence configured)
     let mount = (testMount (fakeMaintenance store) prepared configured){smRuleDeps = deps}
     outcome <- sweepCycle testPacing (recPorts rec') [mount]
@@ -753,7 +753,7 @@ generationSpec = describe "deletion evidence generation" $
             store <- seededStore
             active <- newIORef (DbEtag "generation-A", fakeCveLookup [("left-pad", advisory "OLD" (Just 0.01))])
             let replacement = (DbEtag "generation-B", fakeCveLookup [("left-pad", advisory "NEW-ONLY" (Just 0.95))])
-                deps = inertRuleDeps{rdWithCveLookup = \use -> readIORef active >>= use . Just}
+                deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> readIORef active >>= use . Just)}
                 configured = [DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
                 original = fakeMaintenance store
                 changing = original{readStoreManifest = \name -> writeIORef active replacement *> readStoreManifest original name}

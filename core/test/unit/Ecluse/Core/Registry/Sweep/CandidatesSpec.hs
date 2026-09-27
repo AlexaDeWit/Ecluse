@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, identityDenyNames, inCandidates)
-import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), evalRule)
+import Ecluse.Core.Rules (evalRule)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams, dicMinCvss, dicOnUnavailable),
     EvalContext (EvalContext),
@@ -31,7 +31,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
-import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Rules (servingRuleDeps)
 
 spec :: Spec
 spec = do
@@ -66,7 +66,7 @@ intersectionSpec = describe "candidateSet" $ do
     it "selects Flask_Thing and obtains a shared denial from its flask-thing advisory" $ do
         let name = mkPackageName PyPI Nothing "Flask_Thing"
             cve = coveringLookup ["flask-thing"]
-            deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", cve))}
+            deps = servingRuleDeps (DbEtag "etag-1") cve
             ctx = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
         candidates <- candidateSet (adapterProjectName pypiAdapter) [] (Just cve)
         inCandidates candidates name `shouldBe` True

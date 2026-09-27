@@ -8,6 +8,7 @@ performance harnesses so neither wires the boot-bound capabilities the live comp
 module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
     inertRuleDeps,
+    servingRuleDeps,
 
     -- * Precedence pairing
     atDefaultPrecedence,
@@ -40,12 +41,15 @@ module Ecluse.Test.Rules (
 ) where
 
 import Ecluse.Core.Breaker (noBreakerReporter)
+import Ecluse.Core.Cve (CveLookup)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (
     CodeExecSignal (RunsCodeOnInstall),
     PackageInfo (infoVersions),
  )
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (
+    AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase),
     PreparedRule (PreparedRule, prepAdvisoryGate, prepEval, prepName, prepPrecedence, prepResilience),
     RuleDeps (..),
     evalRules,
@@ -67,18 +71,22 @@ import Ecluse.Core.Rules.Types (
     defaultPrecedence,
  )
 
-{- | Rule capabilities with no advisory database and no breaker observer. The CVE rules abstain, so
-a suite or bench that does not test the advisory path needs no capability wiring.
+{- | Rule capabilities with no advisory database configured and no observers. Each advisory rule
+returns its fixed no-database verdict, so a suite that does not test the advisory path wires nothing.
 -}
 inertRuleDeps :: RuleDeps
 inertRuleDeps =
     RuleDeps
-        { rdWithCveLookup = \use -> use Nothing
+        { rdAdvisoryDatabase = NoAdvisoryDatabase
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         , rdSourceReporter = noSourceReporter
         , rdAdvisoryFreshness = pure AdvisoryFresh
         }
+
+-- | 'inertRuleDeps' with a database configured and the given generation serving.
+servingRuleDeps :: DbEtag -> CveLookup -> RuleDeps
+servingRuleDeps etag cve = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use (Just (etag, cve)))}
 
 {- | Pair a rule with its type's 'defaultPrecedence'. The live policy instead assigns each rule its
 configured precedence ("Ecluse.Config.Rule").

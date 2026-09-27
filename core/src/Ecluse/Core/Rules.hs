@@ -8,6 +8,8 @@ Effectful evaluation may overlap, but precedence governs the result.
 module Ecluse.Core.Rules (
     -- * The boot-bound rule capabilities
     RuleDeps (..),
+    AdvisoryDatabase (..),
+    withCveLookup,
 
     -- * The built-in rule dispatch
     evalRule,
@@ -63,10 +65,9 @@ import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
--- | Pin one advisory generation for an evaluation, or supply 'Nothing' before the first sync.
+-- | One ecosystem's boot-bound rule capabilities: its advisory database and the rules' observers.
 data RuleDeps = RuleDeps
-    { rdWithCveLookup :: forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
-    -- ^ Bracketed access to the lookup and ETag acquired together, if a database is loaded.
+    { rdAdvisoryDatabase :: AdvisoryDatabase
     , rdCurrentAdvisoryEtag :: IO (Maybe DbEtag)
     {- ^ A non-pinning read of the active 'DbEtag'. It holds no generation open, so it never
     delays a shadow-swap.
@@ -82,6 +83,18 @@ data RuleDeps = RuleDeps
     alone ages it, so an unchanged artifact expires in a warm process.
     -}
     }
+
+-- | An ecosystem's advisory database, as configuration fixes it at boot.
+data AdvisoryDatabase
+    = NoAdvisoryDatabase
+    | -- | Bracketed access to the lookup and ETag acquired together, 'Nothing' until a generation loads.
+      AdvisoryDatabase (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a)
+
+-- | Borrow the loaded generation, or 'Nothing' when none is configured or none has loaded yet.
+withCveLookup :: RuleDeps -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
+withCveLookup deps use = case rdAdvisoryDatabase deps of
+    NoAdvisoryDatabase -> use Nothing
+    AdvisoryDatabase borrow -> borrow use
 
 {- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule that reads a fact
 nothing supplied refuses rather than abstaining, so the fold stops at it.
@@ -116,15 +129,15 @@ evalRule _ _ (AllowByIdentity ident) ev =
             then Allow ("identity " <> ident <> " is allow-listed by operator")
             else NoDecision ("identity is not the allow-listed " <> ident)
 evalRule deps _ AllowIfRemediatesCve ev =
-    rdWithCveLookup deps $ \case
+    withCveLookup deps $ \case
         Nothing -> pure (NoDecision "no advisory database is loaded")
         Just (_, cve) -> remediationVerdict cve ev
 evalRule deps _ (DenyIfCve params) ev =
-    rdWithCveLookup deps $ \case
+    withCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
         Just (etag, cve) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve ev
 evalRule deps _ (DenyIfEpss params) ev =
-    rdWithCveLookup deps $ \case
+    withCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
         Just (etag, cve) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
 
@@ -244,7 +257,9 @@ data AdvisoryGate = AdvisoryGate
     -- ^ Where the rule's decided verdicts report the source's health.
     }
 
--- | Allocate each effectful rule's breaker once. Unconfirmed remediation claims abstain.
+{- | Allocate each effectful rule's breaker once. Unconfirmed remediation claims abstain. With no
+advisory database configured, an advisory rule runs directly and returns its fixed verdict.
+-}
 prepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
 prepare deps = traverse (prepareRule deps)
 
@@ -275,8 +290,8 @@ advisoryGateFor deps = \case
   where
     gate alignment = Just AdvisoryGate{agAlignment = alignment, agFreshness = rdAdvisoryFreshness deps, agReporter = rdSourceReporter deps}
 
--- The resilience a rule needs. The effectful CVE rule carries the fail-open policy,
--- allocating its per-source breaker. The pure rules carry none.
+-- The resilience a rule needs: a policy for an advisory rule reading a configured database. With
+-- no database configured its verdict is fixed and cannot fault or hang, so it runs directly.
 resilienceFor :: RuleDeps -> Rule -> IO (Maybe Resilience)
 resilienceFor deps = \case
     AllowIfRemediatesCve -> effectful FailNoDecision
@@ -284,20 +299,28 @@ resilienceFor deps = \case
     -- times out (here) and a database that is not loaded ('noAdvisoryDbVerdict').
     DenyIfCve params -> effectful (dicOnUnavailable params)
     DenyIfEpss params -> effectful (dieOnUnavailable params)
-    _ -> pure Nothing
+    AllowScope{} -> pure Nothing
+    AllowIfOlderThan{} -> pure Nothing
+    DenyInstallTimeExecution -> pure Nothing
+    DenyByIdentity{} -> pure Nothing
+    AllowByIdentity{} -> pure Nothing
   where
-    effectful alignment = do
-        breaker <- newBreaker
-        pure $
-            Just
-                Resilience
-                    { resConfig = defaultEffectfulConfig
-                    , resAlignment = alignment
-                    , resBreaker = breaker
-                    , resBreakerReporter = rdBreakerReporter deps
-                    , resSourceReporter = rdSourceReporter deps
-                    , resClock = getCurrentTime
-                    }
+    effectful alignment = case rdAdvisoryDatabase deps of
+        NoAdvisoryDatabase -> pure Nothing
+        AdvisoryDatabase _ -> Just <$> newResilience deps alignment
+
+newResilience :: RuleDeps -> FailureAlignment -> IO Resilience
+newResilience deps alignment = do
+    breaker <- newBreaker
+    pure
+        Resilience
+            { resConfig = defaultEffectfulConfig
+            , resAlignment = alignment
+            , resBreaker = breaker
+            , resBreakerReporter = rdBreakerReporter deps
+            , resSourceReporter = rdSourceReporter deps
+            , resClock = getCurrentTime
+            }
 
 -- | Sort by descending precedence, then ascending rule name, independently of configuration order.
 bootOrder :: [PreparedRule] -> [PreparedRule]

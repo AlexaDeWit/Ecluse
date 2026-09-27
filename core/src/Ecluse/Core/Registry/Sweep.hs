@@ -86,7 +86,7 @@ import Ecluse.Core.Registry.Sweep.Walk (
     resumeAfter,
     walkBuckets,
  )
-import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
+import Ecluse.Core.Rules (withCveLookup)
 import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext, readsAdvisories)
 
 {- | Run one cycle: every mount's store in turn. A halt ends the whole cycle, because every reason
@@ -333,7 +333,7 @@ locatedMount mount store = mount{smStore = countingAt (smStore mount) store}
 A generation swapped mid-bucket defers a name it newly covers by one cycle. -}
 withCandidates :: SweepPorts -> SweepMount -> (CandidateSet -> EvalContext -> IO a) -> IO a
 withCandidates ports mount act =
-    rdWithCveLookup (smRuleDeps mount) $ \mLookup -> do
+    withCveLookup (smRuleDeps mount) $ \mLookup -> do
         candidates <- candidateSet (smProjectName mount) (smConfigured mount) (snd <$> mLookup)
         ctx <- mkEvalContext (sweepNow ports) (pure (fst <$> mLookup))
         act candidates ctx
@@ -343,7 +343,7 @@ half then sweeps, so that rule set decided on less than it names, which is the g
 reportAdvisoryHalf :: SweepPorts -> SweepState -> SweepMount -> IO ()
 reportAdvisoryHalf ports counters mount =
     when (any readsAdvisories (smConfigured mount)) $
-        rdWithCveLookup (smRuleDeps mount) $ \mLookup ->
+        withCveLookup (smRuleDeps mount) $ \mLookup ->
             whenNothing_ mLookup $ do
                 recordGap counters unloadedGeneration
                 auditError
