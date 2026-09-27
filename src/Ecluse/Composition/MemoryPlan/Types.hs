@@ -59,8 +59,6 @@ data MemoryPlan = MemoryPlan
     , mpCacheAggregateBytes :: Int
     -- ^ Tenant 3: one shared byte bound for all eligible local cache stores.
     , mpCacheMaxEntries :: Int
-    , mpMaterialAggregateBytes :: Int
-    -- ^ Tenant 4: the independent heuristic capacity for concurrent metadata work.
     , mpMaxResponseBytes :: Int
     -- ^ The fixed metadata ingest ceiling, independent of memory and CPU admission.
     , mpMaxRequestBytes :: Int
@@ -82,7 +80,7 @@ data MemoryPlan = MemoryPlan
     , mpFixedBufferBytes :: Int
     -- ^ Tenant 2: the enqueue buffer, charged whenever any mount mirrors.
     , mpDegradations :: [Text]
-    -- ^ Shed-ladder and explicit-control warnings, including the limits of material estimates.
+    -- ^ Shed-ladder and explicit-control warnings.
     , mpOverrideViolations :: [Text]
     {- ^ The pins the plan blames for a residual overshoot it cannot shed around. The boot and
     check-config refuse on these with exit 2.

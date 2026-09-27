@@ -74,7 +74,7 @@ spec = do
             mirroring - unpinned `shouldBe` 40000000
             notMirroring `shouldBe` unpinned
 
-        it "keeps body and CPU pins outside material tenant arithmetic" $ do
+        it "keeps body and CPU pins outside tenant arithmetic" $ do
             let pinned = noOverridePins{opAdmission = Just maxBound, opResponse = Just maxBound}
             overrideMinShedSum baseDemands pinned `shouldBe` overrideMinShedSum baseDemands noOverridePins
 
@@ -101,7 +101,6 @@ spec = do
             , tdPins = noOverridePins
             , tdCacheDesired = 0
             , tdCacheEntriesExplicit = Nothing
-            , tdMaterialDesired = 0
             , tdResponseFinal = 12582912
             , tdAdmissionDesired = 1
             , tdPublishConfigured = False

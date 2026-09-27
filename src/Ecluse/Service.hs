@@ -34,11 +34,10 @@ import Ecluse.Composition.Executable (
     MirrorWiring (mwBootWiring, mwCveSync, mwDeferredMetrics, mwQueue, mwRole),
  )
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMaterialAggregateBytes, mpMirrorArtifactTenant, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     mirrorArtifactBytesCap,
  )
-import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances)
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.Plan (
@@ -63,7 +62,6 @@ import Ecluse.Core.Registry.Adapter (
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Admission.Material (newMaterialAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Server.Readiness (Readiness)
@@ -130,7 +128,6 @@ withServiceRuntime bootEnv plan mirror action = do
     -- gate, so a refused boot never reshapes the process it is about to abandon.
     whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
-    materialAdmission <- newMaterialAdmission (mpMaterialAggregateBytes memoryPlan) (mpAdmissionCapacity memoryPlan) materialAllowances
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
@@ -140,7 +137,7 @@ withServiceRuntime bootEnv plan mirror action = do
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
     (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
-    withEnvWithAdmission serveAdmission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)

@@ -91,7 +91,6 @@ spec = do
             _ <- resolveOk sf "held" (pure "original")
             seen <- newIORef []
             prepared <- Store.prepareStore (\outcome -> modifyIORef' seen (outcome :)) (const pass) pass sf "held" (pure (Right "wrong"))
-            Store.preparedReuse prepared `shouldBe` Store.KnownLocalReuse
             readIORef seen `shouldReturn` []
             _ <- resolveOk sf "replacement" (pure "other")
             lookupStore sf "held" `shouldReturn` Nothing
@@ -106,7 +105,6 @@ spec = do
             sf <- newSingleFlightWithBackend (Just (retentionBackend LocalStorage operations))
             prepared <- Store.prepareStore (\outcome -> modifyIORef' seen (outcome :)) (const pass) pass sf ("absent" :: Text) (pure (Left StoreFault))
             writeIORef held Nothing
-            Store.preparedReuse prepared `shouldBe` Store.KnownLocalReuse
             Store.executePrepared prepared `shouldReturn` Right Nothing
             readIORef lookupCalls `shouldReturn` 1
             readIORef seen `shouldReturn` [Metric.Hit]
@@ -117,7 +115,6 @@ spec = do
                 let operations = externalOperations (\_ _ -> modifyIORef' lookupCalls (+ 1) $> held) (\_ _ -> pass)
                 sf <- newSingleFlightWithBackend (Just (retentionBackend (ExternalStorage 1000000) operations))
                 prepared <- Store.prepareStore (const pass) (const pass) pass sf ("key" :: Text) (pure (Right "fresh" :: Either StoreFault Text))
-                Store.preparedReuse prepared `shouldBe` Store.NeedsMaterialisation
                 readIORef lookupCalls `shouldReturn` 0
                 Store.executePrepared prepared `shouldReturn` Right (fromMaybe "fresh" held)
                 readIORef lookupCalls `shouldReturn` 1

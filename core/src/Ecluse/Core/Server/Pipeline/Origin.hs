@@ -199,7 +199,7 @@ withPublicMetadataClient rt deps baseUrl =
   where
     settle = publicMetadataClient (srMetadataCache rt) (Source (registryUrlText baseUrl))
 
--- | Capture public local reuse before entering material admission, without starting remote work.
+-- | Pin a public local value without starting remote work.
 preparePublicMetadata :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler (PreparedStore MetadataError VersionRead)
 preparePublicMetadata rt deps name version =
     withMetadataClient rt deps settle origin (\prepare -> prepare name version)

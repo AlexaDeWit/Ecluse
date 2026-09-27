@@ -50,8 +50,7 @@ import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkE
 import Ecluse.Core.Security (Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialWork (SelectedMaterial), withMaterialAdmission)
-import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared, preparedReuse)
+import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -113,13 +112,8 @@ servePublicArtifact ctx = do
     withAdmissionResultOrShed
         metrics
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-        ( fmap
-            join
-            ( withServeAdmission metrics (srAdmission rt) $ do
-                prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
-                withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
-                    gatePublicVersion ctx advisoryEtag prepared
-            )
+        ( withServeAdmission metrics (srAdmission rt) $
+            preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ctx advisoryEtag
         )
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped

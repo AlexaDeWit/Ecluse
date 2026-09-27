@@ -7,9 +7,7 @@ module Ecluse.Core.Server.Cache.Store (
     newSingleFlightWithBackend,
     resolveSingleFlight,
     PreparedStore,
-    MaterialReuse (..),
     prepareStore,
-    preparedReuse,
     executePrepared,
     lookupStore,
     CacheOccupancy (..),
@@ -37,15 +35,9 @@ data FlightOutcome e v
 newSingleFlightWithBackend :: Maybe (RetentionBackend k v) -> IO (SingleFlight e k v)
 newSingleFlightWithBackend backend = SingleFlight backend <$> newTVarIO Map.empty
 
--- | Whether execution reuses a captured local value or can allocate fresh metadata.
-data MaterialReuse = KnownLocalReuse | NeedsMaterialisation
-    deriving stock (Eq, Show)
-
--- | A request-scoped read. Execute once inside the matching material allowance.
-data PreparedStore e v = PreparedStore
-    { preparedReuse :: MaterialReuse
-    -- ^ The selected value's reuse class, determined without external lookup.
-    , executePrepared :: IO (Either e v)
+-- | A request-scoped read with any local value already pinned. Execute it once.
+newtype PreparedStore e v = PreparedStore
+    { executePrepared :: IO (Either e v)
     -- ^ Resolve the read, recording its request outcome only during execution.
     }
 
@@ -62,8 +54,8 @@ prepareStore ::
 prepareStore recordRequest recordOccupancy recordRefused sf key fetch = do
     held <- lookupLocal recordOccupancy recordRefused sf key
     pure $ case held of
-        Just value -> PreparedStore KnownLocalReuse (recordRequest Metric.Hit $> Right value)
-        Nothing -> PreparedStore NeedsMaterialisation (resolveDeferred recordRequest recordOccupancy recordRefused sf key fetch)
+        Just value -> PreparedStore (recordRequest Metric.Hit $> Right value)
+        Nothing -> PreparedStore (resolveDeferred recordRequest recordOccupancy recordRefused sf key fetch)
 
 lookupLocal :: (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> IO (Maybe v)
 lookupLocal recordOccupancy recordRefused sf key = case sfBackend sf of

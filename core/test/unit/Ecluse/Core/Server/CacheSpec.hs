@@ -35,7 +35,7 @@ import Ecluse.Core.Server.Cache (
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
-import Ecluse.Core.Server.Cache.Store (MaterialReuse (KnownLocalReuse), executePrepared, preparedReuse)
+import Ecluse.Core.Server.Cache.Store (executePrepared)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -201,7 +201,6 @@ spec = do
             cache <- newMetadataCache cacheConfig
             _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName v1_0_0 (pure (Right absent))
             prepared <- Cache.prepareVersion metrics cache publicSource thingName v1_0_0 (modifyIORef' calls (+ 1) $> Left MetadataUndecodable)
-            preparedReuse prepared `shouldBe` KnownLocalReuse
             _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName (npmVersion "2.0.0") (pure (Right absent))
             cachedVersion noopMetricsPort cache publicSource thingName v1_0_0 `shouldReturn` Nothing
             readIORef seen `shouldReturn` []
