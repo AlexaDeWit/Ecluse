@@ -418,6 +418,11 @@ expiry observation.
 
 ## Memory plan and runtime sizing
 
+Run each Écluse pod with at least 1 GiB of memory. Écluse does not support smaller pods. At
+512 MiB a proxy under load overflows its heap repeatedly, and each overflow ends the process with
+exit code `1` and the line `ecluse: service exited: heap overflow`. The boot does not refuse a
+smaller pod, so keep the minimum in your pod specification.
+
 Check the effective plan in the boot log or `ecluse check-config` before changing pod resources.
 Both use the same plan renderer. The checker predicts the runtime posture, while boot measures
 what the runtime applied, so compare them under the same container limits and configuration.
@@ -635,14 +640,19 @@ the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, o
 copying space during major collection and allocations outside the managed heap.
 The heap ceiling alone does not describe the container's peak memory.
 
-These examples show nursery arithmetic, not a minimum supported pod size or a workload guarantee:
+These examples meet the [1 GiB minimum](@/docs/operations.md#memory-plan-and-runtime-sizing).
+They show nursery arithmetic, not a workload guarantee:
 
 | Pod resources | Allocation area | Nursery arithmetic | What remains to verify |
 |---|---|---|---|
-| 2 CPU / 512 MiB | Default `-A64m` | 128 MiB | Effective controls, peak process memory and concurrent listings |
-| 2 CPU / 256 MiB | `GHCRTS="-A16m"` | 32 MiB | Effective controls, reduced throughput and any degradation warnings |
-| 4 CPU / 750 MiB | Default `-A64m` | 256 MiB | Effective controls and collection headroom under the package mix |
-| 4 CPU / 512 MiB | `GHCRTS="-A32m"` | 128 MiB | Effective controls, collection frequency and peak process memory |
+| 2 CPU / 1 GiB | Default `-A64m` | 128 MiB | Effective controls, peak process memory and concurrent listings |
+| 4 CPU / 1 GiB | Default `-A64m` | 256 MiB | Effective controls, the capability count after any shed and peak process memory |
+| 4 CPU / 2 GiB | Default `-A64m` | 256 MiB | Effective controls and collection headroom under the package mix |
+
+When the nursery exceeds a quarter of the heap ceiling, Écluse sheds capabilities until it fits,
+and the boot log says `memory plan: capability count shed to` with the new count. The pod then
+runs on fewer cores than its CPU limit grants. To keep every core, give the pod more memory or set
+a smaller allocation area through `GHCRTS`.
 
 Read the effective allocation area and admission controls from the boot log after each change.
 Compare cold reads, retained selected reads and listings under the intended concurrency.
