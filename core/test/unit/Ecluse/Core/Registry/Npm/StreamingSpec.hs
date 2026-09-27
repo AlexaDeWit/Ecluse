@@ -38,7 +38,7 @@ import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
@@ -76,15 +76,19 @@ spec = describe "npmFields" $ do
         (selected >>= fieldAt "_npmUser" >>= fieldAt "unknown") `shouldBe` Nothing
         (selected >>= fieldAt "author") `shouldBe` Just (String "See https://registry.npmjs.org/thing")
 
-    it "shares fixed field names across releases and keeps dependency names as read" $ do
+    it "shares field names, dependency names and strings across releases, and nothing between reads" $ do
         let bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= release, "2.0.0" .= release]]))
-        (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
-        let releases = case fieldAt "versions" compact of
+            releases compact = case fieldAt "versions" compact of
                 Just (Object versions) -> KeyMap.elems versions
                 _ -> []
-        sharesKey "dist" releases `shouldReturn` True
-        sharesKey "tarball" (mapMaybe (fieldAt "dist") releases) `shouldReturn` True
-        sharesKey "dep" (mapMaybe (fieldAt "dependencies") releases) `shouldReturn` False
+        (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
+        -- A distinct limit keeps the compiler from sharing one read between both results.
+        (_, again) <- expectRight (projectNpmManifest defaultLimits{maxMetadataBytes = BS.length bytes} name bytes)
+        sharesKey "dist" (releases compact) `shouldReturn` True
+        sharesKey "tarball" (mapMaybe (fieldAt "dist") (releases compact)) `shouldReturn` True
+        sharesKey "dep" (mapMaybe (fieldAt "dependencies") (releases compact)) `shouldReturn` True
+        sharesString "publisher" (mapMaybe (fieldAt "_npmUser" >=> fieldAt "name") (releases compact)) `shouldReturn` True
+        sharesString "^2" (mapMaybe (fieldAt "dependencies" >=> fieldAt "dep") (releases compact <> releases again)) `shouldReturn` False
 
     it "mirrors the same supported fields and source author pointer" $ do
         (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)

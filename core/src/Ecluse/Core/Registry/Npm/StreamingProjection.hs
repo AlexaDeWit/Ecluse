@@ -20,6 +20,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
+import Ecluse.Core.Registry.JsonStream (InternTable, emptyInternTable, internText, internValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
@@ -33,6 +34,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 data NpmProjection = NpmProjection
     { projectedName :: Maybe Value
     , projectedVersions :: Map Text (Either InvalidEntry PackageDetails, Value)
+    , projectedStrings :: InternTable
     , projectedTimes :: Map Text (Either InvalidEntry UTCTime)
     , projectedTags :: Map Text (Either InvalidEntry Version)
     , projectedBookkeeping :: Map Text Value
@@ -48,6 +50,7 @@ emptyProjection =
     NpmProjection
         { projectedName = Nothing
         , projectedVersions = mempty
+        , projectedStrings = emptyInternTable
         , projectedTimes = mempty
         , projectedTags = mempty
         , projectedBookkeeping = mempty
@@ -78,12 +81,11 @@ collectField limits name acc = \case
     VersionField _ _ | projectedActiveContainer acc /= Just VersionsContainer -> Right acc
     VersionField key raw -> do
         let count = projectedCount acc + 1
+            counted = acc{projectedCount = count}
         checkVersionCountOf limits count
-        pure
-            acc
-                { projectedCount = count
-                , projectedVersions = maybe (projectedVersions acc) (\value -> let !typed = release key value in firstInsert key (typed, value) (projectedVersions acc)) raw
-                }
+        pure $ case raw of
+            Just value | Map.notMember key (projectedVersions acc) -> retain key value counted
+            _ -> counted
     TimeField _ _ | projectedActiveContainer acc /= Just TimeContainer -> Right acc
     TimeField key _ | Map.member key (projectedTimes acc) -> Right acc
     TimeField key value ->
@@ -99,6 +101,12 @@ collectField limits name acc = \case
     TagField key _ | Map.member key (projectedTags acc) -> Right acc
     TagField key value -> Right acc{projectedTags = firstInsert key (decode (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
   where
+    -- The typed release reads the shared copies, so its texts are the served document's own.
+    retain key value current =
+        let (keyed, sharedKey) = internText (projectedStrings current) key
+            (strings, shared) = internValue keyed value
+            !typed = release sharedKey shared
+         in current{projectedVersions = Map.insert sharedKey (typed, shared) (projectedVersions current), projectedStrings = strings}
     release key value = case projectVersionEntryResult name (mkVersion Npm key) Nothing value of
         Left err -> Left $! mkInvalidEntry InvalidVersionManifest key value (toText err)
         Right details -> Right $! details

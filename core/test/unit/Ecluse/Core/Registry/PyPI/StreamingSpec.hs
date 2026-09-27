@@ -26,7 +26,7 @@ import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Support (expectRight)
@@ -68,15 +68,19 @@ retainedSpec = describe "supported PyPI fields" $ do
         map snd (simpleFiles document) `shouldBe` [simpleFile filename]
         fieldAt "unknown" (simpleValue document) `shouldBe` Nothing
 
-    it "shares file field and known digest names across files" $ do
+    it "shares field names, digest names and repeated strings across files, and nothing between reads" $ do
         let file other = withFileKeys [("hashes", object ["sha256" .= validSha256, "custom" .= ("digest" :: Text)])] (simpleFile other)
             body = encodeStrict (simpleIndex "requests" [file filename, file "requests-2.0.tar.gz"])
+            files document = map snd (simpleFiles document)
         (_, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
-        let files = map snd (simpleFiles document)
-            hashes = mapMaybe (fieldAt "hashes") files
-        sharesKey "filename" files `shouldReturn` True
+        -- A distinct limit keeps the compiler from sharing one read between both results.
+        (_, again) <- expectRight (projectPyPIIndex defaultLimits{maxMetadataBytes = BS.length body} requestsName body)
+        let hashes = mapMaybe (fieldAt "hashes") (files document)
+        sharesKey "filename" (files document) `shouldReturn` True
         sharesKey "sha256" hashes `shouldReturn` True
-        sharesKey "custom" hashes `shouldReturn` False
+        sharesKey "custom" hashes `shouldReturn` True
+        sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document)) `shouldReturn` True
+        sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document <> files again)) `shouldReturn` False
 
     it "retains compatibility declarations outside the policy projection" $ do
         let fields =

@@ -477,7 +477,9 @@ version ceilings bound other work.
 
 The pinned library's native lexer allocates batches proportional to the input chunk size
 (`20 + chunkBytes / 5` result records). Its key accumulator stops at about 64 KiB and its number
-accumulator at about 200,000 digits. Retained strings become owned `Text`. Parser continuations
-advance before the next chunk, so successful reads do not retain a complete source buffer.
+accumulator at about 200,000 digits. Retained strings become owned `Text`. A full or selected read
+keeps one copy of each key and string its releases or files repeat, in a table it drops when it ends.
+Parser continuations advance before the next chunk, so successful reads do not retain a complete
+source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and
 retained-live measurements remain distinct from the cached accounting estimate.

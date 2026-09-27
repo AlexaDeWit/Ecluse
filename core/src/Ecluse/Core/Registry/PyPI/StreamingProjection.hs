@@ -18,6 +18,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Registry.JsonStream (InternTable, emptyInternTable, internValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
@@ -31,6 +32,7 @@ import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (maxArtifactC
 data PyPIProjection = PyPIProjection
     { projectedEnvelope :: KeyMap.KeyMap Value
     , projectedFiles :: [(IndexFile, Maybe FileCoordinate, Value)]
+    , projectedStrings :: InternTable
     , projectedMemo :: FilenameMemo
     , projectedFileDrops :: [InvalidEntry]
     , projectedVersionDrops :: [InvalidEntry]
@@ -46,7 +48,7 @@ data PyPIProjection = PyPIProjection
 
 -- | Start one project's source without retaining any input chunks.
 emptyProjection :: PackageName -> PyPIProjection
-emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] mempty 0 Nothing True False False False False
+emptyProjection name = PyPIProjection mempty [] emptyInternTable (filenameMemo name) [] [] mempty 0 Nothing True False False False False
 
 -- | Decode one compact file and stop retaining payloads after an existing structural limit trips.
 collectField :: Limits -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
@@ -73,11 +75,15 @@ collectField limits mode acc =
          in case raw of
                 Just value | isNothing (projectedBound bounded) || mode == FullRead -> retainFile position value bounded
                 _ -> bounded
-    retainFile position value current = foldl' (retain value) withDrops files
+    -- A file past a tripped bound is not retained, so its texts stay out of the table too.
+    retainFile position value current = foldl' (retain shared) withDrops files
       where
-        (files, drops) = decodeIndexFiles [(position, value)]
+        (strings, shared)
+            | isNothing (projectedBound current) = internValue (projectedStrings current) value
+            | otherwise = (projectedStrings current, value)
+        (files, drops) = decodeIndexFiles [(position, shared)]
         withDrops
-            | isNothing (projectedBound current) = current{projectedFileDrops = reverse drops <> projectedFileDrops current}
+            | isNothing (projectedBound current) = current{projectedFileDrops = reverse drops <> projectedFileDrops current, projectedStrings = strings}
             | otherwise = current
     retain value current file =
         let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)

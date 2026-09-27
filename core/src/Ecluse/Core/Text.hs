@@ -1,8 +1,9 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE MagicHash #-}
 
-{- | Shared text parsing and rendering without dependencies on other core modules.
+{- | Shared text parsing, rendering and storage without dependencies on other core modules.
 Inbound routes and outbound artifact filenames share the same path-component gate.
 -}
 module Ecluse.Core.Text (
@@ -18,17 +19,22 @@ module Ecluse.Core.Text (
     readHexText,
     renderIso8601Utc,
     displayExceptionT,
+    textStorageBytes,
+    compactText,
 ) where
 
+import Data.Array.Byte (ByteArray (..))
 import Data.Char (isControl)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Text.Internal qualified as TI
 import Data.Text.Lazy qualified as TL
 import Data.Text.Lazy.Builder qualified as TB
 import Data.Text.Lazy.Builder.Int qualified as TBI
 import Data.Text.Read qualified as TR
 import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, toGregorian)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import GHC.Exts (Int (I#), sizeofByteArray#)
 import Network.HTTP.Types.URI (urlDecode)
 
 {- | The text trimmed of surrounding whitespace, or 'Nothing' when nothing remains.
@@ -158,3 +164,13 @@ digits width n =
 -- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text
 displayExceptionT = toText . displayException
+
+-- | The byte size of the array behind a text. A slice keeps the whole array of the text it came from.
+textStorageBytes :: Text -> Int
+textStorageBytes (TI.Text (ByteArray array) _ _) = I# (sizeofByteArray# array)
+
+-- | The text on an array of exactly its own bytes. A slice, or a text on a larger array, is copied.
+compactText :: Text -> Text
+compactText text@(TI.Text _ offset len)
+    | offset == 0 && textStorageBytes text == len = text
+    | otherwise = T.copy text

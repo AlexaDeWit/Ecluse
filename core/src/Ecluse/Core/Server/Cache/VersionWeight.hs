@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE MagicHash #-}
 
 {- | Conservative accounting for selectively decoded releases.
 The cache charges backing allocations and repeated structures without deduplicating sharing.
@@ -9,17 +8,16 @@ A retained raw version object is charged on the shared wire-to-resident model, w
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
-import Data.Array.Byte (ByteArray (..))
 import Data.Text.Internal qualified as Text
 import Data.Text.Short qualified as TS
 import Data.Time (UTCTime (..), diffTimeToPicoseconds, toModifiedJulianDay)
-import GHC.Exts (Int (I#), sizeofByteArray#)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
@@ -75,7 +73,7 @@ timeWeight (UTCTime day time) =
 
 -- Text slices can retain an entire input allocation. Count that allocation each time.
 textWeight :: Text -> Integer
-textWeight (Text.Text (ByteArray array) _ _) = 128 + toInteger (I# (sizeofByteArray# array))
+textWeight text = 128 + toInteger (textStorageBytes text)
 
 -- The allowance covers a list cell, its element record, wrappers, and alignment.
 itemsWeight :: (Foldable f) => (a -> Integer) -> f a -> Integer
