@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 #
-# Assemble the two per-arch Nix-built image archives into one multi-arch OCI index, in
-# an on-disk OCI layout. It pushes nothing: push-multiarch.sh copies the result to the
-# registry, and ci.yml's release dry-run stops here.
+# Assemble the two per-arch Nix-built image archives into one multi-arch OCI index, the
+# `multi` entry of an on-disk OCI layout. It pushes nothing: push-multiarch.sh copies the
+# result to the registry, and ci.yml's release dry-run stops here.
 #
 # Daemonless and rootless: skopeo writes each archive into a layout of plain files, and
 # regctl builds the index from those entries. No container engine and no user namespace,
 # which ubuntu-24.04's AppArmor blocks for /nix/store binaries.
 #
-# The layout holds three entries: `amd64`, `arm64`, and `multi` (the index). The script
-# fails unless the index lists exactly linux/amd64 and linux/arm64, and each entry's
-# image config names the architecture its archive was passed as. All output goes to
-# stderr. Needs skopeo, regctl, and jq (the `.#ci` shell).
+# All output goes to stderr. Needs skopeo, regctl, and jq (the `.#ci` shell).
 #
 # Usage: scripts/assemble-multiarch.sh <layout-dir> <amd64-archive> <arm64-archive>
 set -euo pipefail

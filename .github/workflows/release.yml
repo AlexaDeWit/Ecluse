@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   # The tag (or the dispatch `tag` input) must match ecluse.cabal's `version:` field
-  # before the multi-arch build starts. A pre-release suffix (-rc1) is stripped first.
+  # before the multi-arch build starts.
   verify-version:
     name: Verify tag matches cabal version
     runs-on: ubuntu-latest
@@ -34,8 +34,6 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
-        with:
-          cabal-cache: "true"
 
       - name: Assert the release tag matches ecluse.cabal version
         env:

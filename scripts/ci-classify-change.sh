@@ -14,11 +14,15 @@ set -euo pipefail
 # whatever this says, so the format, lint, SPDX, and site gates still cover all of them.
 doc_path='^([A-Za-z0-9_]+\.md|DCO|LICENSE|CITATION\.cff)$|^(docs|web|threat-modelling|LICENSES|\.agents|\.claude)/'
 
-# Haskell source directories, runbooks, and analysis-tool configuration. The build job
-# compiles the source and the docs job builds it through Nix, so only the image build
-# itself goes unexercised. ecluse.cabal is absent on purpose: it can change the Nix build.
+# Haskell source directories, runbooks, and analysis-tool configuration. The build and
+# docs jobs compile that source on arm64, but such a PR compiles nothing on amd64 and
+# builds no image. ecluse.cabal is absent on purpose: it can change the Nix build.
 source_path='^(src|core|runtime|app|gen|manifest|site|test|bench|acceptance|config|runbooks)/'
 source_path="$source_path"'|^(\.hlint\.yaml|\.stan\.toml|fourmolu\.yaml|weeder\.toml|codecov\.yml)$'
+
+# Paths inside source_path that still run the dry-run: test/oracles/ feeds the `.#ci`
+# shell the release build enters.
+release_path='^test/oracles/'
 
 out="${GITHUB_OUTPUT:-/dev/stdout}"
 
@@ -37,12 +41,14 @@ files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
   --jq '.[] | .filename, (.previous_filename // empty)')" || files=""
 [ -n "$files" ] || decide false true "could not read the changed-file list, every job runs."
 
-# The paths outside the pattern $1, one per line.
 outside() {
   printf '%s\n' "$files" | grep -Ev "$1" || true
 }
 
-reaches_release="$(outside "$doc_path|$source_path")"
+reaches_release="$(
+  outside "$doc_path|$source_path"
+  printf '%s\n' "$files" | grep -E "$release_path" || true
+)"
 if [ -n "$reaches_release" ]; then
   printf '%s\n' "$reaches_release" | sed 's/^/  reaches the release build: /'
   decide false true "the change reaches the release build, every job runs."

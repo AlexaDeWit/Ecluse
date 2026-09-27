@@ -153,6 +153,112 @@ jobs:
           echo "runs-on: ubuntu-latest"
 YAML
 
+check "a job id with a trailing comment is its own job" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  arm: # the next runs-on belongs to this job, not to build
+    runs-on: ubuntu-24.04-arm
+YAML
+
+check "a commented job id on the arm64 runner passes" 0 ci.yml <<'YAML'
+jobs: # every job
+  arm: # a note
+    runs-on: ubuntu-24.04-arm # the policy runner
+YAML
+
+check "an unrecognised two-space key under jobs fails" 1 ci.yml <<'YAML'
+jobs:
+  build: { runs-on: ubuntu-latest }
+YAML
+
+check "a quoted job id fails as unrecognised" 1 ci.yml <<'YAML'
+jobs:
+  "build":
+    runs-on: ubuntu-24.04-arm
+YAML
+
+check "a workflow with no jobs fails" 1 ci.yml <<'YAML'
+on:
+  push:
+YAML
+
+check "a matrix path resolves its own dimension, not another key of the same name" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - host: ubuntu-latest
+        include:
+          - runner: ubuntu-24.04-arm
+YAML
+
+check "a matrix item without the path's key fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04-arm
+          - arch: amd64
+YAML
+
+check "a matrix holding an expression fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-24.04-arm
+        include: ${{ fromJSON(inputs.extra) }}
+YAML
+
+check "a matrix that is an expression fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+YAML
+
+check "a scalar matrix list on the arm64 runner passes" 0 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-24.04-arm
+YAML
+
+check "a flow matrix list with an unlisted runner fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-latest]
+YAML
+
+mkdir -p "$work/empty"
+if bash "$script" "$work/empty" >/dev/null 2>&1; then
+  printf 'FAIL - %s\n' "an empty workflow directory fails"
+  fail=1
+else
+  printf 'ok   - %s\n' "an empty workflow directory fails"
+fi
+
+if bash "$script" "$work/missing" >/dev/null 2>&1; then
+  printf 'FAIL - %s\n' "a missing workflow directory fails"
+  fail=1
+else
+  printf 'ok   - %s\n' "a missing workflow directory fails"
+fi
+
 if bash "$script" "$here/../.github/workflows" >/dev/null 2>&1; then
   printf 'ok   - %s\n' "the repository's own workflows pass"
 else

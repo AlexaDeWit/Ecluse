@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Check every workflow job's runner, for `task lint-workflows`. CI builds and tests on
 # arm64, so a job runs on ubuntu-24.04-arm unless the allow-list below names its
-# workflow, job, and runner with a reason. A `runs-on: ${{ matrix.<key> }}` job is
-# checked against every value its strategy gives that key. A runner the script cannot
-# resolve fails, and a job that calls a reusable workflow is checked in that workflow.
+# workflow, job, and runner with a reason. A `runs-on: ${{ matrix.<dim>[.<key>] }}` job
+# is checked against every value its matrix gives that path. Anything the script cannot
+# resolve fails. A job that calls a reusable workflow is checked in that workflow.
 #
 # Usage: scripts/ci-runner-policy.sh [workflow-dir]   (default .github/workflows)
 set -euo pipefail
@@ -20,9 +20,8 @@ allowed=(
   "release.yml:publish:ubuntu-latest|Builds and tests no code, and only a publishing run can prove a runner change."
 )
 
-# Emit "<job>\t<runner>" for each runner a job can take, "<job>\t?<reason>" when the
-# runner cannot be resolved, and nothing for a reusable-workflow call. Reads the block
-# layout every workflow here uses: job ids at two spaces, job keys at four.
+# Emit "<job>\t<runner>" per runner a job can take, or "<job>\t?<reason>" when unresolved.
+# Expects job ids at two spaces, job keys at four, and matrix dimensions at eight.
 runners_of() {
   awk -v quotes="[\"']" '
     function unquote(v) {
@@ -31,19 +30,42 @@ runners_of() {
       gsub("^" quotes "|" quotes "$", "", v)
       return v
     }
-    function flush(   key, n, parts, i, found) {
+    # One matrix entry: its dimension, item number, and key ("" for a scalar item).
+    function record(d, i, k, v) {
+      v = unquote(v)
+      if (v ~ /\$\{\{/) matrix_expr = 1
+      if (!((d, i, k) in mval)) { mval[d, i, k] = v; nent++; ed[nent] = d; ei[nent] = i; ek[nent] = k }
+    }
+    function resolve(path,   n, seg, j, found, items, hits) {
+      n = split(path, seg, ".")
+      if (matrix_expr) { print job "\t?the matrix holds an expression"; return }
+      found = 0
+      if (n == 1) {
+        for (j = 1; j <= nent; j++) {
+          if ((ed[j] == seg[1] && ek[j] == "") || (ed[j] == "include" && ek[j] == seg[1])) {
+            print job "\t" mval[ed[j], ei[j], ek[j]]; found = 1
+          }
+        }
+      } else if (n == 2) {
+        items = nitems[seg[1]] + 0; hits = 0
+        for (j = 1; j <= nent; j++) {
+          if (ed[j] == seg[1] && ek[j] == seg[2]) { print job "\t" mval[ed[j], ei[j], ek[j]]; hits++ }
+        }
+        if (hits > 0 && hits < items) print job "\t?an item of matrix." seg[1] " lacks " seg[2]
+        found = hits > 0
+      } else {
+        print job "\t?unresolvable matrix path matrix." path
+        return
+      }
+      if (!found) print job "\t?no matrix value for matrix." path
+    }
+    function flush(   path) {
       if (job == "" || reusable) { job = ""; return }
       if (runs_on == "") { print job "\t?no runs-on"; job = ""; return }
       if (runs_on ~ /^\$\{\{[[:space:]]*matrix\.[A-Za-z0-9_.-]+[[:space:]]*\}\}$/) {
-        key = runs_on
-        sub(/^\$\{\{[[:space:]]*/, "", key); sub(/[[:space:]]*\}\}$/, "", key)
-        n = split(key, parts, ".")
-        key = parts[n]
-        found = 0
-        for (i = 1; i <= nvals; i++) {
-          if (vkey[i] == key) { print job "\t" vval[i]; found = 1 }
-        }
-        if (!found) print job "\t?no matrix value for " runs_on
+        path = runs_on
+        sub(/^\$\{\{[[:space:]]*matrix\./, "", path); sub(/[[:space:]]*\}\}$/, "", path)
+        resolve(path)
       } else if (runs_on ~ /\$\{\{/) {
         print job "\t?unresolvable expression " runs_on
       } else {
@@ -51,14 +73,17 @@ runners_of() {
       }
       job = ""
     }
-    /^[^[:space:]#]/ { flush(); in_jobs = ($0 ~ /^jobs:[[:space:]]*$/); next }
-    !in_jobs { next }
-    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+    function start_job(line) {
       flush()
-      job = $0; sub(/^  /, "", job); sub(/:.*$/, "", job)
-      runs_on = ""; reusable = 0; in_strategy = 0; nvals = 0
-      next
+      job = line; sub(/^  /, "", job); sub(/:.*$/, "", job)
+      seen_jobs = 1
+      runs_on = ""; reusable = 0; in_strategy = 0; in_matrix = 0; matrix_expr = 0
+      dim = ""; nent = 0; delete mval; delete nitems
     }
+    /^[^[:space:]#]/ { flush(); in_jobs = ($0 ~ /^jobs:[[:space:]]*(#.*)?$/); next }
+    !in_jobs || /^[[:space:]]*(#.*)?$/ { next }
+    /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ { start_job($0); next }
+    /^ [^ ]|^  [^ ]|^   [^ ]/ { flush(); print "(jobs)\t?unrecognised line under jobs: " $0; next }
     job == "" { next }
     /^    runs-on:/ {
       runs_on = $0; sub(/^    runs-on:/, "", runs_on); runs_on = unquote(runs_on)
@@ -66,23 +91,60 @@ runners_of() {
       next
     }
     /^    uses:/ { reusable = 1; next }
-    /^    strategy:/ { in_strategy = 1; next }
-    /^    [A-Za-z0-9_-]+:/ { in_strategy = 0; next }
-    in_strategy && /^      [[:space:]]*(- )?[A-Za-z0-9_-]+:[[:space:]]*[^[:space:]]/ {
-      line = $0
-      sub(/^[[:space:]]*(- )?/, "", line)
+    /^    strategy:/ { in_strategy = 1; in_matrix = 0; next }
+    /^    [^ ]/ { in_strategy = 0; in_matrix = 0; next }
+    !in_strategy { next }
+    /\$\{\{/ { matrix_expr = 1 }
+    /^      matrix:[[:space:]]*(#.*)?$/ { in_matrix = 1; next }
+    /^      matrix:/ { in_matrix = 1; matrix_expr = 1; next }
+    /^      [^ ]/ { in_matrix = 0; next }
+    !in_matrix { next }
+    /^        [A-Za-z0-9_-]+:/ {
+      line = $0; sub(/^ +/, "", line)
+      dim = line; sub(/:.*$/, "", dim)
+      v = line; sub(/^[^:]*:/, "", v); v = unquote(v)
+      if (v ~ /^\[.*\]$/) {
+        v = substr(v, 2, length(v) - 2)
+        n = split(v, parts, ",")
+        for (j = 1; j <= n; j++) { nitems[dim]++; record(dim, nitems[dim], "", parts[j]) }
+      } else if (v != "") {
+        matrix_expr = 1
+      }
+      next
+    }
+    /^          - / {
+      nitems[dim]++
+      line = $0; sub(/^          - /, "", line)
+      if (line ~ /^[A-Za-z0-9_-]+:/) {
+        k = line; sub(/:.*$/, "", k)
+        v = line; sub(/^[^:]*:/, "", v)
+        record(dim, nitems[dim], k, v)
+      } else {
+        record(dim, nitems[dim], "", line)
+      }
+      next
+    }
+    /^            [A-Za-z0-9_-]+:/ {
+      line = $0; sub(/^ +/, "", line)
       k = line; sub(/:.*$/, "", k)
       v = line; sub(/^[^:]*:/, "", v)
-      nvals++; vkey[nvals] = k; vval[nvals] = unquote(v)
+      record(dim, nitems[dim], k, v)
+      next
     }
-    END { flush() }
+    END { flush(); if (!seen_jobs) print "(file)\t?no jobs found" }
   ' "$1"
 }
 
 verdict=0
 shopt -s nullglob
-for path in "$dir"/*.yml "$dir"/*.yaml; do
+paths=("$dir"/*.yml "$dir"/*.yaml)
+if [ "${#paths[@]}" -eq 0 ]; then
+  echo "FAILED  no workflow files in $dir"
+  exit 1
+fi
+for path in "${paths[@]}"; do
   file="$(basename "$path")"
+  runners="$(runners_of "$path")"
   while IFS=$'\t' read -r job runner; do
     [ -n "$job" ] || continue
     if [ "${runner#\?}" != "$runner" ]; then
@@ -106,7 +168,7 @@ for path in "$dir"/*.yml "$dir"/*.yaml; do
       echo "FAILED  $file $job: $runner is not $policy_runner and not allow-listed"
       verdict=1
     fi
-  done < <(runners_of "$path")
+  done <<< "$runners"
 done
 
 exit "$verdict"

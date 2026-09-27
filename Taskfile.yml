@@ -560,13 +560,13 @@ tasks:
       - sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
       - task: scan-sbom
   scan-sbom:
-    desc: Scan a CycloneDX SBOM for CVEs (SBOM= and SARIF= override the paths)
+    desc: Scan a CycloneDX SBOM for CVEs (SCAN_SBOM= and SCAN_SARIF= override the paths)
     vars:
-      SBOM: '{{.SBOM | default "sbom/ecluse.cdx.json"}}'
-      SARIF: '{{.SARIF | default "grype.sarif"}}'
+      SCAN_SBOM: '{{.SCAN_SBOM | default "sbom/ecluse.cdx.json"}}'
+      SCAN_SARIF: '{{.SCAN_SARIF | default "grype.sarif"}}'
     cmds:
-      - grype 'sbom:{{.SBOM}}' -o table -o 'sarif={{.SARIF}}'
-      - bash scripts/sarif-locations.sh '{{.SARIF}}' flake.lock
+      - grype 'sbom:{{.SCAN_SBOM}}' -o table -o 'sarif={{.SCAN_SARIF}}'
+      - bash scripts/sarif-locations.sh '{{.SCAN_SARIF}}' flake.lock
   scan-vulnix:
     desc: Secondary Nix-native cross-check (vulnix)
     ignore_error: true

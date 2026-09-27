@@ -536,11 +536,12 @@ jobs:
           docker run --rm --network none "$tag" --version
 
   # grype findings arrive with disclosure time, not with a change, so the scan runs
-  # nightly (and on dispatch) over the dry-run's SBOMs and never gates.
+  # nightly (and on dispatch) over the dry-run's SBOMs and never gates. !cancelled()
+  # keeps one architecture's scan when the other architecture's build failed.
   grype:
     name: Vulnerability scan (grype, report-only)
     needs: release-dry-run
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
@@ -562,21 +563,22 @@ jobs:
           path: artifacts
 
       - name: Scan the arm64 closure
-        run: nix develop .#ci --command task scan-sbom SBOM=artifacts/sbom-arm64/ecluse.cdx.json SARIF=grype-arm64.sarif
+        if: ${{ !cancelled() && hashFiles('artifacts/sbom-arm64/ecluse.cdx.json') != '' }}
+        run: nix develop .#ci --command task scan-sbom SCAN_SBOM=artifacts/sbom-arm64/ecluse.cdx.json SCAN_SARIF=grype-arm64.sarif
 
       - name: Scan the amd64 closure
-        if: ${{ !cancelled() }}
-        run: nix develop .#ci --command task scan-sbom SBOM=artifacts/sbom-amd64/ecluse.cdx.json SARIF=grype-amd64.sarif
+        if: ${{ !cancelled() && hashFiles('artifacts/sbom-amd64/ecluse.cdx.json') != '' }}
+        run: nix develop .#ci --command task scan-sbom SCAN_SBOM=artifacts/sbom-amd64/ecluse.cdx.json SCAN_SARIF=grype-amd64.sarif
 
       - name: Upload the arm64 SARIF to code scanning
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('grype-arm64.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: grype-arm64.sarif
           category: grype
 
       - name: Upload the amd64 SARIF to code scanning
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('grype-amd64.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: grype-amd64.sarif

@@ -2,7 +2,7 @@
 # Remove the runner's preinstalled toolchains, but only when the root filesystem is
 # short of space, because the removal costs about a minute. The threshold clears the
 # ~30 GB the heaviest job adds: the Nix store, the Docker data-root, the cabal store,
-# and the e2e image. A path the runner image lacks is skipped.
+# and the e2e image.
 set -euo pipefail
 
 threshold_gb="${CI_FREE_DISK_THRESHOLD_GB:-40}"

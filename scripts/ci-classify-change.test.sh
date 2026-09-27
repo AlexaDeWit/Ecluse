@@ -44,6 +44,8 @@ check "Haskell source runs the Haskell jobs and skips the dry-run" false false p
   src/Ecluse.hs core/src/Ecluse/Core/Package.hs test/unit/Spec.hs docs/testing.md
 check "a runbook or an analysis config skips the dry-run" false false pull_request \
   runbooks/release.md .hlint.yaml weeder.toml
+check "the npm oracle under test/ runs the dry-run" false true pull_request \
+  test/unit/Spec.hs test/oracles/package-lock.json
 check "ecluse.cabal runs the dry-run" false true pull_request \
   ecluse.cabal src/Ecluse.hs
 check "the freeze runs the dry-run" false true pull_request cabal.project.freeze

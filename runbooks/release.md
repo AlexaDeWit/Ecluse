@@ -19,6 +19,7 @@ Run before touching a tag.
 gh run list --branch main --limit 4
 
 # that commit's main-branch CI run built, assembled, and started both images
+git fetch origin main
 run="$(gh run list --workflow ci.yml --branch main --event push --commit "$(git rev-parse origin/main)" \
   --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh run view "$run" --json jobs \
@@ -32,9 +33,10 @@ git ls-remote --tags origin
 ```
 
 Every `Release dry-run` job must read `success`. Those jobs run the release's own build definition
-on both architectures, so a red one predicts a failed release. `task init-release` re-checks the
-other three and refuses on any of them, so `DRY_RUN=1 task init-release VERSION=vX.Y.Z` rehearses
-the rest of this section without creating anything.
+on both architectures, so a red one predicts a failed release. `task init-release` re-checks all
+four and refuses on any of them. Its `CI gate` check covers the dry-run, because the dry-run jobs
+gate it. So `DRY_RUN=1 task init-release VERSION=vX.Y.Z` rehearses this whole section without
+creating anything.
 
 Scope must be final before the tag: the `Tag Integrity` ruleset blocks tag deletion and update
 for everyone, administrators included, so a pushed tag cannot be moved. Decide what merges

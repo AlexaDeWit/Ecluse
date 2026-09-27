@@ -639,11 +639,12 @@ Every job restores caches and only a main run ever saves one, so a pull request 
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub
 caches are immutable per key and two savers would race for the one entry.
 
-There is **one Nix-store cache per architecture**, keyed on `flake.nix` and `flake.lock`. Every
-cache key carries the runner's architecture, because a store or build tree from one architecture is
-useless on the other. The `docs` job writes the Nix-store entry, because it realises the widest
-closure. It roots the `.#ci` dev shell and the flake checks, so the saved store carries both, and
-every other job on that architecture restores that one entry. Two entries, one per closure, cost
+There is **one Nix-store cache**, for arm64, keyed on `flake.nix` and `flake.lock`. Every cache key
+carries the runner's architecture, because a store or build tree from one architecture is useless
+on the other, and only arm64 has a writer. A job on an amd64 runner that restores caches starts
+cold. The `docs` job writes the Nix-store entry, because it realises the widest closure. It roots
+the `.#ci` dev shell and the flake checks, so the saved store carries both, and every other arm64
+job restores that one entry. Two entries, one per closure, cost
 more than they saved: the two build graphs shared about nine tenths of their derivations, so each
 entry held mostly the same store paths, and the job that restored the Haskell one then refetched
 the whole dev shell before it could run.
@@ -670,9 +671,10 @@ Such a PR uploads no coverage and skips the `codecov-notify` job, so the require
 bypass.
 
 The same script skips the release dry-run for a PR whose paths are all documentation, Haskell
-source, runbooks, or analysis-tool configuration, because the `build` and `docs` jobs already
-compile that source. The flake, `ecluse.cabal`, `cabal.project`, the freeze, the Taskfile, the
-workflows, the CI actions, the scripts, and any unlisted path run it. A push to main, the nightly
+source, runbooks, or analysis-tool configuration. The `build` and `docs` jobs compile that source
+on arm64, but such a PR builds no image and compiles nothing on amd64. The flake, `ecluse.cabal`,
+`cabal.project`, the freeze, the Taskfile, the workflows, the CI actions, the scripts,
+`test/oracles/` (it feeds the `.#ci` shell), and any unlisted path run it. A push to main, the nightly
 run, and a manual dispatch always run it. The `gate` job accepts a skipped job from these two
 filters and from nothing else, so a job that silently never ran still fails the gate.
 
