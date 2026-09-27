@@ -10,7 +10,7 @@ on:
         options:
           - all
           - unlimited
-          - 2cpu-512mib
+          - 2cpu-1gib
           - 4cpu-1gib
           - 4cpu-2gib
           - thrash
@@ -73,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-512mib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
+        pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-1gib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
     env:
       # The probe sets its own shape per step, so the shape here only matters for the passes.
       BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
