@@ -17,142 +17,92 @@
         pkgs = nixpkgs.legacyPackages.${system};
         hlib = pkgs.haskell.lib;
 
+        # A hash-pinned Hackage release with dontCheck. Upstream suites are not ours to
+        # run, and their test-only inputs and version bounds stay out of the closure.
+        hackageNoCheck = hself: pkg: ver: sha256:
+          hlib.dontCheck (hself.callHackageDirect { inherit pkg ver sha256; } { });
+
         # The base set carries OTel 0.x. Keep the 1.0 packages aligned with
         # cabal.project and its freeze. Hash-pinned sources resolve against this
         # shared overlay, including their OTel dependencies.
         # See docs/architecture/observability.md.
-        otelOverlay = hself: _hsuper: {
-          # cvss 0.3 adds CVSS v4 parsing and fixes v2 scoring. The base set pins
-          # 0.2.0.1, which rejects the v4 vectors that about a third of the scored
-          # npm OSV advisories carry. `dontCheck` skips its tasty test suite, which
-          # is not ours to gate, so its test-only version bounds stay out of the
-          # closure.
-          cvss = pkgs.haskell.lib.dontCheck (hself.callHackageDirect {
-            pkg = "cvss";
-            ver = "0.3.0.0";
-            sha256 = "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
-          } { });
-          hs-opentelemetry-api-types =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-api-types";
-              ver = "1.0.0.0";
-              sha256 = "sha256-9ByP41wlV45TMCqbyyVpwejQDi5fsG0+j8bMk8ORLw8=";
-            } { };
-          hs-opentelemetry-api =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-api";
-              ver = "1.0.0.0";
-              sha256 = "sha256-COhj9Ms1eu1Gt9wTC21oQ37k6vJ9mxlJvYpHtvXff6A=";
-            } { };
-          hs-opentelemetry-otlp =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-otlp";
-              ver = "1.0.0.0";
-              sha256 = "sha256-kVuKKi6qRx+oBQclTpUnx20Eqw+CRQk8pT4tkcxt1xo=";
-            } { };
-          hs-opentelemetry-semantic-conventions =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-semantic-conventions";
-              ver = "1.40.0.0";
-              sha256 = "sha256-7cIC9dTrd5bJjAsiEyyupi1xSZyc17FpjbACnm0p5ik=";
-            } { };
-          # The SDK 1.0 re-exports the standard propagators, so they travel with it
-          # on the 1.0 line. W3C TraceContext is the default, and B3, Jaeger, X-Ray,
-          # and Datadog are alternates a deployment selects. The Datadog one is the
-          # optional, vendor-specific propagator from the observability design.
-          hs-opentelemetry-propagator-b3 =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-propagator-b3";
-              ver = "1.0.0.0";
-              sha256 = "sha256-gsNe818CprXM9l61mLUsdnePxIQChfml9kegmCDoAmw=";
-            } { };
-          hs-opentelemetry-propagator-datadog =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-propagator-datadog";
-              ver = "1.0.0.0";
-              sha256 = "sha256-nTXEtira3bktvycZkjDmPZewyMJ1IEEDygLT9OiIFYo=";
-            } { };
-          hs-opentelemetry-propagator-jaeger =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-propagator-jaeger";
-              ver = "1.0.0.0";
-              sha256 = "sha256-VL+3YwKbqe0elfZQ0EN7icNS0+pxmtlxlKauPHRqhb8=";
-            } { };
-          hs-opentelemetry-propagator-w3c =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-propagator-w3c";
-              ver = "1.0.0.0";
-              sha256 = "sha256-p8d2Tx8bCVRk6hps8k0qAg/L2gdBVoYuLYJbTzTbI3s=";
-            } { };
-          hs-opentelemetry-propagator-xray =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-propagator-xray";
-              ver = "1.0.0.0";
-              sha256 = "sha256-Tg7TrCMb8GA+jm+ohMAqMW7othRm/HLEyr9SifGa6qI=";
-            } { };
-          hs-opentelemetry-exporter-handle =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-exporter-handle";
-              ver = "1.0.0.0";
-              sha256 = "sha256-DCoVG0Y2aaMjinOP2GWmew0WmjN96j3/UUzEWxN7Ajs=";
-            } { };
-          # The in-memory exporter is part of the SDK's own dependency closure in
-          # this set. The base set's 0.x build does not compile against the 1.0 api,
-          # because a SpanProcessor field changed type, so it moves to 1.0 too.
-          hs-opentelemetry-exporter-in-memory =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-exporter-in-memory";
-              ver = "1.0.0.0";
-              sha256 = "sha256-bJjUHBNMRKhmkqRRnUrAQIDLWpUrox7F418r2QbVQ6o=";
-            } { };
-          hs-opentelemetry-sdk =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-sdk";
-              ver = "1.0.0.0";
-              sha256 = "sha256-kG8gmP8Lr9mPCnJjukCduFI/tADgKCfuelxcQZcXyA8=";
-            } { };
-          # HTTP/protobuf is the default. The gRPC path would pull in grapesy, and
-          # it stays behind the package's cabal flag, off, matching the `-grpc` flag
-          # the cabal freeze resolves. We need no gRPC.
-          hs-opentelemetry-exporter-otlp =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-exporter-otlp";
-              ver = "1.0.0.0";
-              sha256 = "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
-            } { };
-          # The pull-side metrics transport. The pinned SDK resolves
-          # OTEL_METRICS_EXPORTER=prometheus to a no-op push exporter and leaves the
-          # endpoint to the application, so renderPrometheusText has to come from
-          # here. Same monorepo and same 1.0 line as the OTLP exporter above.
-          hs-opentelemetry-exporter-prometheus =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-exporter-prometheus";
-              ver = "1.0.0.0";
-              sha256 = "sha256-6yCjTQ/1hriFD2n3zprJDHKBsjLAD5jzlSfOuN/3ej0=";
-            } { };
-          # Request-lifecycle instrumentation: the WAI server span and the
-          # http-client data-plane child spans. The http-client instrumentation pulls
-          # the conduit instrumentation as a 1.0 dependency, so it travels on the line
-          # too. Their only OTel deps, api and semantic-conventions, are above.
-          hs-opentelemetry-instrumentation-wai =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-instrumentation-wai";
-              ver = "1.0.0.0";
-              sha256 = "sha256-gPU9k2H1MpMEGh0F1Oi5ri8gdsZMCvQBRTnXgDhVAa0=";
-            } { };
-          hs-opentelemetry-instrumentation-conduit =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-instrumentation-conduit";
-              ver = "1.0.0.0";
-              sha256 = "sha256-J4iv0uTsnmntoXOb6tf8CBnKa0KsspomwLN/mJ2ypTA=";
-            } { };
-          hs-opentelemetry-instrumentation-http-client =
-            hself.callHackageDirect {
-              pkg = "hs-opentelemetry-instrumentation-http-client";
-              ver = "1.0.0.0";
-              sha256 = "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
-            } { };
-        };
+        otelOverlay = hself: _hsuper:
+          let fromHackage = hackageNoCheck hself;
+          in {
+            # cvss 0.3 adds CVSS v4 parsing and fixes v2 scoring. The base set pins
+            # 0.2.0.1, which rejects the v4 vectors that about a third of the scored
+            # npm OSV advisories carry.
+            cvss = fromHackage "cvss" "0.3.0.0"
+              "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
+            hs-opentelemetry-api-types =
+              fromHackage "hs-opentelemetry-api-types" "1.0.0.0"
+                "sha256-9ByP41wlV45TMCqbyyVpwejQDi5fsG0+j8bMk8ORLw8=";
+            hs-opentelemetry-api =
+              fromHackage "hs-opentelemetry-api" "1.0.0.0"
+                "sha256-COhj9Ms1eu1Gt9wTC21oQ37k6vJ9mxlJvYpHtvXff6A=";
+            hs-opentelemetry-otlp =
+              fromHackage "hs-opentelemetry-otlp" "1.0.0.0"
+                "sha256-kVuKKi6qRx+oBQclTpUnx20Eqw+CRQk8pT4tkcxt1xo=";
+            hs-opentelemetry-semantic-conventions =
+              fromHackage "hs-opentelemetry-semantic-conventions" "1.40.0.0"
+                "sha256-7cIC9dTrd5bJjAsiEyyupi1xSZyc17FpjbACnm0p5ik=";
+            # The SDK 1.0 re-exports the standard propagators, so they travel with it
+            # on the 1.0 line. W3C TraceContext is the default, and B3, Jaeger, X-Ray,
+            # and Datadog are alternates a deployment selects. The Datadog one is the
+            # optional, vendor-specific propagator from the observability design.
+            hs-opentelemetry-propagator-b3 =
+              fromHackage "hs-opentelemetry-propagator-b3" "1.0.0.0"
+                "sha256-gsNe818CprXM9l61mLUsdnePxIQChfml9kegmCDoAmw=";
+            hs-opentelemetry-propagator-datadog =
+              fromHackage "hs-opentelemetry-propagator-datadog" "1.0.0.0"
+                "sha256-nTXEtira3bktvycZkjDmPZewyMJ1IEEDygLT9OiIFYo=";
+            hs-opentelemetry-propagator-jaeger =
+              fromHackage "hs-opentelemetry-propagator-jaeger" "1.0.0.0"
+                "sha256-VL+3YwKbqe0elfZQ0EN7icNS0+pxmtlxlKauPHRqhb8=";
+            hs-opentelemetry-propagator-w3c =
+              fromHackage "hs-opentelemetry-propagator-w3c" "1.0.0.0"
+                "sha256-p8d2Tx8bCVRk6hps8k0qAg/L2gdBVoYuLYJbTzTbI3s=";
+            hs-opentelemetry-propagator-xray =
+              fromHackage "hs-opentelemetry-propagator-xray" "1.0.0.0"
+                "sha256-Tg7TrCMb8GA+jm+ohMAqMW7othRm/HLEyr9SifGa6qI=";
+            hs-opentelemetry-exporter-handle =
+              fromHackage "hs-opentelemetry-exporter-handle" "1.0.0.0"
+                "sha256-DCoVG0Y2aaMjinOP2GWmew0WmjN96j3/UUzEWxN7Ajs=";
+            # The unit suites use the in-memory exporter. The 0.x build fails against
+            # the 1.0 api, where a SpanProcessor field changed type, so it moves to 1.0.
+            hs-opentelemetry-exporter-in-memory =
+              fromHackage "hs-opentelemetry-exporter-in-memory" "1.0.0.0"
+                "sha256-bJjUHBNMRKhmkqRRnUrAQIDLWpUrox7F418r2QbVQ6o=";
+            hs-opentelemetry-sdk =
+              fromHackage "hs-opentelemetry-sdk" "1.0.0.0"
+                "sha256-kG8gmP8Lr9mPCnJjukCduFI/tADgKCfuelxcQZcXyA8=";
+            # HTTP/protobuf is the default. The gRPC path would pull in grapesy, and
+            # it stays behind the package's cabal flag, off, matching the `-grpc` flag
+            # the cabal freeze resolves. We need no gRPC.
+            hs-opentelemetry-exporter-otlp =
+              fromHackage "hs-opentelemetry-exporter-otlp" "1.0.0.0"
+                "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
+            # The pull-side metrics transport. The pinned SDK resolves
+            # OTEL_METRICS_EXPORTER=prometheus to a no-op push exporter and leaves the
+            # endpoint to the application, so renderPrometheusText has to come from
+            # here. Same monorepo and same 1.0 line as the OTLP exporter above.
+            hs-opentelemetry-exporter-prometheus =
+              fromHackage "hs-opentelemetry-exporter-prometheus" "1.0.0.0"
+                "sha256-6yCjTQ/1hriFD2n3zprJDHKBsjLAD5jzlSfOuN/3ej0=";
+            # Request-lifecycle instrumentation: the WAI server span and the
+            # http-client data-plane child spans. The http-client instrumentation pulls
+            # the conduit instrumentation as a 1.0 dependency, so it travels on the line
+            # too. Their only OTel deps, api and semantic-conventions, are above.
+            hs-opentelemetry-instrumentation-wai =
+              fromHackage "hs-opentelemetry-instrumentation-wai" "1.0.0.0"
+                "sha256-gPU9k2H1MpMEGh0F1Oi5ri8gdsZMCvQBRTnXgDhVAa0=";
+            hs-opentelemetry-instrumentation-conduit =
+              fromHackage "hs-opentelemetry-instrumentation-conduit" "1.0.0.0"
+                "sha256-J4iv0uTsnmntoXOb6tf8CBnKa0KsspomwLN/mJ2ypTA=";
+            hs-opentelemetry-instrumentation-http-client =
+              fromHackage "hs-opentelemetry-instrumentation-http-client" "1.0.0.0"
+                "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
+          };
 
         # amazonka, built from source at the exact rev the cabal path pins in
         # cabal.project (source-repository-package). The Hackage release stops at
@@ -172,7 +122,7 @@
 
         # The same subdirectory set cabal.project vendors: the umbrella package,
         # its own dependencies, and the service leaves we call. `dontCheck` for the
-        # same reason as cvss above: their test suites are not ours to gate.
+        # reason hackageNoCheck gives above.
         amazonkaOverlay = hself: _hsuper:
           let
             fromMonorepo = name: subdir:
@@ -193,11 +143,9 @@
         # Name Constraints (HSEC-2026-0008). Keep the x509 family, tls, and
         # crypton-connection aligned: tls 2.3 accepts x509 1.9, both need crypton
         # 1.1, and crypton-connection 0.4.6 accepts tls 2.3. aeson-pretty 0.8.11
-        # admits aeson 2.3. dontCheck skips upstream tests as with cvss above.
+        # admits aeson 2.3. hackageNoCheck above skips their upstream suites.
         advisoryOverlay = hself: hsuper:
-          let
-            fromHackage = pkg: ver: sha256:
-              hlib.dontCheck (hself.callHackageDirect { inherit pkg ver sha256; } { });
+          let fromHackage = hackageNoCheck hself;
           in {
             aeson = fromHackage "aeson" "2.3.0.0"
               "sha256-nIUIE+wLCHTxhiKimKb1v8iTFxpQrzgyF8yY+27BrXY=";
@@ -232,6 +180,9 @@
             # cborg's library has no aeson dependency. Only its test suite caps
             # aeson <2.3, so dropping the suite drops the conflict.
             cborg = hlib.dontCheck hsuper.cborg;
+            # ecluse-test-support links hspec-wai, and this set rebuilds it from
+            # source. Its suite is not ours to run, as hackageNoCheck says above.
+            hspec-wai = hlib.dontCheck hsuper.hspec-wai;
             # No insert-ordered-containers or openapi3 release or revision admits
             # aeson 2.3 yet. They compile against it, as this build and the suites
             # prove, so strip the stale caps until upstream widens.

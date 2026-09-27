@@ -46,8 +46,9 @@ jobs:
           determinate: false
           diagnostic-endpoint: ""
 
+      # Output silence triggers process, memory and disk snapshots (docs/testing.md).
       - name: Build image
-        run: nix develop .#ci --command task docker-build
+        run: bash scripts/ci-build-diagnostics.sh nix develop .#ci --command task docker-build
 
       # Dereference the ./result symlink (it points into /nix/store) so the
       # uploaded artifact carries the archive's bytes, not a dangling link.
