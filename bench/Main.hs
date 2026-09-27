@@ -10,6 +10,7 @@ module Main (main) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Bench.Corpus (benchEvalContext, syntheticInput)
+import Ecluse.Core.AdvisoryRulesBench qualified as AdvisoryRulesBench
 import Ecluse.Core.CacheBench qualified as CacheBench
 import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.Ecosystem (ecosystemName)
@@ -37,12 +38,13 @@ main = do
     ecosystems <- ecosystemBenches
     cacheBenchmarks <- CacheBench.benchmarks
     ColdReadBench.withBenchmarks ecosystems $ \coldReads ->
-        defaultMain
-            [ bgroup
-                "ecluse-core (work-per-request)"
-                (map ecosystemGroup ecosystems <> coldReads <> [StreamBench.benchmarks, cacheBenchmarks])
-            , testGroup "synthetic generators" (map generatorTests ecosystems)
-            ]
+        AdvisoryRulesBench.withBenchmarks ecosystems $ \advisoryRules ->
+            defaultMain
+                [ bgroup
+                    "ecluse-core (work-per-request)"
+                    (map ecosystemGroup ecosystems <> coldReads <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
+                , testGroup "synthetic generators" (map generatorTests ecosystems)
+                ]
 
 ecosystemGroup :: EcosystemBench -> TestTree
 ecosystemGroup ecosystem =

@@ -37,7 +37,7 @@ import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (Pi
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (..), prepare)
+import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
@@ -72,7 +72,7 @@ import Ecluse.Test.Port (
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
-import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, inertRuleDeps, isAllow, isDeny, isNoDecision)
+import Ecluse.Test.Rules (atDefaultPrecedence, evalRule, isAllow, isDeny, isNoDecision, slotRuleDeps)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
@@ -229,7 +229,7 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
 
     it "removes withdrawn evidence while retaining independent denies, fixes, and deletion guards" $
         withSyncEnv $ \_ slot envWith -> do
-            let deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+            let deps = slotRuleDeps slot
                 cvss = DenyIfCve (DenyIfCveParams 5 FailDeny)
                 epss = DenyIfEpss (DenyIfEpssParams 0.25 FailDeny)
             ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (currentAdvisoryEtag slot)
@@ -334,7 +334,7 @@ unavailableEnrichmentSpec = describe "an artifact published with unavailable EPS
     it "gives a consumer without EPSS rules the new advisory and its fix" $
         withSyncEnv $ \dir slot envWith -> do
             (qualified, unavailable) <- corpusGenerations dir
-            let deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+            let deps = slotRuleDeps slot
                 deny = DenyIfCve (DenyIfCveParams 5 FailDeny)
                 verdictOn rule name version = do
                     ctx <- mkEvalContext (pure publishedAt) (currentAdvisoryEtag slot)

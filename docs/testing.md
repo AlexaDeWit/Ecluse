@@ -508,6 +508,36 @@ under [#1421](https://github.com/AlexaDeWit/Ecluse/issues/1421).
 Capture byte sizes alone do not establish an expansion ratio, and this corpus change does not
 recalibrate `expandWireBytes` or acceptance budgets.
 
+### Advisory rule rows
+
+The `rules with an advisory database (per package)` group shows what an advisory database adds to
+one request's rule phase. It measures the typescript, react, @types/node, and numpy captures, and
+reports time and RTS allocation per request like the other rows. Each iteration prepares the policy,
+decides every release, and builds the filter plan. A row fails when any version ends undecidable,
+because an unanswered read would measure an outage instead of a decision.
+
+| Row set | Advisory database | Policy |
+|---|---|---|
+| `shipped policy without a database` | None | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
+| `shipped policy over corpus advisories` | Captured advisories | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
+| `all advisory rules over corpus advisories` | Captured advisories | The shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
+| `all advisory rules over synthetic advisories` | Generated worst case | The same four rules, over typescript and numpy only |
+
+The captured advisories are the osv.dev records for the corpus packages, unchanged, under
+`bench/corpus/advisories/`, with the EPSS feed rows for their CVE aliases. The `advisories` entry
+in `bench/corpus/pins.json` pins the records by id and records their sources and capture times.
+The generated worst case gives typescript and numpy 200 advisories each. Each advisory spans a
+sixteenth of the package's releases and is fixed at a real release. The advisories alternate
+between a critical and a low CVSS vector, and their EPSS scores step from 0 to 0.95.
+
+Setup compiles both through `Ecluse.Core.Osv.Compile` over loopback HTTP, as Pilot does, and a slot
+serves each artifact, as a synced mount reads it. The repository holds no compiled artifact, so a
+schema change recompiles the fixtures on the next run. The run makes no external request.
+
+The worst-case rows run one iteration each, because one request can take tens of seconds. Their
+reports carry no spread estimate. Allocation varies little between runs, so one iteration still
+gives their allocation per request.
+
 ### Request patterns
 
 The finite replay families run once per captured identity sequence, with a new proxy and empty
@@ -626,8 +656,9 @@ Smoke coverage never replaces a gating case.
 
 ## OSV advisory fixtures
 
-Advisory-shaped test data has one source of truth: the committed OSV JSON under `test/fixtures/osv/`
-(`v1/`, plus the `v2/` delta). A suite derives everything it consumes from those files at test time.
+Advisory-shaped test data comes from committed OSV JSON. The suites read `test/fixtures/osv/`
+(`v1/`, plus the `v2/` delta), and the benchmarks read `bench/corpus/advisories/`
+([Advisory rule rows](#advisory-rule-rows)). A suite derives everything it consumes from those files at test time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline

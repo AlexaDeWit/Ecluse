@@ -9,6 +9,7 @@ module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
     inertRuleDeps,
     servingRuleDeps,
+    slotRuleDeps,
 
     -- * Precedence pairing
     atDefaultPrecedence,
@@ -50,6 +51,7 @@ module Ecluse.Test.Rules (
 
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveLookup)
+import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, withSlotGeneration)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (
     CodeExecSignal (RunsCodeOnInstall),
@@ -102,6 +104,10 @@ inertRuleDeps =
 -- | 'inertRuleDeps' with a database configured and the given generation serving.
 servingRuleDeps :: DbEtag -> CveLookup -> RuleDeps
 servingRuleDeps etag cve = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use (Just (etag, cve)))}
+
+-- | 'inertRuleDeps' reading whichever generation the slot serves, as a synced mount does.
+slotRuleDeps :: CveSlot -> RuleDeps
+slotRuleDeps slot = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
 
 {- | Pair a rule with its type's 'defaultPrecedence'. The live policy instead assigns each rule its
 configured precedence ("Ecluse.Config.Rule").

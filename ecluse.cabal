@@ -19,6 +19,9 @@ build-type:    Simple
 -- fixtures with `task gen-version-fixtures` and pinned captures with `task gen-bench-corpus`.
 extra-source-files:
   acceptance/criteria.json
+  bench/corpus/advisories/epss.csv
+  bench/corpus/advisories/npm/*.json
+  bench/corpus/advisories/pypi/*.json
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
   bench/corpus/pins.json
@@ -633,6 +636,7 @@ library ecluse-test-support
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
+    Ecluse.Test.Corpus.Advisories
     Ecluse.Test.Corpus.Npm
     Ecluse.Test.Corpus.PyPI
     Ecluse.Test.Credential
@@ -720,6 +724,8 @@ library ecluse-test-support
     , wai-extra         ^>=3.1
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
+    -- The advisory fixtures serve their EPSS feeds gzipped, as the publisher does.
+    , zlib              ^>=0.7
 
 -- Internal runtime-test-support library shared by suites that depend on the runtime tier.
 library ecluse-runtime-test-support
@@ -1398,6 +1404,7 @@ benchmark ecluse-bench
   other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
+    Ecluse.Core.AdvisoryRulesBench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
     Ecluse.Core.MergeBench
@@ -1416,14 +1423,17 @@ benchmark ecluse-bench
     , aeson            >=2.2 && <2.4
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , filepath         ^>=1.4 || ^>=1.5
     , http-client      ^>=0.7
     , http-types       ^>=0.12
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
     , tasty-bench-fit  ^>=0.1
     , tasty-hunit      ^>=0.10
+    , temporary        ^>=1.3
     , text             ^>=2.1
     , time             ^>=1.12
+    , unliftio         ^>=0.2.25
     , wai              ^>=3.2
     , warp             ^>=3.4
 
