@@ -5,14 +5,14 @@
 {- | The progress watchdog a registry transfer runs under. It counts the request-body bytes
 handed to the connection and the response-body bytes read from it, and the time spent blocked on
 the upstream in either direction. A transfer that waits a whole 'ProgressFloor' window without
-moving the floor's bytes gets 'BelowProgressFloor' raised in its thread. The consumer's own work
-between reads, and the wait for the status line and headers, never count.
+moving the floor's bytes is stopped. The consumer's own work between reads, and the wait for the
+status line and headers, never count.
 -}
 module Ecluse.Core.Registry.Progress (
     -- * The watchdog
     Watch,
     watched,
-    BelowProgressFloor (..),
+    watchedRaising,
 
     -- * Metered transfers
     meteredReader,
@@ -25,7 +25,7 @@ import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import GHC.Clock (getMonotonicTimeNSec)
 import Network.HTTP.Client (BodyReader, GivesPopper, Popper, RequestBody (..))
-import UnliftIO (withAsync)
+import UnliftIO (try, withAsync)
 import UnliftIO.Concurrent (ThreadId, myThreadId, threadDelay)
 
 import Ecluse.Core.Security (ProgressFloor, floorMinBytes, floorWindowMicros)
@@ -36,35 +36,50 @@ data Watch = Watch ProgressFloor (IORef Window)
 -- When the current wait on the upstream began, the nanoseconds waited before it, and the bytes moved.
 data Window = Window (Maybe Word64) Word64 Int
 
-{- | Raised in a transfer's thread when it waits a whole window without moving the floor's bytes.
-It is thrown as a synchronous failure of the transfer, as a socket error would be.
--}
+-- Raised in a transfer's thread as a synchronous failure of the transfer, as a socket error would be.
 data BelowProgressFloor = BelowProgressFloor
-    deriving stock (Eq, Show)
+    deriving stock (Show)
 
 instance Exception BelowProgressFloor
 
-{- | Run a transfer under a watchdog that raises 'BelowProgressFloor' in the calling thread. The
-watchdog ends with the transfer, so the raise can only land inside it.
+{- | Run a transfer under the watchdog. 'Nothing' means the transfer fell below the floor and was
+stopped. The catch sits outside the watchdog's lifetime, so a raise can never land after it.
 -}
-watched :: ProgressFloor -> (Watch -> IO a) -> IO a
-watched progress transfer = do
+watched :: ProgressFloor -> (Watch -> IO a) -> IO (Maybe a)
+watched progress transfer =
+    try (watchedRaising progress transfer) <&> \case
+        Left BelowProgressFloor -> Nothing
+        Right result -> Just result
+
+{- | 'watched' for a transfer already committed to a client, which a floor miss can only abort. The
+failure propagates as an exception, so the response tears down instead of ending cleanly.
+-}
+watchedRaising :: ProgressFloor -> (Watch -> IO a) -> IO a
+watchedRaising progress transfer = do
     owner <- myThreadId
     watch <- Watch progress <$> newIORef (Window Nothing 0 0)
     withAsync (watchdog watch owner) (\_ -> transfer watch)
 
-{- Base 'throwTo' delivers the plain exception, which the transfer's own @try@ catches. UnliftIO's
-would wrap it as asynchronous, and no synchronous handler would see it. -}
+{- Base 'throwTo' delivers the plain exception, which the synchronous catch in 'watched' sees.
+UnliftIO's would wrap it as asynchronous. -}
 watchdog :: Watch -> ThreadId -> IO ()
 watchdog (Watch progress window) owner = go
   where
     budget = fromIntegral (floorWindowMicros progress) * 1_000
     go = do
         now <- getMonotonicTimeNSec
-        spent <- waitedBy now <$> readIORef window
+        current <- readIORef window
+        let spent = waitedBy now current
         if spent >= budget
             then throwTo owner BelowProgressFloor
-            else threadDelay (fromIntegral ((budget - spent) `div` 1_000) + 1) >> go
+            else threadDelay (fromIntegral (pause budget spent current `div` 1_000) + 1) >> go
+
+{- With a wait open the watchdog wakes as its budget runs out. With none open the waited time cannot
+grow, so it sleeps at least a sixteenth of the window instead of spinning on a near-spent budget. -}
+pause :: Word64 -> Word64 -> Window -> Word64
+pause budget spent = \case
+    Window (Just _) _ _ -> budget - spent
+    Window Nothing _ _ -> max (budget `div` 16) (budget - spent)
 
 -- | A reader whose every read counts as a wait on the upstream, and its chunk as progress.
 meteredReader :: Watch -> BodyReader -> BodyReader

@@ -53,7 +53,7 @@ import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (StreamingBody)
 import UnliftIO.Exception (finally, mask, tryAny)
 
-import Ecluse.Core.Registry.Progress (meteredReader, watched)
+import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 
@@ -116,7 +116,7 @@ withUpstreamWhen manager progress request body accept relay respond =
         upstreamStatus = responseStatus upstream
         bodiless = body == NoBody || isNotModified upstreamStatus
         pump write flush =
-            watched progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush)
+            watchedRaising progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush)
 
 {- | Pump a chunked body from a reader to a WAI stream sink in constant memory. An empty chunk
 is @http-client@'s 'BodyReader' end-of-body terminator, and the pump never writes it.

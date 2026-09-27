@@ -22,7 +22,7 @@ import UnliftIO.Async (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfCause))
+import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Exchange (boundedExchange, digestingRead, singleAttemptSettings, withSuccessBody, withinServeCap)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
@@ -100,6 +100,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
         -- 100 bytes every 50 ms: bytes keep arriving, at 2 KB a second against a 64 KiB floor.
         (outcome, elapsed) <- timedExchange id progress (pacedBody (replicate 400 (50_000, BS.replicate 100 0x61)))
         timeoutCause outcome `shouldBe` Just TransportTimeout
+        faultDetail outcome `shouldBe` Just "the exchange moved fewer than 65536 body bytes, counting both directions together, in a 1-second progress window"
         elapsed `shouldSatisfy` between 1 10
 
     it "completes a healthy body above the floor that takes several windows, byte for byte" $ do
@@ -120,6 +121,7 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
         progress <- floorOf 2 1 1000
         (outcome, elapsed) <- timedExchange (withinServeCap progress id) progress (pacedBody (steadyBody 80))
         timeoutCause outcome `shouldBe` Just TransportTimeout
+        faultDetail outcome `shouldBe` Just "the upstream exchange outlived its 2-second serve-path cap"
         elapsed `shouldSatisfy` between 2 8
 
     it "fails an upload the target stops reading within about one window, with no cap" $ do
@@ -153,7 +155,8 @@ floorSpec = describe "the progress floor and the serve-path cap" $ do
             readIORef opened `shouldReturn` 2
 
     it "hands single-flight followers the leader's fault without waiting out the stall" $ do
-        progress <- floorOf 30 1 1024
+        -- A 3 s window leaves a slow runner time to join every follower before the leader fails.
+        progress <- floorOf 30 3 1024
         hits <- newIORef (0 :: Int)
         withStub (countingUpstream hits (pacedBody [(0, "{\"a\":"), (stallMicros, "1}")])) $ \manager url -> do
             flight <- newSingleFlightWithBackend Nothing :: IO (SingleFlight FetchFault Text ByteString)
@@ -219,4 +222,9 @@ timedExchange wrap progress application =
 timeoutCause :: Either FetchFault a -> Maybe TransportCause
 timeoutCause = \case
     Left (FetchTransport fault) -> Just (tfCause fault)
+    _ -> Nothing
+
+faultDetail :: Either FetchFault a -> Maybe Text
+faultDetail = \case
+    Left (FetchTransport fault) -> Just (tfDetail fault)
     _ -> Nothing

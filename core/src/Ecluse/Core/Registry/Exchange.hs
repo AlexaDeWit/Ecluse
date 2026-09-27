@@ -57,7 +57,7 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
-import Ecluse.Core.Registry.Progress (BelowProgressFloor (BelowProgressFloor), meteredReader, meteredUpload, watched)
+import Ecluse.Core.Registry.Progress (meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (
     BodyLimit,
     LimitError,
@@ -80,12 +80,12 @@ boundedExchange project manager progress limits request =
 
 runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchange manager progress request readResponse =
-    try (try (watched progress (\watch -> withResponse (metered watch) manager (readResponse . fmap (meteredReader watch)))))
+    watched progress (\watch -> try (withResponse (metered watch) manager (readResponse . fmap (meteredReader watch))))
         <&> \case
-            Left BelowProgressFloor -> Left (belowFloor progress)
-            Right (Left httpErr) -> Left (FetchTransport (classifyTransport httpErr))
-            Right (Right (Left limitErr)) -> Left (FetchBoundExceeded limitErr)
-            Right (Right (Right projected)) -> Right projected
+            Nothing -> Left (belowFloor progress)
+            Just (Left httpErr) -> Left (FetchTransport (classifyTransport httpErr))
+            Just (Right (Left limitErr)) -> Left (FetchBoundExceeded limitErr)
+            Just (Right (Right projected)) -> Right projected
   where
     metered watch = request{requestBody = meteredUpload watch (requestBody request)}
 
@@ -103,12 +103,15 @@ belowFloor progress =
     FetchTransport . transportFault TransportTimeout $
         "the exchange moved fewer than "
             <> show (floorMinBytes progress)
-            <> " body bytes in either direction in a "
+            <> " body bytes, counting both directions together, in a "
             <> seconds (floorWindowMicros progress)
             <> "-second progress window"
 
+-- Whole seconds as an operator wrote them, and a fraction only where one exists.
 seconds :: Int -> Text
-seconds micros = show (fromIntegral micros / 1_000_000 :: Double)
+seconds micros = case micros `divMod` 1_000_000 of
+    (whole, 0) -> show whole
+    _ -> show (fromIntegral micros / 1_000_000 :: Double)
 
 -- | Preserve explicit auth refusals without reading their untrusted error bodies.
 boundedFetch :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
