@@ -4,12 +4,13 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 {- | How a measured proxy ended, and the invariants that fail a load run. Throughput and latency
-stay informational. A scenario with no successful response, a kernel OOM kill, or a heap overflow
-is a broken run whatever the other figures say.
+stay informational. A load with no successful response, or a proxy that did not end in the clean
+shutdown the harness asked for, is a broken run whatever the other figures say.
 -}
 module Ecluse.BenchLoad.Verdict (
     ProxyEnding (..),
     classifyEnding,
+    describeEnding,
     RunEvidence (..),
     runViolations,
 ) where
@@ -50,14 +51,26 @@ classifyEnding status stderrText oomKills harnessKilled
     -- 251 is the RTS's own exit status when it reports the heap exhausted.
     heapOverflowReported = "heap overflow" `T.isInfixOf` lowered || "heap exhausted" `T.isInfixOf` lowered || status == 251
 
+-- | A proxy ending as report text.
+describeEnding :: ProxyEnding -> Text
+describeEnding = \case
+    CleanShutdown -> "clean shutdown"
+    HeapOverflow -> "heap overflow"
+    KernelOomKill -> "kernel OOM kill"
+    StoppedByHarness -> "killed after the drain grace"
+    ExitedWith code -> "exited " <> show code
+    KilledBySignal signal -> "killed by signal " <> show signal
+
 -- | What one scenario run shows about the invariants.
 data RunEvidence = RunEvidence
     { reScenario :: Text
     , reSuccesses :: [(Text, Int)]
-    -- ^ Successful responses per load the scenario drove, labelled for the failure message.
+    -- ^ Successful responses per load or ramp step, labelled for the failure message.
     , reOomKills :: Int
     , reEnding :: Maybe ProxyEnding
     -- ^ 'Nothing' for a scenario that runs in the harness process.
+    , reExitedEarly :: Bool
+    -- ^ The proxy had exited before the harness asked it to stop.
     }
     deriving stock (Eq, Show)
 
@@ -69,7 +82,15 @@ runViolations evidence =
     , count <= 0
     ]
         <> [scenario <> ": the kernel OOM-killed the proxy (" <> show (reOomKills evidence) <> " oom_kill events)" | reOomKills evidence > 0]
-        <> [scenario <> ": the proxy exited on heap overflow" | reEnding evidence == Just HeapOverflow]
+        <> endingViolations
+        <> [scenario <> ": the proxy exited before the harness stopped it" | reExitedEarly evidence]
   where
+    -- The OOM kill already has its own line from the cgroup's count.
+    endingViolations = case reEnding evidence of
+        Just HeapOverflow -> [scenario <> ": the proxy exited on heap overflow"]
+        Just ending
+            | ending `notElem` [CleanShutdown, KernelOomKill] ->
+                [scenario <> ": the proxy did not shut down cleanly (" <> describeEnding ending <> ")"]
+        _ -> []
     scenario = reScenario evidence
     labelled label = if T.null label then "" else " (" <> label <> ")"

@@ -12,7 +12,6 @@ module Ecluse.BenchLoad.Pod (
     PodShape (..),
     parsePodShape,
     renderPodShape,
-    defaultPodShapes,
     cpuMaxValue,
 
     -- * Cgroup readings
@@ -62,16 +61,6 @@ renderPodShape = \case
     mib = 1024 * 1024
     gib = 1024 * mib
 
--- | The shapes a scheduled run measures: the documented pod sizes and the unlimited control.
-defaultPodShapes :: [PodShape]
-defaultPodShapes =
-    [ Unlimited
-    , Limited 2 (256 * 1024 * 1024)
-    , Limited 2 (512 * 1024 * 1024)
-    , Limited 4 (1024 * 1024 * 1024)
-    , Limited 4 (2 * 1024 * 1024 * 1024)
-    ]
-
 -- | The @cpu.max@ body granting whole cores over the kernel's default 100 ms period.
 cpuMaxValue :: Int -> Text
 cpuMaxValue cpus = show (cpus * 100_000) <> " 100000"
@@ -83,6 +72,8 @@ data CgroupReading = CgroupReading
     , crMemoryCurrent :: Maybe Int
     , crMemoryEvents :: Map Text Int
     -- ^ @memory.events@: @low@, @high@, @max@, @oom@, @oom_kill@.
+    , crMemoryStat :: Map Text Int
+    -- ^ @memory.stat@: @anon@, the memory an OOM kill follows, beside @file@, @kernel@, and @sock@.
     , crCpuStat :: Map Text Int
     -- ^ @cpu.stat@: @usage_usec@, @nr_throttled@, @throttled_usec@ and the rest.
     }

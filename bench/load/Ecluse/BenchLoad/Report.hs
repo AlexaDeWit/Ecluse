@@ -20,7 +20,7 @@ import Numeric (showFFloat)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (..), admittedListings, bootLimits)
 import Ecluse.BenchLoad.Exposition (GaugeSummary (..))
-import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..))
+import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
     BaselineSource,
@@ -33,8 +33,8 @@ import Ecluse.BenchLoad.Normalise (
  )
 import Ecluse.BenchLoad.PatternReport (renderReplayTotals)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), counter)
-import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), gcCpuShare, perSuccess)
-import Ecluse.BenchLoad.Verdict (ProxyEnding (..))
+import Ecluse.BenchLoad.RtsWindow (RtsSnapshot (..), RtsWindow (..), compactionThresholdCrossed, gcCpuShare, meanLiveAtMajors, perSuccess)
+import Ecluse.BenchLoad.Verdict (ProxyEnding (..), describeEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- | One ecosystem's loaded pass: the operating point, the at-a-glance table, and each scenario.
@@ -99,7 +99,7 @@ glanceRow r =
         <> T.intercalate
             " | "
             [ show (lsConnections load)
-            , show (lsSuccesses load)
+            , show (lsSuccesses load) <> (if null (srSteps r) then "" else " (last step)")
             , show (lsRefusals load)
             , show (lsTransportFailures load)
             , fmt1 (throughput load)
@@ -125,6 +125,7 @@ renderScenario r =
         <> maybe [] companionRows (srCompanion r)
         <> rtsRows r
         <> maybe [] proxyRows (srProxy r)
+        <> [row "memory.peak less RTS max memory in use" (maybe "n/a" signedMib (offHeapGap r)) | isJust (srProxy r)]
         <> [""]
         <> stepsTable (srSteps r)
         <> [maybe "" renderReplayTotals (srReplayTotals r), srEvidence r]
@@ -153,14 +154,17 @@ companionRows l =
 rtsRows :: ScenarioReport -> [Text]
 rtsRows r =
     [ row "RTS figures from" (srRtsSource r)
-    , row "allocation / successful request" (maybe "n/a" kib (allocPerSuccess r) <> " (" <> show (lsCompleted (srLoad r) + lsTransportFailures (srLoad r)) <> " attempts)")
-    , row "allocation / completed response" (maybe "n/a" kib (perAttempt r))
+    , row "allocation / successful request" (maybe "n/a" kib (allocPerSuccess r) <> " (" <> show (windowSuccesses r) <> " successes, " <> show (windowAttempts r) <> " attempts in the window)")
+    , row "allocation / attempt" (maybe "n/a" kib (perAttempt r))
     , row "GCs (total / major) / GC share of CPU / GC wall" (maybe "n/a" gcCell (srRtsWindow r))
+    , row "mean live data after the window's major collections" (maybe "n/a" (mib . round) (meanLiveAtMajors =<< srRtsWindow r))
     , row "RTS max live / max memory in use" (maybe "n/a" (\s -> mib (rsMaxLiveBytes s) <> " / " <> mib (rsMaxMemInUseBytes s)) (srRtsEnd r))
     , row "heap ceiling (-M) / capabilities / allocation area" (maybe "n/a" postureCell (posture r))
+    , row "compaction threshold crossed (inferred from the maxima)" (maybe "n/a" compactionCell (srRtsEnd r))
     , row "retained after the run" (maybe "n/a" mib (srRetainedBytes r))
     ]
   where
+    compactionCell s = maybe "n/a (no heap ceiling)" (bool "no" "yes") (compactionThresholdCrossed s) <> " (-c " <> fmt1 (rsCompactThresholdPercent s) <> "% of -M)"
     gcCell w = show (rwGcs w) <> " / " <> show (rwMajorGcs w) <> " / " <> maybe "n/a" pct (gcCpuShare w) <> " / " <> fmt1 (fromIntegral (rwGcElapsedNs w) / 1_000_000) <> " ms"
     postureCell s = maybe "none" (mib . fromIntegral) (rsMaxHeapBytes s) <> " / " <> show (rsCapabilities s) <> " / " <> mib (fromIntegral (rsAllocAreaBytes s))
 
@@ -168,6 +172,7 @@ proxyRows :: ProxyFigures -> [Text]
 proxyRows p =
     [ row "idle floor: live after a major GC / RTS memory in use / cgroup memory.current" idleCell
     , row "cgroup memory.peak / memory.max" (maybe "no cgroup" (\c -> maybe "n/a" (mib . fromIntegral) (crMemoryPeak c) <> " / " <> maybe "max" (mib . fromIntegral) (crMemoryMax c)) cgroup)
+    , row "memory.stat at the window's end: anon / file / kernel / sock" (maybe "no cgroup" statCell (pfWindowCgroup p))
     , row "memory.events oom_kill / oom / max / high" (maybe "no cgroup" eventsCell cgroup)
     , row "CPU throttled during the window" (maybe "n/a" (\us -> fmt1 (fromIntegral us / 1_000) <> " ms") (pfWindowThrottledUsec p))
     , row "proxy ending" (endingCell (pfEnding p) <> if pfExitedEarly p then ", before the harness stopped it" else "")
@@ -184,6 +189,7 @@ proxyRows p =
             <> " / "
             <> maybe "n/a" (mib . fromIntegral) (pfIdleCgroupBytes p)
     eventsCell c = T.intercalate " / " [show (counter key (crMemoryEvents c)) | key <- ["oom_kill", "oom", "max", "high"]]
+    statCell c = T.intercalate " / " [mib (fromIntegral (counter key (crMemoryStat c))) | key <- ["anon", "file", "kernel", "sock"]]
     g = pfInFlight p
     inFlightCell =
         T.intercalate " / " (map (maybe "n/a" fmt1) [gsMax g, gsMean g, gsLast g])
@@ -229,8 +235,9 @@ readingNotes =
     [ "### Reading the numbers"
     , ""
     , "- **Successes are the primary figure.** A 2xx or 3xx response is a success. A `503` shed or a `429` is a refusal: a client retries it at once, so refusal counts measure retry speed, not demand."
-    , "- **The run fails** when a scenario has no successful response, when the kernel OOM-kills a proxy, or when a proxy exits on heap overflow. Throughput, latency, and memory have no threshold and never fail it."
-    , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by successful requests. The stub upstreams and the load generator run outside it."
+    , "- **The run fails** when a scenario or a ramp step has no successful response, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow or ends any other way than the clean shutdown the harness asks for, or when it exits early. Throughput, latency, and memory have no threshold and never fail it."
+    , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
+    , "- **The proxy's cgroup is not charged for the harness's pages.** Its logs go through pipes the harness drains to disk, and the executable's text pages were first faulted in by the harness, which runs the same binary."
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves."
     , "- **memory.peak** is the kernel's high-water mark for the proxy's cgroup. **RTS max memory in use** is what the heap held, the figure `-M` is compared with. The gap is off-heap and kernel memory."
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
@@ -257,7 +264,9 @@ renderLoadSaturation c1Reports loadedReports =
             (pP50Ms . lsLatency . srLoad =<< Map.lookup (srName loaded) c1ByName)
             (pP50Ms (lsLatency (srLoad loaded)))
 
--- | The GC-thrash probe: one scenario at each memory limit, highest first.
+{- | The GC-thrash probe: one scenario at each memory limit, highest first. Reclaim per major
+collection is absent: GHC.Stats records no promotion or pre-collection size to derive it from.
+-}
 renderThrash :: Text -> [(Text, Either Text ScenarioReport)] -> Text
 renderThrash scenarioKey steps =
     T.unlines $
@@ -265,12 +274,12 @@ renderThrash scenarioKey steps =
         , ""
         , "The load stays fixed while the memory limit steps down. An OOM kill or a heap overflow here is the probe's reading, not a failed run."
         , ""
-        , "| pod shape | successes | success p99 | GC share | major GCs | RTS max live | heap ceiling | memory peak / max | oom_kill | ending |"
-        , "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
+        , "| pod shape | successes | success p99 | GC share | major GCs | mean live after majors | RTS max live | heap ceiling | compaction crossed | memory peak / max | peak less RTS in use | oom_kill | ending |"
+        , "| --- | --: | --: | --: | --: | --: | --: | --: | --- | --: | --: | --: | --- |"
         ]
             <> map step steps
   where
-    step (shape, Left failure) = "| " <> shape <> " | the scenario did not run: " <> T.replace "\n" " " failure <> " | | | | | | | | |"
+    step (shape, Left failure) = "| " <> shape <> " | the scenario did not run: " <> T.replace "\n" " " failure <> " | | | | | | | | | | | |"
     step (shape, Right r) =
         "| "
             <> T.intercalate
@@ -280,9 +289,12 @@ renderThrash scenarioKey steps =
                 , msCell (pP99Ms (lsLatency (srLoad r)))
                 , maybe "n/a" pct (gcCpuShare =<< srRtsWindow r)
                 , maybe "n/a" (show . rwMajorGcs) (srRtsWindow r)
+                , maybe "n/a" (mib . round) (meanLiveAtMajors =<< srRtsWindow r)
                 , maybe "n/a" (mib . rsMaxLiveBytes) (srRtsEnd r)
                 , maybe "n/a" (maybe "none" (mib . fromIntegral) . rsMaxHeapBytes) (posture r)
+                , maybe "n/a" (maybe "n/a" (bool "no" "yes") . compactionThresholdCrossed) (srRtsEnd r)
                 , memoryCell r
+                , maybe "n/a" signedMib (offHeapGap r)
                 , maybe "n/a" (show . counter "oom_kill" . crMemoryEvents) (pfCgroup =<< srProxy r)
                 , maybe "n/a" (endingCell . pfEnding) (srProxy r)
                 ]
@@ -297,6 +309,14 @@ renderVerdict violations =
                 [] -> ["Every scenario had successful responses, and no proxy was OOM-killed or exited on heap overflow."]
                 _ -> "**The run fails:**" : "" : map ("- " <>) violations
 
+-- memory.peak less the RTS's own high-water mark: off-heap and kernel memory, and the overshoot
+-- between collections.
+offHeapGap :: ScenarioReport -> Maybe Int
+offHeapGap r = do
+    peak <- crMemoryPeak =<< pfCgroup =<< srProxy r
+    inUse <- rsMaxMemInUseBytes <$> srRtsEnd r
+    pure (peak - fromIntegral inUse)
+
 -- The posture at the window's end, or at the idle floor when the proxy died before the window closed.
 posture :: ScenarioReport -> Maybe RtsSnapshot
 posture r = srRtsEnd r <|> (pfIdleRts =<< srProxy r)
@@ -307,23 +327,19 @@ memoryCell r = case pfCgroup =<< srProxy r of
     Just c -> maybe "n/a" (mib . fromIntegral) (crMemoryPeak c) <> " / " <> maybe "max" (mib . fromIntegral) (crMemoryMax c)
 
 endingCell :: ProxyEnding -> Text
-endingCell = \case
-    CleanShutdown -> "clean shutdown"
-    HeapOverflow -> "**heap overflow**"
-    KernelOomKill -> "**kernel OOM kill**"
-    StoppedByHarness -> "killed after the drain grace"
-    ExitedWith code -> "exited " <> show code
-    KilledBySignal signal -> "killed by signal " <> show signal
+endingCell ending
+    | ending == CleanShutdown = describeEnding ending
+    | otherwise = "**" <> describeEnding ending <> "**"
 
 allocPerSuccess :: ScenarioReport -> Maybe Double
 allocPerSuccess r = do
     w <- srRtsWindow r
-    perSuccess (fromIntegral (rwAllocatedBytes w)) (lsSuccesses (srLoad r))
+    perSuccess (fromIntegral (rwAllocatedBytes w)) (windowSuccesses r)
 
 perAttempt :: ScenarioReport -> Maybe Double
 perAttempt r = do
     w <- srRtsWindow r
-    perSuccess (fromIntegral (rwAllocatedBytes w)) (lsCompleted (srLoad r))
+    perSuccess (fromIntegral (rwAllocatedBytes w)) (windowAttempts r)
 
 throughput :: LoadSummary -> Double
 throughput l = if lsElapsedSeconds l > 0 then fromIntegral (lsSuccesses l) / lsElapsedSeconds l else 0
@@ -344,7 +360,10 @@ kib :: Double -> Text
 kib bytes = fmt1 (bytes / 1024) <> " KiB"
 
 mib :: Word64 -> Text
-mib bytes = fmt1 (fromIntegral bytes / (1024 * 1024)) <> " MiB"
+mib = signedMib . fromIntegral
+
+signedMib :: Int -> Text
+signedMib bytes = fmt1 (fromIntegral bytes / (1024 * 1024)) <> " MiB"
 
 fmt1, fmt2 :: Double -> Text
 fmt1 x = toText (showFFloat (Just 1) x "")

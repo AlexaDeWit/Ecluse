@@ -5,7 +5,8 @@
 {- | Start, observe, and stop the proxy process a scenario measures. The proxy is this executable
 under 'serveProxyFlag', configured through @ECLUSE_*@ variables as a deployment would be. Under a
 pod shape it runs in its own child of the cgroup named by @BENCH_LOAD_CGROUP@, so the limit bounds
-it alone, and that cgroup outlives the process, so an OOM kill stays readable after it.
+it alone. The cgroup outlives the process, so an OOM kill stays readable after it. The proxy logs
+into pipes the harness drains, so log pages are charged to the harness, not to the limit.
 -}
 module Ecluse.BenchLoad.ProxyProcess (
     -- * Configuration
@@ -14,6 +15,7 @@ module Ecluse.BenchLoad.ProxyProcess (
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
+    sweepProxyCgroups,
 
     -- * A running proxy
     ProxyProcess,
@@ -53,18 +55,20 @@ import Network.HTTP.Client (
     responseTimeoutMicro,
  )
 import Network.HTTP.Types (statusCode)
-import System.Directory (createDirectory, doesFileExist, removeDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectory)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.FilePath ((</>))
-import System.IO (SeekMode (SeekFromEnd), hClose, hFileSize, hSeek, openBinaryFile)
-import System.IO.Error (isDoesNotExistError)
+import System.IO (SeekMode (SeekFromEnd), hFileSize, hSeek)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Process (getPid, terminateProcess)
 import System.Process.Typed (
     ExitCode (ExitFailure, ExitSuccess),
     Process,
+    createPipe,
     getExitCode,
+    getStderr,
+    getStdout,
     nullStream,
     proc,
     setEnv,
@@ -74,10 +78,10 @@ import System.Process.Typed (
     startProcess,
     stopProcess,
     unsafeProcessHandle,
-    useHandleOpen,
     waitExitCode,
  )
-import UnliftIO (bracket, onException, timeout, try, tryIO, tryJust)
+import UnliftIO (bracket, onException, timeout, try, tryIO)
+import UnliftIO.Async (Async, async, cancel, waitCatch)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.BootLines (bootMessages)
@@ -87,7 +91,7 @@ import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), 
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Rts (parseMemoryMax)
+import Ecluse.Rts (parseMemoryMax, readIfExists)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
 
@@ -127,7 +131,9 @@ data ProxyProcess = ProxyProcess
     { ppPort :: Int
     , ppControlPort :: Int
     , ppScrapePort :: Int
-    , ppProcess :: Process () () ()
+    , ppProcess :: Process () Handle Handle
+    , ppDrains :: [Async ()]
+    , ppLogHead :: IORef ByteString
     , ppDirectory :: FilePath
     , ppCgroup :: Maybe FilePath
     , ppManager :: Manager
@@ -170,7 +176,7 @@ withProxyProcess settings publicPort privatePort body = do
     shape <- podShapeFromEnv
     root <- lookupEnv "BENCH_LOAD_CGROUP"
     withSystemTempDirectory "ecluse-bench-proxy" $ \dir ->
-        bracket (acquireCgroup shape root) (traverse_ releaseCgroup) $ \cgroup ->
+        bracket (acquireCgroup shape root) (traverse_ retireCgroup) $ \cgroup ->
             bracket (launch settings shape dir cgroup publicPort privatePort) (void . stopProxy) body
 
 acquireCgroup :: PodShape -> Maybe FilePath -> IO (Maybe FilePath)
@@ -191,11 +197,25 @@ acquireCgroup shape root = case (shape, root) of
                 writeFileText (dir </> "cpu.max") (cpuMaxValue cpus)
         pure (Just dir)
 
-releaseCgroup :: FilePath -> IO ()
-releaseCgroup dir =
+-- Kill anything left in the cgroup, wait for it to empty, and remove it.
+retireCgroup :: FilePath -> IO ()
+retireCgroup dir = do
+    killable <- doesFileExist (dir </> "cgroup.kill")
+    when killable (void (tryIO (writeFileText (dir </> "cgroup.kill") "1")))
+    void (pollUntil 50 100_000 (maybe True (T.null . T.strip)) (readIfExists (dir </> "cgroup.procs")))
     tryIO (removeDirectory dir) >>= \case
         Right () -> pass
         Left err -> TIO.hPutStrLn stderr ("bench-load: could not remove the proxy cgroup " <> toText dir <> ": " <> show err)
+
+-- | Retire every proxy cgroup a killed harness left under @BENCH_LOAD_CGROUP@.
+sweepProxyCgroups :: IO ()
+sweepProxyCgroups =
+    lookupEnv "BENCH_LOAD_CGROUP" >>= traverse_ sweep
+  where
+    sweep base = do
+        present <- doesDirectoryExist base
+        entries <- if present then listDirectory base else pure []
+        traverse_ (retireCgroup . (base </>)) (filter ("proxy-" `isPrefixOf`) entries)
 
 launch :: ProxySettings -> PodShape -> FilePath -> Maybe FilePath -> Int -> Maybe Int -> IO ProxyProcess
 launch settings shape dir cgroup publicPort privatePort = do
@@ -203,18 +223,18 @@ launch settings shape dir cgroup publicPort privatePort = do
     self <- getExecutablePath
     cores <- getNumCapabilities
     base <- getEnvironment
-    out <- openBinaryFile (dir </> "proxy.log") WriteMode
-    err <- openBinaryFile (dir </> "proxy.err") WriteMode
     let environment = proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) publicPort privatePort base
         command = case cgroup of
             Nothing -> proc self [serveProxyFlag]
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
             Just cg -> proc "/bin/sh" ["-c", "echo $$ > \"$0\" && exec \"$@\"", cg </> "cgroup.procs", self, serveProxyFlag]
-    process <- startProcess (setEnv environment (setStdin nullStream (setStdout (useHandleOpen out) (setStderr (useHandleOpen err) command))))
-    -- The child holds its own descriptors. GHC locks a file this process has open for writing
-    -- against its own readers, so the harness closes its copies before it reads the logs.
-    hClose out
-    hClose err
+    process <- startProcess (setEnv environment (setStdin nullStream (setStdout createPipe (setStderr createPipe command))))
+    logHead <- newIORef mempty
+    drains <-
+        sequence
+            [ async (drain (getStdout process) (dir </> "proxy.log") (Just logHead))
+            , async (drain (getStderr process) (dir </> "proxy.err") Nothing)
+            ]
     manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
     endVar <- newMVar Nothing
     let booting =
@@ -223,6 +243,8 @@ launch settings shape dir cgroup publicPort privatePort = do
                 , ppControlPort = controlPort
                 , ppScrapePort = scrapePort
                 , ppProcess = process
+                , ppDrains = drains
+                , ppLogHead = logHead
                 , ppDirectory = dir
                 , ppCgroup = cgroup
                 , ppManager = manager
@@ -233,7 +255,8 @@ launch settings shape dir cgroup publicPort privatePort = do
                 }
     (`onException` stopProxy booting) $ do
         awaitReady booting
-        bootLines <- bootMessages . BS8.lines <$> readHead (dir </> "proxy.log")
+        -- The boot logged its plan before it listened. Give the drain a moment to catch up.
+        bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines <$> readIORef logHead)
         idle <- proxySnapshot booting MajorCollection
         idleCgroup <- proxyCgroupNow booting
         pure booting{ppBootLines = bootLines, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
@@ -305,6 +328,7 @@ awaitReady proxy =
                 answered <- getOk proxy (ppPort proxy) "/readyz"
                 pure (if isJust answered then Ready else Booting)
     failBoot reason = do
+        whenJustM (getExitCode (ppProcess proxy)) (const (finishDrains proxy))
         errText <- tailOf (ppDirectory proxy </> "proxy.err") 4_096
         logText <- tailOf (ppDirectory proxy </> "proxy.log") 4_096
         benchFail ("bench-load: the proxy " <> reason <> "\nstderr:\n" <> errText <> "\nlog tail:\n" <> logText)
@@ -339,13 +363,11 @@ readCgroup dir = do
     peak <- bytesAt "memory.peak"
     current <- bytesAt "memory.current"
     events <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.events")
+    stat <- maybe mempty keyedCounters <$> readIfExists (dir </> "memory.stat")
     cpu <- maybe mempty keyedCounters <$> readIfExists (dir </> "cpu.stat")
-    pure (CgroupReading maxBytes peak current events cpu)
+    pure (CgroupReading maxBytes peak current events stat cpu)
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
-
-readIfExists :: FilePath -> IO (Maybe Text)
-readIfExists path = rightToMaybe <$> tryJust (guard . isDoesNotExistError) (decodeUtf8 <$> readFileBS path)
 
 {- | Stop the proxy and read how it ended. SIGTERM starts its graceful drain. A process still
 alive after thirty seconds is killed. The result is kept, so a second call returns it unchanged.
@@ -371,6 +393,7 @@ terminate proxy = do
                     getPid (unsafeProcessHandle process) >>= traverse_ (signalProcess sigKILL)
                     code <- waitExitCode process
                     pure (code, True)
+    finishDrains proxy
     -- The process has exited, so this only releases what typed-process holds for it.
     stopProcess process
     errText <- tailOf (ppDirectory proxy </> "proxy.err") 4_096
@@ -387,9 +410,23 @@ terminate proxy = do
             , peCgroup = reading
             }
 
--- The first mebibyte of a file: the boot lines precede any served request.
-readHead :: FilePath -> IO ByteString
-readHead path = withFile path ReadMode (`BS.hGetSome` 1_048_576)
+-- Copy a pipe into a file until the proxy closes it, keeping the first mebibyte when asked:
+-- the boot lines precede any served request.
+drain :: Handle -> FilePath -> Maybe (IORef ByteString) -> IO ()
+drain source path logHead = withFile path WriteMode copy
+  where
+    copy sink = do
+        chunk <- BS.hGetSome source 65_536
+        unless (BS.null chunk) $ do
+            BS.hPut sink chunk
+            for_ logHead $ \ref -> modifyIORef' ref (\held -> held <> BS.take (1_048_576 - BS.length held) chunk)
+            copy sink
+
+-- Wait for the drains to reach the end of the exited proxy's output, then stop any that hang.
+finishDrains :: ProxyProcess -> IO ()
+finishDrains proxy = for_ (ppDrains proxy) $ \worker -> do
+    finished <- timeout 10_000_000 (waitCatch worker)
+    when (isNothing finished) (cancel worker)
 
 -- The last bytes of a file as text, for a failure report.
 tailOf :: FilePath -> Integer -> IO Text

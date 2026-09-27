@@ -10,7 +10,6 @@ A run that cannot start, or whose report does not parse, fails the harness.
 module Ecluse.BenchLoad.Oha (
     OhaRun (..),
     RunLength (..),
-    ohaRun,
     OhaReport (..),
     runOha,
 ) where
@@ -39,10 +38,6 @@ data OhaRun = OhaRun
     -- ^ Record every request so the report carries successful-response latencies. A warm-up skips it.
     }
     deriving stock (Eq, Show)
-
--- | A duration-driven run over the given URLs that records success latencies.
-ohaRun :: Int -> Int -> [Text] -> OhaRun
-ohaRun connections seconds urls = OhaRun connections (ForSeconds seconds) [] urls True
 
 -- | What the harness reads from one run.
 data OhaReport = OhaReport

@@ -18,11 +18,10 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, pathInfo, queryString, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
-import System.Mem (performMajorGC, performMinorGC)
 import UnliftIO (race_)
 
-import Ecluse.BenchLoad.RtsProbe (readRtsSnapshot)
-import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), collectionName)
+import Ecluse.BenchLoad.RtsProbe (snapshotAfter)
+import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection, MinorCollection), collectionName)
 import Ecluse.Boot (BootEnv (beBootPlan, beLogEnv, beTelemetry), buildMirrorQueue, logBootWarning, orExit, refuseBoot, withBootEnv)
 import Ecluse.Composition (ResolveAdapter)
 import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
@@ -65,6 +64,7 @@ serveMeasured bootEnv = do
             (beBootPlan bootEnv)
     traverse_ (logBootWarning logEnv . renderAdvisory) advisories
     plan <- orExit renderBootErrors planned
+    -- Keep this arm in step with startPlannedRole in src/Ecluse.hs.
     case epRoleWiring plan of
         MirrorPipelineWiring mirror ->
             ShutdownRequested <$ withServiceRuntime bootEnv plan mirror (\runtime -> race_ (runProxy runtime) (serveControl controlPort))
@@ -109,9 +109,10 @@ serveControl port = Warp.runSettings (Warp.setHost "127.0.0.1" (Warp.setPort por
 control :: Application
 control request respond = case pathInfo request of
     ["rts"] -> do
-        if lookup "gc" (queryString request) == Just (Just (encodeUtf8 (collectionName MajorCollection)))
-            then performMajorGC
-            else performMinorGC
-        snapshot <- readRtsSnapshot
+        snapshot <-
+            snapshotAfter $
+                if lookup "gc" (queryString request) == Just (Just (encodeUtf8 (collectionName MajorCollection)))
+                    then MajorCollection
+                    else MinorCollection
         respond (responseLBS status200 [(hContentType, "application/json")] (encode snapshot))
     _ -> respond (responseLBS status404 [] "")

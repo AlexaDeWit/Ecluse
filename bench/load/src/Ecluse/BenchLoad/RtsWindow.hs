@@ -14,6 +14,8 @@ module Ecluse.BenchLoad.RtsWindow (
     RtsWindow (..),
     rtsWindow,
     gcCpuShare,
+    meanLiveAtMajors,
+    compactionThresholdCrossed,
     perSuccess,
 ) where
 
@@ -43,6 +45,9 @@ data RtsSnapshot = RtsSnapshot
     -- ^ Live data at the fullest major collection so far.
     , rsMaxMemInUseBytes :: Word64
     -- ^ Every megablock the RTS held at its fullest, the figure @-M@ is compared with.
+    , rsMaxLargeObjectsBytes :: Word64
+    , rsCumulativeLiveBytes :: Word64
+    -- ^ Live data summed over every major collection so far.
     , rsLiveBytes :: Word64
     -- ^ Live data after the latest collection, exact only when that collection was major.
     , rsMemInUseBytes :: Word64
@@ -50,6 +55,10 @@ data RtsSnapshot = RtsSnapshot
     , rsMaxHeapBytes :: Maybe Int
     -- ^ The @-M@ ceiling in force, 'Nothing' when unbounded.
     , rsAllocAreaBytes :: Int
+    , rsCompactAlways :: Bool
+    -- ^ The RTS compacts the oldest generation at every major collection (@-c@ with no threshold).
+    , rsCompactThresholdPercent :: Double
+    -- ^ The share of @-M@ the oldest generation passes before the RTS compacts it (@-c@, 30 by default).
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -62,6 +71,7 @@ data RtsWindow = RtsWindow
     , rwGcCpuNs :: Int64
     , rwCpuNs :: Int64
     , rwGcElapsedNs :: Int64
+    , rwCumulativeLiveBytes :: Word64
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -76,6 +86,7 @@ rtsWindow before after =
         , rwGcCpuNs = delta rsGcCpuNs
         , rwCpuNs = delta rsCpuNs
         , rwGcElapsedNs = delta rsGcElapsedNs
+        , rwCumulativeLiveBytes = delta rsCumulativeLiveBytes
         }
   where
     delta :: (Ord a, Num a) => (RtsSnapshot -> a) -> a
@@ -86,6 +97,23 @@ gcCpuShare :: RtsWindow -> Maybe Double
 gcCpuShare w
     | rwCpuNs w <= 0 = Nothing
     | otherwise = Just (fromIntegral (rwGcCpuNs w) / fromIntegral (rwCpuNs w))
+
+-- | The mean live data the window's major collections left, 'Nothing' when none ran.
+meanLiveAtMajors :: RtsWindow -> Maybe Double
+meanLiveAtMajors w
+    | rwMajorGcs w == 0 = Nothing
+    | otherwise = Just (fromIntegral (rwCumulativeLiveBytes w) / fromIntegral (rwMajorGcs w))
+
+{- | Whether the fullest small-object live data passed the compaction threshold, the point where
+every collection turns single-threaded. Inferred from the maxima. 'Nothing' without a heap ceiling.
+-}
+compactionThresholdCrossed :: RtsSnapshot -> Maybe Bool
+compactionThresholdCrossed s
+    | rsCompactAlways s = Just True
+    | otherwise = do
+        ceiling' <- rsMaxHeapBytes s
+        let smallObjects = fromIntegral (rsMaxLiveBytes s) - fromIntegral (rsMaxLargeObjectsBytes s) :: Double
+        pure (smallObjects > rsCompactThresholdPercent s / 100 * fromIntegral ceiling')
 
 -- | A window total divided by the successful requests, 'Nothing' when none succeeded.
 perSuccess :: Double -> Int -> Maybe Double

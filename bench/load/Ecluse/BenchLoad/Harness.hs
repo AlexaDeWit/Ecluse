@@ -30,6 +30,8 @@ module Ecluse.BenchLoad.Harness (
     ProxyFigures (..),
     runScenario,
     warmUp,
+    windowSuccesses,
+    windowAttempts,
     reportEvidence,
 ) where
 
@@ -39,7 +41,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
 import GHC.Stats (getRTSStatsEnabled)
-import System.Mem (performMajorGC, performMinorGC)
 import UnliftIO.Async (concurrently, withAsync)
 
 import Ecluse.BenchLoad.Error (benchFail)
@@ -62,7 +63,7 @@ import Ecluse.BenchLoad.ProxyProcess (
     stopProxy,
  )
 import Ecluse.BenchLoad.Replay (Replay (..), ReplayReport (..), runReplay)
-import Ecluse.BenchLoad.RtsProbe (readRtsSnapshot)
+import Ecluse.BenchLoad.RtsProbe (snapshotAfter)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection, MinorCollection), RtsSnapshot (rsLiveBytes), RtsWindow, rtsWindow)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown), RunEvidence (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -231,6 +232,8 @@ data ProxyFigures = ProxyFigures
     , pfIdleCgroupBytes :: Maybe Int
     , pfCgroup :: Maybe CgroupReading
     -- ^ Read after the proxy exited, so an OOM kill is counted.
+    , pfWindowCgroup :: Maybe CgroupReading
+    -- ^ Read as the window closed, while @memory.stat@ still shows what the proxy held.
     , pfWindowThrottledUsec :: Maybe Int
     -- ^ CPU time the quota withheld during the window.
     , pfEnding :: ProxyEnding
@@ -255,7 +258,7 @@ data ScenarioReport = ScenarioReport
     , srCompanion :: Maybe LoadSummary
     -- ^ The concurrent load a paired scenario ran beside the measured one.
     , srSteps :: [LoadSummary]
-    -- ^ One summary per ramp step.
+    -- ^ One summary per ramp step. 'srLoad' is then the last, highest step.
     , srReplayTotals :: Maybe ReplayTotals
     , srRtsSource :: Text
     -- ^ Which process the RTS figures describe: the proxy, or the harness for in-process work.
@@ -308,7 +311,7 @@ measure knobs s shape (Target proxy driver) = do
             , srRtsWindow = rtsWindow <$> before <*> after
             , srRtsEnd = after
             , srRetainedBytes = rsLiveBytes <$> retained
-            , srProxy = (\(p, end) -> proxyFigures p end (throttled cgroupBefore cgroupAfter) inFlight admission) <$> ends
+            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) inFlight admission) <$> ends
             , srEvidence = evidence
             }
   where
@@ -317,12 +320,13 @@ measure knobs s shape (Target proxy driver) = do
         stop <- b
         pure (counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start))
 
-proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe Int -> [Maybe Double] -> [Text] -> ProxyFigures
-proxyFigures proxy end throttledUsec inFlight admission =
+proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> [Maybe Double] -> [Text] -> ProxyFigures
+proxyFigures proxy end windowCgroup throttledUsec inFlight admission =
     ProxyFigures
         { pfIdleRts = proxyIdleRts proxy
         , pfIdleCgroupBytes = proxyIdleCgroupBytes proxy
         , pfCgroup = peCgroup end
+        , pfWindowCgroup = windowCgroup
         , pfWindowThrottledUsec = throttledUsec
         , pfEnding = peEnding end
         , pfExitedEarly = peExitedEarly end
@@ -336,11 +340,7 @@ proxyFigures proxy end throttledUsec inFlight admission =
 snapshotOf :: Maybe ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)
 snapshotOf proxy collection = case proxy of
     Just p -> proxySnapshot p collection
-    Nothing -> do
-        case collection of
-            MajorCollection -> performMajorGC
-            MinorCollection -> performMinorGC
-        Just <$> readRtsSnapshot
+    Nothing -> Just <$> snapshotAfter collection
 
 -- Wait up to a minute for the requests the warm-up abandoned at its deadline to leave admission,
 -- so they do not spend the window's capacity. A request that never leaves shows in the gauge.
@@ -399,9 +399,9 @@ drive knobs = \case
     DriveBurst count url -> alone . summariseOha "" count <$> runOha (OhaRun count (ForRequests count) [] [url] True)
     DriveRamp steps load -> do
         reports <- traverse (\c -> (c,) <$> runOha (timed c load)) steps
-        let merged = foldl' mergeReports (OhaReport 0 mempty mempty []) (map snd reports)
-            stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
-        pure (DriveOutcome (summariseOha "" (foldl' max 0 steps) merged) Nothing stepSummaries Nothing)
+        let stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
+            highest = fromMaybe (summariseOha "" 0 (OhaReport 0 mempty mempty [])) (listToMaybe (reverse stepSummaries))
+        pure (DriveOutcome highest Nothing stepSummaries Nothing)
     DriveUnder measured beside -> do
         (m, b) <- concurrently (runOha (timed connections measured)) (runOha (timed connections beside))
         pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseOha "concurrent load" connections b)) [] Nothing)
@@ -421,15 +421,6 @@ drive knobs = \case
     connections = lkConcurrency knobs
     timed c load = OhaRun c (ForSeconds (lkDurationSeconds knobs)) (loadHeaders load) (loadUrls load) True
     alone summary = DriveOutcome summary Nothing [] Nothing
-
-mergeReports :: OhaReport -> OhaReport -> OhaReport
-mergeReports a b =
-    OhaReport
-        { ohaElapsedSeconds = ohaElapsedSeconds a + ohaElapsedSeconds b
-        , ohaStatusCounts = Map.unionWith (+) (ohaStatusCounts a) (ohaStatusCounts b)
-        , ohaErrorCounts = Map.unionWith (+) (ohaErrorCounts a) (ohaErrorCounts b)
-        , ohaSuccessLatencies = ohaSuccessLatencies a <> ohaSuccessLatencies b
-        }
 
 summariseOha :: Text -> Int -> OhaReport -> LoadSummary
 summariseOha label connections report =
@@ -470,12 +461,27 @@ distributionNote report =
         | otherwise = ["errors " <> renderCounts (ohaErrorCounts report)]
     renderCounts m = T.intercalate ", " [k <> "×" <> show v | (k, v) <- Map.toList m]
 
--- | The invariant evidence one report carries: its successes, its OOM kills, and its ending.
+-- Every load the RTS window spans: each ramp step, or the measured load and its companion.
+windowLoads :: ScenarioReport -> [LoadSummary]
+windowLoads r = case srSteps r of
+    [] -> srLoad r : maybeToList (srCompanion r)
+    steps -> steps
+
+-- | Successful responses across every load the RTS window spans, the divisor for its totals.
+windowSuccesses :: ScenarioReport -> Int
+windowSuccesses = sum . map lsSuccesses . windowLoads
+
+-- | Completed responses and transport failures across every load the RTS window spans.
+windowAttempts :: ScenarioReport -> Int
+windowAttempts = sum . map (\l -> lsCompleted l + lsTransportFailures l) . windowLoads
+
+-- | The invariant evidence one report carries: successes per load or step, OOM kills, and the ending.
 reportEvidence :: ScenarioReport -> RunEvidence
 reportEvidence r =
     RunEvidence
         { reScenario = srName r <> " (" <> srShape r <> ", " <> show (lsConnections (srLoad r)) <> " connections)"
-        , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- srLoad r : maybeToList (srCompanion r)]
+        , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- windowLoads r]
         , reOomKills = maybe 0 (counter "oom_kill" . crMemoryEvents) (pfCgroup =<< srProxy r)
         , reEnding = pfEnding <$> srProxy r
+        , reExitedEarly = maybe False pfExitedEarly (srProxy r)
         }

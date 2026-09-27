@@ -25,7 +25,7 @@ spec = do
             classifyEnding 2 "boot refused" 0 False `shouldBe` ExitedWith 2
             classifyEnding (-15) "" 0 False `shouldBe` KilledBySignal 15
     describe "runViolations" $ do
-        let healthy = RunEvidence "npm/merge-cold" [("", 130)] 0 (Just CleanShutdown)
+        let healthy = RunEvidence "npm/merge-cold" [("", 130)] 0 (Just CleanShutdown) False
         it "holds for a run with successes and a clean ending" $
             runViolations healthy `shouldBe` []
         it "fails a scenario that answered only refusals" $
@@ -37,3 +37,10 @@ spec = do
             runViolations healthy{reOomKills = 1, reEnding = Just KernelOomKill}
                 `shouldBe` ["npm/merge-cold: the kernel OOM-killed the proxy (1 oom_kill events)"]
             runViolations healthy{reEnding = Just HeapOverflow} `shouldBe` ["npm/merge-cold: the proxy exited on heap overflow"]
+        it "fails on any other ending than a clean shutdown, and on an early exit" $ do
+            runViolations healthy{reEnding = Just StoppedByHarness}
+                `shouldBe` ["npm/merge-cold: the proxy did not shut down cleanly (killed after the drain grace)"]
+            runViolations healthy{reEnding = Just (ExitedWith 2), reExitedEarly = True}
+                `shouldBe` ["npm/merge-cold: the proxy did not shut down cleanly (exited 2)", "npm/merge-cold: the proxy exited before the harness stopped it"]
+        it "passes a scenario that runs in the harness process on its successes alone" $
+            runViolations healthy{reEnding = Nothing} `shouldBe` []

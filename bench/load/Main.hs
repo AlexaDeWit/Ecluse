@@ -20,6 +20,7 @@ import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProcessStdout, setEnv)
+import UnliftIO (bracket_)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (
@@ -34,7 +35,7 @@ import Ecluse.BenchLoad.Harness (
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Npm (npmFixture)
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), renderPodShape)
-import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag)
+import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiFixture, pypiLoadNotes)
 import Ecluse.BenchLoad.Report (renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
@@ -55,8 +56,9 @@ main =
         [name] -> runChild (toText name)
         _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name> | --serve-proxy]"
 
+-- Proxy cgroups a killed run left behind are retired before and after, so none outlives a run.
 runDriver :: IO ()
-runDriver = do
+runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     knobs <- loadKnobsFromEnv
     shape <- podShapeFromEnv
     selected <- selectedKeys
@@ -64,12 +66,12 @@ runDriver = do
     (rendered, violations) <- case thrash of
         Just limits -> runThrashProbe knobs limits
         Nothing -> runPasses knobs shape selected
-    -- The probe reads OOM kills and heap overflows as results, so it carries no verdict section.
-    let output = T.intercalate "\n" (rendered <> [renderVerdict violations | isNothing thrash])
+    -- The probe reads OOM kills and heap overflows as results, so only a broken probe has a verdict.
+    let output = T.intercalate "\n" (rendered <> [renderVerdict violations | isNothing thrash || not (null violations)])
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
     unless (null violations) $
-        benchFail ("the load run broke " <> show (length violations) <> " invariant(s); the verdict section lists them")
+        benchFail ("the load run broke " <> show (length violations) <> " invariant(s). The verdict section lists them.")
 
 runPasses :: LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
 runPasses knobs shape selected = do
@@ -116,7 +118,7 @@ runPasses knobs shape selected = do
     labelled (key, result) = first (\failure -> key <> ": " <> failure) result
 
 {- | Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
-so only a driver fault fails the run.
+so the probe fails only when no limit produced a report.
 -}
 runThrashProbe :: LoadKnobs -> [Int] -> IO ([Text], [Text])
 runThrashProbe knobs limitsMib = do
@@ -132,30 +134,36 @@ runThrashProbe knobs limitsMib = do
             , latencyOverride (lkUpstreamLatencyMicros knobs `div` 1_000)
             ]
     steps <- traverse (\shape -> (renderPodShape shape,) <$> runScenarioChild self (overrides shape) key) shapes
-    pure ([renderThrash key steps], [])
+    pure ([renderThrash key steps], ["the GC-thrash probe produced no report at any memory limit" | null (rights (map snd steps))])
 
 -- The scenario keys in BENCH_LOAD_SCENARIOS, or every scenario when it is unset or blank.
 selectedKeys :: IO (Maybe [Text])
 selectedKeys =
-    lookupEnv "BENCH_LOAD_SCENARIOS" >>= \case
-        Nothing -> pure Nothing
-        Just raw -> case filter (not . T.null) (map T.strip (T.splitOn "," (toText raw))) of
-            [] -> pure Nothing
-            keys -> do
-                let unknown = filter (isNothing . findScenario) keys
-                unless (null unknown) (benchFail ("BENCH_LOAD_SCENARIOS names unknown scenarios: " <> T.intercalate ", " unknown))
-                pure (Just keys)
+    commaListFromEnv "BENCH_LOAD_SCENARIOS" >>= traverse known
+  where
+    known keys = do
+        let unknown = filter (isNothing . findScenario) keys
+        unless (null unknown) (benchFail ("BENCH_LOAD_SCENARIOS names unknown scenarios: " <> T.intercalate ", " unknown))
+        pure keys
 
 -- The memory limits in MiB for the thrash probe, highest first, or 'Nothing' for the normal passes.
 thrashLimitsFromEnv :: IO (Maybe [Int])
 thrashLimitsFromEnv =
-    lookupEnv "BENCH_LOAD_THRASH_LIMITS_MIB" >>= \case
-        Nothing -> pure Nothing
-        Just raw -> case filter (not . T.null) (map T.strip (T.splitOn "," (toText raw))) of
-            [] -> pure Nothing
-            parts -> case traverse (mfilter (> 0) . readMaybe . toString) parts of
-                Just limits -> pure (Just limits)
-                Nothing -> benchFail ("BENCH_LOAD_THRASH_LIMITS_MIB must list positive MiB counts: " <> toText raw)
+    commaListFromEnv "BENCH_LOAD_THRASH_LIMITS_MIB" >>= traverse positive
+  where
+    positive parts =
+        maybe
+            (benchFail ("BENCH_LOAD_THRASH_LIMITS_MIB must list positive MiB counts: " <> T.intercalate "," parts))
+            pure
+            (traverse (mfilter (> 0) . readMaybe . toString) parts)
+
+-- A comma-separated variable's non-blank items, 'Nothing' when it is unset or holds none.
+commaListFromEnv :: String -> IO (Maybe [Text])
+commaListFromEnv name = do
+    raw <- lookupEnv name
+    pure $ case filter (not . T.null) (map T.strip (T.splitOn "," (maybe "" toText raw))) of
+        [] -> Nothing
+        items -> Just items
 
 latencyOverride :: Int -> (String, String)
 latencyOverride injMs = ("BENCH_LOAD_UPSTREAM_LATENCY_MS", show injMs)
@@ -171,7 +179,7 @@ runScenarioChild self overrides name = do
     base <- getEnvironment
     (code, raw) <- readProcessStdout (setEnv (overrideEnv overrides base) (proc self [toString name]))
     pure $ case code of
-        ExitFailure n -> Left ("the scenario process exited " <> show n <> "; its reason is in the job log")
+        ExitFailure n -> Left ("the scenario process exited " <> show n <> ". Its reason is in the job log.")
         ExitSuccess -> first (\err -> "the scenario report did not parse: " <> toText err) (eitherDecode raw)
 
 overrideEnv :: [(String, String)] -> [(String, String)] -> [(String, String)]

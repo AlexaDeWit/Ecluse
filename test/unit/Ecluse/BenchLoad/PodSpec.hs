@@ -8,7 +8,7 @@ module Ecluse.BenchLoad.PodSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), counter, cpuMaxValue, defaultPodShapes, keyedCounters, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
 
 spec :: Spec
 spec = do
@@ -21,9 +21,9 @@ spec = do
             for_ ["", "2cpu", "0cpu-512mib", "2cpu-0mib", "2cpu-512mb", "2cpu-512mib-extra", "-2cpu-512mib", "2.5cpu-1gib"] $ \raw ->
                 parsePodShape raw `shouldSatisfy` isLeft
     describe "renderPodShape" $
-        it "round-trips every scheduled shape" $
-            for_ defaultPodShapes $ \shape ->
-                parsePodShape (renderPodShape shape) `shouldBe` Right shape
+        it "round-trips every shape the workflow schedules" $
+            for_ ["unlimited", "2cpu-256mib", "2cpu-512mib", "4cpu-1gib", "4cpu-2gib"] $ \raw ->
+                renderPodShape <$> parsePodShape raw `shouldBe` Right raw
     describe "cpuMaxValue" $
         it "grants whole cores over the default period" $
             cpuMaxValue 2 `shouldBe` "200000 100000"

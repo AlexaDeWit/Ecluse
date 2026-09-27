@@ -372,8 +372,9 @@ Read a red result according to its measurement:
 - Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
   Each ecosystem's budgets name the CPU architecture they were calibrated on. On another architecture every leg reports as uncalibrated, and the run passes.
   Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
-- Load benchmarks use `oha` against a proxy process. A run fails when a scenario gets no successful response, when the kernel
-  OOM-kills a proxy, or when a proxy exits on heap overflow. It also fails when the harness or a proxy cannot boot, when `oha`
+- Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
+  when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other way than the clean
+  shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot boot, when `oha`
   cannot run, and when a fixture preflight sees an unexpected status, index shape, or wheel body. Throughput, latency, and
   memory have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal, so
   it never runs on a pull request and never gates a merge.
@@ -388,7 +389,8 @@ and starts the proxy as a separate process: `bench-load --serve-proxy`, which bo
 path as `ecluse proxy` and reads its configuration from `ECLUSE_*` variables. The proxy dials the
 stubs over plain HTTP on loopback, which the `dev-http-egress` build allows, and serves RTS
 statistics on a loopback control port. Telemetry is on, with the Prometheus scrape as its only
-exporter, so the harness can sample the admission gauges.
+exporter, so the harness can sample the admission gauges. The proxy logs into pipes that the
+harness drains to disk, so its cgroup is not charged for the log's page cache.
 
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
 `2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
@@ -398,8 +400,9 @@ flag is set by hand: the proxy's boot reads the cgroup and derives its capabilit
 ceiling, and its memory plan as it would in a pod. The unlimited shape sets `runtime.cores` to the
 harness's capability count instead. The workflow delegates the cgroup subtree with `sudo` before
 the run and turns swap off. The cgroup outlives the proxy, so an OOM kill stays countable after the
-process is gone. A scheduled run measures every shape in a matrix. A dispatch picks one shape, or
-`all`, and may name another ref to build, which must carry this harness.
+process is gone, and the harness retires any proxy cgroup a killed run left. A scheduled run
+measures every shape in a matrix. A dispatch picks one shape, `all`, or `thrash` for the GC-thrash
+probe. To measure a branch, dispatch the workflow on that branch after merging this harness into it.
 Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
 
 Each scenario reports:
@@ -407,11 +410,14 @@ Each scenario reports:
 - successes in the window (the primary figure), refusals (`429` and `503`), other statuses,
   transport failures, and the p50 and p99 of successful responses only
 - the proxy's allocation per successful request beside the attempt count, its GC share of CPU,
-  its major collections, and its RTS `max_live_bytes` and `max_mem_in_use_bytes`
+  its major collections and the mean live data they left, its RTS `max_live_bytes` and
+  `max_mem_in_use_bytes`, and whether its small-object live data crossed the compaction threshold.
+  A paired scenario or a ramp divides by every success in the window
 - the idle floor after boot, before any load: live data after a major collection and the cgroup's
   `memory.current`
-- cgroup `memory.peak` against `memory.max`, the `memory.events` counters, and the CPU time the
-  quota withheld during the window
+- cgroup `memory.peak` against `memory.max` and against the RTS's own peak, `memory.stat` (`anon`,
+  `file`, `kernel`, `sock`) as the window closes, the `memory.events` counters, and the CPU time
+  the quota withheld during the window
 - how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
   status), a kernel OOM kill, or another exit
 - the CPU admission, the memory admission budget, and the cold listings that budget admits at
@@ -424,13 +430,14 @@ return the complete public capture, so every request decodes its own private cop
 `npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
 `npm/warm-under-cold` measures assembled hits and retained selected reads while a second generator
 drives heavy-tier listings that never reuse an assembled response. `npm/ramp` steps from 10 to
-400 connections, one configured duration per step. None of the four joins the concurrency-one pass.
+400 connections, one configured duration per step, and reports each step. None of the four joins
+the concurrency-one pass.
 
 `BENCH_LOAD_SCENARIOS` runs a comma-separated subset, such as `npm/merge-cold,npm/herd`.
 `BENCH_LOAD_THRASH_LIMITS_MIB` runs the GC-thrash probe instead of the passes: one scenario
 (`BENCH_LOAD_THRASH_SCENARIO`, `npm/heavy-private` unless set) at `BENCH_LOAD_THRASH_CPUS` cores
 (two unless set) under each listed memory limit, highest first. The probe records OOM kills and
-heap overflows as its reading, so they do not fail it.
+heap overflows as its reading, so they do not fail it. It fails only when no limit produced a report.
 
 ### Benchmark captures
 

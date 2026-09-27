@@ -4,11 +4,8 @@ name: Load test
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: "Branch, tag, or commit to build and measure (blank: the dispatched ref). It must carry this harness."
-        required: false
       pod-shape:
-        description: "Pod shape the measured proxy runs under (none runs only the GC-thrash probe)"
+        description: "Pod shape the measured proxy runs under, or thrash for the GC-thrash probe alone"
         type: choice
         options:
           - all
@@ -17,14 +14,15 @@ on:
           - 2cpu-512mib
           - 4cpu-1gib
           - 4cpu-2gib
-          - none
+          - thrash
         default: all
       scenarios:
         description: "Comma-separated scenario keys, such as npm/merge-cold,npm/herd (blank: every scenario)"
         required: false
       thrash-limits-mib:
-        description: "Memory limits in MiB for the GC-thrash probe, highest first, such as 1024,768,512,384,256 (blank: no probe)"
+        description: "Memory limits in MiB the GC-thrash probe steps down through, highest first"
         required: false
+        default: "1024,768,512,384,256"
       duration-seconds:
         description: "Seconds each scenario, or each ramp step, applies load"
         required: false
@@ -71,7 +69,6 @@ env:
 jobs:
   bench-load:
     name: Load test (${{ matrix.pod-shape }}, inform-only)
-    if: inputs.pod-shape != 'none'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     strategy:
@@ -79,17 +76,15 @@ jobs:
       matrix:
         pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-256mib","2cpu-512mib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
     env:
-      BENCH_LOAD_POD: ${{ matrix.pod-shape }}
+      # The probe sets its own shape per step, so the shape here only matters for the passes.
+      BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
+      BENCH_LOAD_THRASH_LIMITS_MIB: ${{ matrix.pod-shape == 'thrash' && (inputs.thrash-limits-mib || '1024,768,512,384,256') || '' }}
+      BENCH_LOAD_THRASH_CPUS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
           persist-credentials: false
-
-      - name: Name the measured commit
-        id: measured
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up toolchain
         id: toolchain
@@ -135,60 +130,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ steps.measured.outputs.sha }}
+          name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
           path: bench-load-results.md
-          if-no-files-found: warn
-
-  thrash-probe:
-    name: GC-thrash probe (inform-only)
-    if: inputs.thrash-limits-mib != ''
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
-    env:
-      BENCH_LOAD_THRASH_LIMITS_MIB: ${{ inputs.thrash-limits-mib }}
-      BENCH_LOAD_THRASH_CPUS: "2"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-
-      - name: Name the measured commit
-        id: measured
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up toolchain
-        id: toolchain
-        uses: ./.github/actions/setup-toolchain
-        with:
-          cabal-cache: "true"
-
-      - name: Update package index
-        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
-        run: nix develop .#ci --command task update
-
-      - name: Build the harness
-        run: nix develop .#ci --command cabal build -v0 exe:bench-load
-
-      - name: Delegate a cgroup subtree to the harness
-        run: |
-          set -euo pipefail
-          sudo swapoff -a
-          sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
-          sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
-          echo "+cpu +memory" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
-
-      - name: Run the GC-thrash probe
-        run: |
-          set -eo pipefail
-          echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
-          nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-thrash.md
-
-      - name: Upload the probe's results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: bench-load-thrash-${{ runner.arch }}-${{ steps.measured.outputs.sha }}
-          path: bench-load-thrash.md
           if-no-files-found: warn

@@ -6,10 +6,14 @@
 module Ecluse.BenchLoad.ProxyProcessSpec (spec) where
 
 import Data.List (lookup)
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
 import Ecluse.BenchLoad.ProxyProcess (ProxySettings (..), proxyEnvironment, proxySettings)
+import Ecluse.Composition.Support (expectPlanFor, noCeiling)
+import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (ServeAndMirror))
+import Ecluse.Config (loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
 spec :: Spec
@@ -39,6 +43,22 @@ spec = describe "proxyEnvironment" $ do
     it "leaves the cores to the cgroup under a pod shape, and pins them when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
+    it "names only keys the proxy's configuration loads, and a boot plan the serve role accepts" $
+        for_ [Npm, PyPI] $ \ecosystem -> do
+            let everyPin =
+                    (proxySettings ecosystem 60)
+                        { psCacheMaxEntries = Just 64
+                        , psCacheMaxBytes = Just (64 * 1024 * 1024)
+                        , psMaxResponseBytes = Just (256 * 1024 * 1024)
+                        , psServeMaxInFlight = Just 12
+                        , psPublicConnections = Just 32
+                        , psPrivateConnections = Just 64
+                        , psClock = Just (UTCTime (fromGregorian 2026 9 22) 0)
+                        }
+                environment = proxyEnvironment everyPin (Limited 2 (512 * 1024 * 1024)) 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+            case loadConfig environment Nothing of
+                Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
+                Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
     it "pins only the bounds the scenario sets" $ do
         lookup "ECLUSE_CACHE__MAX_ENTRIES" podEnvironment `shouldBe` Just "3"
         lookup "ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT" podEnvironment `shouldBe` Just "12"
