@@ -81,10 +81,13 @@ common shared
     relude (Relude as Prelude)
 
 -- The shipped server's RTS options. The OpenTelemetry batch processor requires the threaded RTS.
--- The load harness links them too, so the proxy it measures boots with the posture a pod gets
--- before its cgroup reshapes it. Tuning and overrides: https://ecluse-proxy.com/docs/operations/.
+-- -T feeds the memory sampler. -c60 keeps the copying collector through the live budget, and
+-- the eager memory return keeps the cgroup's view of the heap current. The boot derives -A and
+-- -M from the pod. The load harness links them too, so the proxy it measures boots with the
+-- posture a pod gets before its cgroup reshapes it. Tuning and overrides:
+-- https://ecluse-proxy.com/docs/operations/.
 common shipped-rts
-  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T -c60 --disable-delayed-os-memory-return"
 
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
@@ -214,8 +217,10 @@ library ecluse-core
     Ecluse.Core.Server.Cache.VersionWeight
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Brake
+    Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
-    Ecluse.Core.Server.Admission.Material
+    Ecluse.Core.Server.Admission.Meter
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
@@ -376,6 +381,7 @@ library
     Ecluse.Composition.MemoryPlan.Override
     Ecluse.Composition.MemoryPlan.Render
     Ecluse.Composition.MemoryPlan.Shed
+    Ecluse.Composition.MemoryPlan.Transient
     Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
@@ -399,6 +405,7 @@ library
     Ecluse.Config.Target
     Ecluse.Config.Types
     Ecluse.Rts
+    Ecluse.Rts.Sampler
 
   build-depends:
     , ecluse:ecluse-core
@@ -861,8 +868,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
+    Ecluse.Core.Server.Admission.BrakeSpec
+    Ecluse.Core.Server.Admission.BudgetSpec
     Ecluse.Core.Server.Admission.BytesSpec
-    Ecluse.Core.Server.Admission.MaterialSpec
+    Ecluse.Core.Server.Admission.MeterSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
@@ -1025,6 +1034,7 @@ test-suite ecluse-unit
     Ecluse.Composition.MaintenanceSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlan.ShedSpec
+    Ecluse.Composition.MemoryPlan.TransientSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec
@@ -1054,6 +1064,7 @@ test-suite ecluse-unit
     Ecluse.Pilot.PlanSpec
     Ecluse.PilotSpec
     Ecluse.RtsSpec
+    Ecluse.Rts.SamplerSpec
     Ecluse.Runtime.EnvSpec
     Ecluse.Runtime.ServerSpec
     Ecluse.ServiceSpec
@@ -1280,7 +1291,6 @@ test-suite ecluse-residency
   other-modules:
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
-    Ecluse.Core.Server.MemoryModel.MaterialProbe
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec

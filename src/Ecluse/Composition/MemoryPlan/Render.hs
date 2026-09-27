@@ -10,44 +10,23 @@ reads one plan whichever path produced it.
 module Ecluse.Composition.MemoryPlan.Render (
     renderPlanLines,
     localCachePolicyLine,
-    materialAdmissionPolicyLine,
-    materialAllowancesLine,
     renderDegradations,
     renderControlWarnings,
 ) where
 
-import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances)
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opAdmission, opArtifact, opCache, opDepth, opRequest, opResponse),
-    PlanInputs (piAllocAreaBytes, piCapabilities, piCeilingClause, piCpuAdmissionLine),
+    PlanInputs (piCeilingClause, piCpuAdmissionLine),
     ShedOutcomes (..),
     TenantDemands (..),
  )
 import Ecluse.Composition.MemoryPlan.Override (overrideFreeOvershoot)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound)
 import Ecluse.Composition.Sizing (renderSized)
-import Ecluse.Core.Server.Admission.Material (MaterialAllowances (..))
 
 -- | The local backend's retention capabilities, independent of capacity overrides.
 localCachePolicyLine :: Text
 localCachePolicyLine = "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
-
--- | State the limit of the static material estimates beside the resolved controls.
-materialAdmissionPolicyLine :: Text
-materialAdmissionPolicyLine = "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
-
--- | Show the static class costs used with the material budget.
-materialAllowancesLine :: Text
-materialAllowancesLine =
-    "metadata admission estimates: cold selected "
-        <> show (maColdSelectedBytes materialAllowances)
-        <> ", retained selected "
-        <> show (maRetainedSelectedBytes materialAllowances)
-        <> ", full origin "
-        <> show (maFullOriginBytes materialAllowances)
-        <> ", listing output "
-        <> show (maListingOutputBytes materialAllowances)
-        <> " bytes"
 
 {- | The ordered boot lines check-config prints: one per resolved bound, tagged with its
 provenance (an explicit config value, or the ceiling it was computed from).
@@ -56,10 +35,7 @@ renderPlanLines :: PlanInputs -> TenantDemands -> ShedOutcomes -> [Text]
 renderPlanLines inputs d o =
     [ planLine "runtime reserve" (tdReserve d) Nothing
     , piCpuAdmissionLine inputs
-    , planLine "material estimate budget" (soMaterialFinal o) Nothing
     , renderSized "memory plan: metadata ingest ceiling" (soResponseFinal o) (opResponse pins) "built-in default, independent of heap and CPU"
-    , materialAdmissionPolicyLine
-    , materialAllowancesLine
     , planLine "request byte cap" (tdRequestFinal d) (opRequest pins)
     , localCachePolicyLine
     , planLine "cache byte bound" (soCacheFinal o) (opCache pins)
@@ -74,18 +50,13 @@ renderPlanLines inputs d o =
     computedClause = "computed from heap ceiling " <> show (tdCeiling d) <> ", " <> piCeilingClause inputs
 
 -- | The shed-ladder warnings, in ladder order, each naming what was given up and why.
-renderDegradations :: PlanInputs -> TenantDemands -> ShedOutcomes -> Maybe Int -> [Text]
-renderDegradations inputs d o shedCaps =
+renderDegradations :: TenantDemands -> ShedOutcomes -> [Text]
+renderDegradations d o =
     catMaybes
         [ shedWarning "mirror artifact byte cap" (tdArtifactCapDesired d) (soArtifactCapFinal o) "this pod mirrors no artifact it cannot buffer safely"
             <$ guard (soMirrorShed o > 0)
         , shedWarning "cache aggregate" (tdCacheDesired d) (soCacheFinal o) "the proxy serves uncached"
             <$ guard (soCacheShed o > 0)
-        , "memory plan: material estimate budget shed to "
-            <> show (soMaterialFinal o)
-            <> " bytes. CPU capacity and metadata ingest ceiling stay unchanged"
-            <$ guard (soMaterialShed o > 0)
-        , capabilityShedWarning inputs <$> shedCaps
         , "memory plan: publish aggregate shed to one maximum request ("
             <> show (soPublishFinal o)
             <> " bytes)"
@@ -93,7 +64,7 @@ renderDegradations inputs d o shedCaps =
         , "memory plan: memory-queue depth shed to " <> show (soDepthFinal o) <$ guard (soQueueShedBytes o > 0)
         , irreducibleMinimumWarning freeOvershoot <$ guard (soResidualOvershoot o > 0 && freeOvershoot > 0)
         ]
-        <> renderControlWarnings (tdPins d) (soAdmissionFinal o) (soResponseFinal o) (soMaterialFinal o)
+        <> renderControlWarnings (tdPins d) (soAdmissionFinal o) (soResponseFinal o)
   where
     freeOvershoot = overrideFreeOvershoot d
 
@@ -109,36 +80,22 @@ shedWarning tenant desired final atZero =
         <> " bytes to fit the heap ceiling"
         <> (if final == 0 then " (" <> atZero <> ")" else "")
 
-capabilityShedWarning :: PlanInputs -> Int -> Text
-capabilityShedWarning inputs shedTo =
-    "memory plan: capability count shed to "
-        <> show shedTo
-        <> " (the nursery of "
-        <> show (piCapabilities inputs)
-        <> " capabilities x "
-        <> show (piAllocAreaBytes inputs)
-        <> " bytes allocation area is the memory pressure; fewer, or a smaller GHCRTS -A, fits this pod)"
-
 irreducibleMinimumWarning :: Int -> Text
 irreducibleMinimumWarning overshoot =
     "memory plan: the irreducible minimum for the configured tenants still exceeds the heap ceiling by "
         <> show overshoot
         <> " bytes. Booting with the container limit as the backstop. Increase the memory limit"
 
--- | Explain exact operator pins without treating heuristic estimates as memory guarantees.
-renderControlWarnings :: OverridePins -> Int -> Int -> Int -> [Text]
-renderControlWarnings pins admission response material =
+-- | Explain exact operator pins, which carry no memory guarantee.
+renderControlWarnings :: OverridePins -> Int -> Int -> [Text]
+renderControlWarnings pins admission response =
     [ "metadata admission: preserving configured CPU capacity "
         <> show admission
-        <> " with material estimate budget "
-        <> show material
-        <> " bytes. Estimates do not bound worst-case heap use"
+        <> ". CPU capacity does not bound heap use"
     | isJust (opAdmission pins)
     ]
         <> [ "metadata admission: preserving configured metadata ingest ceiling "
                 <> show response
-                <> " bytes with material estimate budget "
-                <> show material
                 <> " bytes. Body admissibility does not guarantee materialisation fits the heap"
            | isJust (opResponse pins)
            ]

@@ -21,7 +21,6 @@ module Ecluse.Core.Server.Pipeline.Origin (
     -- * Fetching the two origins
     fetchPrivateOrigin,
     fetchPublicOrigin,
-    withPublicMetadataClient,
     preparePublicMetadata,
     withPrivateMetadataClient,
 
@@ -39,7 +38,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Merge (Provenance)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataNewReads))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -56,9 +55,11 @@ import Ecluse.Core.Registry.Metadata (
     ),
     VersionRead,
  )
-import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, anonymousOrigin, chargingFullReads, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Budget (ChargeFactors (cfFullReadPermille), scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, chargeRead)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Server.Context (
@@ -78,6 +79,8 @@ data Contribution = Contribution
     , srcInfo :: PackageInfo
     , srcValue :: CachedDoc
     , srcDigest :: ContentDigest
+    , srcBodyBytes :: Int
+    -- ^ The decompressed source size, which the listing's output charge scales.
     }
 
 -- | Scope surviving versions and exact artifact coordinates to their source digest and provenance.
@@ -144,26 +147,20 @@ originResultOf = \case
     Right (Right manifest) -> OriginResolved manifest
 
 -- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
-fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe ClientCredential -> PackageName -> Handler OriginResult
-fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
+fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler OriginResult
+fetchPrivateOrigin deps rt ticket token name = case pdPrivateBaseUrl deps of
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
-        resolved <-
-            tryAny $
-                withPrivateMetadataClient rt deps privateBase token $ \client ->
-                    fetchFullManifest client name
-        pure (originResultOf resolved)
+        let origin = chargingFullReads (fullReadCharge deps ticket) (privateOrigin rt deps privateBase token)
+        originResultOf <$> tryAny (withMetadataClient rt deps privateMetadataClient origin (`fetchFullManifest` name))
 
 -- | Resolve the public (gated, anonymous) upstream origin through the metadata cache, keyed by the origin's base URL as its 'Source'.
-fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
-fetchPublicOrigin deps rt name = do
+fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> PackageName -> Handler OriginResult
+fetchPublicOrigin deps rt ticket name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
-    resolved <-
-        tryAny $
-            withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
-                fetchFullManifest client name
-    pure (originResultOf resolved)
+    let origin = chargingFullReads (fullReadCharge deps ticket) (publicOrigin rt deps)
+    originResultOf <$> tryAny (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name))
 
 {- Run an action over a per-request read handle for one origin. 'withRunInIO' captures the request's
 @katip@ context into the failure logs, and each read holds to the mount's 'Limits' and the serve cap. -}
@@ -188,26 +185,29 @@ withMetadataClient rt deps settle origin k =
   where
     baseUrl = originBaseUrl (originClientOf origin)
 
+-- The request's ticket pays for each full-read chunk at the ecosystem's factor. Zero passes through as the end of a read.
+fullReadCharge :: PackumentDeps -> MemoryTicket -> Int -> IO ()
+fullReadCharge deps ticket = chargeRead ticket . scaleCharge (cfFullReadPermille (metadataChargeFactors (pdMetadata deps)))
+
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
 withPrivateMetadataClient rt deps baseUrl token =
-    withMetadataClient rt deps privateMetadataClient (perCallerOrigin (pdLimits deps) (srPrivateManager rt) baseUrl token)
+    withMetadataClient rt deps privateMetadataClient (privateOrigin rt deps baseUrl token)
 
--- | An anonymous read handle sharing the metadata cache across listing and artifact requests.
-withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> (MetadataClient -> IO a) -> Handler a
-withPublicMetadataClient rt deps baseUrl =
-    withMetadataClient rt deps settle (anonymousOrigin (pdLimits deps) (srPublicManager rt) baseUrl)
-  where
-    settle = publicMetadataClient (srMetadataCache rt) (Source (registryUrlText baseUrl))
-
--- | Capture public local reuse before entering material admission, without starting remote work.
+-- | Pin a public local value without starting remote work.
 preparePublicMetadata :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler (PreparedStore MetadataError VersionRead)
 preparePublicMetadata rt deps name version =
-    withMetadataClient rt deps settle origin (\prepare -> prepare name version)
-  where
-    baseUrl = pdPublicBaseUrl deps
-    origin = anonymousOrigin (pdLimits deps) (srPublicManager rt) baseUrl
-    settle = preparePublicVersion (srMetadataCache rt) (Source (registryUrlText baseUrl))
+    withMetadataClient rt deps (preparePublicVersion (srMetadataCache rt) (publicSource deps)) (publicOrigin rt deps) (\prepare -> prepare name version)
+
+privateOrigin :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> OriginFor Private
+privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateManager rt)
+
+publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
+publicOrigin rt deps = anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps)
+
+-- The public origin's key in the shared metadata cache.
+publicSource :: PackumentDeps -> Source
+publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 
 -- | Build an origin with the mount's response bound and the caller-selected manager and credential.
 mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient

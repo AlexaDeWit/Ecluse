@@ -2,9 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolve independent CPU, metadata ingest and material controls beside the memory tenants.
-Tenant accounting guides sizing and shedding. Material estimates do not bound worst-case live heap.
-Configured storage bounds retain their override checks, and every control emits a boot-log line.
+{- | Resolve independent CPU and metadata ingest controls beside the memory tenants.
+Tenant accounting guides sizing and shedding. Configured storage bounds retain their override
+checks, and every control emits a boot-log line.
 -}
 module Ecluse.Composition.MemoryPlan (
     -- * The plan and its tenants
@@ -13,6 +13,7 @@ module Ecluse.Composition.MemoryPlan (
     MirrorArtifactTenant (..),
     QueueTenantDemand (..),
     queueTenantDemand,
+    TransientBudget (..),
 
     -- * Resolution
     resolveMemoryPlan,
@@ -30,7 +31,6 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheEntriesFloor,
     cacheEntryExpectedBytes,
     fixedBufferBytes,
-    materialBytesFallback,
     memoryQueueCharged,
     mirrorArtifactBytesCap,
     mirrorArtifactEnvelopeMultiplier,
@@ -43,8 +43,9 @@ import Ecluse.Composition.MemoryPlan.Bounds (
 import Ecluse.Composition.MemoryPlan.Demands (tenantDemands)
 import Ecluse.Composition.MemoryPlan.Internal (OverridePins (..), PlanInputs (..), ShedOutcomes (..), TenantDemands (..))
 import Ecluse.Composition.MemoryPlan.Override (configuredPins, overrideViolationsFor)
-import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, materialAdmissionPolicyLine, materialAllowancesLine, renderControlWarnings, renderDegradations, renderPlanLines)
-import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedCapabilityCount, shedToFit)
+import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, renderControlWarnings, renderDegradations, renderPlanLines)
+import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedToFit)
+import Ecluse.Composition.MemoryPlan.Transient (TransientBudget (..), renderTransientBudget, transientBudget)
 import Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
     MirrorArtifactTenant (..),
@@ -99,27 +100,25 @@ solvedPlan inputs h =
         { mpRuntimeReserveBytes = tdReserve demands
         , mpCacheAggregateBytes = soCacheFinal outcomes
         , mpCacheMaxEntries = cacheEntryBound demands outcomes
-        , mpMaterialAggregateBytes = soMaterialFinal outcomes
         , mpMaxResponseBytes = soResponseFinal outcomes
         , mpMaxRequestBytes = tdRequestFinal demands
         , mpAdmissionCapacity = soAdmissionFinal outcomes
-        , mpShedCapabilities = shedCaps
         , mpPublishTenant = publishTenantOf demands outcomes
         , mpMirrorArtifactTenant = mirrorArtifactTenantOf demands outcomes
         , mpQueueMemoryMaxDepth = soDepthFinal outcomes
         , mpQueueTenantBytes = soQueueTenantBytes outcomes
         , mpFixedBufferBytes = tdFixedBuffers demands
-        , mpDegradations = renderDegradations inputs demands outcomes shedCaps
+        , mpTransientBudget = transient
+        , mpDegradations = renderDegradations demands outcomes
         , mpOverrideViolations = overrideViolationsFor demands outcomes
         }
-    , renderPlanLines inputs demands outcomes
+    , renderPlanLines inputs demands outcomes <> [renderTransientBudget transient]
     )
   where
     demands = tenantDemands inputs h
+    retained = soCacheFinal outcomes + soQueueTenantBytes outcomes + tdFixedBuffers demands
+    transient = transientBudget (Just h) (piCapabilities inputs) (piAllocAreaBytes inputs) retained
     outcomes = shedToFit demands
-    -- The nursery (capabilities x allocation area) counts inside the heap ceiling, but the
-    -- tenant sum does not charge it. The capability count sheds on its own.
-    shedCaps = shedCapabilityCount inputs h
 
 {- No ceiling datapoint: the shipped fallback bounds and admission from the CPU alone.
 Nothing bounds the sum, so there is no tenant arithmetic to check. -}
@@ -129,27 +128,27 @@ fallbackPlan inputs =
         { mpRuntimeReserveBytes = 0
         , mpCacheAggregateBytes = cacheBytes
         , mpCacheMaxEntries = cacheEntries
-        , mpMaterialAggregateBytes = materialBytesFallback
         , mpMaxResponseBytes = responseBytes
         , mpMaxRequestBytes = requestBytes
         , mpAdmissionCapacity = piCpuAdmission inputs
-        , mpShedCapabilities = Nothing
         , mpPublishTenant = publishTenant
         , mpMirrorArtifactTenant = mirrorArtifactTenant
         , mpQueueMemoryMaxDepth = queueDepth
         , mpQueueTenantBytes = queueCharge (memoryQueueCharged demand) queueDepth
         , mpFixedBufferBytes = fixedBufferBytes demand
-        , mpDegradations = renderControlWarnings pins (piCpuAdmission inputs) responseBytes materialBytesFallback
+        , mpTransientBudget = transient
+        , mpDegradations = renderControlWarnings pins (piCpuAdmission inputs) responseBytes
         , mpOverrideViolations = []
         }
-    , [localCachePolicyLine, piCpuAdmissionLine inputs, materialLine, responseLine, materialAdmissionPolicyLine, materialAllowancesLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
+    , [localCachePolicyLine, piCpuAdmissionLine inputs, responseLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
         <> [artifactLine | anyMountMirrors demand]
+        <> [renderTransientBudget transient]
     )
   where
+    transient = transientBudget Nothing (piCapabilities inputs) (piAllocAreaBytes inputs) (cacheBytes + queueCharge (memoryQueueCharged demand) queueDepth + fixedBufferBytes demand)
     demand = piQueueDemand inputs
     pins = configuredPins inputs
     (responseBytes, responseLine) = resolveSized "memory plan: metadata ingest ceiling" (opResponse pins) responseBytesFallback "built-in default, independent of heap and CPU"
-    materialLine = snd (fallbackOr "material estimate budget" Nothing materialBytesFallback)
     (requestBytes, requestLine) = fallbackOr "request byte cap" (opRequest pins) requestBytesFallback
     (cacheBytes, cacheBytesLine) = fallbackOr "cache byte bound" (opCache pins) cacheBytesFallback
     (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp (cacheEntriesFloor, cacheEntriesCap) (cacheBytes `div` cacheEntryExpectedBytes))

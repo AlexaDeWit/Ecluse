@@ -49,9 +49,7 @@ import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialWork (SelectedMaterial), withMaterialAdmission)
-import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared, preparedReuse)
+import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -106,26 +104,17 @@ import UnliftIO (withRunInIO)
 -- | Gate the requested version under the mount's admission budget, then relay it.
 servePublicArtifact :: ArtifactRequest response -> Handler ResponseReceived
 servePublicArtifact ctx = do
-    let metrics = srMetrics (arRuntime ctx)
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
-    withAdmissionResultOrShed
-        metrics
+    -- A selected read keeps one release, so its entry step is its whole charge.
+    withMetadataAdmission
+        (arRuntime ctx)
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-        ( fmap
-            join
-            ( withServeAdmission metrics (srAdmission rt) $ do
-                prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
-                withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
-                    gatePublicVersion ctx advisoryEtag prepared
-            )
-        )
+        (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ctx advisoryEtag))
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
-  where
-    rt = arRuntime ctx
 
 -- Stream an admitted artifact, recording the admission and the checks the gate had to skip.
 serveAdmitted :: ArtifactRequest response -> Maybe DbEtag -> Artifact -> [SkippedCheck] -> Handler ResponseReceived

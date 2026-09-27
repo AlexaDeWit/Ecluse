@@ -141,12 +141,10 @@ transferring or decoding a full document locally. The adapter owns its TTL, code
 identity checks, and representation. Source, ecosystem, package, version, digest, and artifact
 identities must survive that boundary. No request can bypass the private authorisation or rules.
 
-A selected public read first prepares its provider operation while holding CPU admission.
-A local retained value, including a cached absence, stays captured for this request, so its lower
-materialisation allowance cannot lead to a fetch after eviction. Preparation performs no origin
-fetch or external lookup. The request acquires materialisation admission before executing deferred
-work and evaluating current rules. An external lookup uses the cold allowance even when its remote
-provider later reports a hit.
+A selected public read first prepares its provider operation while holding admission. A local
+retained value, including a cached absence, stays captured for this request, so eviction between
+the lookup and its use cannot turn a hit into a fetch. Preparation performs no origin fetch or
+external lookup.
 
 Recency is a storage-policy hint, not a remote LRU requirement. Occupancy reporting is optional
 and describes the adapter's charged bytes and entry counts, not its server's exact heap use.
@@ -163,7 +161,7 @@ not an implicit second metadata retention provider.
 Repeated full fetches can increase upstream work. Dependency-graph captures establish large full
 working sets, but no successful paired runtime comparison establishes the size of this trade-off.
 Performance reports must compare equal successful work and distinguish retained bytes from transient
-materialisation, allocation, and upstream transfer.
+working data, allocation, and upstream transfer.
 
 The local selected-version store charges each retained release field, including the full backing
 allocation of each text slice. Repeated artifacts, hashes, licences, and trust evidence each carry
@@ -197,22 +195,24 @@ No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 
-Listings and public artifact metadata decisions acquire a process-wide CPU gate and then a separate
-materialisation gate. The CPU capacity follows the core count or an explicit operator pin.
-Materialisation charges static workload estimates against an independent capacity. The
-[memory plan](configuration.md#runtime-sizing-cores-and-heap-ceiling) explains why neither these
-estimates nor their scheduling minimum guarantee that a request fits the heap.
+Listings and public artifact metadata decisions pass two doors: a memory door, then a process-wide
+CPU gate. The memory door charges a small entry step against the
+[memory budget](configuration.md#runtime-sizing-cores-and-heap-ceiling) before the request takes a
+CPU slot, so no request waits for memory while it holds one. The CPU capacity follows the core
+count or an explicit operator pin.
 
-A listing reserves output work plus one full-read allowance per permitted configured origin before
-fetching them concurrently. First-party names omit the public origin, and mounts without a private
-upstream omit that origin. An assembled hit or a conditional `304` does not reduce the initial charge.
-Both gates remain held through metadata evaluation and the listing response. Public artifact
-requests release both after the metadata decision, before streaming the admitted artifact.
+Once admitted, a listing pays for its full reads chunk by chunk and for its response before it
+builds it. A request that joins another's public fetch pays nothing for that fetch, and an
+assembled hit or a conditional `304` pays for its reads alone. A public artifact decision reads one
+selected release, so its entry step is its whole charge. A started request that runs out of budget
+pauses at its next chunk instead of failing. Both doors stay held through metadata evaluation and
+the listing response. Public artifact requests release both after the metadata decision, before
+streaming the admitted artifact.
 
-Each gate has a bounded waiting room and wait budget. A full waiting room or expired wait sheds
-with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact hits
-bypass these metadata gates. The mirror worker runs outside these serve gates. A slow artifact
-client therefore holds no serve metadata slot while its download drains.
+Each door has a bounded waiting room and a 1 s wait budget. A full waiting room or an expired wait
+sheds with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact
+hits bypass both doors. The mirror worker runs outside them. A slow artifact client therefore holds
+no serve metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the

@@ -56,6 +56,9 @@ module Ecluse.Runtime.Telemetry.Instruments.Internal (
     registerAdvisorySourceAge,
     reportAdvisorySourceAge,
 
+    -- * Memory budget (observable)
+    registerMemoryMeter,
+
     -- * Advisory compile
     recordAdvisoryCompileAccepted,
     recordAdvisoryCompileDropped,
@@ -84,6 +87,8 @@ import OpenTelemetry.Metric.Core (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Server.Admission.Brake (brakeLevelCode)
+import Ecluse.Core.Server.Admission.Meter (MeterSnapshot (snBrakeLevel, snBudgetBytes, snChargedBytes))
 import Ecluse.Core.Telemetry.Catalogue (
     MetricName (..),
     metricName,
@@ -154,6 +159,13 @@ data Metrics = Metrics
     , mAdvisoryCompileAccepted :: Counter Int64
     , mAdvisoryCompileDropped :: Counter Int64
     , mAdvisoryCompileRuns :: Counter Int64
+    , mMemoryAdmissionBudgetBytes :: ObservableGauge Int64
+    , mMemoryAdmissionChargedBytes :: ObservableGauge Int64
+    , mMemoryAdmissionBrakeLevel :: ObservableGauge Int64
+    , mMemoryAdmissionQueued :: Counter Int64
+    , mMemoryAdmissionShed :: Counter Int64
+    , mMemoryAdmissionPaused :: Counter Int64
+    , mMemoryAdmissionOverdraws :: Counter Int64
     }
 
 -- | Build instruments on the telemetry meter, or the SDK's no-op meter when disabled.
@@ -199,6 +211,13 @@ newMetrics telemetry = do
         <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
         <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
         <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
+        <*> observableGauge meter MemoryAdmissionBudgetBytes "the metadata memory budget in bytes"
+        <*> observableGauge meter MemoryAdmissionChargedBytes "bytes metadata requests hold against the memory budget"
+        <*> observableGauge meter MemoryAdmissionBrakeLevel "memory brake level (0 calm, 1 holding, 2 braking)"
+        <*> counter meter MemoryAdmissionQueued "{request}" "requests that waited for their memory entry step"
+        <*> counter meter MemoryAdmissionShed "{request}" "requests shed at the memory door"
+        <*> counter meter MemoryAdmissionPaused "{read}" "started reads that paused for memory"
+        <*> counter meter MemoryAdmissionOverdraws "{step}" "steps the overdraw token holder took past the memory budget"
 
 counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
 counter meter name unit description =
@@ -232,6 +251,10 @@ metricsPortOf m =
         , mpServeAdmissionQueued = recordServeAdmissionQueued m
         , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
         , mpPublishBodyShed = addOne (mPublishBodyShed m) []
+        , mpMemoryAdmissionQueued = addOne (mMemoryAdmissionQueued m) []
+        , mpMemoryAdmissionShed = addOne (mMemoryAdmissionShed m) []
+        , mpMemoryAdmissionPaused = addOne (mMemoryAdmissionPaused m) []
+        , mpMemoryAdmissionOverdraw = addOne (mMemoryAdmissionOverdraws m) []
         , mpMergeDivergence = recordMergeDivergence m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
@@ -474,6 +497,17 @@ reportAdvisorySourceAge eco pushedAt result = do
 -- An age is never negative, whatever a clock or a stamp says.
 observeAge :: ObservableResult Int64 -> Ecosystem -> Int64 -> IO ()
 observeAge result eco seconds = observe result (max 0 seconds) (metricAttributes [LEcosystem eco])
+
+-- | Attach the memory meter's budget, charge and brake level to their gauges, read at each collection.
+registerMemoryMeter :: Metrics -> IO MeterSnapshot -> IO ()
+registerMemoryMeter m readMeter = do
+    let observeWith pick instrument =
+            void . observableGaugeRegisterCallback instrument $ \result -> do
+                current <- readMeter
+                observe result (fromIntegral (pick current)) (metricAttributes [])
+    observeWith snBudgetBytes (mMemoryAdmissionBudgetBytes m)
+    observeWith snChargedBytes (mMemoryAdmissionChargedBytes m)
+    observeWith (brakeLevelCode . snBrakeLevel) (mMemoryAdmissionBrakeLevel m)
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

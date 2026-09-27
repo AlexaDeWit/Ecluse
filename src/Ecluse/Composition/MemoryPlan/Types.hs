@@ -14,6 +14,7 @@ module Ecluse.Composition.MemoryPlan.Types (
     queueTenantDemand,
 ) where
 
+import Ecluse.Composition.MemoryPlan.Transient (TransientBudget)
 import Ecluse.Composition.MirrorQueue (MirrorQueuePlan (MemoryBackend, SqsBackend), MirrorRuntimePlan (MirrorWith, NoMirroring))
 
 {- | Whether the memory plan owes the in-memory queue a tenant, projected from the
@@ -59,18 +60,12 @@ data MemoryPlan = MemoryPlan
     , mpCacheAggregateBytes :: Int
     -- ^ Tenant 3: one shared byte bound for all eligible local cache stores.
     , mpCacheMaxEntries :: Int
-    , mpMaterialAggregateBytes :: Int
-    -- ^ Tenant 4: the independent heuristic capacity for concurrent metadata work.
     , mpMaxResponseBytes :: Int
     -- ^ The fixed metadata ingest ceiling, independent of memory and CPU admission.
     , mpMaxRequestBytes :: Int
     -- ^ The per-request (publish body) wire cap @Q@, enforced at the publish read site.
     , mpAdmissionCapacity :: Int
     -- ^ CPU-derived concurrency, or the exact explicit operator pin.
-    , mpShedCapabilities :: Maybe Int
-    {- ^ A count to shrink to when the nursery is the memory pressure, each capability holding an
-    allocation area. 'Nothing' leaves the live count.
-    -}
     , mpPublishTenant :: Maybe PublishTenant
     -- ^ Tenant 5, present only when a publication target is configured.
     , mpMirrorArtifactTenant :: Maybe MirrorArtifactTenant
@@ -81,8 +76,10 @@ data MemoryPlan = MemoryPlan
     -- ^ Tenant 6: the bytes the depth charges. Zero unless the memory backend runs.
     , mpFixedBufferBytes :: Int
     -- ^ Tenant 2: the enqueue buffer, charged whenever any mount mirrors.
+    , mpTransientBudget :: TransientBudget
+    -- ^ The live data metadata requests may hold at once, which the memory meter enforces.
     , mpDegradations :: [Text]
-    -- ^ Shed-ladder and explicit-control warnings, including the limits of material estimates.
+    -- ^ Shed-ladder and explicit-control warnings.
     , mpOverrideViolations :: [Text]
     {- ^ The pins the plan blames for a residual overshoot it cannot shed around. The boot and
     check-config refuse on these with exit 2.

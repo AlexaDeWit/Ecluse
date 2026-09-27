@@ -30,6 +30,9 @@ module Ecluse.Runtime.Telemetry.Instruments (
     -- * Advisory ages (observable)
     registerAdvisoryDatabaseAge,
     registerAdvisorySourceAge,
+
+    -- * Memory budget (observable)
+    registerMemoryMeter,
 ) where
 
 import Ecluse.Runtime.Telemetry.Instruments.Internal (
@@ -45,5 +48,6 @@ import Ecluse.Runtime.Telemetry.Instruments.Internal (
     registerAdvisoryDatabaseAge,
     registerAdvisorySourceAge,
     registerCredentialTokenTtl,
+    registerMemoryMeter,
     workerMetricsPortOf,
  )

@@ -110,7 +110,6 @@ live allocations:
 
 - a runtime reserve
 - the metadata cache
-- the materialisation working space
 - the publish-body aggregate
 - the in-memory queue tenant, when selected
 - the enqueue buffer
@@ -127,29 +126,33 @@ mirror-artifact cap goes first, to zero, so the background back-fill leg gives w
 hot path. The cache goes next, also to zero, and each step logs a loud warning. The boot and
 `check-config` alike refuse only an explicit override that breaks the plan.
 
-Metadata ingest, CPU concurrency, transient materialisation and cache retention have separate
-controls. A larger source body does not automatically enlarge a cache or reduce CPU concurrency.
-The fixed ingest ceiling bounds source bytes. The default byte and count ceilings allow growth
-beyond the captured large-package corpus. They express bounded policy headroom, not measured
-limits on heap use.
+Metadata ingest, CPU concurrency, memory admission and cache retention have separate controls. A
+larger source body does not automatically enlarge a cache or reduce CPU concurrency. The fixed
+ingest ceiling bounds source bytes. The default byte and count ceilings allow growth beyond the
+captured large-package corpus. They express bounded policy headroom, not measured limits on heap use.
 
-Materialisation admission charges estimated work against its own capacity, using static allowances
-rather than deriving residency from wire size.
-An allowance above capacity charges the whole capacity, allowing that request to run alone.
-The scheduling minimum therefore establishes no minimum supported heap size.
+The boot sizes the allocation area and the heap ceiling together from the cgroup memory limit, and
+keeps every core the ladder resolved. A smaller nursery costs some collector time, where shedding a
+core would cost that core's throughput. Since GHC 9.6 the nursery counts inside `-M`, so the
+ceiling reserves only what the heap does not cover: native and kernel memory, and one allocation
+area of growth between collections.
 
-A public artifact request captures any local selected result before choosing its allowance.
-That captured result stays alive through the metadata decision, so eviction cannot turn a cheap
-reservation into an uncharged origin fetch. A deferred read, including an external-provider
-lookup, receives the cold allowance. Listings reserve for their permitted origins and useful
-output before fetching. Assembled hits and conditional responses happen later and receive no
-early discount. Artifact relay begins after both metadata gates release.
+Memory admission exists to keep the pod clear of an OOM kill and of collector thrash, and to admit
+as much work as that allows. A busy copying collector keeps about four times its live data plus
+the nursery. So the live data it holds without strain is a quarter of the heap the nursery leaves,
+and it overflows the heap at half. That quarter, less the cache and the idle process, is the budget
+metadata requests pay into. A static estimate per request cannot hold that line, because request
+cost spans about sixty times across real packages while the cost per byte stays in a narrow band.
+So a request pays per byte as it reads, and pays for its response before it builds it. A started
+read pauses rather than failing, which avoids wasting its upstream transfer and inviting a retry
+storm.
 
-These allowances represent slightly-worse-than-average work. They neither reserve each package's
-worst-case heap nor grow with its observed history. Streaming removes whole-source intermediates,
-but selected fields and useful listing results still materialise. The operator must retain process
-headroom and control edge demand. Explicit positive response and CPU pins win and produce warnings,
-so upgrades do not silently change a declared policy.
+The charges model the memory the heap holds, and the collector's own view corrects them. A sampler
+shrinks the budget by live data the charges do not explain, halves it when the collector takes more
+than half the CPU, and grows it back toward a third of the heap while the collector stays calm. The
+per-byte factors come from the retained-byte gate in
+[`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating), set a little above the
+load mix's average rather than at the worst package.
 
 The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
 pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains

@@ -46,7 +46,6 @@ data TenantDemands = TenantDemands
     , tdCacheDesired :: Int
     , tdCacheEntriesExplicit :: Maybe Int
     -- ^ Cache entries, not bytes.
-    , tdMaterialDesired :: Int
     , tdResponseFinal :: Int
     , tdAdmissionDesired :: Int
     -- ^ Concurrent serve operations, not bytes.
@@ -83,8 +82,6 @@ data ShedOutcomes = ShedOutcomes
     , soArtifactCapFinal :: Int
     , soCacheShed :: Int
     , soCacheFinal :: Int
-    , soMaterialShed :: Int
-    , soMaterialFinal :: Int
     , soAdmissionFinal :: Int
     , soResponseFinal :: Int
     , soPublishShed :: Int

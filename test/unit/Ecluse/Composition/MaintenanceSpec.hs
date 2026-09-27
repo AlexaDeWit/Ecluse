@@ -102,7 +102,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Safe, Undecidable, Unsafe),
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -302,13 +302,7 @@ aPackage = unscopedNpm "leftpad"
 
 -- An origin the absent read never dials, because it answers before it forms a request.
 nowhere :: Manager -> OriginClient
-nowhere manager =
-    OriginClient
-        { ocBaseUrl = unsafeRegistryUrl "https://store.invalid/"
-        , ocManager = manager
-        , ocToken = Nothing
-        , ocLimits = defaultLimits
-        }
+nowhere manager = originClient defaultLimits manager (unsafeRegistryUrl "https://store.invalid/") Nothing
 
 absentRead :: Text
 absentRead = "this build serves the mount's ecosystem no metadata read"

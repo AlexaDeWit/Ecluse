@@ -32,7 +32,7 @@ import Network.Wai (
  )
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 
-import Ecluse.Core.Registry.Origin (OriginClient (..))
+import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Wai (localhost)
@@ -117,13 +117,7 @@ egress former: a stub speaks plain HTTP, and only a @dev-http-egress@ build can 
 stubConfig :: (Text -> RegistryUrl) -> Stub -> IO OriginClient
 stubConfig egressUrl stub = do
     manager <- newManager defaultManagerSettings
-    pure
-        OriginClient
-            { ocBaseUrl = egressUrl (stubBaseUrl stub)
-            , ocManager = manager
-            , ocToken = Nothing
-            , ocLimits = defaultLimits
-            }
+    pure (originClient defaultLimits manager (egressUrl (stubBaseUrl stub)) Nothing)
 
 -- | Look up a header (case-insensitively) in a captured request.
 headerValue :: ByteString -> Captured -> Maybe ByteString

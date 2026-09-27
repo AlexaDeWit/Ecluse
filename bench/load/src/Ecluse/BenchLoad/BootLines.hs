@@ -12,7 +12,6 @@ module Ecluse.BenchLoad.BootLines (
     bootMessages,
     BootLimits (..),
     bootLimits,
-    admittedListings,
 
     -- * The rule policy
     ruleMessages,
@@ -30,7 +29,7 @@ import Data.Text qualified as T
 bootMessages :: [ByteString] -> [Text]
 bootMessages = filter decision . logMessages
   where
-    decision m = any (`T.isPrefixOf` m) ["runtime:", "memory plan:", "metadata admission"]
+    decision m = any (`T.isPrefixOf` m) ["runtime:", "memory plan:"]
 
 -- | The @message@ of every JSON log line that states a rule's configuration or a mount's rule order.
 ruleMessages :: [ByteString] -> [Text]
@@ -48,9 +47,8 @@ logMessages = mapMaybe $ \line -> case decodeStrict line of
 -- | The limits a proxy resolved, in bytes or requests. Each is 'Nothing' when no line states it.
 data BootLimits = BootLimits
     { blCpuAdmission :: Maybe Int
-    , blMaterialBudgetBytes :: Maybe Int
-    , blFullOriginBytes :: Maybe Int
-    , blListingOutputBytes :: Maybe Int
+    , blMemoryBudgetBytes :: Maybe Int
+    -- ^ The metadata memory budget at boot. The proxy's sampler moves it at run time.
     , blCacheBytes :: Maybe Int
     , blCacheEntries :: Maybe Int
     }
@@ -62,38 +60,15 @@ bootLimits :: [Text] -> BootLimits
 bootLimits messages =
     BootLimits
         { blCpuAdmission = after "runtime: serve admission "
-        , blMaterialBudgetBytes = after "memory plan: material estimate budget "
-        , blFullOriginBytes = estimate ["full", "origin"]
-        , blListingOutputBytes = estimate ["listing", "output"]
+        , blMemoryBudgetBytes = after "memory plan: transient budget "
         , blCacheBytes = after "memory plan: cache byte bound "
         , blCacheEntries = after "memory plan: cache entry bound "
         }
   where
     after prefix = listToMaybe (mapMaybe (firstNumber <=< T.stripPrefix prefix) messages)
-    estimate label = listToMaybe (mapMaybe (numberAfter label . words . T.replace "," " ") estimateLines)
-    estimateLines = filter ("metadata admission estimates:" `T.isPrefixOf`) messages
 
 firstNumber :: Text -> Maybe Int
 firstNumber = readMaybe . toString <=< listToMaybe . words
-
-numberAfter :: [Text] -> [Text] -> Maybe Int
-numberAfter label ws = case ws of
-    [] -> Nothing
-    _ : rest
-        | label `isPrefixOf` ws -> readMaybe . toString =<< listToMaybe (drop (length label) ws)
-        | otherwise -> numberAfter label rest
-
-{- | How many two-origin listings the material budget admits at once, the binding limit on a
-cold listing. A listing heavier than the whole budget still runs alone, so the floor is one.
--}
-admittedListings :: BootLimits -> Maybe Int
-admittedListings limits = do
-    budget <- blMaterialBudgetBytes limits
-    listing <- blListingOutputBytes limits
-    origin <- blFullOriginBytes limits
-    let weight = listing + 2 * origin
-    guard (weight > 0)
-    pure (max 1 (budget `div` weight))
 
 -- | One configured rule, from the lines the proxy logged for its resolved configuration keys.
 data LoggedRule = LoggedRule

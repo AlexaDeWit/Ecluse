@@ -8,15 +8,12 @@ module Ecluse.Composition.MemoryPlan.Bounds (
     runtimeReserveShareDiv,
     runtimeReserveFloorBytes,
     cacheSharePercent,
-    materialSharePercent,
     publishSharePercent,
     queueSharePercent,
     mirrorArtifactSharePercent,
 
     -- * Byte floors, caps, and no-ceiling fallbacks
     responseBytesFallback,
-    materialBytesFallback,
-    materialAllowances,
     requestBytesFloor,
     requestBytesCap,
     requestBytesFallback,
@@ -43,7 +40,6 @@ module Ecluse.Composition.MemoryPlan.Bounds (
 import Ecluse.Composition.MemoryPlan.Types (QueueTenantDemand (MemoryQueueTenant, NoQueueTenant))
 import Ecluse.Composition.Sizing (mirrorEnqueueBufferDepth)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), defaultLimits)
-import Ecluse.Core.Server.Admission.Material (MaterialAllowances (..))
 import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
 {- | The divisor taking the runtime reserve off the ceiling. The GC and the RTS get a fifth of
@@ -57,14 +53,10 @@ runtimeReserveFloorBytes :: Int
 runtimeReserveFloorBytes = 33554432
 
 {- | The cache aggregate's share of the application heap, the ceiling less the runtime reserve. The
-four computed shares sum to 95%, so a plan with no floor and no pin in it fits by construction.
+computed shares sum to under 100%, so a plan with no floor and no pin in it fits by construction.
 -}
 cacheSharePercent :: Int
 cacheSharePercent = 30
-
--- | The materialisation envelope's share of the application heap.
-materialSharePercent :: Int
-materialSharePercent = 45
 
 -- | The publish aggregate's share of the application heap, and the computed request cap's.
 publishSharePercent :: Int
@@ -83,22 +75,6 @@ mirrorArtifactSharePercent = 4
 -- | The metadata ingest ceiling, independent of the heap and CPU controls.
 responseBytesFallback :: Int
 responseBytesFallback = maxMetadataBytes defaultLimits
-
-{- | Static estimates from the declared npm/PyPI stage workload with 25% headroom, rounded up.
-See <https://github.com/AlexaDeWit/Ecluse/issues/1427> for the workload and measurement limits.
--}
-materialAllowances :: MaterialAllowances
-materialAllowances =
-    MaterialAllowances
-        { maColdSelectedBytes = 9437184
-        , maRetainedSelectedBytes = 262144
-        , maFullOriginBytes = 38797312
-        , maListingOutputBytes = 11534336
-        }
-
--- | Two calibrated two-origin listings without a heap datapoint, independent of CPU capacity.
-materialBytesFallback :: Int
-materialBytesFallback = 2 * (2 * maFullOriginBytes materialAllowances + maListingOutputBytes materialAllowances)
 
 -- | The smallest computed publish-body cap.
 requestBytesFloor :: Int

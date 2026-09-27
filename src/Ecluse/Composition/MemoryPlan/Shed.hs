@@ -2,13 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Reclaim tenant bytes in priority order while preserving explicit storage pins.
-CPU capacity and metadata ingest limits stay independent of material shedding.
-The nursery's capability adjustment remains separate from tenant accounting.
--}
+-- | Reclaim tenant bytes in priority order while preserving explicit storage pins.
 module Ecluse.Composition.MemoryPlan.Shed (
     shedToFit,
-    shedCapabilityCount,
     cacheEntryBound,
 ) where
 
@@ -24,12 +20,10 @@ import Ecluse.Composition.MemoryPlan.Bounds (
  )
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opArtifact, opCache, opDepth),
-    PlanInputs (piAllocAreaBytes, piCapabilities),
     ShedOutcomes (..),
     TenantDemands (..),
  )
 import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
-import Ecluse.Rts (nurseryFittedCapabilities)
 
 {- | Walk the shed ladder: every tenant at its desired share, then shed in step order until
 the sum fits or every tenant hits its minimum. The residual is what shedding cannot reclaim.
@@ -41,8 +35,6 @@ shedToFit d =
         , soArtifactCapFinal = artifactCapFinal
         , soCacheShed = stepShed cacheStep
         , soCacheFinal = stepFinal cacheStep
-        , soMaterialShed = stepShed materialStep
-        , soMaterialFinal = stepFinal materialStep
         , soAdmissionFinal = tdAdmissionDesired d
         , soResponseFinal = tdResponseFinal d
         , soPublishShed = stepShed publishStep
@@ -60,8 +52,7 @@ shedToFit d =
         Just n -> n
         Nothing -> stepFinal mirrorStep `div` mirrorArtifactEnvelopeMultiplier
     cacheStep = shedCacheStep d (stepResidual mirrorStep)
-    materialStep = shedMaterialStep d (stepResidual cacheStep)
-    publishStep = shedPublishStep d (stepResidual materialStep)
+    publishStep = shedPublishStep d (stepResidual cacheStep)
     queue = shedQueueStep d (stepResidual publishStep)
 
 -- Every tenant at its desired share. What this overshoots is what the ladder must reclaim.
@@ -71,7 +62,6 @@ desiredTenantSum d =
         + tdFixedBuffers d
         + tdMirrorChargeDesired d
         + tdCacheDesired d
-        + tdMaterialDesired d
         + (if tdPublishConfigured d then tdPublishDesired d else 0)
         + queueCharge (tdMemoryBacked d) (tdDepthDesired d)
 
@@ -104,12 +94,7 @@ shedCacheStep d overshoot =
   where
     desired = tdCacheDesired d
 
--- Step 2: reclaim material estimates without changing CPU or metadata ingest controls.
-shedMaterialStep :: TenantDemands -> Int -> ShedStep
-shedMaterialStep d overshoot =
-    shedStep overshoot (tdMaterialDesired d) (max 0 (tdMaterialDesired d - 1))
-
--- Step 3: the publish aggregate shrinks to one maximum request.
+-- Step 2: the publish aggregate shrinks to one maximum request.
 shedPublishStep :: TenantDemands -> Int -> ShedStep
 shedPublishStep d overshoot =
     shedStep overshoot desired (if tdPublishConfigured d then max 0 (desired - tdRequestFinal d) else 0)
@@ -125,7 +110,7 @@ data QueueOutcome = QueueOutcome
     , qoResidual :: Int
     }
 
--- Step 4: the memory-queue depth to its floor (never an explicit one).
+-- Step 3: the memory-queue depth to its floor (never an explicit one).
 shedQueueStep :: TenantDemands -> Int -> QueueOutcome
 shedQueueStep d overshoot =
     QueueOutcome
@@ -154,13 +139,3 @@ planning allowance per shared local metadata entry slot.
 cacheEntryBound :: TenantDemands -> ShedOutcomes -> Int
 cacheEntryBound d o =
     fromMaybe (clamp (cacheEntriesFloor, cacheEntriesCap) (soCacheFinal o `div` cacheEntryExpectedBytes)) (tdCacheEntriesExplicit d)
-
-{- | Where the nursery (capabilities x allocation area) exceeds a bounded share of the
-ceiling, shed the capability count so it fits. 'Nothing' keeps the live count.
--}
-shedCapabilityCount :: PlanInputs -> Int -> Maybe Int
-shedCapabilityCount inputs h
-    | fitted < piCapabilities inputs = Just fitted
-    | otherwise = Nothing
-  where
-    fitted = nurseryFittedCapabilities h (piAllocAreaBytes inputs)

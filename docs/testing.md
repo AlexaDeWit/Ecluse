@@ -202,24 +202,11 @@ Compare equal successful workloads. Full-reference results do not establish a sp
 prior selected-version or inventory algorithms. The warmed retained-shape gate remains a separate
 measurement from this first-read source probe.
 
-### Material admission calibration
+### Selected-retention probes
 
-On Linux, `--metadata-material-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH` measures `ColdSelected`,
-`RetainedSelected`, `FullOrigin`, `ListingOneOrigin` and `ListingTwoOrigins` in isolated processes.
-It reuses the source reader, rule filter, merge and adapter assembly/serialisation operations.
-The policy admits releases older than one day at a fixed `2026-09-22T00:00:00Z` clock.
-Two-origin reads prepare independent objects sequentially and keep both rooted through output.
-They do not measure simultaneous native parser buffers. There is no HTTP, TLS, advisory database,
-authentication exchange, real install, worker or maintenance request in these probes.
-
-Samples report process RSS and high-water alongside RTS allocation, GC live bytes and committed
-memory. Cold read costs subtract the initial process RSS from the operation's high-water.
-Known-hit costs start after the selected value is rooted and a major collection completes.
-They use current RSS growth and allocation, because preparation already contaminated high-water.
-Process-counter sampling and rule preparation remain in that interval.
-The source roots survive a final collection before release, but process-sampled deltas do not
-calibrate tiny selected objects. Pair `--metadata-selected-retention-probe ECOSYSTEM NAME VERSION LIMIT PATH`
-with `--metadata-selected-control-probe ECOSYSTEM NAME VERSION LIMIT PATH` for warmed GC comparisons.
+Process-sampled deltas do not calibrate tiny selected objects. Pair
+`--metadata-selected-retention-probe ECOSYSTEM NAME VERSION LIMIT PATH` with
+`--metadata-selected-control-probe ECOSYSTEM NAME VERSION LIMIT PATH` for warmed GC comparisons.
 Both read, weigh and encode the same selected result. The control discards it before collection
 and roots a constant marker already present in its warmed baseline. Both retain the result's
 would-be accounting charge as a scalar. GC snapshots return three strict counters so a preceding
@@ -234,34 +221,7 @@ Their differences ranged from 2,176 bytes for boto3 to 42,712 bytes for webpack.
 All corresponding production charges exceeded those differences. These objects exclude store keys
 and index overhead, so they do not establish a shared-entry count divisor or a universal bound.
 
-The material calibration used three processes per mode and each of the twelve authentic captures.
-Each name has equal weight. Take each name's median, then the mean across names, add 25%, and round
-up to a whole MiB. Retained-hit weights round to 64 KiB. This declared corpus mix does not establish
-production request frequencies. The resulting mean inputs were:
-
-| Cost input | Mean bytes before margin |
-|---|---:|
-| Cold selected RSS growth | 6,819,840 |
-| Retained hit, larger of RSS growth and allocated interval | 167,936 |
-| Full-origin RSS growth | 30,256,469.333 |
-| Listing work after source preparation | 8,647,740.5 |
-
-Listing cost takes the larger of RSS growth and twice the strict output size, then the larger
-one-origin/two-origin median for each name. Two buffers account for lazy encoding chunks and their
-strict destination. The no-heap-datapoint fallback admits two calibrated listings with two origins
-each. These weights control heuristic concurrency. TypeScript's two-origin median process RSS was
-256,868,352 bytes, so the calibrated request weight cannot be read as its heap limit.
-
-The production source was `868818d671fa30ea93957feb4a6b20a878d14d13`, with the probe extension.
-GHC 9.10.3, Cabal `-O1`, RTS `-T -N1`, and 32 KiB file chunks produced 180 cold/hit/full/listing cells.
-No physical memory ceiling was imposed. The separate 36-row PyPI source comparison also completed.
-The first comparison had six empty selected results because the probe used noncanonical trailing-zero
-pins. Correcting the probe to use production canonical keys admitted the same releases.
-The original 36 process-sampled selected-retention diagnostics had noise larger than some roots.
-Those diagnostics supplied no admission weights or retained-factor inference.
-The next GC-only attempt also had six negative requests/boto3 samples. Removing full statistics
-records changed each raw value delta by 1,040 bytes, but did not remove the common baseline offset.
-The matched controls above resolved the values without discarding those earlier results.
+### Ingest ceiling checks
 
 Vite and Next were separate acceptance stress cases. All twelve full/selected reads completed at a
 48 MiB ingest ceiling. Their original bodies were 38,945,461 and 31,270,567 bytes respectively.
@@ -451,8 +411,8 @@ Each scenario reports:
   the quota withheld during the window
 - how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
   status), a kernel OOM kill, or another exit
-- the CPU admission, the memory admission budget, and the cold listings that budget admits at
-  once, read from the proxy's boot log, with the runtime lines quoted
+- the CPU admission and the memory admission budget at boot, read from the proxy's boot log, with
+  the runtime lines quoted
 - `ecluse.serve.admission.in_flight` and the proxy's thread count (`pids.current`) sampled each
   second, and every admission series at the end of the window
 - the metadata cache's hit, miss, and collapsed request counts in the window for the full,

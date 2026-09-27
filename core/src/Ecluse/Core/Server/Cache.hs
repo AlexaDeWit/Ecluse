@@ -103,7 +103,7 @@ resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Versi
 resolveVersion metrics cache source name version fetch =
     prepareVersion metrics cache source name version fetch >>= executePrepared
 
--- | Pin a selected local value, including absence, before material admission.
+-- | Pin a selected local value, including absence, before any remote work.
 prepareVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (PreparedStore MetadataError VersionRead)
 prepareVersion metrics cache source name version =
     prepareStore

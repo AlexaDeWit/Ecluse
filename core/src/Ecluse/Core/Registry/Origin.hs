@@ -19,6 +19,7 @@ module Ecluse.Core.Registry.Origin (
     anonymousOrigin,
     perCallerOrigin,
     originClientOf,
+    chargingFullReads,
 ) where
 
 import Network.HTTP.Client (Manager)
@@ -37,6 +38,8 @@ data OriginClient = OriginClient
     -- ^ 'Nothing' for an anonymous origin. A passthrough read carries the caller's own verbatim.
     , ocLimits :: Limits
     -- ^ The bound every read through this origin is held to, fail-closed past the maximum.
+    , ocChargeFullRead :: Int -> IO ()
+    -- ^ Pays for each decompressed chunk of a full metadata read before the parser sees it, zero at its end.
     }
 
 {- | One origin from the four things that name it. The bound comes first because a caller
@@ -44,7 +47,7 @@ usually holds one and reaches several origins under it.
 -}
 originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
 originClient limits manager baseUrl token =
-    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits}
+    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits, ocChargeFullRead = const pass}
 
 -- | The origin's base URL as text, which is how every request builder takes it.
 originBaseUrl :: OriginClient -> Text
@@ -74,3 +77,7 @@ perCallerOrigin limits manager baseUrl token = OriginFor (originClient limits ma
 -- | The plain record behind a tagged origin, for the operations that take any origin.
 originClientOf :: OriginFor posture -> OriginClient
 originClientOf (OriginFor client) = client
+
+-- | The same origin, paying for what its full metadata reads hand on.
+chargingFullReads :: (Int -> IO ()) -> OriginFor posture -> OriginFor posture
+chargingFullReads charge (OriginFor client) = OriginFor client{ocChargeFullRead = charge}

@@ -18,7 +18,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), admittedListings, bootLimits, loggedRules, ruleBootOrders)
+import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, ruleBootOrders)
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
@@ -56,8 +56,7 @@ renderReports knobs capabilities processors shape ecosystem c1Reports reports =
         , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
         , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
         , row "CPU admission" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
-        , row "memory admission budget" (maybe "n/a" bytesCell (blMaterialBudgetBytes limits))
-        , row "cold two-origin listings admitted at once" (maybe "n/a" show (admittedListings limits))
+        , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
         , row "private pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPrivateConnectionsPerHost knobs))
         , row "public pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPublicConnectionsPerHost knobs))
         , row "cache-eviction entries" (show (lkCacheMaxEntries knobs))
@@ -240,7 +239,7 @@ proxyRows p =
     , row "CPU throttled during the window" (maybe "n/a" (\us -> fmt1 (fromIntegral us / 1_000) <> " ms") (pfWindowThrottledUsec p))
     , row "proxy ending" (endingCell (pfEnding p) <> if pfExitedEarly p then ", before the harness stopped it" else "")
     , row "boot attempts" (show (length (pfBootRetries p) + 1))
-    , row "CPU admission / memory admission budget / cold listings at once" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMaterialBudgetBytes limits) <> " / " <> maybe "n/a" show (admittedListings limits))
+    , row "CPU admission / memory admission budget at boot" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
     , row "admission in-flight gauge: max / mean / last (samples, missed)" (gaugeCell (pfInFlight p))
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))

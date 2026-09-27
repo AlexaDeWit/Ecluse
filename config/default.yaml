@@ -89,7 +89,7 @@ limits:
   progressWindow: 10
   minProgressBytes: 1048576
   # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
-  # concurrency and the material estimate budget. Reads fail closed past this limit.
+  # concurrency and the metadata memory budget. Reads fail closed past this limit.
   # A positive explicit value stays exact. Boot and check-config warn that accepting
   # a body does not guarantee its materialisation fits the heap.
   # maxRequestBytes bounds a publish body. The memory plan sizes it from the heap,
@@ -196,27 +196,29 @@ advisories:
 # runtime:
 #   # Cores the process claims. Unset, they resolve down a ladder: the cgroup CPU quota
 #   # floored, else the count the cgroup memory limit can feed, else coresCeiling, each
-#   # clamped to the visible processors. The boot log names the rung that fired, and the
-#   # memory plan may shed some on a small pod. Give the container whole cores.
+#   # clamped to the visible processors. The boot log names the rung that fired. Give
+#   # the container whole cores.
 #   cores: 4
 #   # The cap on the last rung of that ladder, which fires only when no cgroup CPU quota
 #   # and no cgroup memory limit bind this process (bare metal, or a pod with neither
 #   # limit set). It never caps an explicit cores, a CPU quota, or the memory-derived
 #   # count. Prefer setting cores over raising this.
 #   coresCeiling: 8
-#   # Heap ceiling in bytes: the cgroup memory limit less one allocation area and 10%
-#   # slack, floored at half the limit. The nursery (cores x allocation area) counts
-#   # inside it. Enforcing it re-executes the binary once. A heap breach is a
-#   # heap-overflow error. Memory outside the heap (socket buffers, OS thread stacks,
-#   # native zlib state) does not count against it. Derived from cgroup v2 only: under
+#   # Heap ceiling in bytes: the cgroup memory limit less one allocation area and an
+#   # eighth of the limit (at least 32 MiB) for memory outside the heap (socket buffers,
+#   # OS thread stacks, native zlib state), floored at half the limit. The nursery
+#   # (cores x allocation area) counts inside it. The boot sizes the allocation area
+#   # (-A) with it: an eighth of the limit across the cores, 4 to 64 MiB. Enforcing
+#   # either re-executes the binary once. A heap breach is a heap-overflow error. The
+#   # ceiling also sizes the metadata memory budget: a quarter of the heap the nursery
+#   # leaves, less the cache and the idle process. Derived from cgroup v2 only: under
 #   # cgroup v1, or a layout that hides the limit, set this by hand or the process
 #   # boots with no heap ceiling.
 #   maxHeapBytes: 1073741824
 #   # Concurrent metadata operations, computed from cores independently of memory.
-#   # A positive explicit value stays exact. A separate material estimate budget
-#   # controls fresh work and known local reuse. Either gate waits up to 1 s before
-#   # returning 503 with Retry-After: 1. Treat these responses as backpressure.
-#   # Estimates reduce concurrency pressure without bounding worst-case heap use.
+#   # A positive explicit value stays exact, and it also sizes the waiting room at the
+#   # memory door. A request waits up to 1 s at either door, then gets 503 with
+#   # Retry-After: 1. Treat these responses as backpressure.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.

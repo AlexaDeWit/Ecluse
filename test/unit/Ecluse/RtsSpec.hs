@@ -13,13 +13,15 @@ import Ecluse.Rts (
     Provenance (FromCgroup, FromCgroupMemory, FromConfig, FromCoresCeiling, FromRts),
     RtsPosture (..),
     RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes),
-    RuntimePlan (planCapabilities, planMaxHeapBytes),
+    RuntimePlan (planAllocAreaBytes, planCapabilities, planMaxHeapBytes),
     appliedRuntimePlan,
     axEnforced,
+    deriveAllocAreaBytes,
     deriveMaxHeapBytes,
     effectiveCapabilities,
     effectiveHeapCeiling,
     parseCpuMax,
+    parseInactiveFile,
     parseMemoryMax,
     reconcileRuntimePlan,
     renderEffectivePosture,
@@ -79,6 +81,10 @@ cgroupParsingSpec = describe "cgroup v2 parsing" $ do
         parseCpuMax "banana" `shouldBe` Nothing
         parseCpuMax "-100000 100000" `shouldBe` Nothing
 
+    it "reads inactive_file from a memory.stat body" $ do
+        parseInactiveFile "anon 100\nfile 200\nactive_file 50\ninactive_file 150\n" `shouldBe` Just 150
+        parseInactiveFile "anon 100\n" `shouldBe` Nothing
+
     it "reads memory.max bytes and the unlimited sentinel" $ do
         parseMemoryMax "536870912\n" `shouldBe` Just (512 * mib)
         parseMemoryMax "max\n" `shouldBe` Nothing
@@ -92,19 +98,35 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planCapabilities plan `shouldBe` (2, FromConfig)
         planMaxHeapBytes plan `shouldBe` (Just (400 * mib), FromConfig)
 
-    it "derives both axes from the cgroup when config is omitted" $ do
+    it "derives from the cgroup when config is omitted, sizing the area from the planned capabilities" $ do
+        -- The cgroup grants 2 cores while the RTS claimed 4, so the eighth of the limit the
+        -- nursery may take splits across 2 capabilities, and the heap follows the area.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
         planCapabilities plan `shouldBe` (2, FromCgroup)
+        planAllocAreaBytes plan `shouldBe` (32 * mib, FromCgroup)
         planMaxHeapBytes plan
-            `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) (64 * mib)), FromCgroup)
+            `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) (32 * mib)), FromCgroup)
 
     it "counts the nursery once, inside the derived heap ceiling" $ do
-        -- 4 CPU / 1 GiB at -A64m: the 256 MiB nursery stays inside -M, so the ceiling is
-        -- 857.6 MiB (the limit less one area and the slack), not 665.6 MiB.
+        -- 4 CPU / 1 GiB: the 128 MiB nursery (4 x 32 MiB) stays inside -M, so the ceiling is the
+        -- limit less the 128 MiB off-heap reserve and one area, 864 MiB.
         let cgroup = CgroupLimits{cgCpuCores = Just 4, cgMemoryMaxBytes = Just (1024 * mib)}
         planMaxHeapBytes (resolveRuntimePlan noOverrides cgroup unpinned)
-            `shouldBe` (Just 899256320, FromCgroup)
+            `shouldBe` (Just 905969664, FromCgroup)
+
+    it "keeps an operator GHCRTS allocation area, and sizes the heap from it" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            plan = resolveRuntimePlan noOverrides cgroup unpinned{rpAllocAreaBytes = 16 * mib}
+        planAllocAreaBytes plan `shouldBe` (16 * mib, FromRts)
+        planMaxHeapBytes plan `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) (16 * mib)), FromCgroup)
+
+    it "reads its own derived area back as derived after the re-launch" $ do
+        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
+            relaunched = unpinned{rpCapabilities = 2, rpAllocAreaBytes = 32 * mib}
+            plan = resolveRuntimePlan noOverrides cgroup relaunched
+        planAllocAreaBytes plan `shouldBe` (32 * mib, FromCgroup)
+        requiredRtsFlags relaunched{rpMaxHeapBytes = fst (planMaxHeapBytes plan)} plan `shouldBe` []
 
     it "floors a fractional cpu quota, so capabilities never exceed the CFS budget" $ do
         let cgroup = noCgroup{cgCpuCores = Just 3.5}
@@ -169,17 +191,29 @@ ladderSpec = describe "the capability ladder below the cgroup CPU quota" $ do
                 `shouldBe` (12, FromCgroupMemory)
 
 derivationSpec :: Spec
-derivationSpec = describe "deriveMaxHeapBytes" $ do
-    it "subtracts one allocation area and ten percent slack, aligned to the RTS's 4 KiB blocks" $ do
-        -- The result rounds down to a whole 4 KiB block, so the ceiling reads back exactly
-        -- after the re-exec.
-        let raw = 512 * mib - 64 * mib - (512 * mib) `div` 10
-        deriveMaxHeapBytes (512 * mib) (64 * mib)
-            `shouldBe` (raw - raw `mod` 4096)
+derivationSpec = describe "deriveMaxHeapBytes and deriveAllocAreaBytes" $ do
+    it "subtracts the off-heap reserve and one allocation area, never the nursery" $ do
+        -- The nursery sits inside -M since GHC 9.6, so only what -M does not cover comes off.
+        deriveMaxHeapBytes (512 * mib) (32 * mib) `shouldBe` 416 * mib
+        deriveMaxHeapBytes (2048 * mib) (64 * mib) `shouldBe` 1728 * mib
+        deriveMaxHeapBytes (256 * mib) (16 * mib) `shouldBe` 208 * mib
 
-    it "floors at half the memory limit when the allowance would swallow a tiny pod" $
-        -- 128 MiB less a 64 MiB area and the slack is under half, so half the limit stands.
-        deriveMaxHeapBytes (128 * mib) (64 * mib) `shouldBe` (64 * mib)
+    it "aligns the ceiling to the RTS's 4 KiB blocks" $
+        deriveMaxHeapBytes (512 * mib + 123) (32 * mib) `mod` 4096 `shouldBe` 0
+
+    it "floors at half the memory limit on a tiny pod" $
+        deriveMaxHeapBytes (40 * mib) (4 * mib) `shouldBe` 20 * mib
+
+    it "gives the nursery an eighth of the limit, in whole MiB from 4 to 64" $ do
+        deriveAllocAreaBytes (512 * mib) 2 `shouldBe` 32 * mib
+        deriveAllocAreaBytes (256 * mib) 2 `shouldBe` 16 * mib
+        deriveAllocAreaBytes (1024 * mib) 4 `shouldBe` 32 * mib
+        deriveAllocAreaBytes (2048 * mib) 4 `shouldBe` 64 * mib
+        deriveAllocAreaBytes (64 * gibi) 4 `shouldBe` 64 * mib
+        deriveAllocAreaBytes (96 * mib) 8 `shouldBe` 4 * mib
+        deriveAllocAreaBytes (750 * mib) 4 `shouldBe` 23 * mib
+  where
+    gibi = 1024 * mib
 
 flagsSpec :: Spec
 flagsSpec = describe "requiredRtsFlags" $ do
@@ -197,11 +231,11 @@ flagsSpec = describe "requiredRtsFlags" $ do
         let plan = resolveRuntimePlan pinnedBoth{roCores = Just 4} noCgroup unpinned
         requiredRtsFlags unpinned plan `shouldBe` ["-M" <> show (400 * mib)]
 
-    it "asks for both flags when both differ" $ do
+    it "asks for every flag that differs" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
-        requiredRtsFlags unpinned plan `shouldBe` ["-N2", "-M" <> show derived]
+            derived = deriveMaxHeapBytes (512 * mib) (32 * mib)
+        requiredRtsFlags unpinned plan `shouldBe` ["-N2", "-A" <> show (32 * mib), "-M" <> show derived]
 
     it "never asks to change a posture the live RTS already matches" $ do
         -- The last rung lands on the visible processors, which is what -N claimed.
@@ -215,8 +249,8 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
     it "reads an exactly-applied plan as enforced on both axes" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
-            applied = unpinned{rpCapabilities = 2, rpMaxHeapBytes = Just derived}
+            derived = deriveMaxHeapBytes (512 * mib) (32 * mib)
+            applied = unpinned{rpCapabilities = 2, rpAllocAreaBytes = 32 * mib, rpMaxHeapBytes = Just derived}
             effective = reconcileRuntimePlan cgroup plan applied
         axEnforced (erpCapabilities effective) `shouldBe` True
         axEnforced (erpMaxHeapBytes effective) `shouldBe` True
@@ -227,7 +261,7 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
         -- Partial application: the capability change took, the -M did not.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (32 * mib)
             partial = unpinned{rpCapabilities = 2}
             effective = reconcileRuntimePlan cgroup plan partial
         axEnforced (erpMaxHeapBytes effective) `shouldBe` False
@@ -252,7 +286,7 @@ reconcileSpec = describe "reconcileRuntimePlan (desired vs observed)" $ do
     it "predicts a successful application (appliedRuntimePlan): both axes enforced at the desire" $ do
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
-            derived = deriveMaxHeapBytes (512 * mib) (64 * mib)
+            derived = deriveMaxHeapBytes (512 * mib) (32 * mib)
             effective = appliedRuntimePlan cgroup plan unpinned
         effectiveCapabilities effective `shouldBe` (2, FromCgroup)
         effectiveHeapCeiling effective `shouldBe` (Just derived, FromCgroup)
@@ -265,7 +299,7 @@ renderSpec = describe "renderEffectivePosture and renderPostureWarnings" $ do
             rendered = renderEffectivePosture (appliedRuntimePlan cgroup plan unpinned)
         rendered `shouldSatisfy` any (\l -> "capabilities 2" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
         rendered `shouldSatisfy` any (\l -> "max heap" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
-        rendered `shouldSatisfy` any ("allocation area 64 MiB/capability" `T.isInfixOf`)
+        rendered `shouldSatisfy` any (\l -> "allocation area 32 MiB/capability" `T.isInfixOf` l && "cgroup" `T.isInfixOf` l)
 
     it "says the heap is unbounded when nothing granted a ceiling, and names the override" $ do
         let plan = resolveRuntimePlan noOverrides noCgroup unpinned

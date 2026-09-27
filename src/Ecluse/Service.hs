@@ -22,8 +22,7 @@ module Ecluse.Service (
     mountBindingFor,
 ) where
 
-import GHC.Conc (setNumCapabilities)
-import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
+import Katip (LogEnv, Namespace (Namespace), SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
@@ -34,11 +33,12 @@ import Ecluse.Composition.Executable (
     MirrorWiring (mwBootWiring, mwCveSync, mwDeferredMetrics, mwQueue, mwRole),
  )
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMaterialAggregateBytes, mpMirrorArtifactTenant, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpTransientBudget),
     MirrorArtifactTenant (matMaxBytes),
+    TransientBudget (tbBootBytes),
     mirrorArtifactBytesCap,
  )
-import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances)
+import Ecluse.Composition.MemoryPlan.Transient (brakeBounds, meterStepBytes)
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.Plan (
@@ -63,7 +63,9 @@ import Ecluse.Core.Registry.Adapter (
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Admission.Material (newMaterialAdmission)
+import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
+import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Server.Readiness (Readiness)
@@ -76,10 +78,13 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
 import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
+import Ecluse.Rts (cgroupMemoryUse)
+import Ecluse.Rts.Sampler (SamplerSettings (..), readCollector, runMemorySampler, samplerPeriodMicros, shareWindowPeriods)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Runtime.Telemetry.Instruments (registerMemoryMeter)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredMirrorEnqueueFailure,
@@ -106,6 +111,8 @@ data ServiceRuntime = ServiceRuntime
     -- ^ The supervised enqueue-buffer drain, present when this role produces jobs into a queue.
     , svcSyncTasks :: [IO ()]
     -- ^ One supervised advisory-sync task per configured ecosystem.
+    , svcMemorySampler :: IO ()
+    -- ^ The supervised memory sampler that steers the transient budget. It never returns.
     , svcCheckReady :: IO Readiness
     , svcCheckLive :: IO Liveness
     }
@@ -126,11 +133,8 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         bindings = bwBindings (mwBootWiring mirror)
 
-    -- Apply a shed capability count in-process before the parallel machinery spins up. Past the
-    -- gate, so a refused boot never reshapes the process it is about to abandon.
-    whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
-    materialAdmission <- newMaterialAdmission (mpMaterialAggregateBytes memoryPlan) (mpAdmissionCapacity memoryPlan) materialAllowances
+    (memoryMeter, sampler) <- memoryAdmission memoryPlan
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
@@ -140,10 +144,11 @@ withServiceRuntime bootEnv plan mirror action = do
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
     (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
-    withEnvWithAdmission serveAdmission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+    withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
+        registerMemoryMeter (envMetrics builtEnv) (meterSnapshot memoryMeter)
         registerAdvisoryAges (envMetrics builtEnv) cveSyncPlan
         -- 'MirrorWith' always carries the artifact tenant.
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
@@ -155,7 +160,7 @@ withServiceRuntime bootEnv plan mirror action = do
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
                 , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
-                , svcMirrorDrain = superviseDrain builtEnv <$> mirrorDrain
+                , svcMirrorDrain = superviseBackground "mirror-enqueue-drain" builtEnv <$> mirrorDrain
                 , svcSyncTasks =
                     cveSyncTasks
                         (envLogEnv builtEnv)
@@ -163,9 +168,37 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
+                , svcMemorySampler = superviseBackground "memory-sampler" builtEnv sampler
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
+
+-- The metadata memory meter and the sampler that steers it, both sized from the memory plan.
+memoryAdmission :: MemoryPlan -> IO (MemoryMeter, IO ())
+memoryAdmission memoryPlan = do
+    meter <-
+        newMemoryMeter
+            MeterSettings
+                { msBudgetBytes = tbBootBytes (mpTransientBudget memoryPlan)
+                , msStepBytes = meterStepBytes
+                , msEntryRoom = mpAdmissionCapacity memoryPlan
+                , msEntryWaitMicros = admissionWaitMicros
+                }
+    collector <- readCollector
+    kernelUse <- cgroupMemoryUse
+    pure
+        ( meter
+        , runMemorySampler
+            SamplerSettings
+                { ssMeter = meter
+                , ssMarks = defaultBrakeMarks
+                , ssBounds = brakeBounds (mpTransientBudget memoryPlan)
+                , ssCollector = collector
+                , ssKernelPermille = kernelUse
+                , ssPeriodMicros = samplerPeriodMicros
+                , ssWindowPeriods = shareWindowPeriods
+                }
+        )
 
 {- The two data-plane managers, each instrumented then pooled at its own bound. They stay split
 because public reads are anonymous and private reads forward the caller's credential. -}
@@ -221,12 +254,12 @@ the log line is rate-limited, and the metric alongside counts every event. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
 
-{- The enqueue-buffer drain under the shared supervision combinator. Pacing lives in the
-buffer's own loop, so this wrapper only stops residue ending mirror-job delivery. -}
-superviseDrain :: Env -> IO () -> IO ()
-superviseDrain builtEnv drain =
-    void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "mirror-enqueue-drain" $
-        superviseLoop (transientPolicy "mirror-enqueue-drain" backgroundLoopBackoff) (liftIO drain)
+{- A background loop under the shared supervision combinator: the enqueue-buffer drain or the
+memory sampler. Pacing lives in each loop, so this wrapper only stops residue ending the task. -}
+superviseBackground :: Text -> Env -> IO () -> IO ()
+superviseBackground label builtEnv task =
+    void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) (Namespace [label]) $
+        superviseLoop (transientPolicy label backgroundLoopBackoff) (liftIO task)
 
 {- | Run the supervised mirror worker over the composition-root 'Env' and the per-ecosystem
 bundles. The loop re-runs current policy against a job before it mirrors.

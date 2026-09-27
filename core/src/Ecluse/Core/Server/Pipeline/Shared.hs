@@ -13,7 +13,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     privateAuthorisationRefusal,
 
     -- * Admission shed
-    withAdmissionResultOrShed,
+    withMetadataAdmission,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -35,8 +35,12 @@ import Network.Wai (Request, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
+import UnliftIO (MonadUnliftIO)
+
+import Ecluse.Core.Server.Admission (withServeAdmission)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
-import Ecluse.Core.Server.Context (MountBinding (bindingCredential))
+import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntime (srAdmission, srMemoryMeter, srMetrics))
 import Ecluse.Core.Server.Response (
     HelpMessage,
     Refusal,
@@ -73,14 +77,20 @@ shedMessage = "server is busy; retry later"
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
 retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 
--- | Answer an admission result after its brackets release, counting either gate's refusal once.
-withAdmissionResultOrShed :: (MonadIO m) => MetricsPort -> m received -> m (Maybe a) -> (a -> m received) -> m received
-withAdmissionResultOrShed metrics shed gated answer =
-    gated >>= \case
+{- | Run metadata work behind the memory door and then the CPU gate, and answer its result after both
+release. A shed at either door answers with @shed@, counted once.
+-}
+withMetadataAdmission :: (MonadUnliftIO m) => ServeRuntime -> m received -> (MemoryTicket -> m a) -> (a -> m received) -> m received
+withMetadataAdmission runtime shed gated answer =
+    admitted >>= \case
         Just result -> answer result
         Nothing -> do
             liftIO (mpServeDecision metrics Metric.Unavailable)
             shed
+  where
+    metrics = srMetrics runtime
+    admitted = fmap join . withMemoryEntry metrics (srMemoryMeter runtime) $ \ticket ->
+        withServeAdmission metrics (srAdmission runtime) (gated ticket)
 
 -- | Match the configured inbound secret without content-dependent early exit. An unconfigured edge is open.
 edgeTokenMatches :: Maybe Secret -> Maybe ClientCredential -> Bool
