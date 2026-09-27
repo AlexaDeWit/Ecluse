@@ -15,9 +15,11 @@ import Data.Aeson (Value (Array, Null, Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Parser qualified as J
+import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
+import Ecluse.Core.Package.Hash (HashAlg (SRI), renderHashAlg)
+import Ecluse.Core.Registry.JsonStream (knownMembers, namedMembers, retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject, fileVersionKey)
 
 -- | Select all files or one canonical release while counting every input file.
@@ -41,8 +43,8 @@ pypiFields depth mode
     | otherwise = J.objectKeyValues topField
   where
     topField "name" = EnvelopeField "name" <$> scalar (depth - 1)
-    topField "meta" = EnvelopeField "meta" <$> objectOrScalar (depth - 1) metaField
-    topField "project-status" = fullOnly (EnvelopeField "project-status" <$> objectOrScalar (depth - 1) statusField)
+    topField "meta" = EnvelopeField "meta" <$> objectOrScalar (depth - 1) metaFields
+    topField "project-status" = fullOnly (EnvelopeField "project-status" <$> objectOrScalar (depth - 1) statusFields)
     topField "alternate-locations" = fullOnly (EnvelopeField "alternate-locations" <$> arrayOrScalar (depth - 1))
     topField "files" = files
     topField "versions" = versions
@@ -63,7 +65,7 @@ pypiFields depth mode
     file
         | depth <= 2 = Nothing <$ retainedValue 0
         | otherwise = case mode of
-            FullRead -> Just <$> retainedObjectOr Null fileField
+            FullRead -> Just <$> retainedObjectOr Null fileFields
             SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted
     versions = case mode of
         SelectedRead{} -> mempty
@@ -73,26 +75,25 @@ pypiFields depth mode
                 <|> pure (VersionsShape False)
     version (_, String _) = IgnoredField
     version (position, value) = InvalidVersionField position value
-    fileField "hashes" = objectOrScalar (depth - 3) (const (scalar (depth - 4)))
-    fileField key
-        | isFileScalar key = scalar (depth - 3)
-        | otherwise = mempty
-    metaField "tracks" = fullOnly (arrayOrScalar (depth - 2))
-    metaField key
-        | key == "api-version" = scalar (depth - 2)
-        | key == "_last-serial" = fullOnly (scalar (depth - 2))
-        | otherwise = mempty
-    statusField key
-        | key `elem` ["status", "reason"] = scalar (depth - 2)
-        | otherwise = mempty
+    -- Built once per read, so every file shares its field and hash algorithm names.
+    fileFields = namedMembers (("hashes", objectOrScalar (depth - 3) (knownMembers hashNames (scalar (depth - 4)))) : [(key, scalar (depth - 3)) | key <- fileScalars])
+    metaFields = namedMembers [("tracks", fullOnly (arrayOrScalar (depth - 2))), ("api-version", scalar (depth - 2)), ("_last-serial", fullOnly (scalar (depth - 2)))]
+    statusFields = namedMembers [(key, scalar (depth - 2)) | key <- ["status", "reason"]]
 
 scalar :: Int -> J.Parser Value
 scalar budget
     | budget <= 0 = retainedValue 0
     | otherwise = retainedScalar <|> pure (Array mempty)
 
+fileScalars :: [Text]
+fileScalars = ["filename", "url", "requires-python", "size", "upload-time", "yanked", "provenance"]
+
 isFileScalar :: Text -> Bool
-isFileScalar key = key `elem` ["filename", "url", "requires-python", "size", "upload-time", "yanked", "provenance"]
+isFileScalar key = key `elem` fileScalars
+
+-- The digest names a file's @hashes@ object can use. Any other name keeps its own key.
+hashNames :: [Text]
+hashNames = [renderHashAlg alg | alg <- Universe.universe, alg /= SRI]
 
 data SelectedFileEvent
     = FileScalar Key.Key Value

@@ -35,7 +35,7 @@ import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
@@ -65,6 +65,16 @@ spec = describe "npmFields" $ do
         fmap (fieldAt "unknown") selected `shouldBe` Just Nothing
         (selected >>= fieldAt "_npmUser" >>= fieldAt "unknown") `shouldBe` Nothing
         (selected >>= fieldAt "author") `shouldBe` Just (String "See https://registry.npmjs.org/thing")
+
+    it "shares fixed field names across releases and keeps dependency names as read" $ do
+        let bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= release, "2.0.0" .= release]]))
+        (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
+        let releases = case fieldAt "versions" compact of
+                Just (Object versions) -> KeyMap.elems versions
+                _ -> []
+        sharesKey "dist" releases `shouldReturn` True
+        sharesKey "tarball" (mapMaybe (fieldAt "dist") releases) `shouldReturn` True
+        sharesKey "dep" (mapMaybe (fieldAt "dependencies") releases) `shouldReturn` False
 
     it "mirrors the same supported fields and source author pointer" $ do
         (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)
