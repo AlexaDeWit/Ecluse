@@ -119,9 +119,9 @@ jobs:
           # This shell, and so the harness, joins the leaf beside the proxy cgroups.
           echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
           # The runner has 4 cores. The harness pins oha to core 0, and GHC takes the other
-          # 3 as capabilities. The driver passes -N3 to each scenario child through GHCRTS,
-          # because argv RTS flags do not survive the re-exec, and strips it from the proxy,
-          # whose own boot sizes it from its cgroup.
+          # 3 as capabilities. The driver passes -T -N3 to each scenario child through GHCRTS,
+          # because argv RTS flags do not survive the re-exec. Each proxy gets only -T, since
+          # its own boot sizes its capabilities from its cgroup.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # Preserve partial output when the harness fails.

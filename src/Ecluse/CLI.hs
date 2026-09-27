@@ -4,7 +4,7 @@
 
 {- | The @ecluse@ command line: the subcommand grammar and the flags each one settles. A bare
 invocation is @proxy@, so an operator who names no role gets the single-process pipeline.
-'Ecluse.run' dispatches the 'AppCommand' this yields.
+'Ecluse.Startup.runWith' dispatches the 'AppCommand' this yields.
 -}
 module Ecluse.CLI (
     AppCommand (..),

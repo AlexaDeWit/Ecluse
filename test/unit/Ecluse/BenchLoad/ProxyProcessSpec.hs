@@ -118,9 +118,9 @@ environmentSpec = describe "proxyEnvironment" $ do
             ]
         environmentFor shape = proxyEnvironment settings shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) base
         podEnvironment = environmentFor (Limited 2 (512 * 1024 * 1024))
-    it "keeps the harness environment without its RTS flags or its own configuration" $ do
+    it "keeps the harness environment with only the RTS statistics flag and without its own configuration" $ do
         lookup "PATH" podEnvironment `shouldBe` Just "/bin"
-        lookup "GHCRTS" podEnvironment `shouldBe` Nothing
+        filter ((== "GHCRTS") . fst) podEnvironment `shouldBe` [("GHCRTS", "-T")]
         lookup "__ECLUSE_RUNTIME_RTS_APPLIED" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_CACHE__TTL" podEnvironment `shouldBe` Just "0"
         lookup "OTEL_METRICS_EXPORTER" podEnvironment `shouldBe` Just "prometheus"

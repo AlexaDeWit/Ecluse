@@ -398,15 +398,17 @@ and are not charged to it. The harness does not enforce that.
 `BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
 `2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
 of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
-zero, and `cpu.max` at the cores. The load generator and the stubs stay outside that cgroup. No RTS
-flag is set by hand: the proxy's boot reads the cgroup and derives its capabilities, its heap
-ceiling, and its memory plan as it would in a pod. The unlimited shape sets `runtime.cores` to the
-harness's capability count instead. The workflow delegates the cgroup subtree with `sudo` before
-the run, enables the cpu, memory, and pids controllers for it without a task limit, and turns swap
-off. The cgroup outlives the proxy, so an OOM kill stays countable after the
-process is gone, and the harness retires any proxy cgroup a killed run left. A scheduled run
-measures `unlimited`, `2cpu-512mib`, `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one
-shape, `all`, or `thrash` for the GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this harness into it.
+zero, and `cpu.max` at the cores. The load generator and the stubs stay outside that cgroup. The
+proxy links the shipped RTS options and gets only `-T`, for its statistics, through `GHCRTS` at
+launch. Its boot reads the cgroup and derives its capabilities, its heap ceiling, and its memory
+plan as it would in a pod. The unlimited shape sets `runtime.cores` to the harness's capability
+count instead. The workflow delegates the cgroup subtree with `sudo` before the run, enables the
+cpu, memory, and pids controllers for it without a task limit, and turns swap off. The cgroup
+outlives the proxy, so an OOM kill stays countable after the process is gone, and the harness
+retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`, `2cpu-512mib`,
+`4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
+GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
+harness into it.
 Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
 
 Each scenario reports:
@@ -522,7 +524,8 @@ No family represents all deployments. The small captured identity space limits e
 | Restart | Empty process cache and interval between client arrivals |
 | Scan | Repeated full scans with one shared selected-version and assembled byte bound |
 
-`bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
+`GHCRTS=-T bench-load npm/pattern-cold-install` runs one cell, with the RTS statistics the driver
+turns on for each scenario it runs. Substitute `pypi` for its Simple-index trace.
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
 Duration knobs apply only to the legacy duration drivers.
 Clients send sequential requests after their scheduled start. Slow responses extend the run.

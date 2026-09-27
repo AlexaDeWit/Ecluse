@@ -40,10 +40,8 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
-import GHC.Stats (getRTSStatsEnabled)
 import UnliftIO.Async (concurrently, withAsync)
 
-import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (GaugeSummary, Sample (sampleName), commonLabels, renderSample, seriesTotal, summariseGauge)
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
@@ -65,7 +63,7 @@ import Ecluse.BenchLoad.ProxyProcess (
     stopProxy,
  )
 import Ecluse.BenchLoad.Replay (Replay (..), ReplayReport (..), runReplay)
-import Ecluse.BenchLoad.RtsProbe (snapshotAfter)
+import Ecluse.BenchLoad.RtsProbe (requireRtsStats, snapshotAfter)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection, MinorCollection), RtsSnapshot (rsLiveBytes), RtsWindow, rtsWindow)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown), RunEvidence (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -282,9 +280,7 @@ data ScenarioReport = ScenarioReport
 -- | Measure one fixture. Missing RTS counters fail the harness.
 runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
 runScenario knobs s = do
-    rtsOn <- getRTSStatsEnabled
-    unless rtsOn $
-        benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
+    requireRtsStats "the scenario"
     shape <- podShapeFromEnv
     let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale s)}
     scenarioBoot s scaled (measure scaled s (renderPodShape shape))

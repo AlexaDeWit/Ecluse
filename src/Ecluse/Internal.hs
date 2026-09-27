@@ -2,11 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The typed process perimeter behind 'Ecluse.run': how one service run ends, the status it
-exits with, and what it reports on the way out. "Ecluse" keeps only the entry point in its public
-contract, so this is the only module exporting the perimeter, for the composition root and for the
-specs that classify an ending directly. Importing it opts out of that contract's stability promise,
-as @text@ does.
+{- | The typed process perimeter behind 'Ecluse.Startup.runWith': how one service run ends, the
+status it exits with, and what it reports on the way out. "Ecluse" keeps only the entry point in its
+public contract, so this is the only module exporting the perimeter, for the composition root and
+for the specs that classify an ending directly. Importing it opts out of that contract's stability
+promise, as @text@ does.
 -}
 module Ecluse.Internal (
     ProcessOutcome (..),
@@ -57,7 +57,7 @@ superviseProcess service =
             | otherwise -> pure (ServiceExited (displayExceptionT err))
 
 {- How a run ends. A failing status is representable only beside the reason it reports, so
-'Ecluse.run' cannot exit non-zero in silence. -}
+'Ecluse.Startup.runWith' cannot exit non-zero in silence. -}
 data ProcessExit
     = ExitedCleanly
     | ExitedWith ExitCode Text
