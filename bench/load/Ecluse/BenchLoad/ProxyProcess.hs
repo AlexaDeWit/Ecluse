@@ -21,7 +21,9 @@ module Ecluse.BenchLoad.ProxyProcess (
     ProxyProcess,
     withProxyProcess,
     proxyPort,
+    proxyListening,
     proxyBootLines,
+    proxyRuleLines,
     proxyIdleRts,
     proxyIdleCgroupBytes,
     proxyBootRetries,
@@ -96,7 +98,7 @@ import UnliftIO (bracket, finally, onException, try, tryAny, tryIO)
 import UnliftIO.Async (Async, async, cancel, link, poll)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.BootLines (bootMessages)
+import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Exposition (Sample, parseExposition)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
@@ -105,6 +107,7 @@ import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, co
 import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Rts (parseMemoryMax, readIfExists)
+import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
 
@@ -148,6 +151,7 @@ data ProxyProcess = ProxyProcess
     , ppCgroup :: Maybe FilePath
     , ppManager :: Manager
     , ppBootLines :: [Text]
+    , ppRuleLines :: [Text]
     , ppIdleRts :: Maybe RtsSnapshot
     , ppIdleCgroupBytes :: Maybe Int
     , ppBootRetries :: [Text]
@@ -158,9 +162,17 @@ data ProxyProcess = ProxyProcess
 proxyPort :: ProxyProcess -> Int
 proxyPort = ppPort
 
+-- | Whether a JSON log holds the line the proxy logs once its listener has bound.
+proxyListening :: [ByteString] -> Bool
+proxyListening = any (listeningPrefix proxyListener `T.isPrefixOf`) . logMessages
+
 -- | The runtime and admission lines the proxy logged at boot.
 proxyBootLines :: ProxyProcess -> [Text]
 proxyBootLines = ppBootLines
+
+-- | The rule configuration and rule boot order the proxy logged at boot.
+proxyRuleLines :: ProxyProcess -> [Text]
+proxyRuleLines = ppRuleLines
 
 -- | RTS counters after a major collection on the booted, idle proxy: its idle floor.
 proxyIdleRts :: ProxyProcess -> Maybe RtsSnapshot
@@ -268,17 +280,18 @@ launch settings shape root dir publicPort privatePort = do
                 , ppCgroup = cgroup
                 , ppManager = manager
                 , ppBootLines = []
+                , ppRuleLines = []
                 , ppIdleRts = Nothing
                 , ppIdleCgroupBytes = Nothing
                 , ppBootRetries = retries
                 , ppEnd = endVar
                 }
     (`onException` (stopProxy booted `finally` traverse_ retireCgroup cgroup)) $ do
-        -- The boot logged its plan before it listened. Give the drain a moment to catch up.
-        bootLines <- pollUntil 50 100_000 (any ("memory plan:" `T.isPrefixOf`)) (bootMessages . BS8.lines . capturedHead <$> readIORef (drStdout drained))
+        -- Every boot line precedes the listening line. Give the drain a moment to catch up.
+        logged <- pollUntil 50 100_000 proxyListening (BS8.lines . capturedHead <$> readIORef (drStdout drained))
         idle <- proxySnapshot booted MajorCollection
         idleCgroup <- proxyCgroupNow booted
-        pure booted{ppBootLines = bootLines, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
+        pure booted{ppBootLines = bootMessages logged, ppRuleLines = ruleMessages logged, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
 
 -- Three distinct free ports: the proxy, its RTS control listener, and its scrape listener.
 distinctPorts :: IO (Int, Int, Int)

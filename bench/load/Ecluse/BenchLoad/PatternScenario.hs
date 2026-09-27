@@ -11,14 +11,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
-import Data.Universe.Class qualified as Universe
 import Network.HTTP.Client qualified as HTTP
 import Network.Wai (Application, rawPathInfo)
 import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (blCacheBytes, blCacheEntries), bootLimits)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Exposition (Sample, seriesTotal)
+import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), Sample, expositionName, seriesTotal, storeLabel, storeOutcomes)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, loadCorpusBodies, withProxyConfigured)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (scenarioServiceTime), Target, proxied, scenario)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..), selectedNpmArtifact)
@@ -33,7 +32,8 @@ import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
-import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
+import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
+import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName, readCorpusPins)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
@@ -171,9 +171,9 @@ evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace
     let limits = bootLimits (proxyBootLines proxy)
         shared = capacity <|> blCacheBytes limits
         stores =
-            [ collect scraped fullWorkingBytes "full" "" 0
-            , collect scraped fullWorkingBytes "version" "_version" (fromMaybe 0 shared)
-            , collect scraped fullWorkingBytes "assembled" "_assembled" (fromMaybe 0 shared)
+            [ collect scraped fullWorkingBytes FullStore 0
+            , collect scraped fullWorkingBytes VersionStore (fromMaybe 0 shared)
+            , collect scraped fullWorkingBytes AssembledStore (fromMaybe 0 shared)
             ]
     pure $
         T.unlines
@@ -186,33 +186,32 @@ evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxMetadataBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxMetadataBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / 0 B. Full retention is ineligible."
             , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected lookups use only the selected provider capability."
-            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / 0."
+            , renderStoreEvidence stores
             , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS figures describe the proxy process alone. The replay client and the stub upstreams run in the harness process."
             , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and historical weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
             , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and the shared eligible-store budget."
             ]
-  where
-    metricsAvailable =
-        all
-            (`elem` map metricName (Universe.universe :: [MetricName]))
-            ["ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests", "ecluse.metadata_cache.refused"]
 
--- One store's outcomes from the scrape. The exporter spells each metric with underscores for dots.
-collect :: [Sample] -> Int -> Text -> Text -> Int -> StoreEvidence
-collect scraped fullWorkingBytes storeName suffix capacity =
+-- One store's outcomes and occupancy from the scrape.
+collect :: [Sample] -> Int -> CacheStore -> Int -> StoreEvidence
+collect scraped fullWorkingBytes store capacity =
     StoreEvidence
-        { seStore = storeName
+        { seStore = storeLabel store
         , seCapacity = capacity
-        , seAccountedWorkingSet = if storeName == "full" then Just fullWorkingBytes else Nothing
-        , seResidentBytes = round (fromMaybe 0 (seriesTotal ("ecluse_metadata_cache" <> suffix <> "_resident_bytes") [] scraped))
-        , seHits = outcome "hit"
-        , seMisses = outcome "miss"
-        , seCollapsed = outcome "collapsed"
-        , seRefused = round (fromMaybe 0 (seriesTotal "ecluse_metadata_cache_refused" [("store", storeName)] scraped))
+        , seAccountedWorkingSet = if store == FullStore then Just fullWorkingBytes else Nothing
+        , seResidentBytes = round (fromMaybe 0 (seriesTotal (expositionName residentBytes) [] scraped))
+        , seHits = coHits outcomes
+        , seMisses = coMisses outcomes
+        , seCollapsed = coCollapsed outcomes
+        , seRefused = round (fromMaybe 0 (seriesTotal (expositionName MetadataCacheRefused) [renderLabel (LCacheStore store)] scraped))
         }
   where
-    outcome result = round (fromMaybe 0 (seriesTotal ("ecluse_metadata_cache" <> suffix <> "_requests") [("result", result)] scraped))
+    outcomes = storeOutcomes scraped store
+    residentBytes = case store of
+        FullStore -> MetadataCacheResidentBytes
+        VersionStore -> SingleVersionCacheResidentBytes
+        AssembledStore -> AssembledCacheResidentBytes
 
 accountedFullBytes :: Ecosystem -> Text -> CorpusPackage -> LByteString -> Either Text Int
 accountedFullBytes ecosystem upstreamBase package bytes = do

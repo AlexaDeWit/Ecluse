@@ -32,6 +32,7 @@ module Ecluse.BenchLoad.Harness (
     warmUp,
     windowSuccesses,
     windowAttempts,
+    windowRefusals,
     reportEvidence,
 ) where
 
@@ -42,7 +43,16 @@ import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
 import UnliftIO.Async (concurrently, withAsync)
 
-import Ecluse.BenchLoad.Exposition (GaugeSummary, Sample (sampleName), commonLabels, renderSample, seriesTotal, summariseGauge)
+import Ecluse.BenchLoad.Exposition (
+    CacheOutcomes,
+    GaugeSummary,
+    Sample (sampleName),
+    cacheWindow,
+    commonLabels,
+    renderSample,
+    seriesTotal,
+    summariseGauge,
+ )
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
@@ -57,6 +67,7 @@ import Ecluse.BenchLoad.ProxyProcess (
     proxyCgroupNow,
     proxyIdleCgroupBytes,
     proxyIdleRts,
+    proxyRuleLines,
     proxyScrape,
     proxySnapshot,
     proxyTasksNow,
@@ -241,6 +252,8 @@ data ProxyFigures = ProxyFigures
     , pfStderrTail :: Text
     -- ^ Kept only for an ending other than a clean shutdown.
     , pfBootLines :: [Text]
+    , pfRuleLines :: [Text]
+    -- ^ The rule configuration and rule boot order the proxy logged.
     , pfBootRetries :: [Text]
     -- ^ Failed boots the harness retried, each with its diagnostic.
     , pfInFlight :: GaugeSummary
@@ -249,6 +262,8 @@ data ProxyFigures = ProxyFigures
     -- ^ The proxy cgroup's @pids.current@, its thread count, sampled each second of the window.
     , pfAdmissionSeries :: [Text]
     -- ^ Every admission series at the end of the window.
+    , pfCacheWindow :: Maybe [(Text, CacheOutcomes)]
+    -- ^ Each metadata cache store's outcomes in the window. 'Nothing' when a scrape failed.
     }
     deriving stock (Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -289,12 +304,15 @@ measure :: LoadKnobs -> Scenario -> Text -> Target -> IO ScenarioReport
 measure knobs s shape (Target proxy driver) = do
     warmUp driver
     settle proxy
+    -- This scrape and the one after the window closes sit outside the RTS window, so their own
+    -- allocation is not charged to it.
+    startScrape <- scrapeOf proxy
     before <- snapshotOf proxy MajorCollection
     cgroupBefore <- cgroupOf proxy
     (outcome, (inFlight, tasks)) <- sampling proxy (drive knobs driver)
     after <- snapshotOf proxy MinorCollection
     cgroupAfter <- cgroupOf proxy
-    admission <- maybe (pure []) admissionSeries proxy
+    endScrape <- scrapeOf proxy
     evidence <- case driver of
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
@@ -313,7 +331,7 @@ measure knobs s shape (Target proxy driver) = do
             , srRtsWindow = rtsWindow <$> before <*> after
             , srRtsEnd = after
             , srRetainedBytes = rsLiveBytes <$> retained
-            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) (inFlight, tasks) admission) <$> ends
+            , srProxy = (\(p, end) -> proxyFigures p end cgroupAfter (throttled cgroupBefore cgroupAfter) (inFlight, tasks) (startScrape, endScrape)) <$> ends
             , srEvidence = evidence
             }
   where
@@ -322,8 +340,8 @@ measure knobs s shape (Target proxy driver) = do
         stop <- b
         pure (counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start))
 
-proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> ([Maybe Double], [Maybe Double]) -> [Text] -> ProxyFigures
-proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) admission =
+proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe CgroupReading -> Maybe Int -> ([Maybe Double], [Maybe Double]) -> (Maybe [Sample], Maybe [Sample]) -> ProxyFigures
+proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) (startScrape, endScrape) =
     ProxyFigures
         { pfIdleRts = proxyIdleRts proxy
         , pfIdleCgroupBytes = proxyIdleCgroupBytes proxy
@@ -334,10 +352,12 @@ proxyFigures proxy end windowCgroup throttledUsec (inFlight, tasks) admission =
         , pfExitedEarly = peExitedEarly end
         , pfStderrTail = if peEnding end == CleanShutdown then "" else peStderrTail end
         , pfBootLines = proxyBootLines proxy
+        , pfRuleLines = proxyRuleLines proxy
         , pfBootRetries = proxyBootRetries proxy
         , pfInFlight = summariseGauge inFlight
         , pfTasks = summariseGauge tasks
-        , pfAdmissionSeries = admission
+        , pfAdmissionSeries = maybe ["(the final scrape failed)"] admissionSeries endScrape
+        , pfCacheWindow = cacheWindow <$> startScrape <*> endScrape
         }
 
 -- The proxy's counters over HTTP, or this process's own for in-process work.
@@ -356,6 +376,9 @@ settle = traverse_ $ \p -> void (pollUntil 300 200_000 (== Just 0) (inFlightNow 
 cgroupOf :: Maybe ProxyProcess -> IO (Maybe CgroupReading)
 cgroupOf = fmap join . traverse proxyCgroupNow
 
+scrapeOf :: Maybe ProxyProcess -> IO (Maybe [Sample])
+scrapeOf = fmap join . traverse proxyScrape
+
 -- Sample the in-flight gauge and thread count each second. A failed scrape is a miss, and a gauge
 -- not yet created reads zero, since it appears on the first admission.
 sampling :: Maybe ProxyProcess -> IO a -> IO (a, ([Maybe Double], [Maybe Double]))
@@ -373,11 +396,8 @@ sampling proxy load = case proxy of
 inFlightSeries :: Text
 inFlightSeries = "ecluse_serve_admission_in_flight"
 
-admissionSeries :: ProxyProcess -> IO [Text]
-admissionSeries proxy =
-    proxyScrape proxy <&> \case
-        Nothing -> ["(the final scrape failed)"]
-        Just samples -> map (renderSample (commonLabels samples)) (filter (T.isInfixOf "admission" . sampleName) samples)
+admissionSeries :: [Sample] -> [Text]
+admissionSeries samples = map (renderSample (commonLabels samples)) (filter (T.isInfixOf "admission" . sampleName) samples)
 
 -- | Prime duration-driven HTTP loads. Bursts and finite replays meet a cold proxy.
 warmUp :: Driver -> IO ()
@@ -479,6 +499,10 @@ windowSuccesses = sum . map lsSuccesses . windowLoads
 -- | Completed responses and transport failures across every load the RTS window spans.
 windowAttempts :: ScenarioReport -> Int
 windowAttempts = sum . map (\l -> lsCompleted l + lsTransportFailures l) . windowLoads
+
+-- | Refusals across every load the RTS window spans.
+windowRefusals :: ScenarioReport -> Int
+windowRefusals = sum . map lsRefusals . windowLoads
 
 -- | The invariant evidence one report carries: successes per load or step, OOM kills, and the ending.
 reportEvidence :: ScenarioReport -> RunEvidence

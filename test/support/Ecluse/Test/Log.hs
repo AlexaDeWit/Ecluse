@@ -5,13 +5,15 @@
 {- | The katip plumbing every tier's specs share.
 
 A spec either wants no log output at all ('newTestLogEnv', 'runQuietKatip') or wants to
-read back exactly what a scribe serialised ('jsonLogEnv' with 'captureStdout'), or what a
-refusal reported ('captureStderr').
+read back exactly what a scribe serialised ('jsonLogEnv' with 'captureStdout'), what a
+refusal reported ('captureStderr'), or each message while the code under test still runs
+('memoryLogEnv').
 -}
 module Ecluse.Test.Log (
     newTestLogEnv,
     runQuietKatip,
     jsonLogEnv,
+    memoryLogEnv,
     captureStdout,
     captureStderr,
     captureStderrWith,
@@ -22,13 +24,17 @@ module Ecluse.Test.Log (
 
 import Data.Aeson (Object, eitherDecodeStrict, (.:))
 import Data.Aeson.Types (parseMaybe)
+import Data.Text.Lazy.Builder (toLazyText)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
     ColorStrategy (ColorLog),
     Environment (Environment),
+    Item (_itemMessage),
     KatipContextT,
     LogEnv,
+    LogStr (unLogStr),
     Namespace (Namespace),
+    Scribe (Scribe, liPush, scribeFinalizer, scribePermitItem),
     Severity (DebugS),
     SimpleLogPayload,
     Verbosity (V2),
@@ -61,6 +67,17 @@ jsonLogEnv = do
     scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
     base <- newTestLogEnv
     registerScribe "stdout" scribe defaultScribeSettings base
+
+{- | A 'LogEnv' with one scribe that keeps every message in memory, and an action that reads them
+in the order logged. The scribe runs on @katip@'s worker thread, so a spec polls the reader.
+-}
+memoryLogEnv :: IO (LogEnv, IO [Text])
+memoryLogEnv = do
+    held <- newIORef []
+    let keep item = atomicModifyIORef' held (\messages -> (toStrict (toLazyText (unLogStr (_itemMessage item))) : messages, ()))
+        scribe = Scribe{liPush = keep, scribeFinalizer = pass, scribePermitItem = permitItem DebugS}
+    logEnv <- registerScribe "memory" scribe defaultScribeSettings =<< newTestLogEnv
+    pure (logEnv, reverse <$> readIORef held)
 
 {- | Run an action with 'stdout' redirected to a temporary file and return what it wrote.
 'stdout' is restored on every exit path, so scribe output never leaks into the run.

@@ -8,14 +8,18 @@ module Ecluse.BenchLoad.ExpositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse.BenchLoad.Exposition (
+    CacheOutcomes (..),
     GaugeSummary (..),
     Sample (..),
+    cacheWindow,
     commonLabels,
     parseExposition,
     renderSample,
     seriesTotal,
+    storeOutcomes,
     summariseGauge,
  )
+import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore, VersionStore))
 
 exposition :: Text
 exposition =
@@ -64,5 +68,15 @@ spec = do
                 `shouldBe` GaugeSummary{gsSamples = 3, gsMissed = 1, gsMax = Just 3, gsMean = Just 2, gsLast = Just 2}
         it "reports nothing for a window with no reading" $
             summariseGauge [Nothing] `shouldBe` GaugeSummary 0 1 Nothing Nothing Nothing
+    describe "storeOutcomes" $
+        it "reads a store's outcomes, and zero for a store with no series" $ do
+            storeOutcomes (parseExposition exposition) VersionStore `shouldBe` CacheOutcomes 7 2 0
+            storeOutcomes (parseExposition exposition) FullStore `shouldBe` CacheOutcomes 0 0 0
+    describe "cacheWindow" $
+        it "counts what each store recorded between the two scrapes" $
+            cacheWindow
+                (parseExposition "ecluse_metadata_cache_requests{result=\"miss\"} 2\n")
+                (parseExposition "ecluse_metadata_cache_requests{result=\"miss\"} 6\necluse_metadata_cache_requests{result=\"collapsed\"} 3\necluse_metadata_cache_assembled_requests{result=\"hit\"} 1\n")
+                `shouldBe` [("full", CacheOutcomes 0 4 3), ("version", CacheOutcomes 0 0 0), ("assembled", CacheOutcomes 1 0 0)]
   where
     lookupLabel key s = snd <$> find ((== key) . fst) (sampleLabels s)

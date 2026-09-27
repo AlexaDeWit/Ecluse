@@ -57,7 +57,7 @@ proxyServerConfig runtime =
 
 -- | Run the proxy listener with the mounted adapters and shared process resources.
 runServer :: ServerConfig -> Env -> IO ()
-runServer cfg env = Server.runWarp cfg (`Server.tracedApplication` env)
+runServer cfg env = Server.runWarp (envLogEnv env) Server.proxyListener cfg (`Server.tracedApplication` env)
 
 {- Warp's exception hook over the process logger. 'Warp.defaultShouldDisplayException'
 filters routine client disconnects, so an aborted download does not spam the log. -}

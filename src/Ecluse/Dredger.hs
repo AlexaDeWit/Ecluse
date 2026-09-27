@@ -75,7 +75,7 @@ import Ecluse.Dredger.Plan (
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (
-    ServerConfig (scCheckReady, scPort),
+    ServerConfig (scCheckReady),
     probeOnlyApplication,
     raceServerAgainstLoop,
     runWarp,
@@ -109,9 +109,9 @@ runDredger bootEnv opts pruner = do
     traverse_ (moduleLog logEnv dredgerModule InfoS . renderScopeBudget pacing) (storeBudgets mounts)
     -- Nothing has measured a cycle yet, so every pool starts at the ceiling its capacity allows.
     paceAtCeiling pacing (portsOver metrics) mounts
-    moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
+    moduleLog logEnv dredgerModule InfoS "Dredger starting up"
     raceServerAgainstLoop
-        (runWarp (cfg status) probeOnlyApplication)
+        (runWarp logEnv "Dredger health probes" (cfg status) probeOnlyApplication)
         (withSyncTasks (syncTasks metrics) (sweepTask logEnv opts pacing (portsOver metrics) syncReady status mounts))
     (>>= cycleEnding (doMode opts)) <$> readIORef (stFinal status)
   where

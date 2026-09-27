@@ -10,6 +10,10 @@ import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Katip (closeScribes)
+import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
+import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodHead, methodPut, status200, status404, status500, statusCode)
 import Network.Wai (
     Application,
@@ -18,13 +22,15 @@ import Network.Wai (
     responseLBS,
     responseStatus,
  )
+import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Network.Wai.Test qualified as WaiTest
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO (timeout)
+import UnliftIO.Async (link, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (finally, throwIO, try)
+import UnliftIO.Exception (bracket, finally, throwIO, try)
 
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime)
 
@@ -70,22 +76,27 @@ import Ecluse.Runtime.Server.Internal (
     application,
     beginDrain,
     isDraining,
+    listeningPrefix,
     mkServerConfig,
     newDrainSignal,
     perimeterGuard,
     probeOnlyApplication,
+    proxyListener,
     raceServerAgainstLoop,
     runWarp,
+    serveBound,
  )
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Log (memoryLogEnv, newTestLogEnv)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
+import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
-import Ecluse.Test.Wai (bodyContainsAll, selfBaseUrlOf, servedVersions, status)
+import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status)
 
 {- | A test mount binding with the given prefix and router, and __inert__ packument-serve
 dependencies. These specs exercise routing, not the data plane.
@@ -240,6 +251,7 @@ spec = do
     composedNpmMountSpec
     partialAdvisorySpec
     runWarpDrainWiringSpec
+    listeningLineSpec
     raceServerAgainstLoopSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
@@ -525,13 +537,49 @@ runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)
         -- The scDrain from mkServerConfig is neverDraining, so an app closed over that inert
         -- signal would never see a drain. Abort before warp binds a socket.
         let getApp cfg = putMVar captured (scDrain cfg) >> throwIO AbortLaunch
-        runWarp (mkServerConfig []) getApp `shouldThrow` (== AbortLaunch)
+        logEnv <- newTestLogEnv
+        runWarp logEnv "probe" (mkServerConfig []) getApp `shouldThrow` (== AbortLaunch)
         drain <- takeMVar captured
         -- A live, lowered signal: raising it is observable. neverDraining's raise is a
         -- no-op, so an inert signal would stay False where this one flips True.
         isDraining drain `shouldReturn` False
         beginDrain drain
         isDraining drain `shouldReturn` True
+
+{- | Pin the line 'runWarp' logs once bound, through 'serveBound', its binding half, which runs
+without the process-wide signal handlers 'runWarp' installs.
+-}
+listeningLineSpec :: Spec
+listeningLineSpec = describe "serveBound -- the listening line" $ do
+    it "logs the proxy's line with its configured port once it serves there" $ do
+        port <- freePort
+        (logged, answers) <- listeningOn port
+        logged `shouldBe` Just port
+        answers `shouldBe` True
+    it "logs the port the socket took when the configured port is 0, and serves there" $ do
+        (logged, answers) <- listeningOn 0
+        logged `shouldSatisfy` maybe False (/= 0)
+        answers `shouldBe` True
+
+-- Serve the probes on a configured port, wait up to ten seconds for the proxy's listening line,
+-- and return the port it names and whether @/livez@ answers on that port.
+listeningOn :: Int -> IO (Maybe Int, Bool)
+listeningOn configured = do
+    app <- probeOnlyApplication (mkServerConfig [])
+    bracket memoryLogEnv (void . closeScribes . fst) $ \(logEnv, messages) ->
+        withAsync (serveBound logEnv proxyListener (Warp.setPort configured Warp.defaultSettings) app) $ \server -> do
+            link server
+            logged <- pollUntil 200 50_000 isJust (loggedPort <$> messages)
+            answers <- maybe (pure False) livezAnswers logged
+            pure (logged, answers)
+  where
+    loggedPort = listToMaybe . mapMaybe (readMaybe . toString <=< T.stripPrefix (listeningPrefix proxyListener))
+
+livezAnswers :: Int -> IO Bool
+livezAnswers port = do
+    manager <- newManager defaultManagerSettings
+    livez <- parseRequest ("http://127.0.0.1:" <> show port <> "/livez")
+    either (const False) ((== status200) . HttpClient.responseStatus) <$> (try (httpNoBody livez manager) :: IO (Either HttpException (HttpClient.Response ())))
 
 {- | A typed fault thrown from one arm of 'raceServerAgainstLoop', to assert the race
 re-raises it (fails the process up) rather than swallowing it.

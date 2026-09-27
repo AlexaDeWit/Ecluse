@@ -60,7 +60,7 @@ import Ecluse.Pilot.Plan (
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleContext)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, raceServerAgainstLoop, runWarp)
+import Ecluse.Runtime.Server (probeOnlyApplication, raceServerAgainstLoop, runWarp)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryTracerProvider)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisoryCompileMetricsPortOf, newMetrics)
 
@@ -71,9 +71,9 @@ runPilot :: BootEnv -> ExportLoopPlan -> IO ()
 runPilot bootEnv exportPlan = do
     let cfg = probeServerConfig (configApp (beConfig bootEnv))
     moduleContext (beLogEnv bootEnv) "Ecluse.Pilot" $ do
-        logFM InfoS (ls ("Pilot mode starting up on port " <> show (scPort cfg) :: String))
+        logFM InfoS "Pilot mode starting up"
         raceServerAgainstLoop
-            (liftIO $ runWarp cfg probeOnlyApplication)
+            (liftIO $ runWarp (beLogEnv bootEnv) "Pilot health probes" cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv) exportPlan)
 
 {- | Run the loop the boot planned, never returning. Every fault inside a cycle is transient,

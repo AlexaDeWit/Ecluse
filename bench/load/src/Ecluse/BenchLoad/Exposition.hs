@@ -4,8 +4,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 {- | The proxy's Prometheus scrape, read as samples. The harness samples the admission gauges
-during a window and reads cache outcomes after a replay. A line it cannot read is skipped, so a
-series added later never breaks a report.
+during a window and reads the metadata cache outcomes across it. A line it cannot read is skipped,
+so a series added later never breaks a report.
 -}
 module Ecluse.BenchLoad.Exposition (
     -- * Samples
@@ -18,10 +18,21 @@ module Ecluse.BenchLoad.Exposition (
     -- * Gauge summaries
     GaugeSummary (..),
     summariseGauge,
+
+    -- * Metadata cache outcomes
+    expositionName,
+    storeLabel,
+    CacheOutcomes (..),
+    storeOutcomes,
+    cacheWindow,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
+import Data.Universe.Class qualified as Universe
+
+import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheRequests, MetadataCacheRequests, SingleVersionCacheRequests), metricName)
+import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore), renderLabel)
 
 -- | One exposition line: the metric name, its labels, and its value.
 data Sample = Sample
@@ -127,3 +138,41 @@ summariseGauge readings =
         }
   where
     taken = catMaybes readings
+
+-- | A catalogue metric's name in the exposition, which spells each dot as an underscore.
+expositionName :: MetricName -> Text
+expositionName = T.replace "." "_" . metricName
+
+-- | A cache store's @store@ label value.
+storeLabel :: CacheStore -> Text
+storeLabel = snd . renderLabel . LCacheStore
+
+-- | One metadata cache store's request outcomes. A collapsed request waited on another's fetch.
+data CacheOutcomes = CacheOutcomes
+    { coHits :: Int
+    , coMisses :: Int
+    , coCollapsed :: Int
+    }
+    deriving stock (Eq, Show, Generic)
+    deriving anyclass (FromJSON, ToJSON)
+
+-- | One store's outcomes in one scrape. A store with no series yet reads zero.
+storeOutcomes :: [Sample] -> CacheStore -> CacheOutcomes
+storeOutcomes samples store = CacheOutcomes (count Hit) (count Miss) (count Collapsed)
+  where
+    count result = round (fromMaybe 0 (seriesTotal (expositionName (requests store)) [renderLabel (LCacheResult result)] samples))
+    requests = \case
+        FullStore -> MetadataCacheRequests
+        VersionStore -> SingleVersionCacheRequests
+        AssembledStore -> AssembledCacheRequests
+
+-- | Each store's outcomes between two scrapes of one process, keyed by its @store@ label value.
+cacheWindow :: [Sample] -> [Sample] -> [(Text, CacheOutcomes)]
+cacheWindow start end = [(storeLabel store, since (storeOutcomes end store) (storeOutcomes start store)) | store <- Universe.universe]
+  where
+    since now before =
+        CacheOutcomes
+            { coHits = max 0 (coHits now - coHits before)
+            , coMisses = max 0 (coMisses now - coMisses before)
+            , coCollapsed = max 0 (coCollapsed now - coCollapsed before)
+            }
