@@ -6,9 +6,9 @@
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, childMain, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
 import Crypto.Hash (Digest, SHA256, hash)
-import Data.Aeson (Value, eitherDecodeStrict, encode, object, withObject, (.:), (.=))
+import Data.Aeson (Object, eitherDecodeStrict, encode, object, (.:), (.=))
 import Data.Aeson.Key qualified as Key
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (Parser)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import System.Environment (getExecutablePath)
@@ -26,7 +26,7 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), packages, probe, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
 
 -- | Reject unauthenticated captures and roots that do not survive or release across collections.
 spec :: Spec
@@ -77,16 +77,14 @@ childMain rawShape path = do
 
 authenticate :: CorpusPackage -> IO (Int, Text)
 authenticate package = do
-    pinsBytes <- BS.readFile "bench/corpus/pins.json"
-    pins <- either fail pure (eitherDecodeStrict pinsBytes)
-    (expectedBytes, expectedHash) <- either fail pure (parseEither (capture package) pins)
+    (expectedBytes, expectedHash) <- readCorpusPins (capture package) >>= either fail pure
     bytes <- BS.readFile (cpPath package)
     BS.length bytes `shouldBe` expectedBytes
     (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` expectedHash
     pure (expectedBytes, expectedHash)
 
-capture :: CorpusPackage -> Value -> Parser (Int, Text)
-capture package = withObject "corpus pins" $ \pins -> do
+capture :: CorpusPackage -> Object -> Parser (Int, Text)
+capture package pins = do
     captures <- pins .: "captures"
     ecosystem <- case pkgEcosystem (cpPackage package) of
         Npm -> captures .: "npm"

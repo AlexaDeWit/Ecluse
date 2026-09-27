@@ -40,7 +40,7 @@ module Ecluse.Test.Osv (
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
-import Conduit (MonadResource, MonadThrow, MonadUnliftIO, PrimMonad, ResourceT, runConduit, runResourceT, sinkLazy, yieldMany, (.|))
+import Conduit (MonadResource, MonadThrow, MonadUnliftIO, PrimMonad, ResourceT, mapMC, runConduit, runResourceT, sinkLazy, yieldMany, (.|))
 import Control.Monad.Catch (MonadCatch, MonadMask)
 import Data.ByteString qualified as BS
 import Data.Time (LocalTime (..), fromGregorian, midnight)
@@ -103,12 +103,15 @@ osvCorpusZip v = do
     entries <- osvCorpusFiles v
     osvZipOf (map (first toText) entries)
 
--- | Build a zip from arbitrary entries with a fixed timestamp for deterministic hostile fixtures.
+{- | Build a zip from arbitrary entries with a fixed timestamp for deterministic hostile fixtures.
+Each chunk is copied, so a small entry does not hold the compressor's whole output buffer.
+-}
 osvZipOf :: [(Text, LByteString)] -> IO LByteString
 osvZipOf entries =
     runConduit $
         yieldMany (map toZipEntry entries)
             .| void (zipStream defaultZipOptions)
+            .| mapMC (\chunk -> pure $! BS.copy chunk)
             .| sinkLazy
   where
     toZipEntry (name, bytes) =

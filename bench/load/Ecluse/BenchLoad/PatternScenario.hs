@@ -5,8 +5,7 @@
 -- | A finite matrix over authenticated captures, with independent cache and upstream evidence.
 module Ecluse.BenchLoad.PatternScenario (patternScenarios, loadPins, selectArtifacts) where
 
-import Data.Aeson (Value, eitherDecode, withObject, (.:))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson (withObject, (.:))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -35,7 +34,7 @@ import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName, readCorpusPins)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
@@ -130,10 +129,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
 
 -- | The captured version pins in @bench/corpus/pins.json@, by package name.
 loadPins :: IO (Map Text Text)
-loadPins = do
-    raw <- readFileLBS "bench/corpus/pins.json"
-    value <- either (benchFail . toText) pure (eitherDecode raw :: Either String Value)
-    either (benchFail . toText) pure (parseEither (withObject "pins" (.: "pins")) value)
+loadPins = readCorpusPins (.: "pins") >>= either (benchFail . toText) pure
 
 knobsFromEnv :: Pattern -> Int -> IO PatternKnobs
 knobsFromEnv family available = do
@@ -157,14 +153,12 @@ readKnob name fallback =
 
 verifyCaptures :: Ecosystem -> Map Text LByteString -> IO UTCTime
 verifyCaptures ecosystem bodies = do
-    raw <- readFileLBS "bench/corpus/pins.json"
-    manifest <- either (benchFail . toText) pure (eitherDecode raw :: Either String Value)
-    sizes <- either (benchFail . toText) pure (parseEither parser manifest)
+    sizes <- readCorpusPins parser >>= either (benchFail . toText) pure
     for_ (Map.toList bodies) $ \(name, body) ->
         unless ((fst <$> Map.lookup name sizes) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
     pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map snd (Map.elems sizes))))
   where
-    parser = withObject "pins" $ \pins -> do
+    parser pins = do
         captures <- pins .: "captures"
         entries <- captures .: fromString (toString (ecosystemName ecosystem))
         traverse (withObject "capture" (\capture -> (,) <$> capture .: "bytes" <*> capture .: "capturedAt")) entries

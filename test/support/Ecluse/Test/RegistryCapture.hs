@@ -22,7 +22,7 @@ module Ecluse.Test.RegistryCapture (
 import Data.ByteString qualified as BS
 
 import Control.Exception (try)
-import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (parseJSON), Object, eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -41,6 +41,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Corpus (readCorpusPins)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
@@ -55,20 +56,19 @@ data Catalogue = Catalogue
     deriving stock (Eq, Show)
 
 instance FromJSON Catalogue where
-    parseJSON = withObject "Catalogue" $ \o -> do
-        rawNames <- o .: "smokeNames"
-        pins <- o .: "pins"
-        names <- Map.fromList <$> traverse parseEcoKey (Map.toList rawNames)
-        pure Catalogue{catSmokeNames = names, catBenchPins = pins}
-      where
-        parseEcoKey :: (Text, [Text]) -> Parser (Ecosystem, [Text])
-        parseEcoKey (k, vs) = case parseEcosystem k of
-            Just eco -> pure (eco, vs)
-            Nothing -> fail ("RegistryCapture: unknown ecosystem key in smokeNames: " <> toString k)
+    parseJSON = withObject "Catalogue" catalogueFields
 
--- | The shared catalogue path, relative to the repository root.
-cataloguePath :: FilePath
-cataloguePath = "bench/corpus/pins.json"
+catalogueFields :: Object -> Parser Catalogue
+catalogueFields o = do
+    rawNames <- o .: "smokeNames"
+    pins <- o .: "pins"
+    names <- Map.fromList <$> traverse parseEcoKey (Map.toList rawNames)
+    pure Catalogue{catSmokeNames = names, catBenchPins = pins}
+  where
+    parseEcoKey :: (Text, [Text]) -> Parser (Ecosystem, [Text])
+    parseEcoKey (k, vs) = case parseEcosystem k of
+        Just eco -> pure (eco, vs)
+        Nothing -> fail ("RegistryCapture: unknown ecosystem key in smokeNames: " <> toString k)
 
 -- | Decode a 'Catalogue' from raw JSON bytes.
 decodeCatalogue :: LByteString -> Either String Catalogue
@@ -76,9 +76,7 @@ decodeCatalogue = eitherDecode
 
 -- | Fail on a missing or malformed committed catalogue.
 loadCatalogue :: IO Catalogue
-loadCatalogue = do
-    raw <- readFileLBS cataloguePath
-    either (\e -> fail (cataloguePath <> " did not decode: " <> e)) pure (decodeCatalogue raw)
+loadCatalogue = readCorpusPins catalogueFields >>= either fail pure
 
 -- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem. This is the shape the version-oracle differential iterates.
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]

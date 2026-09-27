@@ -2,21 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The complexity-assertion helpers shared by the version-count-scaled benches.
-
-A scaled bench reports a time. @tasty-bench-fit@ also fits its /growth/ and requires
-that growth to be no worse than linear. That is the guard against the accidentally
-quadratic class of regression, a fold that becomes @O(n^2)@ in version count. A
-single-size timing would never reveal it.
-
-Unlike a perf-regression comparison (machine-dependent, noisy, never gated), an
-algorithmic-class assertion is a real correctness signal. A packument merge or rule
-sweep going quadratic in version count is a bug, not a slow machine. A failure here is
-therefore a genuine benchmark failure (a non-zero exit), the one red state the
-benchmark workflow recognises.
-
-Two variants: 'notWorseThanLinear' for a pure operation, and 'notWorseThanLinearIO'
-for one that computes its result in 'IO' (the rule engine evaluates effectfully).
+{- | Complexity assertions for the version-count-scaled benches. @tasty-bench-fit@ fits a bench's
+growth and fails it when the growth is worse than linear, which catches a fold that turns
+@O(n^2)@ in version count where a single-size timing cannot. A timing depends on the machine, but a
+growth class does not, so a failure exits non-zero and reds the benchmark run.
 -}
 module Ecluse.Bench.Fit (
     notWorseThanLinear,
