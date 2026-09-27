@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.Npm.Streaming (
 ) where
 
 import Data.Aeson (Value (Array, Null, Number, Object, String))
+import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
 
 import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
@@ -59,32 +60,40 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
                 <|> pure (InvalidContainer slot)
     release key = case mode of
         SelectedRead target | key /= target -> pure (VersionField "" Nothing)
-        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listField)
-        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (field versionFields))
+        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (fieldIn listFields))
+        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (fieldIn releaseFields))
     timestamp key = TimeField key <$> scalar (depth - 2)
     tag key = TagField key <$> scalar (depth - 2)
-    listField key
-        | key == "name" || key == "version" = withinRetainedDepth (depth - 3) witness
-        | key == "dist" = withinRetainedDepth (depth - 3) (retainedObjectOr Null (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty))
-        | key == "scripts" = withinRetainedDepth (depth - 3) (stringMapWitness (depth - 4))
-        | key == "deprecated" = withinRetainedDepth (depth - 3) (pure Null)
-        | key `elem` versionListFields = field versionListFields key
-        | otherwise = mempty
+    fieldIn fields key = HashMap.findWithDefault mempty key fields
+    -- Both unions are left-biased, so a shaped entry wins over the generic one for its key.
+    -- 'HashMap.fromList' keeps the last duplicate, so each list names a key once.
+    listFields = HashMap.fromList listWitnesses <> HashMap.filterWithKey (\key _ -> key `elem` versionListFields) releaseFields
+    releaseFields = HashMap.fromList shapedFields <> HashMap.fromList [(key, retainedValue (depth - 3)) | key <- versionFields]
+    listWitnesses =
+        [ ("name", withinRetainedDepth (depth - 3) witness)
+        , ("version", withinRetainedDepth (depth - 3) witness)
+        , ("dist", withinRetainedDepth (depth - 3) (retainedObjectOr Null (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty)))
+        , ("scripts", withinRetainedDepth (depth - 3) (stringMapWitness (depth - 4)))
+        , ("deprecated", withinRetainedDepth (depth - 3) (pure Null))
+        ]
+    shapedFields =
+        [ ("_npmUser", personValue ["name", "email", "url"] (depth - 3))
+        , ("license", personValue ["type", "url"] (depth - 3))
+        , ("dist", objectValue (depth - 3) distField)
+        , ("peerDependenciesMeta", objectValue (depth - 3) (const (fixed ["optional"] (depth - 4))))
+        , ("dependenciesMeta", objectValue (depth - 3) (const (fixed ["optional"] (depth - 4))))
+        , ("directories", fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3))
+        , ("devEngines", objectValue (depth - 3) devEngineField)
+        , ("publishConfig", objectValue (depth - 3) publishField)
+        , ("workspaces", withinRetainedDepth (depth - 3) (retainedArrayWith (objectValue (depth - 3) workspaceField) (scalar (depth - 4))))
+        ]
+            <> [ (key, objectValue (depth - 3) (const (scalar (depth - 4))))
+               | key <- ["dependencies", "acceptDependencies", "devDependencies", "optionalDependencies", "peerDependencies", "engines", "scripts", "bin", "browser"]
+               ]
+            <> [ (key, scalar (depth - 3))
+               | key <- ["name", "version", "_hasShrinkwrap", "hasInstallScript", "deprecated", "main", "module", "type", "types", "typings", "gypfile", "preferGlobal", "packageManager", "engineStrict"]
+               ]
     witness = (String "" <$ J.string) <|> (Null <$ J.jNull) <|> pure (Number 0)
-    field supported key
-        | key == "_npmUser" = personValue ["name", "email", "url"] (depth - 3)
-        | key == "license" = personValue ["type", "url"] (depth - 3)
-        | key == "dist" = objectValue (depth - 3) distField
-        | key == "peerDependenciesMeta" || key == "dependenciesMeta" = objectValue (depth - 3) (const (fixed ["optional"] (depth - 4)))
-        | key == "directories" = fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3)
-        | key == "devEngines" = objectValue (depth - 3) devEngineField
-        | key == "publishConfig" = objectValue (depth - 3) publishField
-        | key == "workspaces" = withinRetainedDepth (depth - 3) (retainedArrayWith (objectValue (depth - 3) workspaceField) (scalar (depth - 4)))
-        | key `elem` ["dependencies", "acceptDependencies", "devDependencies", "optionalDependencies", "peerDependencies", "engines", "scripts", "bin", "browser"] =
-            objectValue (depth - 3) (const (scalar (depth - 4)))
-        | key `elem` ["name", "version", "_hasShrinkwrap", "hasInstallScript", "deprecated", "main", "module", "type", "types", "typings", "gypfile", "preferGlobal", "packageManager", "engineStrict"] = scalar (depth - 3)
-        | key `elem` supported = retainedValue (depth - 3)
-        | otherwise = mempty
     personValue keys budget = withinRetainedDepth budget ((String <$> J.string) <|> fixed keys budget)
     scalar budget = withinRetainedDepth budget (retainedScalar <|> pure (Array mempty))
     objectValue budget fields = withinRetainedDepth budget (retainedObjectWith (scalar budget) fields)

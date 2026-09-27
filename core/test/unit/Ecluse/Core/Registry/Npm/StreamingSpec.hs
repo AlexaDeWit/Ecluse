@@ -106,6 +106,26 @@ spec = describe "npmFields" $ do
             (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
             (fieldAt "versions" compact >>= fieldAt "1.0.0" >>= fieldAt "bin") `shouldBe` Just bin
 
+    forM_ [(FullRead, versionFields, unshapedFields), (SelectedRead "1.0.0", versionFields, unshapedFields), (VersionListRead, versionListFields, [])] $ \(mode, supported, whole) ->
+        it ("retains nested values whole only for supported fields without their own shape in " <> show mode) $ do
+            retained <- nestedRelease mode
+            sort (map Key.toText (KeyMap.keys retained)) `shouldBe` sort supported
+            sort [Key.toText key | (key, value) <- KeyMap.toList retained, value == nestedValue] `shouldBe` sort whole
+
+    it "reduces nested version-list fields to their witnesses" $ do
+        retained <- nestedRelease VersionListRead
+        Object retained
+            `shouldBe` object
+                [ "name" .= Number 0
+                , "version" .= Number 0
+                , "dist" .= object []
+                , "scripts" .= Number 0
+                , "deprecated" .= Null
+                , "hasInstallScript" .= Array mempty
+                , "license" .= object []
+                , "_npmUser" .= object []
+                ]
+
     it "preserves array workspaces on the selected path" $ do
         let workspaces = toJSON (["packages/*", "tools/*"] :: [Text])
             bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("workspaces", workspaces)] release]]))
@@ -229,6 +249,10 @@ release =
 
 typesVersions :: Value
 typesVersions = object [">=4" .= object ["*" .= (["ts4/*"] :: [Text])]]
+
+-- Supported release fields that the policy keeps whole, whatever their nesting.
+unshapedFields :: [Text]
+unshapedFields = ["bundleDependencies", "bundledDependencies", "os", "cpu", "libc", "man", "exports", "imports", "typesVersions", "files", "config", "sideEffects"]
 
 invalidScripts :: Value
 invalidScripts = case release of
@@ -409,6 +433,19 @@ depthBoundary mode label levels source = do
     it (toString label <> " refuses one fewer level in " <> show mode) $ do
         result <- extractFields (levels - 1) mode source
         streamValue result `shouldBe` Left (ParseError "retained JSON nesting limit")
+
+-- The one release object retained when every supported field, and one unknown field, holds 'nestedValue'.
+nestedRelease :: NpmRead -> IO (KeyMap.KeyMap Value)
+nestedRelease mode = do
+    let bytes = toStrict (encode (object ["versions" .= object ["1.0.0" .= object [(Key.fromText key, nestedValue) | key <- "unknown" : versionFields]]]))
+    result <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmFields 12 mode) (\events event -> Right (event : events)) [] [bytes])
+    events <- expectRight (streamValue result)
+    case [fields | VersionField "1.0.0" (Just (Object fields)) <- events] of
+        [fields] -> pure fields
+        other -> fail ("expected one release object, got " <> show other)
+
+nestedValue :: Value
+nestedValue = object ["nested" .= object ["deeper" .= True]]
 
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())
 extractFields levels mode source =
