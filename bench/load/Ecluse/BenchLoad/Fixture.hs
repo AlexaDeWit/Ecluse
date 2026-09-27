@@ -2,14 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared loopback proxy wiring for ecosystem load fixtures.
-HTTP preflights reject a wrong response before the measured window starts.
+{- | Shared wiring for the ecosystem load fixtures: loopback stub upstreams in the harness process,
+and a proxy process in front of them. HTTP preflights reject a wrong response before the measured
+window starts.
 -}
 module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
+    httpTarget,
     longCacheTtl,
-    defaultCacheEntries,
     artifactBytes,
     loadCorpusBodies,
     selfHosted,
@@ -21,8 +22,7 @@ module Ecluse.BenchLoad.Fixture (
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
-import GHC.Conc (getNumCapabilities)
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Header, Status, status200, status304)
@@ -31,72 +31,42 @@ import Network.Wai (Application)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Harness (LoadKnobs (..))
-import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances, materialBytesFallback)
-import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolvePublicConnections, resolveServeAdmission)
+import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Admission.Material (newMaterialAdmission)
-import Ecluse.Core.Server.Cache (CacheConfig (..), newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps)
-import Ecluse.Core.Worker (newWorkerHeartbeat)
-import Ecluse.Runtime.Env (newEnvWithAdmission)
-import Ecluse.Runtime.Server (application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
-import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
-import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Wai (rebaseAuthority)
 
--- | Boot a composed proxy with production pool sizing over the supplied ecosystem stubs.
-withProxyOverStubs :: Ecosystem -> (Int -> Int -> IO PackumentDeps) -> LoadKnobs -> NominalDiffTime -> Int -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
-withProxyOverStubs ecosystem depsFor knobs ttl maxEntries =
-    withProxyConfigured ecosystem depsFor knobs (benchCacheConfig ttl (max 1 maxEntries)) telemetryDisabled
+{- | Boot a proxy in front of the private and public stubs with this cache TTL in seconds and an
+optional entry bound. The body gets the proxy and the URL mix for its port.
+-}
+withProxyOverStubs :: Ecosystem -> LoadKnobs -> Int -> Maybe Int -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+withProxyOverStubs ecosystem knobs ttl entries =
+    withProxyConfigured ecosystem knobs (\_ -> pure (\settings -> settings{psCacheTtlSeconds = ttl, psCacheMaxEntries = entries}))
 
--- | Boot an empty cache with explicit budgets and telemetry for finite replay.
-withProxyConfigured :: Ecosystem -> (Int -> Int -> IO PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
-withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp publicApp mkMix body = do
-    capabilities <- getNumCapabilities
-    fdLimit <- openFileSoftLimit
-    let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
-        privateConnections = fst (resolvePrivateConnections (lkPrivateConnectionsPerHost knobs) fdLimit)
-        publicConnections = fst (resolvePublicConnections (lkPublicConnectionsPerHost knobs) fdLimit)
+-- | 'withProxyOverStubs' with settings derived once the public stub's port is known.
+withProxyConfigured :: Ecosystem -> LoadKnobs -> (Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+withProxyConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
-            privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
-            admission <- newServeAdmission admissionCapacity
-            materialAdmission <- newMaterialAdmission materialBytesFallback admissionCapacity materialAllowances
-            cache <- newMetadataCache cacheConfig
-            logEnv <- newTestLogEnv
-            heartbeat <- newWorkerHeartbeat
-            -- No worker drains this production-sized queue. At capacity, it sheds new jobs.
-            queue <-
-                newBoundedInMemoryQueue
-                    (defaultMemoryQueueConfig 50_000)
-                    (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap. Running dropped-job total: " <> show n))
-            env <- newEnvWithAdmission admission materialAdmission queue publicManager privateManager cache logEnv telemetry heartbeat
-            deps <- depsFor privatePort publicPort
-            let cfg = mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))
-            testWithApplication (pure (application cfg env)) $ \proxyPort ->
-                body (mkMix proxyPort)
+            adjust <- configure publicPort
+            withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
+                body proxy (mkMix (proxyPort proxy))
+  where
+    knobSettings =
+        (proxySettings ecosystem 60)
+            { psServeMaxInFlight = lkServeMaxInFlight knobs
+            , psPublicConnections = lkPublicConnectionsPerHost knobs
+            , psPrivateConnections = lkPrivateConnectionsPerHost knobs
+            }
+
+-- | The target for a duration-driven load over the URL mix.
+httpTarget :: (Target -> IO a) -> ProxyProcess -> [Text] -> IO a
+httpTarget k proxy = k . proxied proxy . DriveHttp . urlLoad
 
 -- | Keep entries alive throughout warm-up and measurement, leaving eviction as the tested axis.
-longCacheTtl :: NominalDiffTime
+longCacheTtl :: Int
 longCacheTtl = 3600
-
--- | The aggregate local entry bound.
-defaultCacheEntries :: Int
-defaultCacheEntries = cacheMaxEntries defaultCacheConfig
-
-benchCacheConfig :: NominalDiffTime -> Int -> CacheConfig
-benchCacheConfig ttl maxEntries =
-    defaultCacheConfig
-        { cacheTtl = ttl
-        , cacheMaxEntries = maxEntries
-        }
 
 -- | A payload-sized body shared by artifact relays and integrity verification.
 artifactBytes :: Int -> LByteString
@@ -140,6 +110,6 @@ fetchChecked expected headers url = do
         benchFail ("bench-load preflight " <> url <> ": expected " <> show expected <> ", got " <> show (HTTP.responseStatus response))
     pure response
 
--- | A fixed clock keeps age admission independent of the day the benchmark runs.
+-- | A fixed date the stub documents are dated against, so their ages never depend on the run date.
 benchNow :: UTCTime
 benchNow = UTCTime (fromGregorian 2026 6 1) 0

@@ -2,128 +2,101 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @oha@ load-generator driver. It spawns @oha@ as a subprocess against a URL. It
-parses the JSON report into the throughput and latency-distribution figures the load
-harness records.
-
-The driver runs @oha@ (a single static binary, in the pin) with @--output-format json@.
-That report carries a request-rate summary, a latency-percentile table, and the
-status\/error distributions. This module knows that schema and nothing about any
-ecosystem. It is part of the reusable harness core, shared unchanged across every upstream
-a scenario might target.
-
-The driver tolerates a degraded run on purpose: it reports a low success rate or a non-2xx
-response and never throws on one. The load benchmarks tier is inform-only and characterises
-behaviour rather than asserting a pass\/fail.
-A genuinely broken run does throw: the subprocess cannot start, or its output does not
-parse. That is a literal harness failure, the one red state the layer recognises.
+{- | The @oha@ load generator, run as a subprocess against a list of URLs. Its JSON report gives
+the status and transport-error counts. Its per-request database gives the latency of successful
+responses alone, because the report's own percentiles mix sheds in with served requests.
+A run that cannot start, or whose report does not parse, fails the harness.
 -}
 module Ecluse.BenchLoad.Oha (
+    OhaRun (..),
+    RunLength (..),
+    ohaRun,
     OhaReport (..),
     runOha,
-    runOhaUrls,
-    runOhaUrlsWith,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
-import Data.Map.Strict qualified as Map
-import GHC.IO.Handle (hClose)
-import System.Process.Typed (proc, readProcessStdout_)
-import UnliftIO.Temporary (withSystemTempFile)
+import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
+import System.FilePath ((</>))
+import System.Process.Typed (nullStream, proc, runProcess_, setStdout)
+import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Error (benchFail)
 
--- | The fields of an @oha@ JSON report the load harness records.
+-- | How long a run lasts: a fixed duration, or a fixed number of requests.
+data RunLength
+    = ForSeconds Int
+    | ForRequests Int
+    deriving stock (Eq, Show)
+
+-- | One @oha@ invocation. Repeating a URL weights it in the mix.
+data OhaRun = OhaRun
+    { orConnections :: Int
+    , orLength :: RunLength
+    , orHeaders :: [(Text, Text)]
+    , orUrls :: [Text]
+    , orSuccessLatencies :: Bool
+    -- ^ Record every request so the report carries successful-response latencies. A warm-up skips it.
+    }
+    deriving stock (Eq, Show)
+
+-- | A duration-driven run over the given URLs that records success latencies.
+ohaRun :: Int -> Int -> [Text] -> OhaRun
+ohaRun connections seconds urls = OhaRun connections (ForSeconds seconds) [] urls True
+
+-- | What the harness reads from one run.
 data OhaReport = OhaReport
-    { ohaRequestsPerSec :: Double
-    -- ^ Achieved throughput over the run, requests per second.
-    , ohaSuccessRate :: Double
-    -- ^ Fraction of requests that succeeded, in @[0, 1]@.
-    , ohaElapsedSeconds :: Double
-    -- ^ The run's wall-clock duration, in seconds.
-    , ohaP50, ohaP90, ohaP99, ohaP999 :: Maybe Double
-    -- ^ Latency percentiles in seconds. 'Nothing' when no request succeeded.
+    { ohaElapsedSeconds :: Double
     , ohaStatusCounts :: Map Text Int
-    -- ^ Response counts keyed by HTTP status code (e.g. @"200"@).
+    -- ^ Response counts keyed by HTTP status code.
     , ohaErrorCounts :: Map Text Int
-    -- ^ Transport-error counts keyed by the error string (e.g. a refused connection).
+    -- ^ Transport-error counts keyed by oha's error text, including its deadline aborts.
+    , ohaSuccessLatencies :: [Double]
+    -- ^ Seconds per 2xx or 3xx response, empty when the run did not record requests.
     }
     deriving stock (Show)
 
 instance FromJSON OhaReport where
     parseJSON = withObject "oha report" $ \o -> do
         summary <- o .: "summary"
-        requestsPerSec <- summary .: "requestsPerSec"
-        successRate <- summary .: "successRate"
         elapsed <- summary .: "total"
-        percentiles <- o .: "latencyPercentiles"
-        p50 <- percentiles .:? "p50"
-        p90 <- percentiles .:? "p90"
-        p99 <- percentiles .:? "p99"
-        p999 <- percentiles .:? "p99.9"
-        statusCounts <- o .:? "statusCodeDistribution" .!= Map.empty
-        errorCounts <- o .:? "errorDistribution" .!= Map.empty
-        pure
-            OhaReport
-                { ohaRequestsPerSec = requestsPerSec
-                , ohaSuccessRate = successRate
-                , ohaElapsedSeconds = elapsed
-                , ohaP50 = p50
-                , ohaP90 = p90
-                , ohaP99 = p99
-                , ohaP999 = p999
-                , ohaStatusCounts = statusCounts
-                , ohaErrorCounts = errorCounts
-                }
+        statusCounts <- o .:? "statusCodeDistribution" .!= mempty
+        errorCounts <- o .:? "errorDistribution" .!= mempty
+        pure (OhaReport elapsed statusCounts errorCounts [])
 
-{- | Drive @oha@ against a URL and parse its report, keeping the subprocess output off the
-harness's stdout, which carries only the machine-readable report. Throws when @oha@ cannot
-start or its JSON does not parse. A degraded run (errors, non-2xx) parses and comes back.
--}
-runOha :: Int -> Int -> Text -> IO OhaReport
-runOha concurrency durationSeconds url =
-    runOhaArgs concurrency durationSeconds [toString url]
-
-{- | Drive @oha@ against a weighted URL list. Repeating a URL @w@ times gives it weight @w@
-in the served mix, which is how the harness drives a heavy-headed package mix. Same
-failure contract as 'runOha'.
--}
-runOhaUrls :: Int -> Int -> [Text] -> IO OhaReport
-runOhaUrls = runOhaUrlsWith []
-
-{- | 'runOhaUrls' with fixed extra request headers on every request: the revalidation
-scenario's @If-None-Match@. Each pair becomes an @-H "name: value"@ argument.
--}
-runOhaUrlsWith :: [(Text, Text)] -> Int -> Int -> [Text] -> IO OhaReport
-runOhaUrlsWith headers concurrency durationSeconds urls =
-    withSystemTempFile "ecluse-bench-urls.txt" $ \path handle -> do
-        hClose handle
-        writeFileText path (unlines urls)
-        runOhaArgs concurrency durationSeconds (headerArgs <> ["--urls-from-file", path])
-  where
-    headerArgs :: [String]
-    headerArgs = concatMap (\(name, value) -> ["-H", toString (name <> ": " <> value)]) headers
-
--- Run oha with the common reporting flags plus the given target arguments (a single
--- URL, or @--urls-from-file <path>@), and parse its JSON report.
-runOhaArgs :: Int -> Int -> [String] -> IO OhaReport
-runOhaArgs concurrency durationSeconds target = do
+-- | Run @oha@, pinned to core 0 when @BENCH_LOAD_ISOLATE_OHA=1@ so it does not share the proxy's cores.
+runOha :: OhaRun -> IO OhaReport
+runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
+    let urlsFile = dir </> "urls.txt"
+        reportFile = dir </> "report.json"
+        requestsFile = dir </> "requests.db"
+    writeFileText urlsFile (unlines (orUrls run))
     isolate <- (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
-    let (cmd, finalArgs) =
-            if isolate
-                then ("taskset", ["-c", "0", "oha"] <> args)
-                else ("oha", args)
-    raw <- readProcessStdout_ (proc cmd finalArgs)
-    either (\err -> benchFail ("oha report did not parse: " <> toText err)) pure (eitherDecode raw)
+    let args = ohaArgs run reportFile requestsFile urlsFile
+        (command, finalArgs) = if isolate then ("taskset", ["-c", "0", "oha"] <> args) else ("oha", args)
+    -- With a database, oha writes a progress line to stdout, so the report goes to a file.
+    runProcess_ (setStdout nullStream (proc command finalArgs))
+    raw <- readFileLBS reportFile
+    report <- either (\err -> benchFail ("oha report did not parse: " <> toText err)) pure (eitherDecode raw)
+    latencies <-
+        if orSuccessLatencies run && sum (ohaStatusCounts report) > 0
+            then successLatencies requestsFile
+            else pure []
+    pure report{ohaSuccessLatencies = latencies}
+
+ohaArgs :: OhaRun -> FilePath -> FilePath -> FilePath -> [String]
+ohaArgs run reportFile requestsFile urlsFile =
+    ["--no-tui", "--output-format", "json", "-o", reportFile, "-c", show (orConnections run)]
+        <> lengthArgs
+        <> concatMap (\(name, value) -> ["-H", toString (name <> ": " <> value)]) (orHeaders run)
+        <> (if orSuccessLatencies run then ["--db-url", requestsFile] else [])
+        <> ["--urls-from-file", urlsFile]
   where
-    args :: [String]
-    args =
-        [ "--no-tui"
-        , "--output-format"
-        , "json"
-        , "-c"
-        , show concurrency
-        , "-z"
-        , show durationSeconds <> "s"
-        ]
-            <> target
+    lengthArgs = case orLength run of
+        ForSeconds seconds -> ["-z", show seconds <> "s"]
+        ForRequests count -> ["-n", show count]
+
+successLatencies :: FilePath -> IO [Double]
+successLatencies path =
+    withConnection path $ \conn ->
+        map fromOnly <$> query_ conn "SELECT duration FROM oha WHERE status >= 200 AND status < 400"

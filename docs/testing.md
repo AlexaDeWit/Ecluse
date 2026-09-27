@@ -364,7 +364,7 @@ Reports support manual comparisons only. No workflow stores a cross-run baseline
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Full-document and selective-decode overhead on live registry documents against reviewed budgets | `perf-acceptance-report.md` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI throughput and latency through the composed proxy, with separate ecosystem sections and baseline sources | `bench-load-results.md` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, and `bench-load-thrash.md` for the GC-thrash probe |
 
 Read a red result according to its measurement:
 
@@ -372,12 +372,65 @@ Read a red result according to its measurement:
 - Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
   Each ecosystem's budgets name the CPU architecture they were calibrated on. On another architecture every leg reports as uncalibrated, and the run passes.
   Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
-- Load benchmarks use `oha` against the composed proxy. They fail when the harness cannot boot, `oha` cannot run, or a scenario serves nothing.
-  Fixture preflights also fail on an unexpected status, index shape, or wheel body.
-  Throughput and latency have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal.
+- Load benchmarks use `oha` against a proxy process. A run fails when a scenario gets no successful response, when the kernel
+  OOM-kills a proxy, or when a proxy exits on heap overflow. It also fails when the harness or a proxy cannot boot, when `oha`
+  cannot run, and when a fixture preflight sees an unexpected status, index shape, or wheel body. Throughput, latency, and
+  memory have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal, so
+  it never runs on a pull request and never gates a merge.
 
 Budget values and calibration belong in [acceptance/criteria.json](../acceptance/criteria.json).
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
+
+### Load tests under a pod shape
+
+Each load scenario runs in its own child process. The child serves the stub upstreams in process
+and starts the proxy as a separate process: `bench-load --serve-proxy`, which boots through the same
+path as `ecluse proxy` and reads its configuration from `ECLUSE_*` variables. The proxy dials the
+stubs over plain HTTP on loopback, which the `dev-http-egress` build allows, and serves RTS
+statistics on a loopback control port. Telemetry is on, with the Prometheus scrape as its only
+exporter, so the harness can sample the admission gauges.
+
+`BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
+`2cpu-512mib` or `4cpu-1gib`. Under a limited shape the proxy starts inside its own cgroup, a child
+of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
+zero, and `cpu.max` at the cores. The load generator and the stubs stay outside that cgroup. No RTS
+flag is set by hand: the proxy's boot reads the cgroup and derives its capabilities, its heap
+ceiling, and its memory plan as it would in a pod. The unlimited shape sets `runtime.cores` to the
+harness's capability count instead. The workflow delegates the cgroup subtree with `sudo` before
+the run and turns swap off. The cgroup outlives the proxy, so an OOM kill stays countable after the
+process is gone. A scheduled run measures every shape in a matrix. A dispatch picks one shape, or
+`all`, and may name another ref to build, which must carry this harness.
+Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
+
+Each scenario reports:
+
+- successes in the window (the primary figure), refusals (`429` and `503`), other statuses,
+  transport failures, and the p50 and p99 of successful responses only
+- the proxy's allocation per successful request beside the attempt count, its GC share of CPU,
+  its major collections, and its RTS `max_live_bytes` and `max_mem_in_use_bytes`
+- the idle floor after boot, before any load: live data after a major collection and the cgroup's
+  `memory.current`
+- cgroup `memory.peak` against `memory.max`, the `memory.events` counters, and the CPU time the
+  quota withheld during the window
+- how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
+  status), a kernel OOM kill, or another exit
+- the CPU admission, the memory admission budget, and the cold listings that budget admits at
+  once, read from the proxy's boot log, with the runtime lines quoted
+- `ecluse.serve.admission.in_flight` sampled each second, and every admission series at the end
+  of the window
+
+Four scenarios stress admission under memory pressure. `npm/heavy-private` has the private stub
+return the complete public capture, so every request decodes its own private copy.
+`npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
+`npm/warm-under-cold` measures assembled hits and retained selected reads while a second generator
+drives heavy-tier listings that never reuse an assembled response. `npm/ramp` steps from 10 to
+400 connections, one configured duration per step. None of the four joins the concurrency-one pass.
+
+`BENCH_LOAD_SCENARIOS` runs a comma-separated subset, such as `npm/merge-cold,npm/herd`.
+`BENCH_LOAD_THRASH_LIMITS_MIB` runs the GC-thrash probe instead of the passes: one scenario
+(`BENCH_LOAD_THRASH_SCENARIO`, `npm/heavy-private` unless set) at `BENCH_LOAD_THRASH_CPUS` cores
+(two unless set) under each listed memory limit, highest first. The probe records OOM kills and
+heap overflows as its reading, so they do not fail it.
 
 ### Benchmark captures
 
@@ -471,7 +524,7 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_SEED` | 42 |
 | `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
 | `BENCH_PATTERN_FULL_BYTES` | Must be zero. The local backend never retains full metadata, regardless of capacity |
-| `BENCH_PATTERN_CACHE_BYTES` | The shared local byte budget, must be positive |
+| `BENCH_PATTERN_CACHE_BYTES` | Unset, the proxy sizes the shared local byte budget from its heap. A set value must be positive |
 | `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
 | `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured public tarball coordinate |
 
@@ -481,13 +534,13 @@ the production tarball route. The public stub supplies labelled synthetic artifa
 sequence does not model an npm install or validate the captured integrity digest against a download.
 Public metadata and artifact request counts stay separate. Captured metadata and policy stay unchanged.
 
-Every pattern cell reports its evaluation clock. Paired listing-only and artifact-follow-up cells
-use the same clock. Set `BENCH_PATTERN_NOW` explicitly when comparing runs from different captures.
-Legacy duration-driven fixtures retain their own fixed clock.
+Every pattern cell reports its evaluation clock, which the proxy's rules evaluate against. Paired
+listing-only and artifact-follow-up cells use the same clock. Set `BENCH_PATTERN_NOW` explicitly when
+comparing runs from different captures. Duration-driven scenarios evaluate against the wall clock.
 
-The process peak comes from RTS statistics after reporting and the final major GC. It includes
-preparation and warm-up. GC-observed live heap does not establish the maximum transient working set.
-Timed allocation and GC deltas keep their original measurement window.
+RTS figures describe the proxy process alone. Its peak statistics cover its whole life, including
+boot. GC-observed live heap does not establish the maximum transient working set.
+Timed allocation and GC deltas cover the replay window.
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
 Each report states the parameters, distinct wire bytes, and shared accounted capacity.
@@ -503,8 +556,8 @@ The selectors `npm/cached-public-hit` and `pypi/cached-public-hit` were renamed 
 The finite report retains scheduled, completed, successful, refused, other HTTP failure, transport
 failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
 Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while
-other non-success statuses have a separate count. Allocation averages include all completed responses
-and are unavailable when no response completes. Public upstream requests remain separate from store outcomes. Selected reads use their provider
+other non-success statuses have a separate count. Allocation divides by successful responses, with
+the attempt count beside it, and is unavailable when no response succeeds. Public upstream requests remain separate from store outcomes. Selected reads use their provider
 capability directly, so there is no full-entry shortcut count.
 
 The `pattern-cold-install-default-body-cap` cell keeps the default body limit. Other finite cells use

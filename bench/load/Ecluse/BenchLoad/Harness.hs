@@ -4,9 +4,9 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE RankNTypes #-}
 
-{- | Shared load settings, fixture drivers, runtime counters, and report rendering.
-Each scenario runs in a child process so its peak residency belongs to that scenario.
-Throughput and latency are informational. Fixture boot failures still fail the run.
+{- | Load settings, the fixture interface, and the measurement of one scenario. Each scenario runs
+in a child process against its own proxy process, so every figure belongs to that scenario alone.
+Throughput and latency are informational. "Ecluse.BenchLoad.Verdict" names what fails a run.
 -}
 module Ecluse.BenchLoad.Harness (
     -- * Load knobs
@@ -17,87 +17,77 @@ module Ecluse.BenchLoad.Harness (
     -- * The per-ecosystem fixture interface (the Handle pattern)
     UpstreamFixture (..),
     Scenario (..),
+    scenario,
+    Target (..),
+    proxied,
     Driver (..),
+    Load (..),
+    urlLoad,
 
     -- * Running a scenario
     ScenarioReport (..),
+    LoadSummary (..),
+    ProxyFigures (..),
     runScenario,
     warmUp,
-
-    -- * Rendering
-    renderReports,
-    renderServiceTime,
-    renderLoadSaturation,
+    reportEvidence,
 ) where
 
+import Control.Concurrent (threadDelay)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
-import GHC.Stats (
-    GCDetails (gcdetails_live_bytes),
-    RTSStats (allocated_bytes, gc, gc_elapsed_ns, gcs, major_gcs, max_live_bytes),
-    getRTSStats,
-    getRTSStatsEnabled,
- )
-import Numeric (showFFloat)
-import System.Mem (performMajorGC)
+import GHC.Stats (getRTSStatsEnabled)
+import System.Mem (performMajorGC, performMinorGC)
+import UnliftIO.Async (concurrently, withAsync)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Normalise (
-    BaselineSource,
-    NormalisedRow (NormalisedRow),
-    SaturationInput (SaturationInput),
-    deriveSaturation,
-    queuingDominanceThreshold,
-    renderNormalised,
-    renderSaturation,
- )
-import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
-import Ecluse.BenchLoad.PatternReport (ReplayTotals (..), renderReplayTotals)
+import Ecluse.BenchLoad.Exposition (GaugeSummary, Sample (sampleName), commonLabels, renderSample, seriesTotal, summariseGauge)
+import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
+import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
+import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
+import Ecluse.BenchLoad.Pod (CgroupReading (..), counter, renderPodShape)
+import Ecluse.BenchLoad.ProxyProcess (
+    ProxyEnd (..),
+    ProxyProcess,
+    podShapeFromEnv,
+    proxyBootLines,
+    proxyCgroupNow,
+    proxyIdleCgroupBytes,
+    proxyIdleRts,
+    proxyScrape,
+    proxySnapshot,
+    stopProxy,
+ )
 import Ecluse.BenchLoad.Replay (Replay (..), ReplayReport (..), runReplay)
-import Ecluse.Composition.Sizing (resolveServeAdmission)
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.BenchLoad.RtsProbe (readRtsSnapshot)
+import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection, MinorCollection), RtsSnapshot (rsLiveBytes), RtsWindow, rtsWindow)
+import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown), RunEvidence (..))
+import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Test.Poll (pollUntil)
 
-{- | Tunables every scenario shares: the load the generator applies and the shape of the
-upstream it applies it to. Override them through the environment ('loadKnobsFromEnv').
--}
+-- | What every scenario shares: the load applied and the upstream it is applied to.
 data LoadKnobs = LoadKnobs
     { lkConcurrency :: Int
-    -- ^ Concurrent connections the generator holds open (@oha -c@).
+    -- ^ Connections the generator holds open (@oha -c@).
     , lkDurationSeconds :: Int
-    -- ^ How long each scenario applies load, in seconds (@oha -z@, the in-process loop's run length).
+    -- ^ How long each scenario, or each ramp step, applies load.
     , lkUpstreamLatencyMicros :: Int
-    -- ^ Latency a stub upstream injects before responding, modelling a real network hop.
+    -- ^ Latency a stub upstream injects before responding, modelling a network hop.
     , lkPayloadBytes :: Int
-    {- ^ Approximate size of the worker and tarball scenarios' synthetic artifacts. The
-    packument scenarios serve the corpus captures, so this knob does not size them.
-    -}
+    -- ^ Size of the synthetic artifacts. The metadata scenarios serve the corpus captures.
     , lkCacheMaxEntries :: Int
-    {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set it below
-    'lkWorkingSet', or the cache holds the whole set and never evicts.
-    -}
+    -- ^ Entry bound for the cache-eviction scenario. Keep it below 'lkWorkingSet'.
     , lkWorkingSet :: Int
-    {- ^ Number of distinct large packages in the cache-eviction working set, taken from the
-    head of the corpus, heaviest first. The default exceeds the corpus, so the corpus bounds it.
-    -}
+    -- ^ Distinct packages in the cache working set, heaviest first. The corpus bounds it.
     , lkServeMaxInFlight :: Maybe Int
-    {- ^ Process-wide metadata admission capacity the proxy fixture exercises. 'Nothing'
-    resolves the shipped computed default via 'resolveServeAdmission', as the composition root
-    does.
-    -}
+    -- ^ Metadata admission capacity. 'Nothing' leaves it to the proxy's computed default.
     , lkPublicConnectionsPerHost :: Maybe Int
-    {- ^ Public-upstream per-host connection-pool capacity. 'Nothing' resolves the shipped
-    computed default from the file-descriptor limit via
-    'resolvePublicConnections'\/'openFileSoftLimit', as the composition root does.
-    -}
+    -- ^ Public pool capacity. 'Nothing' leaves it to the proxy's computed default.
     , lkPrivateConnectionsPerHost :: Maybe Int
-    {- ^ Private-upstream per-host connection-pool capacity. 'Nothing' resolves the shipped
-    computed default from the file-descriptor limit, as the composition root does. The private
-    pool does not follow the admission capacity, because a trusted tarball hit streams outside
-    admission.
-    -}
+    -- ^ Private pool capacity. 'Nothing' leaves it to the proxy's computed default.
     }
     deriving stock (Eq, Show)
 
@@ -116,7 +106,7 @@ defaultLoadKnobs =
         , lkPrivateConnectionsPerHost = Nothing
         }
 
--- | Read @BENCH_LOAD_*@ overrides. Malformed values retain defaults or computed pool sizing.
+-- | Read @BENCH_LOAD_*@ overrides. A malformed value keeps the default.
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
     concurrency <- readEnvInt "BENCH_LOAD_CONCURRENCY" (lkConcurrency defaultLoadKnobs)
@@ -144,14 +134,10 @@ loadKnobsFromEnv = do
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
 
-{- | A per-ecosystem load-test fixture: the ecosystem it serves and its load scenarios.
-The harness consumes it without knowing which ecosystem it is.
--}
+-- | A per-ecosystem fixture: the ecosystem it serves and its scenarios.
 data UpstreamFixture = UpstreamFixture
     { fixtureEcosystem :: Ecosystem
-    -- ^ The upstream ecosystem this fixture exercises.
     , fixtureScenarios :: [Scenario]
-    -- ^ The traffic shapes this ecosystem supports.
     }
 
 -- | A named scenario whose boot bracket keeps its fixture alive throughout measurement.
@@ -159,233 +145,319 @@ data Scenario = Scenario
     { scenarioName :: Text
     -- ^ A stable, argument-safe identifier (the driver passes it to the child process).
     , scenarioDescription :: Text
-    -- ^ A one-line description of the traffic shape, for the rendered report.
     , scenarioConcurrencyScale :: Int
-    {- ^ Multiplier applied to 'lkConcurrency' for this scenario alone, @1@ for an ordinary
-    scenario. A ceiling probe raises it so the load generator stops being the binding
-    constraint. The scenario's description must state the factor, because the operating-point
-    line prints the shared base.
+    {- ^ Multiplier on 'lkConcurrency' for this scenario alone. The description must state it,
+    because the operating point prints the shared base.
     -}
-    , scenarioBoot :: forall a. LoadKnobs -> (Driver -> IO a) -> IO a
-    -- ^ Bracket the ecosystem-specific setup\/teardown and yield the 'Driver'.
+    , scenarioServiceTime :: Bool
+    -- ^ Whether the concurrency-one pass runs it. Replays, bursts, ramps, and paired loads do not.
+    , scenarioInProcess :: Bool
+    -- ^ Work in the harness process, which no pod shape bounds, so only an unlimited run measures it.
+    , scenarioBoot :: forall a. LoadKnobs -> (Target -> IO a) -> IO a
     }
 
--- | Duration-driven load or a finite replay over a live fixture.
+-- | A proxied, duration-driven scenario at the base concurrency that joins the concurrency-one pass.
+scenario :: Text -> Text -> (forall a. LoadKnobs -> (Target -> IO a) -> IO a) -> Scenario
+scenario name description boot =
+    Scenario
+        { scenarioName = name
+        , scenarioDescription = description
+        , scenarioConcurrencyScale = 1
+        , scenarioServiceTime = True
+        , scenarioInProcess = False
+        , scenarioBoot = boot
+        }
+
+-- | What a booted fixture hands the harness: the proxy it measures, if any, and how to load it.
+data Target = Target
+    { targetProxy :: Maybe ProxyProcess
+    , targetDriver :: Driver
+    }
+
+-- | A target served by a proxy process.
+proxied :: ProxyProcess -> Driver -> Target
+proxied proxy = Target (Just proxy)
+
+-- | Headers sent with every request, and a weighted URL list: a repeated URL carries more weight.
+data Load = Load
+    { loadHeaders :: [(Text, Text)]
+    , loadUrls :: [Text]
+    }
+
+-- | A load with no extra headers.
+urlLoad :: [Text] -> Load
+urlLoad = Load []
+
+-- | How a scenario applies its traffic.
 data Driver
-    = -- | Consume a finite trace once from the fresh fixture, without priming any cache.
+    = -- | Hold the base connections for the configured duration.
+      DriveHttp Load
+    | -- | Send this many requests at once to an idle proxy, once, with no warm-up.
+      DriveBurst Int Text
+    | -- | Run the load once per connection count, each for the configured duration.
+      DriveRamp [Int] Load
+    | -- | Measure the first load while the second runs beside it on its own connections.
+      DriveUnder Load Load
+    | -- | Consume a finite trace once from the fresh fixture, without priming any cache.
       DriveReplay Replay
-    | {- | Drive this URL with @oha@ (the proxy is up). The harness owns the concurrency
-      and duration.
-      -}
-      DriveHttp Text
-    | {- | Drive a __weighted list of URLs__ with @oha@ (the proxy is up). @oha@ spreads
-      requests across the list in proportion to each URL's multiplicity. A hot package
-      repeated many times and a heavy one listed once therefore realise a heavy-headed
-      (Zipfian) serve mix. The harness owns the concurrency and duration.
-      -}
-      DriveHttpUrls [Text]
-    | {- | Drive a weighted list of URLs with @oha@, every request carrying the given
-      fixed headers: the revalidation scenario's conditional @If-None-Match@. The measured
-      path is then the @304@ answer rather than the full body.
-      -}
-      DriveHttpHeaders [(Text, Text)] [Text]
-    | {- | Run the in-process load for the configured duration, returning each completed
-      unit's latency in seconds. The harness wraps the RTS capture around the call and
-      computes the throughput and percentiles from the timings.
-      -}
+    | -- | Run the in-process load for the configured duration, returning each unit's latency in seconds.
       DriveInProcess (IO [Double])
 
--- | A child-process report. Latencies use milliseconds and are absent when no request succeeds.
+-- | One load's outcome over its window. Latencies cover successful responses only.
+data LoadSummary = LoadSummary
+    { lsLabel :: Text
+    , lsConnections :: Int
+    , lsElapsedSeconds :: Double
+    , lsCompleted :: Int
+    -- ^ HTTP responses of any status, or completed in-process units.
+    , lsSuccesses :: Int
+    -- ^ 2xx and 3xx responses: the primary figure.
+    , lsRefusals :: Int
+    -- ^ @429@ and @503@ responses, which carry the admission's back-pressure.
+    , lsOtherStatuses :: Int
+    , lsTransportFailures :: Int
+    , lsDeadlineAborts :: Int
+    -- ^ Requests still in flight when the window closed, or unfinished replay work.
+    , lsLatency :: Percentiles
+    , lsNote :: Text
+    -- ^ The status and transport-error distribution.
+    }
+    deriving stock (Show, Generic)
+    deriving anyclass (FromJSON, ToJSON)
+
+-- | What the proxy process showed beyond the traffic: its limits, its memory, and its ending.
+data ProxyFigures = ProxyFigures
+    { pfIdleRts :: Maybe RtsSnapshot
+    , pfIdleCgroupBytes :: Maybe Int
+    , pfCgroup :: Maybe CgroupReading
+    -- ^ Read after the proxy exited, so an OOM kill is counted.
+    , pfWindowThrottledUsec :: Maybe Int
+    -- ^ CPU time the quota withheld during the window.
+    , pfEnding :: ProxyEnding
+    , pfExitedEarly :: Bool
+    , pfStderrTail :: Text
+    -- ^ Kept only for an ending other than a clean shutdown.
+    , pfBootLines :: [Text]
+    , pfInFlight :: GaugeSummary
+    -- ^ @ecluse.serve.admission.in_flight@ sampled each second of the window.
+    , pfAdmissionSeries :: [Text]
+    -- ^ Every admission series at the end of the window.
+    }
+    deriving stock (Show, Generic)
+    deriving anyclass (FromJSON, ToJSON)
+
+-- | A child process's report, which the driver renders and checks.
 data ScenarioReport = ScenarioReport
     { srName :: Text
     , srDescription :: Text
-    , srConcurrency :: Int
-    {- ^ The connections the generator held open for this scenario: the shared base times
-    the scenario's 'scenarioConcurrencyScale'. Recorded so no reader misreads a scaled
-    scenario (the ceiling probe) against the base operating point.
-    -}
-    , srRequests :: Int
-    -- ^ Requests (or jobs) the proxy actually processed over the measured window.
-    , srThroughput :: Double
-    -- ^ Requests (or jobs) per second.
-    , srSuccessRate :: Double
-    -- ^ Fraction of requests that succeeded, in @[0, 1]@.
-    , srDeadlineAborts :: Int
-    {- ^ Requests the load generator abandoned at the run's deadline, the load-saturation
-    signal. Zero for the in-process scenario, which has no deadline-bounded generator.
-    -}
-    , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
-    -- ^ Latency percentiles, in milliseconds.
-    , srAllocPerReqBytes :: Maybe Double
-    {- ^ Bytes allocated per request, the machine-independent signal. The delta spans the
-    whole bench process, so it folds in the stub upstreams and is a consistent over-count, not
-    a pure proxy per-request cost.
-    -}
-    , srPeakResidencyBytes :: Word64
-    {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
-    high-water mark through reporting and the final major GC, wider than the timed deltas.
-    -}
-    , srRetainedBytes :: Word64
-    -- ^ Live heap retained after a major GC at the scenario's end.
-    , srGcs :: Word32
-    -- ^ Total GCs over the measured window.
-    , srMajorGcs :: Word32
-    -- ^ Major (whole-heap) GCs over the measured window, the long-pause kind.
-    , srGcWallMs :: Double
-    -- ^ Wall-clock time spent in GC over the window, in milliseconds.
-    , srMeanPauseMs :: Maybe Double
-    -- ^ Mean GC pause over the window, in milliseconds. @Nothing@ when no GC ran.
+    , srShape :: Text
+    , srLoad :: LoadSummary
+    , srCompanion :: Maybe LoadSummary
+    -- ^ The concurrent load a paired scenario ran beside the measured one.
+    , srSteps :: [LoadSummary]
+    -- ^ One summary per ramp step.
     , srReplayTotals :: Maybe ReplayTotals
-    -- ^ Finite replay accounting, including scheduled work not completed by the deadline.
+    , srRtsSource :: Text
+    -- ^ Which process the RTS figures describe: the proxy, or the harness for in-process work.
+    , srRtsWindow :: Maybe RtsWindow
+    , srRtsEnd :: Maybe RtsSnapshot
+    -- ^ The snapshot closing the window, whose maxima cover the process's life so far.
+    , srRetainedBytes :: Maybe Word64
+    -- ^ Live data after a major collection at the end of the scenario.
+    , srProxy :: Maybe ProxyFigures
     , srEvidence :: Text
-    -- ^ Per-pattern parameters, byte budgets, and cache outcomes.
-    , srNote :: Text
-    -- ^ A short note: the status-code distribution, and any transport errors.
     }
-    deriving stock (Generic, Show)
+    deriving stock (Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
 
--- | Measure one live fixture. Missing RTS counters or no responses fail the harness.
+-- | Measure one fixture. Missing RTS counters fail the harness.
 runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
-runScenario knobs scenario = do
+runScenario knobs s = do
     rtsOn <- getRTSStatsEnabled
     unless rtsOn $
         benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
-    let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale scenario)}
-    scenarioBoot scenario scaled (measure scaled scenario)
+    shape <- podShapeFromEnv
+    let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale s)}
+    scenarioBoot s scaled (measure scaled s (renderPodShape shape))
 
--- Finite replay starts cold. Only the legacy duration-driven HTTP scenarios receive warm-up.
-measure :: LoadKnobs -> Scenario -> Driver -> IO ScenarioReport
-measure knobs scenario driver = do
+measure :: LoadKnobs -> Scenario -> Text -> Target -> IO ScenarioReport
+measure knobs s shape (Target proxy driver) = do
     warmUp driver
-    performMajorGC
-    before <- getRTSStats
-    (requests, throughput, successRate, percentilesMs, deadlineAborts, note, replayAccounting) <- drive knobs driver
-    after <- getRTSStats
+    settle proxy
+    before <- snapshotOf proxy MajorCollection
+    cgroupBefore <- cgroupOf proxy
+    (outcome, inFlight) <- sampling proxy (drive knobs driver)
+    after <- snapshotOf proxy MinorCollection
+    cgroupAfter <- cgroupOf proxy
+    admission <- maybe (pure []) admissionSeries proxy
     evidence <- case driver of
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
-    when (requests <= 0 && isNothing replayAccounting) $
-        benchFail ("scenario " <> scenarioName scenario <> " served no requests -- a harness failure, not a result")
-    performMajorGC
-    finalStats <- getRTSStats
-    let retained = gcdetails_live_bytes (gc finalStats)
-    let (p50, p90, p99, p999) = percentilesMs
-        allocated = fromIntegral (allocated_bytes after - allocated_bytes before)
-        gcCount = gcs after - gcs before
-        gcWallNs = fromIntegral (gc_elapsed_ns after - gc_elapsed_ns before)
+    retained <- snapshotOf proxy MajorCollection
+    ends <- traverse (\p -> (p,) <$> stopProxy p) proxy
     pure
         ScenarioReport
-            { srName = scenarioName scenario
-            , srConcurrency = case driver of
-                DriveReplay replay -> length (rtClients (replayTrace replay))
-                _ -> lkConcurrency knobs
-            , srDescription = scenarioDescription scenario
-            , srRequests = requests
-            , srThroughput = throughput
-            , srSuccessRate = successRate
-            , srDeadlineAborts = deadlineAborts
-            , srP50Ms = p50
-            , srP90Ms = p90
-            , srP99Ms = p99
-            , srP999Ms = p999
-            , srAllocPerReqBytes = if requests > 0 then Just (allocated / fromIntegral requests) else Nothing
-            , srPeakResidencyBytes = max_live_bytes finalStats
-            , srRetainedBytes = retained
-            , srGcs = gcCount
-            , srMajorGcs = major_gcs after - major_gcs before
-            , srGcWallMs = gcWallNs / 1_000_000
-            , srMeanPauseMs = if gcCount == 0 then Nothing else Just (gcWallNs / 1_000_000 / fromIntegral gcCount)
-            , srReplayTotals = replayAccounting
+            { srName = scenarioName s
+            , srDescription = scenarioDescription s
+            , srShape = shape
+            , srLoad = doLoad outcome
+            , srCompanion = doCompanion outcome
+            , srSteps = doSteps outcome
+            , srReplayTotals = doReplay outcome
+            , srRtsSource = if isJust proxy then "proxy process" else "harness process"
+            , srRtsWindow = rtsWindow <$> before <*> after
+            , srRtsEnd = after
+            , srRetainedBytes = rsLiveBytes <$> retained
+            , srProxy = (\(p, end) -> proxyFigures p end (throttled cgroupBefore cgroupAfter) inFlight admission) <$> ends
             , srEvidence = evidence
-            , srNote = note
             }
+  where
+    throttled a b = do
+        start <- a
+        stop <- b
+        pure (counter "throttled_usec" (crCpuStat stop) - counter "throttled_usec" (crCpuStat start))
 
--- | Prime duration-driven HTTP scenarios. Finite replay remains untouched and starts cold.
+proxyFigures :: ProxyProcess -> ProxyEnd -> Maybe Int -> [Maybe Double] -> [Text] -> ProxyFigures
+proxyFigures proxy end throttledUsec inFlight admission =
+    ProxyFigures
+        { pfIdleRts = proxyIdleRts proxy
+        , pfIdleCgroupBytes = proxyIdleCgroupBytes proxy
+        , pfCgroup = peCgroup end
+        , pfWindowThrottledUsec = throttledUsec
+        , pfEnding = peEnding end
+        , pfExitedEarly = peExitedEarly end
+        , pfStderrTail = if peEnding end == CleanShutdown then "" else peStderrTail end
+        , pfBootLines = proxyBootLines proxy
+        , pfInFlight = summariseGauge inFlight
+        , pfAdmissionSeries = admission
+        }
+
+-- The proxy's counters over HTTP, or this process's own for in-process work.
+snapshotOf :: Maybe ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)
+snapshotOf proxy collection = case proxy of
+    Just p -> proxySnapshot p collection
+    Nothing -> do
+        case collection of
+            MajorCollection -> performMajorGC
+            MinorCollection -> performMinorGC
+        Just <$> readRtsSnapshot
+
+-- Wait up to a minute for the requests the warm-up abandoned at its deadline to leave admission,
+-- so they do not spend the window's capacity. A request that never leaves shows in the gauge.
+settle :: Maybe ProxyProcess -> IO ()
+settle = traverse_ $ \p -> void (pollUntil 300 200_000 (== Just 0) (inFlightNow p))
+  where
+    inFlightNow p = fmap (fromMaybe 0 . seriesTotal inFlightSeries []) <$> proxyScrape p
+
+cgroupOf :: Maybe ProxyProcess -> IO (Maybe CgroupReading)
+cgroupOf = fmap join . traverse proxyCgroupNow
+
+-- Sample the in-flight gauge once a second while the load runs. A failed scrape is a miss, and a
+-- scrape with no series yet reads zero, because the gauge appears on its first admission.
+sampling :: Maybe ProxyProcess -> IO a -> IO (a, [Maybe Double])
+sampling proxy load = case proxy of
+    Nothing -> (,[]) <$> load
+    Just p -> do
+        readings <- newIORef []
+        let sampleOnce = do
+                scraped <- proxyScrape p
+                modifyIORef' readings ((fromMaybe 0 . seriesTotal inFlightSeries [] <$> scraped) :)
+        result <- withAsync (forever (sampleOnce >> threadDelay 1_000_000)) (const load)
+        (result,) . reverse <$> readIORef readings
+
+inFlightSeries :: Text
+inFlightSeries = "ecluse_serve_admission_in_flight"
+
+admissionSeries :: ProxyProcess -> IO [Text]
+admissionSeries proxy =
+    proxyScrape proxy <&> \case
+        Nothing -> ["(the final scrape failed)"]
+        Just samples -> map (renderSample (commonLabels samples)) (filter (T.isInfixOf "admission" . sampleName) samples)
+
+-- | Prime duration-driven HTTP loads. Bursts and finite replays meet a cold proxy.
 warmUp :: Driver -> IO ()
 warmUp = \case
+    DriveHttp load -> warm load
+    DriveRamp _ load -> warm load
+    DriveUnder measured beside -> warm measured >> warm beside
+    DriveBurst _ _ -> pass
     DriveReplay _ -> pass
-    DriveHttp url -> void (runOha 8 warmupSeconds url)
-    DriveHttpUrls urls -> void (runOhaUrls 8 warmupSeconds urls)
-    DriveHttpHeaders headers urls -> void (runOhaUrlsWith headers 8 warmupSeconds urls)
     DriveInProcess _ -> pass
   where
-    warmupSeconds :: Int
-    warmupSeconds = 3
+    warm load = void (runOha (OhaRun 8 (ForSeconds 3) (loadHeaders load) (loadUrls load) False))
 
--- Apply the measured load and return the request count, throughput, success rate, the
--- four percentiles in milliseconds, the deadline-abort count, and a distribution note.
-drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text, Maybe ReplayTotals)
+data DriveOutcome = DriveOutcome
+    { doLoad :: LoadSummary
+    , doCompanion :: Maybe LoadSummary
+    , doSteps :: [LoadSummary]
+    , doReplay :: Maybe ReplayTotals
+    }
+
+drive :: LoadKnobs -> Driver -> IO DriveOutcome
 drive knobs = \case
+    DriveHttp load -> alone . summariseOha "" connections <$> runOha (timed connections load)
+    DriveBurst count url -> alone . summariseOha "" count <$> runOha (OhaRun count (ForRequests count) [] [url] True)
+    DriveRamp steps load -> do
+        reports <- traverse (\c -> (c,) <$> runOha (timed c load)) steps
+        let merged = foldl' mergeReports (OhaReport 0 mempty mempty []) (map snd reports)
+            stepSummaries = [summariseOha (show c <> " connections") c r | (c, r) <- reports]
+        pure (DriveOutcome (summariseOha "" (foldl' max 0 steps) merged) Nothing stepSummaries Nothing)
+    DriveUnder measured beside -> do
+        (m, b) <- concurrently (runOha (timed connections measured)) (runOha (timed connections beside))
+        pure (DriveOutcome (summariseOha "measured" connections m) (Just (summariseOha "concurrent load" connections b)) [] Nothing)
     DriveReplay replay -> do
         result <- runReplay replay
-        pure (fromOha (Just (replayTotals result)) (replayHttp result))
-    DriveHttp url -> fromOha Nothing <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
-    DriveHttpUrls urls -> fromOha Nothing <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
-    DriveHttpHeaders headers urls -> fromOha Nothing <$> runOhaUrlsWith headers (lkConcurrency knobs) (lkDurationSeconds knobs) urls
+        let totals = replayTotals result
+            clients = length (rtClients (replayTrace replay))
+        pure (DriveOutcome (summariseOha "" clients (replayHttp result)){lsDeadlineAborts = rtotalUnfinished totals} Nothing [] (Just totals))
     DriveInProcess act -> do
         start <- getMonotonicTime
         latencies <- act
         end <- getMonotonicTime
-        let requests = length latencies
-            elapsed = max 1e-9 (end - start)
-            sorted = sort latencies
-            pctl q = toMs (percentile q sorted)
-        pure
-            ( requests
-            , fromIntegral requests / elapsed
-            , 1.0
-            , (pctl 0.50, pctl 0.90, pctl 0.99, pctl 0.999)
-            , 0 -- no deadline-bounded generator here, so the deadline-abort count is explicitly zero
-            , "in-process worker loop (no HTTP surface)"
-            , Nothing
-            )
+        let completed = length latencies
+        pure . alone $
+            LoadSummary "" connections (max 1e-9 (end - start)) completed completed 0 0 0 0 (percentiles latencies) "in-process worker loop (no HTTP surface)"
   where
-    -- Project an oha report into the figures the RTS capture pairs with. The single-URL
-    -- and weighted-URL-list HTTP drivers share it.
-    fromOha :: Maybe ReplayTotals -> OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text, Maybe ReplayTotals)
-    fromOha replayAccounting report =
-        let statusCounts = ohaStatusCounts report
-            errorCounts = ohaErrorCounts report
-            totalResponses = sum (Map.elems statusCounts)
-            totalErrors = sum (Map.elems errorCounts)
-            totalRequests = maybe (totalResponses + totalErrors) rtotalScheduled replayAccounting
+    connections = lkConcurrency knobs
+    timed c load = OhaRun c (ForSeconds (lkDurationSeconds knobs)) (loadHeaders load) (loadUrls load) True
+    alone summary = DriveOutcome summary Nothing [] Nothing
 
-            isSuccess status = "2" `T.isPrefixOf` status || "3" `T.isPrefixOf` status
-            successCount = sum [count | (status, count) <- Map.toList statusCounts, isSuccess status]
+mergeReports :: OhaReport -> OhaReport -> OhaReport
+mergeReports a b =
+    OhaReport
+        { ohaElapsedSeconds = ohaElapsedSeconds a + ohaElapsedSeconds b
+        , ohaStatusCounts = Map.unionWith (+) (ohaStatusCounts a) (ohaStatusCounts b)
+        , ohaErrorCounts = Map.unionWith (+) (ohaErrorCounts a) (ohaErrorCounts b)
+        , ohaSuccessLatencies = ohaSuccessLatencies a <> ohaSuccessLatencies b
+        }
 
-            elapsed = ohaElapsedSeconds report
-            successReqsPerSec = if elapsed > 0 then fromIntegral successCount / elapsed else 0
-            successRate = if totalRequests > 0 then fromIntegral successCount / fromIntegral totalRequests else 0
-         in ( totalResponses
-            , successReqsPerSec
-            , successRate
-            , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
-            , maybe (deadlineAbortsOf report) rtotalUnfinished replayAccounting
-            , distributionNote report
-            , replayAccounting
-            )
+summariseOha :: Text -> Int -> OhaReport -> LoadSummary
+summariseOha label connections report =
+    LoadSummary
+        { lsLabel = label
+        , lsConnections = connections
+        , lsElapsedSeconds = ohaElapsedSeconds report
+        , lsCompleted = completed
+        , lsSuccesses = successes
+        , lsRefusals = refusals
+        , lsOtherStatuses = completed - successes - refusals
+        , lsTransportFailures = sum (Map.elems (ohaErrorCounts report)) - aborts
+        , lsDeadlineAborts = aborts
+        , lsLatency = percentiles (ohaSuccessLatencies report)
+        , lsNote = distributionNote report
+        }
+  where
+    statuses = [(readMaybe (toString status) :: Maybe Int, n) | (status, n) <- Map.toList (ohaStatusCounts report)]
+    completed = sum (map snd statuses)
+    successes = sum [n | (Just status, n) <- statuses, isSuccessStatus status]
+    refusals = sum [n | (Just status, n) <- statuses, status == 429 || status == 503]
+    aborts = deadlineAbortsOf report
 
-    toMs :: Maybe Double -> Maybe Double
-    toMs = fmap (* 1_000)
-
--- Best-effort saturation signal, never a gate. oha labels a deadline abandonment as the
--- transport error "aborted due to deadline", so this sums the error entries naming the
--- deadline. No matching label yields zero, whether none occurred or a future oha renamed it.
+-- oha labels a request abandoned at the run's deadline "aborted due to deadline".
 deadlineAbortsOf :: OhaReport -> Int
 deadlineAbortsOf report =
     sum [n | (label, n) <- Map.toList (ohaErrorCounts report), "deadline" `T.isInfixOf` T.toLower label]
 
--- A nearest-rank percentile of a sorted, non-empty list. 'Nothing' for an empty one.
-percentile :: Double -> [Double] -> Maybe Double
-percentile _ [] = Nothing
-percentile q xs =
-    let n = length xs
-        rank = ceiling (q * fromIntegral n) :: Int
-        idx = min (n - 1) (max 0 (rank - 1))
-     in xs !!? idx
-
--- A one-line note on the status-code distribution and any transport errors.
 distributionNote :: OhaReport -> Text
 distributionNote report =
     T.intercalate "; " (statusPart <> errorPart)
@@ -398,160 +470,12 @@ distributionNote report =
         | otherwise = ["errors " <> renderCounts (ohaErrorCounts report)]
     renderCounts m = T.intercalate ", " [k <> "×" <> show v | (k, v) <- Map.toList m]
 
-{- | Render the per-scenario reports to a Markdown section. The same text goes to stdout
-and to the GitHub run summary.
--}
-renderReports :: LoadKnobs -> Int -> Ecosystem -> [ScenarioReport] -> Text
-renderReports knobs capabilities ecosystem reports =
-    T.unlines $
-        [ "## Load test -- throughput & latency over " <> ecosystemName ecosystem
-        , ""
-        , "_Inform-only: figures are read and trended by a human, never compared to a threshold. Allocations per request is the machine-independent signal. Reading notes are at the end of the report._"
-        , ""
-        , "**Operating point**"
-        , ""
-        , "| knob | value |"
-        , "| --- | --- |"
-        , opRow "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections; see the at-a-glance table)")
-        , opRow "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
-        , opRow "admission" (show admissionCapacity <> " (" <> admissionOrigin <> ")")
-        , opRow "private pool" privatePoolNote
-        , opRow "public pool" publicPoolNote
-        , opRow "GHC capabilities" (show capabilities <> " (scenario children pinned to the driver's count)")
-        , opRow "packument corpus" "real-world captures (the packument scenarios serve the corpus)"
-        , opRow "configured cache entries" (show (lkCacheMaxEntries knobs))
-        , opRow "configured working-set cap" (show (lkWorkingSet knobs) <> " projects")
-        , opRow "worker artifact" ("~" <> fmtKiB (lkPayloadBytes knobs))
-        , ""
-        , "### At a glance"
-        , ""
-        , "| scenario | connections | successful req/s | success | p50 | p99 | process alloc/req | peak residency |"
-        , "| --- | --: | --: | --: | --: | --: | --: | --: |"
-        ]
-            <> map glanceRow reports
-            <> [""]
-            <> concatMap renderScenario reports
-            <> readingNotes
-  where
-    -- Resolved through the same function as the composition root, so the reported
-    -- admission is the admission the fixture ran with.
-    admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
-    admissionOrigin = case lkServeMaxInFlight knobs of
-        Just _ -> "explicit"
-        Nothing -> "computed from " <> show capabilities <> " capabilities, as in production"
-
-    -- The private pool is fd-derived rather than admission-derived. Name its origin so
-    -- the line cannot mislead.
-    privatePoolNote = case lkPrivateConnectionsPerHost knobs of
-        Just n -> show n <> " (explicit)"
-        Nothing -> "computed from the fd limit, as in production"
-
-    -- The public pool is fd-derived too (half the private share). Name its origin the
-    -- same way.
-    publicPoolNote = case lkPublicConnectionsPerHost knobs of
-        Just n -> show n <> " (explicit)"
-        Nothing -> "computed from the fd limit, as in production"
-
-    opRow :: Text -> Text -> Text
-    opRow k v = "| " <> k <> " | " <> v <> " |"
-
-    -- One at-a-glance row per scenario, linked to its section. The header anchor is the
-    -- scenario name, and every name is already a kebab-case slug.
-    glanceRow :: ScenarioReport -> Text
-    glanceRow r =
-        "| ["
-            <> srName r
-            <> "](#"
-            <> srName r
-            <> ") | "
-            <> show (srConcurrency r)
-            <> " | "
-            <> fmt1 (srThroughput r)
-            <> " | "
-            <> fmt1 (srSuccessRate r * 100)
-            <> "% | "
-            <> maybe "n/a" (\v -> fmt2 v <> " ms") (srP50Ms r)
-            <> " | "
-            <> maybe "n/a" (\v -> fmt2 v <> " ms") (srP99Ms r)
-            <> " | "
-            <> maybe "n/a" (fmtKiB . round) (srAllocPerReqBytes r)
-            <> " | "
-            <> fmtMiB (srPeakResidencyBytes r)
-            <> " |"
-
-    -- A short closing section, so the numbers lead.
-    readingNotes :: [Text]
-    readingNotes =
-        [ "### Reading the numbers"
-        , ""
-        , "- **Inform-only.** Throughput and latency are runner-dependent and read coarsely; nothing here gates."
-        , "- **Allocations / request is the machine-independent signal**, measured over the whole bench process: the HTTP scenarios also run their in-process stub upstreams (only oha, a subprocess, is excluded), so it is a consistent over-count -- right for trending, not a pure proxy per-request cost, and not comparable to the work-per-request micro-benches."
-        , "- **Peak residency is a process high-water mark** including preparation, warm-up, reporting, and the final major GC. GC-observed live heap does not establish the maximum transient working set. Allocation and GC deltas cover only the timed window."
-        , "- **Each scenario runs in its own process**, so residency and GC figures are per scenario."
-        , "- **A low success rate is deliberate load shedding, not a broken run.** Success counts 2xx and 3xx only, so a shed `503` carrying `Retry-After` reads as a failure. A saturating scenario answers mostly `503`, so its allocations per request average over shed requests and are not a served request's cost."
-        ]
-
-renderScenario :: ScenarioReport -> [Text]
-renderScenario r =
-    [ "### " <> srName r
-    , ""
-    , "| metric | value |"
-    , "| --- | --- |"
-    , row "connections held open" (show (srConcurrency r))
-    , row "successful throughput" (fmt1 (srThroughput r) <> " req/s")
-    , row "completed responses" (show (srRequests r))
-    , row "success fraction" (fmt1 (srSuccessRate r * 100) <> "%" <> if isJust (srReplayTotals r) then " of scheduled requests" else " of completed requests and transport failures")
-    , row "latency p50 / p90 / p99 / p99.9" (msCell (srP50Ms r) <> " / " <> msCell (srP90Ms r) <> " / " <> msCell (srP99Ms r) <> " / " <> msCell (srP999Ms r))
-    , row "process allocations / request" (maybe "n/a" (fmtKiB . round) (srAllocPerReqBytes r))
-    , row "peak residency" (fmtMiB (srPeakResidencyBytes r))
-    , row "retained heap" (fmtMiB (srRetainedBytes r))
-    , row "GCs (total / major)" (show (srGcs r) <> " / " <> show (srMajorGcs r))
-    , row "GC wall / mean pause" (fmt1 (srGcWallMs r) <> " ms / " <> maybe "n/a" (\p -> fmt2 p <> " ms") (srMeanPauseMs r))
-    , row "distribution" (srNote r)
-    , ""
-    , maybe "" renderReplayTotals (srReplayTotals r)
-    , srEvidence r
-    , "> " <> srDescription r
-    , ""
-    ]
-  where
-    row :: Text -> Text -> Text
-    row k v = "| " <> k <> " | " <> v <> " |"
-
-    msCell :: Maybe Double -> Text
-    msCell = maybe "n/a" (\v -> fmt2 v <> " ms")
-
--- | Attribute concurrency-one service time against the named upstream baseline.
-renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
-renderServiceTime source reports =
-    renderNormalised source (map toRow reports)
-  where
-    toRow r = NormalisedRow (srName r) (srP50Ms r) (srP99Ms r)
-
--- | Pair loaded reports with their concurrency-one counterparts to describe saturation.
-renderLoadSaturation :: [ScenarioReport] -> [ScenarioReport] -> Text
-renderLoadSaturation c1Reports loadedReports =
-    renderSaturation queuingDominanceThreshold (map (deriveSaturation queuingDominanceThreshold . toInput) loadedReports)
-  where
-    c1ByName :: Map Text ScenarioReport
-    c1ByName = Map.fromList [(srName r, r) | r <- c1Reports]
-
-    toInput loaded =
-        SaturationInput
-            (srName loaded)
-            (srThroughput loaded)
-            (srDeadlineAborts loaded)
-            (srP50Ms =<< Map.lookup (srName loaded) c1ByName)
-            (srP50Ms loaded)
-
-fmt1, fmt2 :: Double -> Text
-fmt1 x = toText (showFFloat (Just 1) x "")
-fmt2 x = toText (showFFloat (Just 2) x "")
-
--- An integer byte count rendered in KiB (one decimal).
-fmtKiB :: Int -> Text
-fmtKiB bytes = fmt1 (fromIntegral bytes / 1024) <> " KiB"
-
--- A Word64 byte count rendered in MiB (one decimal).
-fmtMiB :: Word64 -> Text
-fmtMiB bytes = fmt1 (fromIntegral bytes / (1024 * 1024)) <> " MiB"
+-- | The invariant evidence one report carries: its successes, its OOM kills, and its ending.
+reportEvidence :: ScenarioReport -> RunEvidence
+reportEvidence r =
+    RunEvidence
+        { reScenario = srName r <> " (" <> srShape r <> ", " <> show (lsConnections (srLoad r)) <> " connections)"
+        , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- srLoad r : maybeToList (srCompanion r)]
+        , reOomKills = maybe 0 (counter "oom_kill" . crMemoryEvents) (pfCgroup =<< srProxy r)
+        , reEnding = pfEnding <$> srProxy r
+        }

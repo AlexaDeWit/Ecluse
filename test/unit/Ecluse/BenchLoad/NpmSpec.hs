@@ -2,11 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Real proxy replay and local-retention configuration checks.
+-- | The npm stubs' artifact paths, and the pattern knobs refused before any proxy boots.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
+import Data.Aeson ((.=))
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (status200, status404)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -14,10 +14,8 @@ import Test.Hspec
 
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Fixture (fetchChecked)
-import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..), UpstreamFixture (fixtureScenarios), defaultLoadKnobs)
-import Ecluse.BenchLoad.Npm (corpusPublicStub, npmFixture, privateOverlayStub)
-import Ecluse.BenchLoad.Oha (OhaReport (ohaStatusCounts))
-import Ecluse.BenchLoad.Replay (Replay (replayEvidence), ReplayReport (replayHttp), runReplay)
+import Ecluse.BenchLoad.Harness (LoadKnobs (..), Scenario (..), Target, UpstreamFixture (fixtureScenarios), defaultLoadKnobs)
+import Ecluse.BenchLoad.Npm (corpusPublicStub, npmFixture, privateOverlayStub, privateOverlayStubWith)
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
@@ -40,21 +38,23 @@ spec = describe "npm artifact fixture paths" $ do
             metadata <- fetchChecked status200 [] (localhost port <> "/request")
             HTTP.responseBody metadata `shouldBe` rebaseAuthority "https://registry.npmjs.org" (localhost port) body
 
-    it "serves a listing and public artifact with no local full retention" $
-        bootSelectedPattern 0 $ \case
-            DriveReplay replay -> do
-                report <- runReplay replay
-                ohaStatusCounts (replayHttp report) `shouldBe` Map.singleton "200" 2
-                observed <- replayEvidence replay
-                observed `shouldSatisfy` T.isInfixOf "Public upstream requests (metadata / artifact): 2 / 1."
-                observed `shouldSatisfy` T.isInfixOf "Local full retention is ineligible. Effective full capacity is zero."
-            _ -> expectationFailure "cold-install scenario did not select finite replay"
+    it "draws extra fields on every private request, so a nonce defeats assembled reuse" $ do
+        served <- newIORef (0 :: Int)
+        let nonce name
+                | name == "webpack" = (\n -> ["description" .= ("nonce " <> show n :: Text)]) <$> atomicModifyIORef' served (\c -> (c + 1, c))
+                | otherwise = pure []
+            fetchBody port name = HTTP.responseBody <$> fetchChecked status200 [] (localhost port <> "/" <> name)
+        testWithApplication (pure (privateOverlayStubWith nonce 0 "trusted")) $ \port -> do
+            changing <- traverse (const (fetchBody port "webpack")) [1 :: Int, 2]
+            stable <- traverse (const (fetchBody port "lodash")) [1 :: Int, 2]
+            ordNub changing `shouldSatisfy` ((== 2) . length)
+            ordNub stable `shouldSatisfy` ((== 1) . length)
 
     it "rejects a full-retention budget before starting a replay" $
         bootSelectedPattern (154 * 1024 * 1024) (const (expectationFailure "a nonzero full budget reached the replay"))
             `shouldThrow` (\(BenchLoadError message) -> message == "BENCH_PATTERN_FULL_BYTES must be zero: the local backend never retains full metadata")
 
-bootSelectedPattern :: Int -> (Driver -> IO ()) -> IO ()
+bootSelectedPattern :: Int -> (Target -> IO ()) -> IO ()
 bootSelectedPattern fullBytes action =
     withEnvVars (map fst entries) entries $
         case find ((== "pattern-cold-install") . scenarioName) (fixtureScenarios npmFixture) of
