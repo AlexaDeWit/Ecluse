@@ -16,7 +16,7 @@ import UnliftIO.Exception (finally)
 
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
 import Ecluse.Test.Support (expectRight)
 
 -- | Verify retained-depth boundaries, source size and response cancellation.
@@ -39,7 +39,7 @@ spec = describe "readJsonStream" $ do
             result <- expectRight (decode (retainedValue 2) [BS.take position body, BS.drop position body])
             streamValue result `shouldBe` Right (Just expected)
 
-    forM_ [("object", \fallback -> retainedObjectWith fallback (const (retainedValue 3)), object ["keep" .= (1 :: Int)]), ("array", \fallback -> retainedArrayWith fallback (retainedValue 3), Array (fromList [Number 1]))] $ \(label, choose, value) ->
+    forM_ [("object", \fallback -> retainedObjectWith fallback (everyMember (retainedValue 3)), object ["keep" .= (1 :: Int)]), ("array", \fallback -> retainedArrayWith fallback (retainedValue 3), Array (fromList [Number 1]))] $ \(label, choose, value) ->
         it ("commits to the " <> label <> " before reading its next chunk") $ do
             let fallback = J.mapWithFailure (const (Left "unselected fallback")) (J.objectFound () () mempty <> J.arrayFound () () mempty)
                 body = toStrict (encode value)
@@ -52,7 +52,7 @@ spec = describe "readJsonStream" $ do
             streamValue result `shouldBe` Right (Just value)
 
     it "preserves a scalar fallback and an invalid-container witness" $ do
-        let parser = retainedObjectWith (retainedScalar <|> pure (Array mempty)) (const (retainedValue 1))
+        let parser = retainedObjectWith (retainedScalar <|> pure (Array mempty)) (everyMember (retainedValue 1))
         forM_ [("true", Bool True), ("null", Null), ("[1,2]", Array mempty)] $ \(body, expected) -> do
             result <- expectRight (decode (J.objectWithKey "value" parser) ["{\"value\":" <> body <> "}"])
             streamValue result `shouldBe` Right (Just expected)
@@ -74,7 +74,7 @@ spec = describe "readJsonStream" $ do
 
     it "preserves nested values and split escapes at every source boundary" $ do
         let body = "{\"keep\":{\"list\":[1,true,null,\"a\\\\b\\u00e9\"]},\"ignored\":{\"blob\":[1,2,3]}}"
-            parser = retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 10 else mempty)
+            parser = retainedObjectWith mempty (namedMembers [("keep", retainedValue 10)])
             baseline = decode parser [body]
         forM_ [1 .. BS.length body - 1] $ \position ->
             decode parser [BS.take position body, BS.drop position body] `shouldBe` baseline
@@ -86,10 +86,20 @@ spec = describe "readJsonStream" $ do
         result <-
             expectRight
                 ( decode
-                    (retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 3 else mempty))
+                    (retainedObjectWith mempty (namedMembers [("keep", retainedValue 3)]))
                     ["{\"ignored\":{\"deep\":[[[[[1]]]]]},\"keep\":\"yes\"}"]
                 )
         streamValue result `shouldBe` Right (Just (object ["keep" .= ("yes" :: Text)]))
+
+    forM_ [("a named member", namedMembers [("keep", retainedValue 1)], True), ("a known member", knownMembers ["keep"] (retainedValue 1), True), ("an unlisted member", everyMember (retainedValue 1), False)] $ \(label, members, shared) ->
+        it ("holds the key of " <> label <> " as one object across objects: " <> show shared) $ do
+            result <- expectRight (decode (retainedArrayWith mempty (retainedObjectWith mempty members)) ["[{\"keep\":1},{\"keep\":2}]"])
+            objects <- either (fail . show) (maybe (fail "no array") pure) (streamValue result)
+            sharesKey "keep" (arrayItems objects) `shouldReturn` shared
+
+    it "keeps the first of duplicate named members" $ do
+        result <- expectRight (decode (retainedObjectWith mempty (namedMembers [("keep", retainedValue 1)])) ["{\"keep\":1,\"keep\":2}"])
+        streamValue result `shouldBe` Right (Just (object ["keep" .= (1 :: Int)]))
 
     it "drains trailing chunks after the selected JSON object ends" $ do
         let chunks = ["{\"name\":\"thing\"}", " trailing", " bytes"]
@@ -115,6 +125,11 @@ spec = describe "readJsonStream" $ do
             cancel worker
             waitCatch worker >>= (`shouldSatisfy` isLeft)
             takeMVar released
+
+arrayItems :: Value -> [Value]
+arrayItems = \case
+    Array items -> toList items
+    _ -> []
 
 -- Keep the test fold independent of an accumulated list of parser events.
 decode :: J.Parser a -> [ByteString] -> Either LimitError (StreamResult (Maybe a))

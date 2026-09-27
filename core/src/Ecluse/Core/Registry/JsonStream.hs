@@ -11,6 +11,10 @@ module Ecluse.Core.Registry.JsonStream (
     readJsonStream,
     retainedValue,
     withinRetainedDepth,
+    Members,
+    namedMembers,
+    knownMembers,
+    everyMember,
     retainedObjectOr,
     retainedScalar,
     retainedObjectWith,
@@ -21,6 +25,7 @@ import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
 import Data.Vector qualified as V
 
@@ -71,7 +76,7 @@ retainedValue depth =
     withinRetainedDepth depth $
         retainedObjectWith
             (retainedArrayWith retainedScalar child)
-            (const child)
+            (everyMember child)
   where
     child = retainedValue (depth - 1)
 
@@ -81,13 +86,33 @@ withinRetainedDepth budget parser
     | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
     | otherwise = parser
 
+{- | Which members of an object are retained, with what parser, and under which key. Every object
+read with one 'Members' value holds each name it knows under one shared key.
+-}
+data Members
+    = NamedMembers (HashMap Text (Key.Key, J.Parser Value))
+    | KnownMembers (HashMap Text Key.Key) (J.Parser Value)
+    | EveryMember (J.Parser Value)
+
+-- | Retain only the named members. The first entry for a name wins.
+namedMembers :: [(Text, J.Parser Value)] -> Members
+namedMembers entries = NamedMembers (HashMap.fromListWith (\_ earlier -> earlier) [(name, (Key.fromText name, parser)) | (name, parser) <- entries])
+
+-- | Retain every member with one parser, sharing the key of each listed name.
+knownMembers :: [Text] -> J.Parser Value -> Members
+knownMembers names = KnownMembers (HashMap.fromList [(name, Key.fromText name) | name <- names])
+
+-- | Retain every member with one parser, each under its own key.
+everyMember :: J.Parser Value -> Members
+everyMember = EveryMember
+
 -- | Supply an invalid-shape witness without traversing a valid object through a parallel fallback.
-retainedObjectOr :: Value -> (Text -> J.Parser Value) -> J.Parser Value
+retainedObjectOr :: Value -> Members -> J.Parser Value
 retainedObjectOr fallback = fmap (fromMaybe fallback) . foldRetained . objectEvents
 
 -- | Select object events before folding. The fallback handles scalars and other container shapes.
-retainedObjectWith :: J.Parser Value -> (Text -> J.Parser Value) -> J.Parser Value
-retainedObjectWith fallback select = J.catMaybeI (foldRetained (objectEvents select <|> (OtherValue <$> fallback)))
+retainedObjectWith :: J.Parser Value -> Members -> J.Parser Value
+retainedObjectWith fallback members = J.catMaybeI (foldRetained (objectEvents members <|> (OtherValue <$> fallback)))
 
 -- | Select array events before folding. A container fallback must yield only its completed value.
 retainedArrayWith :: J.Parser Value -> J.Parser Value -> J.Parser Value
@@ -97,10 +122,14 @@ data RetainedEvent = BeginObject | ObjectField Key.Key Value | BeginArray | Arra
 
 data Retained = Missing | ObjectFields (KeyMap.KeyMap Value) | ArrayItems [Value] | ScalarValue Value
 
-objectEvents :: (Text -> J.Parser Value) -> J.Parser RetainedEvent
-objectEvents select = J.objectFound BeginObject EndContainer (J.objectKeyValues field)
-  where
-    field key = ObjectField (Key.fromText key) <$> select key
+objectEvents :: Members -> J.Parser RetainedEvent
+objectEvents members = J.objectFound BeginObject EndContainer (J.objectKeyValues (memberEvent members))
+
+memberEvent :: Members -> Text -> J.Parser RetainedEvent
+memberEvent = \case
+    NamedMembers named -> \name -> maybe mempty (\(key, parser) -> ObjectField key <$> parser) (HashMap.lookup name named)
+    KnownMembers known parser -> \name -> ObjectField (HashMap.findWithDefault (Key.fromText name) name known) <$> parser
+    EveryMember parser -> \name -> ObjectField (Key.fromText name) <$> parser
 
 arrayEvents :: J.Parser Value -> J.Parser RetainedEvent
 arrayEvents parser = J.arrayFound BeginArray EndContainer (ArrayItem <$> J.arrayOf parser)

@@ -13,10 +13,9 @@ module Ecluse.Core.Registry.Npm.Streaming (
 ) where
 
 import Data.Aeson (Value (Array, Null, Number, Object, String))
-import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
 
-import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
+import Ecluse.Core.Registry.JsonStream (everyMember, namedMembers, retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
 
 -- | Full serving data, one release, or the fields needed to recognise usable version entries.
 data NpmRead = FullRead | SelectedRead Text | VersionListRead
@@ -60,34 +59,34 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
                 <|> pure (InvalidContainer slot)
     release key = case mode of
         SelectedRead target | key /= target -> pure (VersionField "" Nothing)
-        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (fieldIn listFields))
-        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (fieldIn releaseFields))
+        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listFields)
+        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null releaseFields)
     timestamp key = TimeField key <$> scalar (depth - 2)
     tag key = TagField key <$> scalar (depth - 2)
-    fieldIn fields key = HashMap.findWithDefault mempty key fields
-    -- Both unions are left-biased, so a shaped entry wins over the generic one for its key.
-    -- 'HashMap.fromList' keeps the last duplicate, so each list names a key once.
-    listFields = HashMap.fromList listWitnesses <> HashMap.filterWithKey (\key _ -> key `elem` versionListFields) releaseFields
-    releaseFields = HashMap.fromList shapedFields <> HashMap.fromList [(key, retainedValue (depth - 3)) | key <- versionFields]
+    -- Each table is built once per read, so every release shares its field names. The first
+    -- entry for a name wins, so a witness or a shaped entry takes precedence over the generic one.
+    listFields = namedMembers (listWitnesses <> filter ((`elem` versionListFields) . fst) releaseEntries)
+    releaseFields = namedMembers releaseEntries
+    releaseEntries = shapedFields <> [(key, retainedValue (depth - 3)) | key <- versionFields]
     listWitnesses =
         [ ("name", withinRetainedDepth (depth - 3) witness)
         , ("version", withinRetainedDepth (depth - 3) witness)
-        , ("dist", withinRetainedDepth (depth - 3) (retainedObjectOr Null (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty)))
+        , ("dist", withinRetainedDepth (depth - 3) (retainedObjectOr Null (namedMembers [(slot, withinRetainedDepth (depth - 4) witness) | slot <- ["tarball", "shasum", "integrity"]])))
         , ("scripts", withinRetainedDepth (depth - 3) (stringMapWitness (depth - 4)))
         , ("deprecated", withinRetainedDepth (depth - 3) (pure Null))
         ]
     shapedFields =
         [ ("_npmUser", personValue ["name", "email", "url"] (depth - 3))
         , ("license", personValue ["type", "url"] (depth - 3))
-        , ("dist", objectValue (depth - 3) distField)
-        , ("peerDependenciesMeta", objectValue (depth - 3) (const (fixed ["optional"] (depth - 4))))
-        , ("dependenciesMeta", objectValue (depth - 3) (const (fixed ["optional"] (depth - 4))))
+        , ("dist", objectValue (depth - 3) distFields)
+        , ("peerDependenciesMeta", dependencyMeta)
+        , ("dependenciesMeta", dependencyMeta)
         , ("directories", fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3))
-        , ("devEngines", objectValue (depth - 3) devEngineField)
-        , ("publishConfig", objectValue (depth - 3) publishField)
-        , ("workspaces", withinRetainedDepth (depth - 3) (retainedArrayWith (objectValue (depth - 3) workspaceField) (scalar (depth - 4))))
+        , ("devEngines", objectValue (depth - 3) (namedMembers [(key, devEngine) | key <- ["cpu", "os", "libc", "runtime", "packageManager"]]))
+        , ("publishConfig", objectValue (depth - 3) publishFields)
+        , ("workspaces", withinRetainedDepth (depth - 3) (retainedArrayWith (objectValue (depth - 3) workspaceFields) (scalar (depth - 4))))
         ]
-            <> [ (key, objectValue (depth - 3) (const (scalar (depth - 4))))
+            <> [ (key, objectValue (depth - 3) (everyMember (scalar (depth - 4))))
                | key <- ["dependencies", "acceptDependencies", "devDependencies", "optionalDependencies", "peerDependencies", "engines", "scripts", "bin", "browser"]
                ]
             <> [ (key, scalar (depth - 3))
@@ -96,27 +95,20 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
     witness = (String "" <$ J.string) <|> (Null <$ J.jNull) <|> pure (Number 0)
     personValue keys budget = withinRetainedDepth budget ((String <$> J.string) <|> fixed keys budget)
     scalar budget = withinRetainedDepth budget (retainedScalar <|> pure (Array mempty))
-    objectValue budget fields = withinRetainedDepth budget (retainedObjectWith (scalar budget) fields)
+    objectValue budget members = withinRetainedDepth budget (retainedObjectWith (scalar budget) members)
     arrayValue budget entry = withinRetainedDepth budget (retainedArrayWith (scalar budget) entry)
-    fixed keys budget = objectValue budget (\key -> if key `elem` keys then scalar (budget - 1) else mempty)
-    distField "signatures" = arrayValue (depth - 4) (fixed ["keyid", "sig"] (depth - 5))
-    distField "attestations" = objectValue (depth - 4) attestationField
-    distField key
-        | key `elem` distFields = scalar (depth - 4)
-        | otherwise = mempty
-    attestationField "url" = scalar (depth - 5)
-    attestationField "provenance" = fixed ["predicateType"] (depth - 5)
-    attestationField _ = mempty
-    devEngineField key
-        | key `elem` ["cpu", "os", "libc", "runtime", "packageManager"] =
-            withinRetainedDepth (depth - 4) (retainedArrayWith (fixed ["name", "version", "onFail"] (depth - 4)) (fixed ["name", "version", "onFail"] (depth - 5)))
-        | otherwise = mempty
-    publishField key
-        | key `elem` ["registry", "tag", "access", "provenance", "ignore-scripts", "directory", "linkDirectory", "executableFiles", "main", "module", "types", "typings", "exports", "imports", "bin", "browser"] = retainedValue (depth - 4)
-        | otherwise = mempty
-    workspaceField key
-        | key `elem` ["packages", "nohoist"] = arrayValue (depth - 4) (scalar (depth - 5))
-        | otherwise = mempty
+    fixed keys budget = objectValue budget (namedMembers [(key, scalar (budget - 1)) | key <- keys])
+    distFields =
+        namedMembers
+            ( [ ("signatures", arrayValue (depth - 4) (fixed ["keyid", "sig"] (depth - 5)))
+              , ("attestations", objectValue (depth - 4) (namedMembers [("url", scalar (depth - 5)), ("provenance", fixed ["predicateType"] (depth - 5))]))
+              ]
+                <> [(key, scalar (depth - 4)) | key <- distScalars]
+            )
+    dependencyMeta = objectValue (depth - 3) (everyMember (fixed ["optional"] (depth - 4)))
+    devEngine = withinRetainedDepth (depth - 4) (retainedArrayWith (fixed ["name", "version", "onFail"] (depth - 4)) (fixed ["name", "version", "onFail"] (depth - 5)))
+    publishFields = namedMembers [(key, retainedValue (depth - 4)) | key <- ["registry", "tag", "access", "provenance", "ignore-scripts", "directory", "linkDirectory", "executableFiles", "main", "module", "types", "typings", "exports", "imports", "bin", "browser"]]
+    workspaceFields = namedMembers [(key, arrayValue (depth - 4) (scalar (depth - 5))) | key <- ["packages", "nohoist"]]
 
 -- | Supported release fields for installation, runtime resolution, policy and mirrored publication.
 versionFields :: [Text]
@@ -164,8 +156,8 @@ versionFields =
 versionListFields :: [Text]
 versionListFields = ["name", "version", "dist", "deprecated", "hasInstallScript", "scripts", "license", "_npmUser"]
 
-distFields :: [Text]
-distFields = ["tarball", "shasum", "integrity", "unpackedSize", "fileCount", "signatures", "attestations"]
+distScalars :: [Text]
+distScalars = ["tarball", "shasum", "integrity", "unpackedSize", "fileCount"]
 
 data StringMapShape = ValidStringMap | InvalidStringMap | NullStringMap
 
