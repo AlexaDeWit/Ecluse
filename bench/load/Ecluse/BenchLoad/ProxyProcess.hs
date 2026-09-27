@@ -3,15 +3,18 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Start, observe, and stop the proxy process a scenario measures. The proxy is this executable
-under 'serveProxyFlag', configured through @ECLUSE_*@ variables as a deployment would be. Under a
-pod shape it runs in its own child of the cgroup named by @BENCH_LOAD_CGROUP@, so the limit bounds
-it alone. The cgroup outlives the process, so an OOM kill stays readable after it. The proxy logs
-into pipes the harness drains into bounded memory, so no log page is charged to the limit.
+under 'serveProxyFlag', configured through @ECLUSE_*@ variables, and @AWS_*@ ones for an advisory
+store, as a deployment would be. Under a pod shape it runs in its own child of the cgroup named by
+@BENCH_LOAD_CGROUP@, so the limit bounds it alone. The cgroup outlives the process, so an OOM kill
+stays readable after it. The proxy logs into pipes the harness drains into bounded memory, so no
+log page is charged to the limit.
 -}
 module Ecluse.BenchLoad.ProxyProcess (
     -- * Configuration
     ProxySettings (..),
     proxySettings,
+    AdvisoryFeed (..),
+    advisoryBucket,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -46,7 +49,8 @@ module Ecluse.BenchLoad.ProxyProcess (
 ) where
 
 import Control.Concurrent (modifyMVar, threadDelay)
-import Data.Aeson (eitherDecode)
+import Data.Aeson (eitherDecode, encode, object)
+import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.List (lookup)
@@ -100,7 +104,7 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.BootLines (bootMessages, logMessages, ruleMessages)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Exposition (Sample, parseExposition)
+import Ecluse.BenchLoad.Exposition (Sample, advisoryDatabaseInstalled, parseExposition)
 import Ecluse.BenchLoad.Pod (CgroupReading (..), PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.RtsWindow (Collection (MajorCollection), RtsSnapshot, collectionName)
@@ -108,6 +112,7 @@ import Ecluse.BenchLoad.Verdict (ProxyEnding, classifyEnding)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Rts (parseMemoryMax, readIfExists)
 import Ecluse.Runtime.Server (listeningPrefix, proxyListener)
+import Ecluse.Test.Env (ambientAwsEntries)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (freePort)
 
@@ -129,11 +134,23 @@ data ProxySettings = ProxySettings
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
+    , psAdvisories :: Maybe AdvisoryFeed
     }
 
 -- | Settings for one mount with the given cache TTL, every bound left to the boot.
 proxySettings :: Ecosystem -> Int -> ProxySettings
-proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
+-- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
+data AdvisoryFeed = AdvisoryFeed
+    { afStorePort :: Int
+    , afRules :: [Pair]
+    }
+    deriving stock (Eq, Show)
+
+-- | The bucket the proxy syncs its advisory database from.
+advisoryBucket :: Text
+advisoryBucket = "ecluse-bench-advisories"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
@@ -289,9 +306,18 @@ launch settings shape root dir publicPort privatePort = do
     (`onException` (stopProxy booted `finally` traverse_ retireCgroup cgroup)) $ do
         -- Every boot line precedes the listening line. Give the drain a moment to catch up.
         logged <- pollUntil 50 100_000 proxyListening (BS8.lines . capturedHead <$> readIORef (drStdout drained))
+        when (isJust (psAdvisories settings)) (awaitAdvisoryDatabase booted (psEcosystem settings))
         idle <- proxySnapshot booted MajorCollection
         idleCgroup <- proxyCgroupNow booted
         pure booted{ppBootLines = bootMessages logged, ppRuleLines = ruleMessages logged, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
+
+-- Wait up to a minute for the first advisory sync, so every reading includes the database.
+awaitAdvisoryDatabase :: ProxyProcess -> Ecosystem -> IO ()
+awaitAdvisoryDatabase proxy ecosystem = do
+    installed <- pollUntil 600 100_000 id (maybe False (advisoryDatabaseInstalled ecosystem) <$> proxyScrape proxy)
+    unless installed $ do
+        logTail <- capturedTailText (drStdout (ppDrained proxy))
+        benchFail ("bench-load: the proxy did not install its advisory database within 60 s\nlog tail:\n" <> logTail)
 
 -- Three distinct free ports: the proxy, its RTS control listener, and its scrape listener.
 distinctPorts :: IO (Int, Int, Int)
@@ -309,7 +335,7 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
     filter (inherited . fst) base <> map (bimap toString toString) (fixed <> pinned)
   where
     -- The proxy reads its whole configuration from here, so nothing of the harness's own leaks in.
-    inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "__ECLUSE"])
+    inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "AWS_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
     -- The upstreams are named over https for the configuration to accept them.
     upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://localhost:" <> show p)
@@ -329,6 +355,12 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
         , ("GHCRTS", toText rtsStatsFlag)
         , upstream "PUBLIC_UPSTREAM" publicPort
         ]
+    advisories feed =
+        [ ("ECLUSE_ADVISORIES__URL", "s3://" <> advisoryBucket)
+        , ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show (afStorePort feed))
+        ]
+            <> map (bimap toText toText) ambientAwsEntries
+            <> [("ECLUSE_RULES", decodeUtf8 (encode (object (afRules feed)))) | not (null (afRules feed))]
     pinned =
         catMaybes
             [ upstream "PRIVATE_UPSTREAM" <$> privatePort
@@ -342,6 +374,7 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
             , -- Unbounded, the harness's own capability count stands in for the missing CPU quota.
               ("ECLUSE_RUNTIME__CORES", show cores) <$ guard (shape == Unlimited)
             ]
+            <> foldMap advisories (psAdvisories settings)
 
 -- | RTS counters from the proxy after the given collection. 'Nothing' once it has gone.
 proxySnapshot :: ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)

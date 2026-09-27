@@ -5,7 +5,9 @@
 -- | Pin the configuration a measured proxy boots from.
 module Ecluse.BenchLoad.ProxyProcessSpec (spec) where
 
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (Value (Object), decode, encode, object, (.=))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -20,8 +22,10 @@ import UnliftIO (throwIO)
 import UnliftIO.Async (cancel, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
+import Ecluse.BenchLoad.Advisories (advisoryDenyRules)
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited))
 import Ecluse.BenchLoad.ProxyProcess (
+    AdvisoryFeed (AdvisoryFeed),
     BootFailure (..),
     ProxySettings (..),
     bootDiagnostic,
@@ -168,11 +172,28 @@ environmentSpec = describe "proxyEnvironment" $ do
                         , psPublicConnections = Just 32
                         , psPrivateConnections = Just 64
                         , psClock = Just (UTCTime (fromGregorian 2026 9 22) 0)
+                        , psAdvisories = Just (AdvisoryFeed 9003 advisoryDenyRules)
                         }
                 environment = proxyEnvironment everyPin shape 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
             case loadConfig environment Nothing of
                 Left errs -> expectationFailure (toString (unlines (map renderConfigError errs)))
                 Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
+    it "points an advisory feed's proxy at the loopback store under a stand-in identity, never the harness's own" $ do
+        let advised rules = proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) awsBase
+            awsBase = [("AWS_PROFILE", "harness"), ("AWS_ACCESS_KEY_ID", "harness-key")]
+            shipped = advised []
+        lookup "ECLUSE_ADVISORIES__URL" shipped `shouldBe` Just "s3://ecluse-bench-advisories"
+        lookup "AWS_ENDPOINT_URL" shipped `shouldBe` Just "http://127.0.0.1:9003"
+        filter ((== "AWS_ACCESS_KEY_ID") . fst) shipped `shouldBe` [("AWS_ACCESS_KEY_ID", "test")]
+        lookup "AWS_PROFILE" shipped `shouldBe` Nothing
+        lookup "AWS_ACCESS_KEY_ID" (environmentFor Unlimited) `shouldBe` Nothing
+    it "adds an advisory feed's rules to the shipped policy, and leaves the policy alone without any" $ do
+        let rulesFor rules = lookup "ECLUSE_RULES" (proxyEnvironment settings{psAdvisories = Just (AdvisoryFeed 9003 rules)} Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 Nothing [])
+            ruleNames = \case
+                Just (Object entries) -> sort (map Key.toText (KeyMap.keys entries))
+                _ -> []
+        rulesFor [] `shouldBe` Nothing
+        ruleNames (decode . encodeUtf8 =<< rulesFor advisoryDenyRules) `shouldBe` ["deny-exploitable-cves", "deny-known-cves"]
     it "pins only the bounds the scenario sets" $ do
         lookup "ECLUSE_CACHE__MAX_ENTRIES" podEnvironment `shouldBe` Just "3"
         lookup "ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT" podEnvironment `shouldBe` Just "12"

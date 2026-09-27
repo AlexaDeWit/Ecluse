@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the scrape reading the in-flight gauge and the cache evidence depend on.
+-- | Pin the scrape reading the advisory wait, the in-flight gauge, and the cache evidence depend on.
 module Ecluse.BenchLoad.ExpositionSpec (spec) where
 
 import Test.Hspec
@@ -11,6 +11,7 @@ import Ecluse.BenchLoad.Exposition (
     CacheOutcomes (..),
     GaugeSummary (..),
     Sample (..),
+    advisoryDatabaseInstalled,
     cacheWindow,
     commonLabels,
     parseExposition,
@@ -19,6 +20,7 @@ import Ecluse.BenchLoad.Exposition (
     storeOutcomes,
     summariseGauge,
  )
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore, VersionStore))
 
 exposition :: Text
@@ -53,6 +55,13 @@ spec = do
             seriesTotal "ecluse_metadata_cache_version_requests" [("result", "hit")] samples `shouldBe` Just 7
         it "keeps an absent metric apart from a zero one" $
             seriesTotal "ecluse_missing" [] samples `shouldBe` Nothing
+    describe "advisoryDatabaseInstalled" $ do
+        let installed = parseExposition "ecluse_advisory_database_age_seconds{job=\"ecluse\",ecosystem=\"npm\"} 0\n"
+        it "reads the ecosystem's database age, even a zero one, as an installed database" $
+            advisoryDatabaseInstalled Npm installed `shouldBe` True
+        it "waits while the age is absent or names another ecosystem" $ do
+            advisoryDatabaseInstalled PyPI installed `shouldBe` False
+            advisoryDatabaseInstalled Npm (parseExposition exposition) `shouldBe` False
     describe "renderSample" $
         it "drops the labels every series repeats" $ do
             let samples = parseExposition exposition

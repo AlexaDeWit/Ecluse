@@ -2,9 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Local npm load scenarios for metadata, artifacts, caches, admission under memory pressure, and
-the mirror worker. Private reads stay live. Public requests can share one in-flight fetch even at
-zero cache TTL.
+{- | Local npm load scenarios for metadata, artifacts, caches, advisory databases, admission under
+memory pressure, and the mirror worker. Private reads stay live. Public requests can share one
+in-flight fetch even at zero cache TTL.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
@@ -30,6 +30,7 @@ import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
+import Ecluse.BenchLoad.Advisories (allAdvisoryRules, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
@@ -85,9 +86,12 @@ npmFixture =
         { fixtureEcosystem = Npm
         , fixtureScenarios =
             [ mergeScenario
+            , shippedAdvisories Npm mergeScenario
+            , allAdvisoryRules Npm mergeScenario
             , heavyPrivateScenario
             , assembledHitScenario
             , revalidateScenario
+            , shippedAdvisories Npm revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario
             , tarballScenario

@@ -59,6 +59,7 @@ import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
 import Ecluse.BenchLoad.Pod (CgroupReading (..), counter, renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (
+    AdvisoryFeed,
     ProxyEnd (..),
     ProxyProcess,
     podShapeFromEnv,
@@ -100,6 +101,8 @@ data LoadKnobs = LoadKnobs
     -- ^ Public pool capacity. 'Nothing' leaves it to the proxy's computed default.
     , lkPrivateConnectionsPerHost :: Maybe Int
     -- ^ Private pool capacity. 'Nothing' leaves it to the proxy's computed default.
+    , lkAdvisories :: Maybe AdvisoryFeed
+    -- ^ The advisory store the proxy syncs from. 'Nothing' configures none, as the shipped default does.
     }
     deriving stock (Eq, Show)
 
@@ -116,6 +119,7 @@ defaultLoadKnobs =
         , lkServeMaxInFlight = Nothing
         , lkPublicConnectionsPerHost = Nothing
         , lkPrivateConnectionsPerHost = Nothing
+        , lkAdvisories = Nothing
         }
 
 -- | Read @BENCH_LOAD_*@ overrides. A malformed value keeps the default.
@@ -141,6 +145,7 @@ loadKnobsFromEnv = do
             , lkServeMaxInFlight = max 1 <$> serveMaxInFlight
             , lkPublicConnectionsPerHost = max 1 <$> publicConnections
             , lkPrivateConnectionsPerHost = max 1 <$> privateConnections
+            , lkAdvisories = Nothing
             }
   where
     readEnvInt :: String -> Int -> IO Int

@@ -980,6 +980,8 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit bench/load
   other-modules:
     Ecluse.AcceptanceSpec
+    Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.ExpositionSpec
     Ecluse.BenchLoad.LatencySpec
@@ -1459,6 +1461,7 @@ executable bench-load
   if !flag(dev-http-egress)
     buildable: False
   other-modules:
+    Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
