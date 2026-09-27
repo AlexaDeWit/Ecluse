@@ -12,7 +12,12 @@ module Ecluse.Core.Registry.PyPI.Project (
     -- * File coordinates
     FileCoordinate (..),
     fileCoordinate,
+    FileProject,
+    fileProject,
     fileVersionKey,
+    FilenameMemo,
+    filenameMemo,
+    readCoordinate,
 
     -- * Name validation
     projectName,
@@ -52,7 +57,6 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.Wire (
     IndexFile (..),
-    SimpleIndex (..),
     YankState (FileOffered, FileWithdrawn),
  )
 import Ecluse.Core.Registry.WireSupport (
@@ -70,25 +74,27 @@ data FileCoordinate = FileCoordinate
     }
     deriving stock (Eq, Show)
 
--- | Group decoded files without changing their source coordinates or release policy inputs.
-projectSimpleIndex :: PackageName -> SimpleIndex -> PackageInfo
-projectSimpleIndex name index =
+{- | Group decoded files by the coordinates their read produced. The decode's invalid entries come
+first, then one for each file without a coordinate.
+-}
+projectSimpleIndex :: PackageName -> [InvalidEntry] -> [(IndexFile, Maybe FileCoordinate)] -> PackageInfo
+projectSimpleIndex name invalid files =
     PackageInfo
         { infoName = name
         , infoVersions = versions
         , infoDistTags = latestTag versions
-        , infoInvalidEntries = siInvalidEntries index <> fileDrops
+        , infoInvalidEntries = invalid <> fileDrops
         }
   where
-    (versions, fileDrops) = projectVersions name (siFiles index)
+    (versions, fileDrops) = projectVersions name files
 
-projectVersions :: PackageName -> [IndexFile] -> (Map Text PackageDetails, [InvalidEntry])
+projectVersions :: PackageName -> [(IndexFile, Maybe FileCoordinate)] -> (Map Text PackageDetails, [InvalidEntry])
 projectVersions name files =
     (Map.map (projectDetails name) grouped, drops)
   where
     (grouped, drops) = foldr place (Map.empty, []) files
 
-    place file (byVersion, dropAcc) = case fileCoordinate name (ifFilename file) of
+    place (file, found) (byVersion, dropAcc) = case found of
         Just coordinate ->
             ( Map.insertWith (<>) (fcVersionKey coordinate) ((file, coordinate) :| []) byVersion
             , dropAcc
@@ -172,46 +178,84 @@ indexHash (algorithm, digest) = do
 
 -- | Read a filename's coordinate, rejecting another project, an unknown archive, or invalid PEP 440.
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-fileCoordinate name file = wheelCoordinate name file <|> sdistCoordinate name file
+fileCoordinate name file = do
+    (version, kind) <- filenameParts (fileProject name) file
+    canonical <- canonicalPep440 version
+    pure (FileCoordinate canonical kind)
+
+-- | A project's PEP 503 key, prepared once for reading many of its filenames.
+data FileProject = FileProject
+    { fpCanonical :: Text
+    , fpChunks :: [Text]
+    }
+
+-- | Prepare a project for reading its filenames.
+fileProject :: PackageName -> FileProject
+fileProject name = FileProject canonical (T.splitOn "-" canonical)
+  where
+    canonical = canonicalName name
 
 -- | Read a filename's release key, with the same refusals as 'fileCoordinate'.
-fileVersionKey :: PackageName -> Text -> Maybe Text
-fileVersionKey name = fmap fcVersionKey . fileCoordinate name
+fileVersionKey :: FileProject -> Text -> Maybe Text
+fileVersionKey project file = canonicalPep440 . fst =<< filenameParts project file
+
+-- | One read's PEP 440 results by version text, so the files of one release parse their version once.
+data FilenameMemo = FilenameMemo
+    { memoProject :: FileProject
+    , memoVersions :: Map Text (Maybe Text)
+    }
+
+-- | Start a memo for one index read. It ends with the read, so no request inherits its versions.
+filenameMemo :: PackageName -> FilenameMemo
+filenameMemo name = FilenameMemo (fileProject name) Map.empty
+
+-- | Read a coordinate as 'fileCoordinate' does, parsing each distinct version text once.
+readCoordinate :: FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
+readCoordinate memo file = maybe (Nothing, memo) remember (filenameParts (memoProject memo) file)
+  where
+    remember (version, kind) = case Map.lookup version (memoVersions memo) of
+        Just known -> (coordinate kind known, memo)
+        Nothing ->
+            let known = canonicalPep440 version
+             in (coordinate kind known, memo{memoVersions = Map.insert version known (memoVersions memo)})
+    coordinate kind = fmap (`FileCoordinate` kind)
+
+-- A filename's version text and artifact kind, before PEP 440 canonicalisation.
+filenameParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+filenameParts project file = wheelParts project file <|> sdistParts project file
 
 -- @{project}-{version}(-{build})?-{python}-{abi}-{platform}.whl@. The project and version
 -- parts escape @-@ as @_@, so the parts split exactly and the project part compares whole.
-wheelCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-wheelCoordinate name file = do
+wheelParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+wheelParts project file = do
     stem <- T.stripSuffix ".whl" file
     parts <- nonEmpty (T.splitOn "-" stem)
     guard (length parts == 5 || length parts == 6)
-    guard (canonicalise PyPI (NE.head parts) == canonicalName name)
-    version <- canonicalPep440 =<< (toList parts !!? 1)
-    pure (FileCoordinate version (Wheel (T.intercalate "-" (lastThree parts))))
+    guard (canonicalise PyPI (NE.head parts) == fpCanonical project)
+    version <- toList parts !!? 1
+    pure (version, Wheel (T.intercalate "-" (lastThree parts)))
   where
     lastThree parts = drop (length parts - 3) (toList parts)
 
 -- @{project}-{version}{archive suffix}@. A legacy project name can carry the separator a
 -- version can, so the split takes the longest project part that canonicalises to this one.
-sdistCoordinate :: PackageName -> Text -> Maybe FileCoordinate
-sdistCoordinate name file = do
+sdistParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+sdistParts project file = do
     stem <- asum (map (`T.stripSuffix` file) sdistSuffixes)
-    version <- canonicalPep440 =<< afterProjectName name stem
-    pure (FileCoordinate version Sdist)
+    version <- afterProjectName project stem
+    pure (version, Sdist)
 
 sdistSuffixes :: [Text]
 sdistSuffixes = [".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz"]
 
 -- Compare disjoint chunks so unauthenticated filenames cannot trigger repeated prefix work.
-afterProjectName :: PackageName -> Text -> Maybe Text
-afterProjectName name stem
-    | T.null expected = do
+afterProjectName :: FileProject -> Text -> Maybe Text
+afterProjectName project stem
+    | T.null (fpCanonical project) = do
         (separator, _) <- T.uncons stem
         guard (isNameSeparator separator)
         pure (T.dropWhile isNameSeparator stem)
-    | otherwise = matchProjectChunks (T.splitOn "-" expected) (T.dropWhile isNameSeparator stem)
-  where
-    expected = canonicalName name
+    | otherwise = matchProjectChunks (fpChunks project) (T.dropWhile isNameSeparator stem)
 
 matchProjectChunks :: [Text] -> Text -> Maybe Text
 matchProjectChunks [] rest = Just rest
