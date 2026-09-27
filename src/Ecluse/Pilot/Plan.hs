@@ -46,7 +46,6 @@ import Ecluse.Config (
     mountEpssRequirement,
     unUrl,
  )
-import Ecluse.Config.Types (schemeDial, splitHttpScheme)
 import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
@@ -54,7 +53,7 @@ import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
-import Ecluse.Core.Security.Authority (authorityLabelWithDefault)
+import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan
@@ -106,11 +105,8 @@ configuredSources advisories eco =
 epssAttemptLine :: AdvisoriesSettings -> Text
 epssAttemptLine advisories =
     "pilot: every compile attempts the EPSS feed at "
-        <> authorityLabelWithDefault portless feed
+        <> dialledAuthorityLabel (unUrl (advEpssFeedUrl advisories))
         <> ", whatever the rules, so its egress must be allowed"
-  where
-    feed = unUrl (advEpssFeedUrl advisories)
-    portless = maybe 443 (snd . schemeDial . fst) (splitHttpScheme feed)
 
 {- | The quiet-time thresholds one compile is judged against. An ecosystem with no configured
 threshold, and a one-shot compile of a name this build does not serve, take 'defaultQuietTime'.

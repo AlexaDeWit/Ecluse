@@ -11,6 +11,7 @@ decides whether it stops publication. Individual missing scores remain absent.
 module Ecluse.Core.Osv.Epss (
     -- * The feed
     maxEpssFeedBytes,
+    maxEpssLineBytes,
     EpssFeed (..),
     fetchEpssScores,
     EpssFeedTooLarge (..),
@@ -72,14 +73,20 @@ import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired), EpssStatus (EnrichmentAvailable, EnrichmentUnavailable))
-import Ecluse.Core.Security.Authority (authorityLabel)
-import Ecluse.Core.Stream (boundBytes)
+import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
+import Ecluse.Core.Stream (boundBytes, boundLines)
 
 {- | The byte ceiling Pilot fetches under, 64 MiB, applied to the served stream and again to its
 expansion. The feed is one short row per scored CVE, so the headroom is several times over.
 -}
 maxEpssFeedBytes :: Int
 maxEpssFeedBytes = 64 * 1024 * 1024
+
+{- | The longest feed line Pilot holds, 4 KiB. A scored row is under 100 bytes, so a longer line
+is no row, and bytes that never reach a newline cannot pile up.
+-}
+maxEpssLineBytes :: Int
+maxEpssLineBytes = 4 * 1024
 
 {- | The feed passed a byte ceiling, so the fetch refused it whole. Each carries that ceiling
 and the bytes seen when it tripped, which is the ceiling plus at most one chunk.
@@ -89,6 +96,8 @@ data EpssFeedTooLarge
       CompressedTooLarge Int Int
     | -- | Its expansion under gzip, which is what a compression bomb inflates.
       DecompressedTooLarge Int Int
+    | -- | One line of the expansion ('maxEpssLineBytes'), however the stream was chunked.
+      LineTooLarge Int Int
     deriving stock (Eq, Show)
 
 instance Exception EpssFeedTooLarge
@@ -204,7 +213,7 @@ fetchEpssScores cap urlStr = do
         pure (accumulated, lastModifiedOf (getResponseHeader hLastModified res))
     let scores = faScores decoded
     when (epssScoreCount scores == 0) (throwM EpssFeedEmpty)
-    logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> authorityLabel (toText urlStr)))
+    logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> dialledAuthorityLabel (toText urlStr)))
     pure
         EpssFeed
             { efScores = scores
@@ -221,18 +230,18 @@ data FeedAccum = FeedAccum
     , faScores :: EpssScores
     }
 
--- The feed's wire form: gzip, then CSV rows. Bounding the served stream keeps an endless one
--- from hanging the pass, and bounding its expansion keeps a bomb from exhausting the heap.
+-- The feed's wire form: gzip, then CSV rows. The served and expanded bounds cap the bytes a pass
+-- reads, and the line bound caps what one unfinished row holds, however the stream is chunked.
 decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m FeedAccum
 decodeEpssFeed cap =
     boundBytes cap (throwM . CompressedTooLarge cap)
         .| ungzipWhole
         .| boundBytes cap (throwM . DecompressedTooLarge cap)
-        .| C.linesUnboundedAscii
+        .| boundLines maxEpssLineBytes (throwM . LineTooLarge maxEpssLineBytes)
         .| C.foldl addLine (FeedAccum True (EpssPreamble Nothing Nothing) (mkEpssScores []))
 
--- Every gzip member to the end of input, as gunzip reads them. 'Data.Conduit.Zlib.ungzip' stops
--- after the first member and passes a cut one through, so its rows would read as a whole table.
+-- Every gzip member to the end of input. Any byte that does not begin a whole member, zero padding
+-- included, fails the feed. 'Data.Conduit.Zlib.ungzip' stops after one member and passes a cut one.
 ungzipWhole :: (MonadIO m, MonadThrow m) => ConduitT ByteString ByteString m ()
 ungzipWhole = await >>= maybe truncatedFeed inflateMember
 
@@ -299,6 +308,7 @@ renderEpssFeedFailure = \case
     EpssFeedTransport cause -> renderTransportCause cause
     EpssFeedOversize (CompressedTooLarge cap _) -> "the served feed passed its " <> show cap <> "-byte ceiling"
     EpssFeedOversize (DecompressedTooLarge cap _) -> "the decompressed feed passed its " <> show cap <> "-byte ceiling"
+    EpssFeedOversize (LineTooLarge cap _) -> "a feed line passed its " <> show cap <> "-byte ceiling"
     EpssFeedUndecodable -> "the feed is not a complete gzip stream"
     EpssFeedNoScores -> "the feed carried no scores"
 

@@ -412,6 +412,12 @@ spec = do
                 logged `shouldSatisfy` T.isInfixOf "osv_newest_modified=2026-08-30T00:00:00Z"
                 logged `shouldSatisfy` T.isInfixOf "epss_score_date=2026-08-29T00:00:00Z"
 
+        it "names the port a portless http source dials" $
+            withSyncEnv $ \_ _ envWith -> do
+                let write dest = mkMinimalValidDbWithMeta dest "pkg-a" [("osv_source", "http://osv.example.test/npm/all.zip")]
+                logged <- captureSwapLog (envWith (fetchServingAt (Just publishedAt) (Just "e1") write))
+                logged `shouldSatisfy` T.isInfixOf "osv_source=osv.example.test:80"
+
         it "reads a value an older artifact never recorded as absent, not as a zero" $
             withSyncEnv $ \_ _ envWith -> do
                 logged <- captureSwapLog (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))

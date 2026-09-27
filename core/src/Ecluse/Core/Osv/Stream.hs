@@ -47,7 +47,7 @@ import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractF
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
 import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Security.Authority (dialledAuthorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
 -- | The per-advisory byte bound one ingest pass holds every zip entry to.
@@ -171,12 +171,12 @@ instance Exception PilotIngestAborted
 -- | Fetch the OSV zip and stream its contents, bounded by @ingest@.
 streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ()
 streamOsvUrl mTracerProvider ingest urlStr = do
-    lift $ logFM InfoS (ls ("Initializing OSV stream from " <> authorityLabel (toText urlStr)))
+    lift $ logFM InfoS (ls ("Initializing OSV stream from " <> dialledAuthorityLabel (toText urlStr)))
     bracketP
         (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.stream")
         closeOptionalSpan
         ( \mSpan -> do
-            forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
+            forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (dialledAuthorityLabel (toText urlStr))
             -- Reject non-2xx responses before unzip so the retry policy sees HTTP failures.
             req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
             httpSource req $ \res -> do

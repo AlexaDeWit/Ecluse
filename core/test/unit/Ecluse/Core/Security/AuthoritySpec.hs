@@ -9,6 +9,7 @@ import Test.Hspec
 import Ecluse.Core.Security (
     authorityLabel,
     credentialFreeUrl,
+    dialledAuthorityLabel,
     hostAddress,
     hostPortAddress,
     hostPortAddressWithDefault,
@@ -25,6 +26,7 @@ spec = do
     hostPortAddressSpec
     hostPortAddressWithDefaultSpec
     authorityLabelSpec
+    dialledAuthorityLabelSpec
     credentialFreeUrlSpec
     refuseCredentialMaterialSpec
     splitHostPortSpec
@@ -183,6 +185,16 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://deploy@/thing" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
+
+dialledAuthorityLabelSpec :: Spec
+dialledAuthorityLabelSpec = describe "dialledAuthorityLabel" $ do
+    it "names port 80 for a portless http URL, whatever the scheme's case" $ do
+        dialledAuthorityLabel "http://mirror.example.test/epss.csv.gz" `shouldBe` "mirror.example.test:80"
+        dialledAuthorityLabel "HTTP://mirror.example.test/epss.csv.gz" `shouldBe` "mirror.example.test:80"
+    it "names port 443 for a portless https URL, as authorityLabel does" $
+        dialledAuthorityLabel "https://epss.example.test/scores.csv.gz" `shouldBe` authorityLabel "https://epss.example.test/scores.csv.gz"
+    it "keeps a written port and drops the credential carriers" $
+        dialledAuthorityLabel "http://user:secret@mirror.example.test:8080/epss.csv.gz?token=q" `shouldBe` "mirror.example.test:8080"
 
 credentialFreeUrlSpec :: Spec
 credentialFreeUrlSpec = describe "credentialFreeUrl" $ do

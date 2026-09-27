@@ -17,6 +17,7 @@ import Network.HTTP.Types.Header (hLastModified)
 import Network.HTTP.Types.Status (Status, status200, status404)
 import System.IO.Error (doesNotExistErrorType, mkIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportUnreachable))
 import Ecluse.Core.Osv.Epss (
@@ -34,6 +35,7 @@ import Ecluse.Core.Osv.Epss (
     epssScoreCount,
     fetchEpssScores,
     maxEpssFeedBytes,
+    maxEpssLineBytes,
     mkEpssScores,
     parseEpssLine,
     parseEpssPreamble,
@@ -179,13 +181,23 @@ spec = do
         it "refuses an empty body, which is no gzip stream at all" $
             fetchRaw [] maxEpssFeedBytes "" `shouldThrow` (== EpssFeedTruncated)
 
-        it "reads every member of a multi-member stream, as gunzip does" $
+        it "reads every member of a multi-member stream" $
             epssScoreCount . efScores <$> fetchRaw [] maxEpssFeedBytes (GZip.compress (feedPreamble <> "CVE-2026-10001,0.875,0.995\n") <> GZip.compress "CVE-2026-10002,0.5,0.900\n")
                 `shouldReturn` 2
 
         it "refuses a stream whose second member is cut" $
             fetchRaw [] maxEpssFeedBytes (wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed)
                 `shouldThrow` (== EpssFeedTruncated)
+
+        it "refuses a line past the line ceiling, which no scored row approaches" $
+            fetchFeed maxEpssFeedBytes (feedPreamble <> LBS.replicate (fromIntegral maxEpssLineBytes + 1) 0x78 <> "\n")
+                `shouldThrow` (\case LineTooLarge cap seen -> cap == maxEpssLineBytes && seen > cap; _ -> False)
+
+        it "refuses tiny members that never reach a newline once one line's worth arrives" $ do
+            -- Each one-byte member expands to one byte, so the ceiling trips long before the body ends.
+            member <- evaluate (LBS.toStrict (GZip.compress "x"))
+            fetchRaw [] maxEpssFeedBytes (LBS.fromChunks (replicate 200_000 member))
+                `shouldThrow` (\case LineTooLarge cap seen -> cap == maxEpssLineBytes && seen == cap + 1; _ -> False)
 
     describe "acquireEpssFeed" $ do
         it "returns the fetched feed after one request" $ do
@@ -200,6 +212,8 @@ spec = do
             , ("a cut stream", maxEpssFeedBytes, status200, LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
             , ("a stream with its second member cut", maxEpssFeedBytes, status200, wholeFeed <> LBS.take (LBS.length wholeFeed `div` 2) wholeFeed, EpssFeedUndecodable)
             , ("a whole member followed by trailing bytes", maxEpssFeedBytes, status200, wholeFeed <> "trailing bytes", EpssFeedUndecodable)
+            , ("a whole member followed by zero padding", maxEpssFeedBytes, status200, wholeFeed <> LBS.replicate 512 0, EpssFeedUndecodable)
+            , ("a line past the line ceiling", maxEpssFeedBytes, status200, GZip.compress (LBS.replicate 8192 0x78), EpssFeedOversize (LineTooLarge maxEpssLineBytes 0))
             , ("a served stream past the ceiling", 32, status200, wholeFeed, EpssFeedOversize (CompressedTooLarge 32 0))
             , ("an expansion past the ceiling", 4096, status200, GZip.compress (toLazy (BS.replicate 65536 0x78)), EpssFeedOversize (DecompressedTooLarge 4096 0))
             ]
@@ -281,4 +295,5 @@ withoutSeen :: EpssFeedFailure -> EpssFeedFailure
 withoutSeen = \case
     EpssFeedOversize (CompressedTooLarge cap _) -> EpssFeedOversize (CompressedTooLarge cap 0)
     EpssFeedOversize (DecompressedTooLarge cap _) -> EpssFeedOversize (DecompressedTooLarge cap 0)
+    EpssFeedOversize (LineTooLarge cap _) -> EpssFeedOversize (LineTooLarge cap 0)
     other -> other

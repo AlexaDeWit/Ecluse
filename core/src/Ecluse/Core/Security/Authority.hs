@@ -24,7 +24,7 @@ module Ecluse.Core.Security.Authority (
 
     -- * Log-safe rendering
     authorityLabel,
-    authorityLabelWithDefault,
+    dialledAuthorityLabel,
     credentialFreeUrl,
 ) where
 
@@ -78,7 +78,16 @@ attacker-influenced or credential-bearing URL must never reach a log line or a s
 authorityLabel :: Text -> Text
 authorityLabel = authorityLabelWithDefault 443
 
--- | 'authorityLabel' with the caller's own port for a URL that writes none, as a plain-http one dials.
+{- | 'authorityLabel' for a URL a client dials as written, so a portless @http://@ URL names port 80.
+
+>>> dialledAuthorityLabel "HTTP://mirror.example.test/epss.csv.gz"
+"mirror.example.test:80"
+-}
+dialledAuthorityLabel :: Text -> Text
+dialledAuthorityLabel raw = authorityLabelWithDefault portless raw
+  where
+    portless = if T.toLower (T.take 7 raw) == "http://" then 80 else 443
+
 authorityLabelWithDefault :: Word16 -> Text -> Text
 authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . hostPortAddressWithDefault portless
 

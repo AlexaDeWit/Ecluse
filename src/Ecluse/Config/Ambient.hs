@@ -19,7 +19,7 @@ module Ecluse.Config.Ambient (
 import Data.List (lookup)
 import Data.Text qualified as T
 
-import Ecluse.Config.Types (schemeDial, splitHttpScheme)
+import Ecluse.Config.Types (HttpScheme (..), splitHttpScheme)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Security (HostPort (..), hostPortAddressWithDefault, refuseCredentialMaterial)
 import Ecluse.Core.Text (nonBlank)
@@ -71,3 +71,9 @@ blank @AWS_ENDPOINT_URL@, and a set-but-refused value is the 'Left', never a sil
 -}
 ambientS3Endpoint :: AmbientAws -> Either Secret (Maybe AwsEndpoint)
 ambientS3Endpoint = traverse parseEndpointUrl . (nonBlank <=< ambientAwsEndpointUrl)
+
+-- The TLS flag and the port a scheme dials when the URL writes no port.
+schemeDial :: HttpScheme -> (Bool, Word16)
+schemeDial = \case
+    Https -> (True, 443)
+    Http -> (False, 80)

@@ -33,7 +33,7 @@ import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (finally, try)
+import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), openCveDb)
@@ -561,11 +561,21 @@ failedFeeds :: [(String, IO (Status, LByteString))]
 failedFeeds =
     [ ("answers 404", pure (status404, ""))
     , ("carries no scores", pure (status200, GZip.compress "cve,epss,percentile\n"))
-    , ("passes the served-byte ceiling", pure (status200, storedGzip (LBS.replicate (fromIntegral maxEpssFeedBytes + 1) 0)))
-    , ("passes the decompressed-byte ceiling", pure (status200, GZip.compress (LBS.replicate (fromIntegral maxEpssFeedBytes + 1) 0)))
+    , ("passes the served-byte ceiling", servedWhole (storedGzip ceilingRows))
+    , ("passes the decompressed-byte ceiling", servedWhole (GZip.compress ceilingRows))
     , ("is not gzip", pure (status200, "not a gzip stream"))
     ]
         <> [("sends a stream that " <> label, pure (status200, damaged scoredFeed)) | (label, damaged) <- damagedStreams]
+
+-- Lines under the line ceiling, one byte past the feed ceiling in all, so only a byte ceiling trips.
+ceilingRows :: LByteString
+ceilingRows = LBS.take (fromIntegral maxEpssFeedBytes + 1) (LBS.cycle (LBS.replicate 4000 0x78 <> "\n"))
+
+-- Compressed in full before the stub serves it, so no lazy compressor runs on a thread the fetch cuts off.
+servedWhole :: LByteString -> IO (Status, LByteString)
+servedWhole body = do
+    whole <- evaluate (LBS.toStrict body)
+    pure (status200, LBS.fromStrict whole)
 
 -- Gzip with no compression, so the served stream is as large as its expansion.
 storedGzip :: LByteString -> LByteString

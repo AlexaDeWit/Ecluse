@@ -77,7 +77,7 @@ import Ecluse.Core.Osv.Stream (
     systemicDrop,
  )
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
-import Ecluse.Core.Security.Authority (authorityLabel, credentialFreeUrl)
+import Ecluse.Core.Security.Authority (credentialFreeUrl, dialledAuthorityLabel)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -178,7 +178,7 @@ compileCandidate run dbFile =
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
     addAttribute sp "ecluse.osv.ecosystem" (osvWireName (crEcosystem run))
-    addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl (crSources run))))
+    addAttribute sp "ecluse.osv.source_host" (dialledAuthorityLabel (toText (csOsvExportUrl (crSources run))))
 
 -- The attempt runs whatever the requirement, so an ecosystem that could publish without scores
 -- still carries them whenever the feed is up.
@@ -211,7 +211,7 @@ refuseRequiredEpss run mSpan failure = do
             }
 
 epssFeedLabel :: CompileRun -> Text
-epssFeedLabel run = authorityLabel (toText (csEpssFeedUrl (crSources run)))
+epssFeedLabel run = dialledAuthorityLabel (toText (csEpssFeedUrl (crSources run)))
 
 renderRequirement :: EpssRequirement -> Text
 renderRequirement = \case
@@ -389,11 +389,11 @@ writeMeta conn conclusion rowCount = do
         ( [ (renderMetaKey MetaPilotVersion, productVersion)
           , (renderMetaKey MetaEcosystem, ccEcosystem conclusion)
           , (renderMetaKey MetaBuiltAt, toText (iso8601Show builtAt))
-          , (renderMetaKey MetaSourceUrl, authorityLabel (toText (csOsvExportUrl sources)))
+          , (renderMetaKey MetaSourceUrl, dialledAuthorityLabel (toText (csOsvExportUrl sources)))
           , (renderMetaKey MetaEpssStatus, renderEpssStatus status)
           , (renderMetaKey MetaRowCount, show rowCount)
           ]
-            <> [(renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources))) | status == EnrichmentAvailable]
+            <> [(renderMetaKey MetaEpssSourceUrl, dialledAuthorityLabel (toText (csEpssFeedUrl sources))) | status == EnrichmentAvailable]
             <> provenanceRows (ccProvenance conclusion)
         )
   where

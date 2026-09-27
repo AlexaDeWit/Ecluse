@@ -124,7 +124,7 @@ spec = do
                     map capPath <$> allCaptured epssStub `shouldReturn` ["/epss.csv.gz"]
                     filter (T.isInfixOf "EPSS enrichment unavailable for npm") (lines logged)
                         `shouldSatisfy` \warned -> length warned == 1 && all (T.isInfixOf "\"sev\":\"Warning\"") warned
-                    logged `shouldSatisfy` (not . T.isInfixOf "Aborting OSV compile")
+                    logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
 
         it "requires the feed, and warns, for an ecosystem the configuration does not mount" $ do
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
@@ -187,6 +187,8 @@ withPolicyCompile outDir rule (feedStatus, feedBody) use = do
                 expectConfig
                     ( [ ("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")
                       , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+                      , -- A century, so the fixture's fixed advisory dates never raise the quiet-time ERROR.
+                        ("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "3153600000")
                       ]
                         <> [("ECLUSE_MOUNTS__NPM__RULES", r) | Just r <- [rule]]
                         <> stubSourceEnv osvStub epssStub
