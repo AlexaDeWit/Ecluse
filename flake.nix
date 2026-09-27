@@ -192,10 +192,10 @@
 
         jsonStreamOverlay = hself: _hsuper: {
           json-stream = hlib.dontCheck (hself.callCabal2nix "json-stream" (pkgs.fetchFromGitHub {
-            owner = "ondrap";
+            owner = "AlexaDeWit";
             repo = "json-stream";
-            rev = "537a43a775e64f50dc63c373193323de98619799";
-            hash = "sha256-9ws1kWK/0MU08W7sgxKtEqTdbhj0wJ0yuW/J9pSYVRA=";
+            rev = "0c77cbf35486bbb72f5d2706fcbfb7ce1064d986";
+            hash = "sha256-BciDEgUiO/rBHNy1j5gOkKwysiuhRbFBp2TeU0Kqu0g=";
           }) { });
         };
 
