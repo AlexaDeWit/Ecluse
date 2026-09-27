@@ -32,6 +32,7 @@ import Ecluse.Core.Rules (
     RuleEval (PerVersion),
     SourceHealth (..),
     SourceReporter (..),
+    bootOrder,
     evalRules,
     newEvaluator,
     noSourceReporter,
@@ -379,7 +380,7 @@ engineSpec = do
             decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
-        it "never runs a later rule's own read once an earlier one decides" $ do
+        it "credits the earlier decisive advisory rule, and the later rule runs no read of its own" $ do
             (lagging, readCount) <- counting pass
             winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing "blocked")
             laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision lagging (Allow "too late")
@@ -620,7 +621,7 @@ data Fault = Hangs | Throws | BreakerOpen | PushExpired
     deriving stock (Bounded, Enum, Show)
 
 -- | A policy prepared so its advisory read meets the given fault, with the pins the read takes.
-faultedPolicy :: Fault -> [Rule] -> IO ([PreparedRule], IORef Int)
+faultedPolicy :: Fault -> [PrecededRule] -> IO ([PreparedRule], IORef Int)
 faultedPolicy fault policy = do
     pins <- newIORef 0
     let serving = servingRuleDeps (DbEtag "faulted") (fakeCveLookup affectingEvery)
@@ -631,9 +632,9 @@ faultedPolicy fault policy = do
             PushExpired -> serving{rdAdvisoryDatabase = countedDatabase pins (withCveLookup serving), rdAdvisoryFreshness = pure expired}
         expired = assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (9 * nominalDay)) now))
         knobs = withKnobs fastConfig{ecTimeout = 5_000, ecBackoff = [0, 0], ecBreakerThreshold = 5}
-    rules <- knobs <$> prepare deps (map atDefaultPrecedence policy)
+    rules <- knobs <$> prepare deps (policy <> [atDefaultPrecedence quarantine])
     opened <- case fault of
-        BreakerOpen -> traverse openBreaker rules
+        BreakerOpen -> openReaderBreaker rules
         Hangs -> pure rules
         Throws -> pure rules
         PushExpired -> pure rules
@@ -643,11 +644,15 @@ faultedPolicy fault policy = do
 countedDatabase :: IORef Int -> (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a) -> AdvisoryDatabase
 countedDatabase pins access = AdvisoryDatabase (\use -> modifyIORef' pins (+ 1) *> access use)
 
--- | The same rule with its breaker open until well after 'now'.
-openBreaker :: PreparedRule -> IO PreparedRule
-openBreaker rule = do
+-- | Open the first-reading advisory rule's breaker, so every later rule can only reuse its fault.
+openReaderBreaker :: [PreparedRule] -> IO [PreparedRule]
+openReaderBreaker rules = do
     tripped <- newTVarIO (Open (addUTCTime 30 now))
-    pure (mapResilience (\res -> res{resBreaker = tripped}) rule)
+    let firstReader = prepName <$> find (isJust . prepResilience) (bootOrder rules)
+        open rule
+            | Just (prepName rule) == firstReader = mapResilience (\res -> res{resBreaker = tripped}) rule
+            | otherwise = rule
+    pure (map open rules)
 
 -- | The alignment a rule resolves a fault to: fixed on an expired push, else as configured.
 faultAlignment :: Fault -> Rule -> FailureAlignment
@@ -685,21 +690,33 @@ expectedUnder fault rules decision = case find ((== FailDeny) . faultAlignment f
         SkippedUnavailable rule _ -> Just rule
         Unreached _ -> Nothing
 
+{- | The advisory policies the fault cases cover, in boot order: each rule alone, pairs, and all
+three, with the remediation allow reading last at its default precedence or first at 300.
+-}
+faultPolicies :: [[PrecededRule]]
+faultPolicies =
+    map (pure . atDefaultPrecedence) advisoryRules
+        <> [[cve a, epss b] | a <- alignments, b <- alignments]
+        <> concat [[[deny, fastLaneLast], [fastLaneFirst, deny]] | deny <- map cve alignments <> map epss alignments]
+        <> concat [[[cve a, epss b, fastLaneLast], [fastLaneFirst, cve a, epss b]] | a <- alignments, b <- alignments]
+  where
+    alignments = [FailDeny, FailNoDecision]
+    cve a = atDefaultPrecedence (DenyIfCve (DenyIfCveParams 7.0 a))
+    epss b = atDefaultPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 b))
+    fastLaneLast = atDefaultPrecedence AllowIfRemediatesCve
+    fastLaneFirst = PrecededRule 300 AllowIfRemediatesCve
+
+policyLabel :: [PrecededRule] -> String
+policyLabel = intercalate ", " . map (\(PrecededRule prec rule) -> ruleLabel rule <> " at " <> show prec)
+
 faultSpec :: Spec
 faultSpec = describe "a faulted advisory read resolves every version to each rule's own alignment" $
-    for_ [minBound .. maxBound :: Fault] $ \fault -> do
-        for_ advisoryRules $ \rule ->
-            it (ruleLabel rule <> " alone when the read " <> show fault) $ do
-                (rules, pins) <- faultedPolicy fault [rule, quarantine]
+    for_ [minBound .. maxBound :: Fault] $ \fault ->
+        for_ faultPolicies $ \policy ->
+            it (policyLabel policy <> ", when the read " <> show fault) $ do
+                (rules, pins) <- faultedPolicy fault policy
                 decisions <- decideRequest rules requestVersions
-                decisions `shouldSatisfy` all (expectedUnder fault [rule])
-                readIORef pins `shouldReturn` faultPins fault
-        for_ [(cve, epss) | cve <- [FailDeny, FailNoDecision], epss <- [FailDeny, FailNoDecision]] $ \(cve, epss) -> do
-            let shared = [DenyIfCve (DenyIfCveParams 7.0 cve), DenyIfEpss (DenyIfEpssParams 0.5 epss), AllowIfRemediatesCve]
-            it ("all three rules, DenyIfCve " <> show cve <> " and DenyIfEpss " <> show epss <> ", when the shared read " <> show fault) $ do
-                (rules, pins) <- faultedPolicy fault (shared <> [quarantine])
-                decisions <- decideRequest rules requestVersions
-                decisions `shouldSatisfy` all (expectedUnder fault shared)
+                decisions `shouldSatisfy` all (expectedUnder fault (map prRule policy))
                 readIORef pins `shouldReturn` faultPins fault
 
 heldThrowSpec :: Spec

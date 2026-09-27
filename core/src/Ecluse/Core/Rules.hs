@@ -79,8 +79,8 @@ data RuleDeps = RuleDeps
     , rdBreakerReporter :: BreakerReporter
     -- ^ Where advisory rules report breaker transitions, as @ecluse.rule.breaker.state@.
     , rdSourceReporter :: SourceReporter
-    {- ^ Where every advisory read reports whether it could consult the source, so an outage is
-    observed as a transition rather than once per request.
+    {- ^ Where each advisory rule a request reaches reports whether it could consult the source, so
+    an outage is observed as a transition rather than once per request.
     -}
     , rdAdvisoryFreshness :: IO AdvisoryFreshness
     {- ^ How old the serving artifact's push is, read again for every package read. The wall
@@ -328,8 +328,8 @@ renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
             <> show (prepPrecedence r)
             <> ")"
 
-{- | An evaluator for one request's versions, deciding each in boot order. The first advisory rule
-reached reads the package once, and every advisory rule decides from that read. A throw refuses.
+{- | An evaluator for one request's versions, in boot order. Its advisory rules must come from one
+'prepare', since the first reached reads the package once for them all. A throw refuses.
 -}
 newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
 newEvaluator ctx rules = do

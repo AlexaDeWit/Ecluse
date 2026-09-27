@@ -184,13 +184,13 @@ malicious publish.
   open**, unlike a deny, which fails closed. The version then falls back to the normal
   quarantine instead of being admitted on an unverified claim.
 
-It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the
-scope allow-list, so a trusted scope never pays the probe. The fix test is an exact text match on the
-advisory's `fixed` version as written. A fix published under any other spelling waits
-out the quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range
-membership in Haskell with the same per-ecosystem ordering as
-[`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison
-counts as affected, so the lane only opens on evidence.
+It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the scope
+allow-list, so a trusted scope never pays the advisory read. The fix test is an exact text match on
+the advisory's `fixed` version as written. A fix published under any other spelling waits out the
+quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range membership
+in Haskell with the same per-ecosystem ordering as
+[`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison counts
+as affected, so the lane only opens on evidence.
 
 ### `DenyIfCve`, the deny direction
 
