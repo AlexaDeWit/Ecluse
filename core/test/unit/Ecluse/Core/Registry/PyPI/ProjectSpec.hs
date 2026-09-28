@@ -45,9 +45,12 @@ import Ecluse.Core.Registry.PyPI.Project (
     readCoordinate,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Version (genPyPI)
@@ -171,7 +174,7 @@ memoSpec = describe "filenameMemo" $ do
             file <- forAll genFilename
             fileVersionKey (fileProject azureStorageBlob) file === (fcVersionKey <$> fileCoordinate azureStorageBlob file)
 
-    it "keeps each file's artifact kind when two files share a version text" $ do
+    it "keeps each file's distribution kind when two files share a version text" $ do
         let (wheel, memo) = readCoordinate (filenameMemo requestsName) "requests-2.34.2-py3-none-any.whl"
         wheel `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
         fst (readCoordinate memo "requests-2.34.2.tar.gz") `shouldBe` Just (FileCoordinate "2.34.2" Sdist)
@@ -232,9 +235,12 @@ projectionSpec = describe "projectSimpleIndexFromValue" $ do
 
     it "drops a file whose requires-python or provenance is not text, though neither is kept" $ do
         let unshaped key = withFileKeys [(key, toJSON (5 :: Int))] (sdistFile "2.34.2")
-        info <- shouldProject requestsName (indexOf [unshaped "requires-python", unshaped "provenance", wheelFile "2.34.2"])
-        artifactNames info "2.34.2" `shouldBe` Just ["requests-2.34.2-py3-none-any.whl"]
-        map invalidKind (infoInvalidEntries info) `shouldBe` [InvalidIndexFile, InvalidIndexFile]
+            index = indexOf [unshaped "requires-python", unshaped "provenance", wheelFile "2.34.2"]
+        info <- shouldProject requestsName index
+        (streamed, _) <- expectRight (projectPyPIIndex defaultLimits requestsName (encodeStrict index))
+        for_ [info, streamed] $ \projected -> do
+            artifactNames projected "2.34.2" `shouldBe` Just ["requests-2.34.2-py3-none-any.whl"]
+            map invalidKind (infoInvalidEntries projected) `shouldBe` [InvalidIndexFile, InvalidIndexFile]
 
     it "points latest at the highest release, preferring a final over a pre-release" $ do
         info <- shouldProject requestsName (indexOf [wheelFile "2.34.2", wheelFile "3.0.0rc1"])

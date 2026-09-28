@@ -44,10 +44,12 @@ import Ecluse.Core.Registry.Npm.Project (
     projectScope,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
@@ -352,8 +354,10 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
 
     it "drops a version whose publisher or licence has neither npm form, though neither is kept" $ do
         info <- projectInfoOf unshapedPublisherAndLicencePackument
-        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
-        map invalidKey (infoInvalidEntries info) `shouldBe` ["2.0.0", "3.0.0"]
+        (streamed, _) <- expectRight (projectNpmManifest defaultLimits (unscopedNpm "mix") unshapedPublisherAndLicencePackument)
+        for_ [info, streamed] $ \projected -> do
+            Map.keys (infoVersions projected) `shouldBe` ["1.0.0"]
+            map invalidKey (infoInvalidEntries projected) `shouldBe` ["2.0.0", "3.0.0"]
         fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length unshapedPublisherAndLicencePackument) unshapedPublisherAndLicencePackument))
             `shouldBe` Right ["1.0.0"]
 

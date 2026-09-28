@@ -57,7 +57,7 @@ import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
--- A decoded version object. A malformed @_npmUser@ still drops the release, though nothing keeps it.
+-- A decoded version object. A malformed @_npmUser@ drops the release, though nothing keeps it.
 newtype VersionEntry = VersionEntry VersionManifest
 
 instance FromJSON VersionEntry where
