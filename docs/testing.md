@@ -362,14 +362,16 @@ Each package has four legs:
 
 The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
 [advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
-`Ecluse.Core.Osv.Compile`, and a slot serves the artifact, as a synced mount reads it. An artifact
-with no range would make the advisory rules abstain and pass for a speed-up, so setup fails on one.
+`Ecluse.Core.Osv.Compile`, and a slot serves the artifact, as a synced mount reads it. A rule that
+finds no row abstains, which would pass for a speed-up. So setup fails when the artifact holds no
+range, and when a capture the artifact covers returns no row, read the way the rules read it.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
 GHC's per-thread allocation counter. For one build over one input, that figure moves by a few bytes
-at most between runs. Wall-clock time appears in the report for information only. The age rules evaluate at each capture's `capturedAt` time in
-`bench/corpus/pins.json`, so they admit the same versions on every run. The harness links the
+at most between runs. Wall-clock time appears in the report for information only. The age rules
+evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they admit the same
+versions on every run. The harness links the
 shipped server's RTS options (the `shipped-rts` stanza in `ecluse.cabal`), and the report prints
 the capabilities and allocation area it read from the running RTS.
 
@@ -381,6 +383,8 @@ from. The job fails closed. It fails when:
 - a leg allocates more than its budget,
 - a measured leg has no calibrated figure,
 - a capture is missing or does not project, or a leg does not complete,
+- an advisory fixture file differs from its pin in `bench/corpus/pins.json`, or the advisory setup
+  above fails,
 - the criteria calibrate a package that the run did not measure.
 
 A red result needs a human decision: fix the regression, or recalibrate. A leg that allocates more
@@ -782,8 +786,10 @@ Smoke coverage never replaces a gating case.
 
 Advisory-shaped test data comes from committed OSV JSON, apart from the benchmarks' generated
 worst case. The suites read `test/fixtures/osv/`
-(`v1/`, plus the `v2/` delta), and the benchmarks read `bench/corpus/advisories/`
-([Advisory rule rows](#advisory-rule-rows)). A suite derives everything it consumes from those files at test time.
+(`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
+[allocation gate](#allocation-budgets-perf-allocation-gating), and the load harness's advisory
+scenarios read `bench/corpus/advisories/`. A suite derives everything it consumes from those files
+at test time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline

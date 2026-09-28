@@ -53,7 +53,7 @@ import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
-import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, compileCorpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Rules (inertRuleDeps)
@@ -72,7 +72,7 @@ captures :: IO ()
 captures = do
     criteria <- loadCriteria
     benches <- ecosystemBenches
-    runs <- forM benches $ \bench -> withCorpusAdvisories (ebEcosystem bench) $ \advisories -> do
+    runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories -> do
         records <- readCaptureRecords (ebEcosystem bench) >>= either fail pure
         outcomes <- forM (ebCorpus bench) $ \(package, raw, _, _) ->
             case crCapturedAt <$> Map.lookup (cpName package) records of
@@ -91,19 +91,23 @@ live = do
     benches <- ecosystemBenches
     manager <- newManager tlsManagerSettings
     now <- getCurrentTime
-    runs <- forM benches $ \bench -> withCorpusAdvisories (ebEcosystem bench) $ \advisories ->
+    runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
         (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
     publish (renderLiveReport op runs)
     traverse_ putTextLn (liveAnnotations runs)
     exitWith (liveExitCode runs)
 
--- Compile the ecosystem's corpus advisories, and serve them to the advisory legs while the action runs.
-withCorpusAdvisories :: Ecosystem -> (RuleDeps -> IO a) -> IO a
-withCorpusAdvisories eco use =
+-- Serve the ecosystem's corpus advisories to the advisory legs while the action runs, once every covered capture reaches its rows.
+withCorpusAdvisories :: EcosystemBench -> (RuleDeps -> IO a) -> IO a
+withCorpusAdvisories bench use =
     withSystemTempDirectory "ecluse-acceptance-advisories" $ \dir -> do
         artifact <- compileCorpusAdvisories eco dir
-        withServedArtifact eco artifact (\deps _ -> use deps)
+        withServedArtifact eco artifact $ \deps _ -> do
+            checkCapturesServed deps [cpPackage package | (package, _, _, _) <- ebCorpus bench] >>= either (fail . toString) pure
+            use deps
+  where
+    eco = ebEcosystem bench
 
 measureLive :: Manager -> RuleDeps -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
 measureLive manager advisories ctx bench package = do

@@ -10,7 +10,9 @@ The performance harnesses deny on them at the same suggested thresholds.
 module Ecluse.Test.Corpus.Advisories (
     AdvisoryInputs (..),
     corpusAdvisories,
+    compileAdvisoryInputs,
     compileCorpusAdvisories,
+    checkCapturesServed,
     suggestedDenyIfCve,
     suggestedDenyIfEpss,
     shippedPolicy,
@@ -32,9 +34,12 @@ import Data.Time (nominalDay)
 import Network.HTTP.Types (status200)
 import System.FilePath (takeFileName, (</>))
 
+import Ecluse.Core.Cve (CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Package (PackageName, canonicalise, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Rules (RuleDeps, withCveLookup)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
@@ -68,11 +73,30 @@ An artifact with no range would leave every advisory rule abstaining, so it fail
 -}
 compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
 compileCorpusAdvisories eco dir = do
-    inputs <- corpusAdvisories eco
-    compiled <- compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
+    compiled <- corpusAdvisories eco >>= compileAdvisoryInputs eco dir
     ranges <- scoresOf compiled
     when (null ranges) (fail ("the " <> toString (ecosystemName eco) <> " corpus advisories compiled to no range"))
     pure compiled
+
+-- | Compile advisory inputs into the directory through Pilot's compiler, returning the artifact's path.
+compileAdvisoryInputs :: Ecosystem -> FilePath -> AdvisoryInputs -> IO FilePath
+compileAdvisoryInputs eco dir inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
+
+{- | Check, reading as the rules read, that the served generation returns rows for every capture it
+covers and covers at least one. A rule that finds no row abstains, and would pass for a speed-up.
+-}
+checkCapturesServed :: RuleDeps -> [PackageName] -> IO (Either Text ())
+checkCapturesServed deps packages = withCveLookup deps $ \case
+    Nothing -> pure (Left "no advisory generation is serving")
+    Just (_, cve) -> do
+        covered <- cveCoveredNames cve
+        case filter (`elem` covered) (map canonicalKey packages) of
+            [] -> pure (Left "the served advisories cover none of the captures")
+            names -> do
+                unserved <- filterM (fmap null . cveAdvisoriesFor cve) names
+                pure (if null unserved then Right () else Left ("the served advisories return no row for " <> T.intercalate ", " unserved))
+  where
+    canonicalKey package = canonicalise (pkgEcosystem package) (renderPackageName package)
 
 -- | The shipped policy: the minimum-age quarantine and the remediation fast lane.
 shippedPolicy :: [PrecededRule]

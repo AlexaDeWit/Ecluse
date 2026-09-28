@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Compile temporary advisory artifacts through Pilot's compiler, and read back what they hold.
-Local HTTP stubs serve the chosen OSV archive and the shared EPSS feed slice.
+{- | Compile temporary advisory artifacts through Pilot's compiler, read back what they hold, and
+serve one through a slot as a synced mount does. Local HTTP stubs serve the chosen OSV archive and
+the shared EPSS feed slice.
 -}
 module Ecluse.Test.OsvDb (
     epssFixtureFile,

@@ -10,7 +10,6 @@ module Ecluse.Core.AdvisoryRulesBench (withBenchmarks) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Network.HTTP.Types (status200)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (localOption)
@@ -20,23 +19,23 @@ import Test.Tasty.HUnit (assertBool, assertFailure, (@?=))
 import Ecluse.Bench.Corpus (LoadedEntry, benchEvalContext, entryInfo, entryName)
 import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (ecosystemName)
-import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpSurvivors))
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (PrecededRule)
-import Ecluse.Test.Corpus (cpName)
+import Ecluse.Test.Corpus (cpName, cpPackage)
 import Ecluse.Test.Corpus.Advisories (
-    AdvisoryInputs (..),
     SyntheticTarget (..),
     allAdvisoryRules,
+    checkCapturesServed,
+    compileAdvisoryInputs,
     compileCorpusAdvisories,
     fillerTargets,
     shippedPolicy,
     syntheticAdvisories,
  )
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, withServedArtifact)
+import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Rules (filterPlan, inertRuleDeps, isUndecidable)
 
 -- | Keep every ecosystem's artifacts open and served while the caller runs the benchmark tree.
@@ -48,10 +47,6 @@ withBenchmarks ecosystems action =
 -- The captures whose many releases make the per-version rule cost show.
 measuredPackages :: [Text]
 measuredPackages = ["typescript", "react", "@types/node", "numpy"]
-
--- The measured captures the captured records name.
-advisedPackages :: [Text]
-advisedPackages = ["react", "numpy"]
 
 -- The capture per ecosystem the generated worst case targets, and its advisory count.
 heavyPackages :: [Text]
@@ -71,9 +66,9 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
         let heavy = filter ((`elem` heavyPackages) . packageName) entries
             targets = map heavyTarget heavy <> fillerTargets fillerPackages
         corpus <- compileCorpusAdvisories eco (scratch "corpus")
-        synthetic <- syntheticAdvisories eco targets >>= compileSynthetic
-        withServedArtifact eco corpus $ \corpusDeps corpusDb -> withServedArtifact eco synthetic $ \syntheticDeps syntheticDb -> do
-            checkCorpusServed (cveDbLookup corpusDb) entries
+        synthetic <- syntheticAdvisories eco targets >>= compileAdvisoryInputs eco (scratch "synthetic")
+        withServedArtifact eco corpus $ \corpusDeps _ -> withServedArtifact eco synthetic $ \syntheticDeps syntheticDb -> do
+            checkCapturesServed corpusDeps [cpPackage package | (package, _, _, _) <- entries] >>= either (assertFailure . ("advisory rows: " <>) . toString) pure
             checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
             use
                 [ bgroup
@@ -90,17 +85,7 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
   where
     eco = ebEcosystem ecosystem
     scratch label = dir </> toString (ecosystemName eco) </> label
-    compileSynthetic inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) (scratch "synthetic")
     heavyTarget entry = SyntheticTarget{stPackage = packageName entry, stVersions = Map.keys (infoVersions (entryInfo entry)), stAdvisories = heavyAdvisoryCount}
-
-{- An empty captured artifact would pass for a speed-up under the shipped policy, since the
-remediation rule then abstains, so setup requires ranges for every advised capture it measures. -}
-checkCorpusServed :: CveLookup -> [LoadedEntry] -> IO ()
-checkCorpusServed corpus entries = case filter ((`elem` advisedPackages) . packageName) entries of
-    [] -> assertFailure "advisory rows: no measured capture is one the captured records name"
-    advised -> for_ advised $ \entry -> do
-        ranges <- cveAdvisoriesFor corpus (packageName entry)
-        assertBool ("advisory rows: the captured artifact serves no range for " <> entryName entry) (not (null ranges))
 
 -- The generated artifact serves each worst-case target's advisories and names exactly the targets.
 checkSyntheticServed :: CveLookup -> [LoadedEntry] -> [SyntheticTarget] -> IO ()
