@@ -721,6 +721,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Metadata
     Ecluse.Test.Registry.PyPI.Project
+    Ecluse.Test.Registry.PyPI.Streaming
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
     Ecluse.Test.RegistryCapture

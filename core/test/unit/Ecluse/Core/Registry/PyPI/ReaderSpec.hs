@@ -14,11 +14,12 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIRead (..), pypiFields)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIRead (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions))
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes, releaseKeys)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
 
 -- | Every generated body reads to the same fields, refusal or failure class as json-stream's reader.
 spec :: Spec

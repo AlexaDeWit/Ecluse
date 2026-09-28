@@ -94,7 +94,8 @@ toShape = \case
         TestEvery shape -> Shape.everyMember (toShape shape)
         TestKnown known shape -> Shape.knownMembers known (toShape shape)
 
--- The json-stream combinators the npm and PyPI field parsers compose for each shape.
+-- The json-stream combinators the npm and PyPI field parsers compose for each shape. Known names
+-- only share keys, so every member reads alike.
 toParser :: TestShape -> J.Parser Value
 toParser = \case
     TestScalar budget -> JsonStream.withinRetainedDepth budget (JsonStream.retainedScalar <|> pure (Array mempty))
@@ -108,4 +109,4 @@ toParser = \case
     toMembers = \case
         TestNamed entries -> JsonStream.namedMembers [(name, toParser shape) | (name, shape) <- entries]
         TestEvery shape -> JsonStream.everyMember (toParser shape)
-        TestKnown known shape -> JsonStream.knownMembers known (toParser shape)
+        TestKnown _ shape -> JsonStream.everyMember (toParser shape)

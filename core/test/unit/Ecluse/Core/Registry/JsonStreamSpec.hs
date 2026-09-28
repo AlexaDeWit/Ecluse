@@ -94,7 +94,7 @@ readSpec = describe "readJsonStream" $ do
                 )
         streamValue result `shouldBe` Right (Just (object ["keep" .= ("yes" :: Text)]))
 
-    forM_ [("a named member", namedMembers [("keep", retainedValue 1)], True), ("a known member", knownMembers ["keep"] (retainedValue 1), True), ("an unlisted member", everyMember (retainedValue 1), False)] $ \(label, members, shared) ->
+    forM_ [("a named member", namedMembers [("keep", retainedValue 1)], True), ("an unlisted member", everyMember (retainedValue 1), False)] $ \(label, members, shared) ->
         it ("holds the key of " <> label <> " as one object across objects: " <> show shared) $ do
             result <- expectRight (decode (retainedArrayWith mempty (retainedObjectWith mempty members)) ["[{\"keep\":1},{\"keep\":2}]"])
             objects <- either (fail . show) (maybe (fail "no array") pure) (streamValue result)

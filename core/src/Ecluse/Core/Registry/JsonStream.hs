@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.JsonStream (
     withinRetainedDepth,
     Members,
     namedMembers,
-    knownMembers,
     everyMember,
     retainedObjectOr,
     retainedScalar,
@@ -91,16 +90,11 @@ read with one 'Members' value holds each name it knows under one shared key.
 -}
 data Members
     = NamedMembers (HashMap Text (Key.Key, J.Parser Value))
-    | KnownMembers (HashMap Text Key.Key) (J.Parser Value)
     | EveryMember (J.Parser Value)
 
 -- | Retain only the named members. The first entry for a name wins.
 namedMembers :: [(Text, J.Parser Value)] -> Members
 namedMembers entries = NamedMembers (HashMap.fromListWith (\_ earlier -> earlier) [(name, (Key.fromText name, parser)) | (name, parser) <- entries])
-
--- | Retain every member with one parser, sharing the key of each listed name.
-knownMembers :: [Text] -> J.Parser Value -> Members
-knownMembers names = KnownMembers (HashMap.fromList [(name, Key.fromText name) | name <- names])
 
 -- | Retain every member with one parser, each under its own key.
 everyMember :: J.Parser Value -> Members
@@ -128,7 +122,6 @@ objectEvents members = J.objectFound BeginObject EndContainer (J.objectKeyValues
 memberEvent :: Members -> Text -> J.Parser RetainedEvent
 memberEvent = \case
     NamedMembers named -> \name -> maybe mempty (\(key, parser) -> ObjectField key <$> parser) (HashMap.lookup name named)
-    KnownMembers known parser -> \name -> ObjectField (HashMap.findWithDefault (Key.fromText name) name known) <$> parser
     EveryMember parser -> \name -> ObjectField (Key.fromText name) <$> parser
 
 arrayEvents :: J.Parser Value -> J.Parser RetainedEvent

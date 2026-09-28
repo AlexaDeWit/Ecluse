@@ -20,7 +20,6 @@ module Ecluse.Core.Text (
     renderIso8601Utc,
     displayExceptionT,
     textStorageBytes,
-    ownedText,
 ) where
 
 import Data.Array.Byte (ByteArray (..))
@@ -168,9 +167,3 @@ displayExceptionT = toText . displayException
 -- | The byte size of the array behind a text. A slice keeps the whole array of the text it came from.
 textStorageBytes :: Text -> Int
 textStorageBytes (TI.Text (ByteArray array) _ _) = I# (sizeofByteArray# array)
-
--- | The text on an array of exactly its own bytes. A slice, or a text on a larger array, is copied.
-ownedText :: Text -> Text
-ownedText text@(TI.Text _ offset len)
-    | offset == 0 && textStorageBytes text == len = text
-    | otherwise = T.copy text
