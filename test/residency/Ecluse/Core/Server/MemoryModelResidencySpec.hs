@@ -26,10 +26,11 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), MergeShape (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, mergeDocuments, packages, probeSelected, probeSource)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource, writeMergeDocuments)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
+import Ecluse.Test.Corpus.Merge (MergeShape (..))
 
 {- | Reject unauthenticated captures, roots that do not survive or release across collections, and
 listings, of one source or two, whose reads or render outgrow what the memory gate charges.
@@ -71,7 +72,7 @@ spec = do
             it (toString (cpName package) <> "/" <> show shape) $ do
                 (size, _) <- authenticate package
                 withSystemTempDirectory "ecluse-merge" $ \directory -> do
-                    (private, public) <- mergeDocuments shape directory package
+                    (private, public) <- writeMergeDocuments shape directory package
                     measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package >>= \case
                         Left failure -> expectationFailure failure
                         Right peaks -> do
@@ -171,6 +172,8 @@ checkBasis shape size peaks = case shape of
         listingBasisBytes peaks `shouldBe` size
     Overlapping -> listingBasisBytes peaks `shouldSatisfy` (< listingSourceBytes peaks)
     Disjoint -> listingBasisBytes peaks `shouldBe` listingSourceBytes peaks
+    PublishOrder -> listingBasisBytes peaks `shouldSatisfy` (\basis -> basis >= size && basis < listingSourceBytes peaks)
+    HeavyBase -> listingBasisBytes peaks `shouldSatisfy` (\basis -> basis > size && basis < listingSourceBytes peaks)
 
 rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
 rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
@@ -186,10 +189,12 @@ reportListing label details package peaks =
                , "served_per_source_byte" .= perByte listingSourceBytes (toInteger (listingServedBytes peaks))
                , "basis_per_source_byte" .= perByte listingSourceBytes (toInteger (listingBasisBytes peaks))
                , "output_working_set_per_basis_byte" .= perByte listingBasisBytes (outputWorkingSet peaks)
+               , "output_working_set_per_charged_byte" .= (fromInteger (outputWorkingSet peaks) / fromIntegral charged :: Double)
                , "peaks" .= peaks
                ]
   where
     perByte bytesOf bytes = fromInteger bytes / fromIntegral (bytesOf peaks) :: Double
+    charged = maybe 0 (\factors -> scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)) (chargeFactors (pkgEcosystem (cpPackage package)))
 
 chargeFactors :: Ecosystem -> Maybe ChargeFactors
 chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor

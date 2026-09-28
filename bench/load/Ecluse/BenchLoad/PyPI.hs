@@ -23,14 +23,15 @@ import Network.Wai (Application, Request, pathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
+import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, loadMergePrivates, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario (scenarioServiceTime), UpstreamFixture (..), proxied, scenario)
 import Ecluse.BenchLoad.PatternScenario (patternScenarios)
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Test.Corpus (CorpusPackage (cpWeight), cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus.Merge (MergeShape (HeavyBase, PublishOrder))
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
@@ -42,6 +43,14 @@ pypiFixture =
         { fixtureEcosystem = PyPI
         , fixtureScenarios =
             [ indexColdScenario
+            , skewedMergeScenario
+                PublishOrder
+                "merge-publish-order"
+                "GET the weighted Simple-index corpus with public cache TTL 0, while the private upstream returns the newest third of the public index's versions by upload time, as a private index that holds recently consumed versions does."
+            , skewedMergeScenario
+                HeavyBase
+                "merge-heavy-base"
+                "GET the weighted Simple-index corpus with public cache TTL 0, while the private upstream returns every tenth version of the public index by upload time and a project status reason, so the private copy renders text half the index's size. The private copy is the base document."
             , shippedAdvisories PyPI indexColdScenario
             , allRulesAdvisories PyPI indexColdScenario
             , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
@@ -85,6 +94,28 @@ indexColdScenario =
 indexScenario :: Text -> Text -> Int -> Scenario
 indexScenario name description ttl =
     scenario name description (\knobs k -> withIndexProxy knobs ttl Nothing pypiCorpusPackages cpWeight (httpTarget k))
+
+-- A merge whose private index is a skewed part of the public capture. Only memory is judged.
+skewedMergeScenario :: MergeShape -> Text -> Text -> Scenario
+skewedMergeScenario shape name description =
+    ( scenario name description $ \knobs k -> do
+        captures <- loadCorpusBodies pypiCorpusPackages
+        privates <- loadMergePrivates shape pypiCorpusPackages
+        privateRewritten <- newIORef mempty
+        publicRewritten <- newIORef mempty
+        let latency = lkUpstreamLatencyMicros knobs
+        withProxyOverStubs
+            PyPI
+            knobs
+            0
+            Nothing
+            (indexStub privateRewritten latency privates)
+            (indexStub publicRewritten latency captures)
+            (weightedIndexMix pypiCorpusPackages cpWeight)
+            (httpTarget k)
+    )
+        { scenarioServiceTime = False
+        }
 
 revalidateScenario :: Scenario
 revalidateScenario =
@@ -152,7 +183,6 @@ withIndexProxy knobs ttl entries packages weight body = do
     captures <- loadCorpusBodies packages
     rewritten <- newIORef mempty
     let latency = lkUpstreamLatencyMicros knobs
-        mix port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
     withProxyOverStubs
         PyPI
         knobs
@@ -160,7 +190,7 @@ withIndexProxy knobs ttl entries packages weight body = do
         entries
         (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
         (indexStub rewritten latency captures)
-        mix
+        (weightedIndexMix packages weight)
         ( \proxy urls -> do
             for_ (ordNub urls) $ \url -> do
                 index <- checkedIndex url
@@ -169,6 +199,10 @@ withIndexProxy knobs ttl entries packages weight body = do
                     benchFail ("pypi index preflight did not merge public files and the private overlay: " <> url)
             body proxy urls
         )
+
+-- The index URLs for a proxy port, each project repeated by its weight.
+weightedIndexMix :: [CorpusPackage] -> (CorpusPackage -> Int) -> Int -> [Text]
+weightedIndexMix packages weight port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
 
 pypiMountBase :: Text
 pypiMountBase = "https://bench.proxy/pypi"

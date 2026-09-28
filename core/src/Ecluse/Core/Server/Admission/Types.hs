@@ -21,7 +21,7 @@ module Ecluse.Core.Server.Admission.Types (
     BrakeBounds (..),
 ) where
 
--- | Live heap bytes charged per source byte, in thousandths, for one ecosystem's metadata.
+-- | Live heap bytes charged per byte of a read or an output basis, in thousandths, for one ecosystem.
 data ChargeFactors = ChargeFactors
     { cfFullReadPermille :: Int
     {- ^ Per decompressed byte of a full read: 1.25 times the largest read peak per source byte on a

@@ -16,8 +16,7 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     project,
     ListingPeaks (..),
     probeListing,
-    MergeShape (..),
-    mergeDocuments,
+    writeMergeDocuments,
     probeMerge,
     measureInChild,
     childMain,
@@ -29,13 +28,10 @@ module Ecluse.Core.Server.MemoryModel.Probe (
 ) where
 
 import Control.Concurrent (yield)
-import Data.Aeson (FromJSON, ToJSON, Value (Array, Object, String), eitherDecodeStrict, encode, toJSON)
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -48,7 +44,7 @@ import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, pkgEcosystem)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
@@ -74,6 +70,7 @@ import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisByt
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
@@ -280,54 +277,15 @@ prepareListingRender ecosystem sources = do
     root <- newStablePtr served
     pure (root, basis)
 
--- | How the private and public documents of a two-source listing share a capture's versions.
-data MergeShape
-    = -- | Both hold every version, as a private mirror of the whole package does.
-      Identical
-    | -- | Each holds two thirds of the versions, one third of them in both.
-      Overlapping
-    | -- | Each holds half of the versions, none of them in both.
-      Disjoint
-    deriving stock (Eq, Show, Enum, Bounded)
-
-{- | The private and public documents of a merge in the shape, written under the directory when they
-differ from the capture. Each keeps the capture's other fields.
--}
-mergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
-mergeDocuments shape directory package = case shape of
-    Identical -> pure (cpPath package, cpPath package)
-    Overlapping -> splitBy (\position -> position `mod` 3 /= 2) (\position -> position `mod` 3 /= 0)
-    Disjoint -> splitBy even odd
+-- | Write a merge's rewritten documents under the directory, and return both documents' paths.
+writeMergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
+writeMergeDocuments shape directory package = do
+    (private, public) <- BS.readFile (cpPath package) >>= either fail pure . captureDocuments shape package
+    (,) <$> place "private.json" private <*> place "public.json" public
   where
-    splitBy private public = do
-        bytes <- BS.readFile (cpPath package)
-        (info, _) <- project package bytes
-        document <- either fail pure (eitherDecodeStrict bytes)
-        let positions = zip [0 :: Int ..] (Map.keys (infoVersions info))
-            write file keeps = do
-                let path = directory <> "/" <> file
-                    kept = Set.fromList [key | (position, key) <- positions, keeps position]
-                LBS.writeFile path (encode (keepVersions (pkgEcosystem (cpPackage package)) info kept document))
-                pure path
-        (,) <$> write "private.json" private <*> write "public.json" public
-
--- The document with only the given versions, their files, and their timestamps.
-keepVersions :: Ecosystem -> PackageInfo -> Set Text -> Value -> Value
-keepVersions ecosystem info kept = \case
-    Object fields -> Object (KeyMap.mapWithKey (keepField . Key.toText) fields)
-    other -> other
-  where
-    dropped = Map.keysSet (infoVersions info) `Set.difference` kept
-    files = Set.fromList [artFilename artifact | details <- Map.elems (Map.restrictKeys (infoVersions info) kept), artifact <- toList (pkgArtifacts details)]
-    keepField field value = case (ecosystem, field, value) of
-        (Npm, "versions", Object releases) -> Object (KeyMap.filterWithKey (\key _ -> Key.toText key `Set.member` kept) releases)
-        (Npm, "time", Object times) -> Object (KeyMap.filterWithKey (\key _ -> Key.toText key `Set.notMember` dropped) times)
-        (PyPI, "files", Array entries) -> toJSON (filter keptFile (toList entries))
-        (PyPI, "versions", Array _) -> toJSON (Set.toList kept)
-        _ -> value
-    keptFile = \case
-        Object entry | Just (String filename) <- KeyMap.lookup "filename" entry -> filename `Set.member` files
-        _ -> False
+    place file = \case
+        Captured -> pure (cpPath package)
+        Rewritten document -> (directory <> "/" <> file) <$ LBS.writeFile (directory <> "/" <> file) (encode document)
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement

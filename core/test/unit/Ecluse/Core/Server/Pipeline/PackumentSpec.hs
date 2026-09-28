@@ -142,8 +142,18 @@ outputBasisSpec = describe "outputBasisBytes -- the source bytes a listing's out
             it "takes the larger source whole on either side of the merge" $
                 basisOf [source TrustedSource 900 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 300 ["3.0.0", "4.0.0", "5.0.0"]] `shouldBe` Just 1100
 
-            it "rounds a share up" $
+            it "rounds a share up, anchored on the largest source when it gives more" $
                 basisOf [source TrustedSource 100 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 900 ["2.0.0", "3.0.0", "4.0.0"]] `shouldBe` Just 934
+
+            it "anchors on the base document when a larger source holds all its versions" $
+                basisOf [source TrustedSource 900 ["1.0.0"], source GatedSource 1000 thousandVersions] `shouldBe` Just 1899
+
+            it "anchors on the trusted source wherever it sits in the merge" $
+                basisOf [source GatedSource 1000 thousandVersions, source TrustedSource 900 ["1.0.0"]] `shouldBe` Just 1899
+
+-- A 1,000-version document that includes 1.0.0.
+thousandVersions :: [Text]
+thousandVersions = [show major <> ".0.0" | major <- [1 .. 1000 :: Int]]
 
 -- A merge source holding the given versions, whose body is the given number of bytes.
 listingSource :: PackageName -> (Text -> Version) -> Provenance -> Int -> [Text] -> Contribution

@@ -686,6 +686,7 @@ library ecluse-test-support
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
     Ecluse.Test.Corpus.Advisories
+    Ecluse.Test.Corpus.Merge
     Ecluse.Test.Corpus.Npm
     Ecluse.Test.Corpus.Outputs
     Ecluse.Test.Corpus.PyPI

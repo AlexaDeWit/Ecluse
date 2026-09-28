@@ -419,15 +419,18 @@ servedBytes serving sources plan etag =
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
-{- | The source bytes a listing's output charge scales: the largest source's, plus each other source's
-share for the versions the largest does not hold. It reads only map sizes.
+{- | The source bytes a listing's output charge scales: the larger of two estimates, anchored on the
+largest source and on the base document, each adding the others' bytes pro rata for versions it lacks.
 -}
 outputBasisBytes :: MergePlan -> [Contribution] -> Int
-outputBasisBytes plan sources = case sortOn (Down . srcBodyBytes) sources of
-    [] -> 0
-    largest : others -> srcBodyBytes largest + sum (map (addedShare (Map.size (mpSurvivors plan) - versionCount largest)) others)
+outputBasisBytes plan sources = foldl' max 0 (map anchoredOn anchors)
+  where
+    indexed = zip [0 :: Int ..] sources
+    anchors = maybeToList (listToMaybe (sortOn (Down . srcBodyBytes . snd) indexed)) <> maybeToList (baseSource indexed)
+    anchoredOn (position, anchor) =
+        srcBodyBytes anchor + sum [addedShare (Map.size (mpSurvivors plan) - versionCount anchor) other | (at, other) <- indexed, at /= position]
 
--- A source's bytes pro rata for the survivors outside the largest source, rounded up.
+-- A source's bytes pro rata for the survivors outside the anchor, rounded up.
 addedShare :: Int -> Contribution -> Int
 addedShare outside source
     | count <= 0 = srcBodyBytes source
@@ -450,8 +453,11 @@ assembleServedBody metadata mountBase sources plan =
     bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])
 
 baseDocument :: [Contribution] -> Maybe CachedDoc
-baseDocument sources =
-    srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
+baseDocument = fmap (srcValue . snd) . baseSource . zip [0 :: Int ..]
+
+-- The source whose top-level fields the served document keeps: the trusted one, else the first.
+baseSource :: [(Int, Contribution)] -> Maybe (Int, Contribution)
+baseSource indexed = find ((== TrustedSource) . srcProvenance . snd) indexed <|> listToMaybe indexed
 
 packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
 packumentResponse replies mode etag bytes = case mode of
