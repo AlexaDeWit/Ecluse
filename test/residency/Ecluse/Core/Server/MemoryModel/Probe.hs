@@ -219,7 +219,7 @@ probeListing :: CorpusPackage -> IO ListingPeaks
 probeListing package = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
-    -- A first read settles the process's one-off state, so the baseline holds it.
+    -- A first read settles the read's one-off state, so the baseline holds it.
     bracket (prepareListingRead package) freeStablePtr (void . deRefStablePtr)
     before <- sample
     bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do

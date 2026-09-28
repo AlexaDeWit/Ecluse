@@ -461,8 +461,9 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 
 For packages of at least 1 MiB, the per-byte charges sit above the largest the residency tests
 measure on the captured package corpus: the most a full read holds while it parses, and a
-response's encoding with its copy. A smaller package's read stays within the entry step. The tests
-fail when a package would need more, so the charges stay above the measured peaks.
+response's encoding with its copy. A smaller package can peak above its per-byte charge, but stays
+within what the meter holds for it, at least the entry step. The tests fail when a package would
+need more than the meter holds.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until

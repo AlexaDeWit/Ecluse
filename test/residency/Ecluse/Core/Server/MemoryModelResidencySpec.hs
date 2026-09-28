@@ -48,8 +48,12 @@ spec = do
                         Right result -> do
                             report package digest shape result
                             checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
-    describe "listing peak heap" $ forM_ packages $ \package ->
-        it (toString (cpName package)) $ do
+    describe "listing peak heap" $ do
+        it "keeps each read-peak limit below its full-read charge" $
+            for_ [Npm, PyPI] $ \ecosystem ->
+                for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) $ \(factors, envelope) ->
+                    envelope `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
+        forM_ packages $ \package -> it (toString (cpName package)) $ do
             (size, _) <- authenticate package
             measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
                 Left failure -> expectationFailure failure
@@ -104,7 +108,6 @@ readPeakEnvelopePermille = \case
 source up, the read's peak stays under its limit and the render's working set under its charge. -}
 checkListing :: ListingPeaks -> ChargeFactors -> Integer -> Expectation
 checkListing peaks factors envelope = do
-    envelope `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
     when (size >= meterStepBytes) $ do
