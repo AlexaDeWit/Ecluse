@@ -178,7 +178,7 @@ spec = do
             rendered `shouldSatisfy` T.isInfixOf "Result: complete"
             liveAnnotations [(Npm, [upstream])] `shouldBe` []
             rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | full | 1050 | 1049 / 1051 | 5.000 | measured |"
-            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | singleVersion | 200 | 1.000 | measured |"
+            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | singleVersion | 200 | 200 / 200 | 1.000 | measured |"
 
 -- Each run fails the captures check, with a problem naming why.
 failingRuns :: [(String, Criteria, [(Ecosystem, [PackageOutcome])], Text)]
