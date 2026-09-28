@@ -33,6 +33,9 @@ extra-source-files:
   test/fixtures/osv/withdrawal/*.json
   test/unit/fixtures/epss/*.gz
   test/unit/fixtures/osv/*.zip
+  vendor/json-stream/LICENSE
+  vendor/json-stream/README.md
+  vendor/json-stream/c_lib/lexer.h
 
 source-repository head
   type:     git
@@ -87,6 +90,37 @@ common shared
 -- overrides: https://ecluse-proxy.com/docs/operations/.
 common shipped-rts
   ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T --disable-delayed-os-memory-return"
+
+-- json-stream 0.4.6.1, vendored at the fork commit vendor/json-stream/README.md names. Its files
+-- keep upstream's form and BSD-3-Clause licence, so this stanza keeps upstream's language and
+-- warning settings instead of importing `shared`. Écluse code reaches it only through the
+-- registry JSON readers in ecluse-core.
+library ecluse-json-stream
+  hs-source-dirs:   vendor/json-stream
+  exposed-modules:
+    Data.JsonStream.CLexType
+    Data.JsonStream.CLexer
+    Data.JsonStream.Parser
+    Data.JsonStream.TokenParser
+    Data.JsonStream.Unescape
+
+  c-sources:        vendor/json-stream/c_lib/lexer.c
+  include-dirs:     vendor/json-stream/c_lib
+  includes:         lexer.h
+  default-language: Haskell2010
+  -- Upstream's own warning set. base 4.18 exports liftA2 from the Prelude, so Parser.hs's explicit
+  -- import of it now warns, and cabal.project turns that warning into an error for this package.
+  ghc-options:      -Wall -fwarn-incomplete-uni-patterns -Wno-unused-imports
+  build-depends:
+    , aeson                 >=2.2      && <2.4
+    , base                  ^>=4.20
+    , bytestring            ^>=0.12
+    , containers            ^>=0.7
+    , primitive             ^>=0.9
+    , scientific            ^>=0.3
+    , text                  ^>=2.1
+    , unordered-containers  ^>=0.2
+    , vector                ^>=0.13
 
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
@@ -315,7 +349,7 @@ library ecluse-core
     , hs-opentelemetry-api  ^>=1.0
     , integer-logarithms    ^>=1.0
     , scientific            ^>=0.3
-    , json-stream           ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , iproute               ^>=1.7
     , katip                 ^>=0.8.8
     , ram                   ^>=0.22
@@ -707,7 +741,7 @@ library ecluse-test-support
 
   build-depends:
     , ecluse:ecluse-core
-    , json-stream       ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
@@ -936,7 +970,7 @@ test-suite ecluse-core-unit
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
-    , json-stream       ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
     , autodocodec       ^>=0.5
