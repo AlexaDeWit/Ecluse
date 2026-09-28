@@ -112,7 +112,7 @@ response limits admit each capture.
 The retained-byte gate uses the following corpus envelopes. The calibration at
 `868818d671fa30ea93957feb4a6b20a878d14d13` used all nine npm and three PyPI captures with
 GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process. The shared rows come from the same
-probe on x86-64, with each document's keys and strings held once.
+probe with each document's keys and strings held once.
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 A calibrated gate is the smallest quarter step at least 8% above its measured maximum. The PyPI raw
 and typed gates keep their defaults.
@@ -122,11 +122,11 @@ and typed gates keep their defaults.
 | npm | Wire bytes | 1.001106275 | lodash | 1.25 | 24.9% |
 | npm | Raw `Value` | 6.479086061 | express | 7 | 8.0% |
 | npm | Typed projection | 0.584934090 | react | 0.75 | 28.2% |
-| npm | Shared cache entry | 1.610137506 | typescript | 1.75 | 8.7% |
+| npm | Shared cache entry | 1.610082962 | typescript | 1.75 | 8.7% |
 | PyPI | Wire bytes | 1.079997401 | requests | 1.25 | 15.7% |
 | PyPI | Raw `Value` | 4.120672117 | boto3 | 7 | 69.9% |
 | PyPI | Typed projection | 1.821159345 | requests | 2.25 | 23.5% |
-| PyPI | Shared cache entry | 3.294840135 | requests | 3.75 | 13.8% |
+| PyPI | Shared cache entry | 3.287951651 | requests | 3.75 | 14.1% |
 
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
 same test also checks that it stays within the memory gate's full-read charge, 4.5 bytes per source
@@ -135,22 +135,25 @@ shared entry's encoded size, for the lazy encoding and its strict copy, must sta
 output charge. That check covers the encoding, not the working set while the merged document is
 built. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
-For example, the TypeScript shared shape retains 25,269,432 heap bytes from 15,693,959 source bytes.
+For example, the TypeScript shared shape retains 25,268,576 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
 `compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
 
-The 48 calibration rows left -13,304 to 11,752 bytes above their warmed baselines after release.
-The 16 KiB release tolerance leaves 4,632 bytes above the observed maximum.
+The 48 rows of the run that measured the shared rows left -14,152 to 8,816 bytes above their warmed
+baselines after release. The 16 KiB release tolerance leaves 7,568 bytes above the observed maximum.
 The second release condition requires at least 90% of each held growth to disappear.
 Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
 
 The compact denominator gives a different accounting ratio. Requests' shared retained bytes
-divided by its compact encoding equal 4.199188339, the maximum across both ecosystems. The 7.5
-factor leaves 78.6% margin above it. It is not an active-work bound.
+divided by its compact encoding equal 4.190409144, the maximum across both ecosystems. The 7.5
+factor leaves 79.0% margin above it. It is not an active-work bound.
 The local provider retains selected releases and assembled bytes, so full shared shapes do not
 size its entry-count control. An assembled-output mean cannot size a shared count of both forms.
 These residency measurements do not determine the shared entry-count allowance.
 
+The shared rows and the release range came from the arm64 Build job of
+[CI run 36362062684](https://github.com/AlexaDeWit/Ecluse/actions/runs/36362062684/job/108741087227),
+which checked out `3d33ea81a6f20b5ac23c5d42b8645e3ec43db1c0` merged into `main`.
 The rows for the other shapes came from [CI run 35534647795](https://github.com/AlexaDeWit/Ecluse/actions/runs/35534647795/job/106141404819).
 Its merge checkout `98a03cd9289041b5a2106f333f27ac32596c2aea` has the same source tree as the
 feature head above. The later digest-helper move changes no read or projection behaviour.
