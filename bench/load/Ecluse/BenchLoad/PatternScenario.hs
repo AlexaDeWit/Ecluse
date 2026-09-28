@@ -5,7 +5,7 @@
 -- | A finite matrix over authenticated captures, with independent cache and upstream evidence.
 module Ecluse.BenchLoad.PatternScenario (patternScenarios, loadPins, selectArtifacts) where
 
-import Data.Aeson (withObject, (.:))
+import Data.Aeson ((.:))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -25,7 +25,7 @@ import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
 import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyBootLines, proxyScrape)
 import Ecluse.BenchLoad.Replay (Replay (..))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
@@ -34,7 +34,7 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystem
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crBytes, crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
@@ -153,15 +153,10 @@ readKnob name fallback =
 
 verifyCaptures :: Ecosystem -> Map Text LByteString -> IO UTCTime
 verifyCaptures ecosystem bodies = do
-    sizes <- readCorpusPins parser >>= either (benchFail . toText) pure
+    records <- readCaptureRecords ecosystem >>= either (benchFail . toText) pure
     for_ (Map.toList bodies) $ \(name, body) ->
-        unless ((fst <$> Map.lookup name sizes) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
-    pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map snd (Map.elems sizes))))
-  where
-    parser pins = do
-        captures <- pins .: "captures"
-        entries <- captures .: fromString (toString (ecosystemName ecosystem))
-        traverse (withObject "capture" (\capture -> (,) <$> capture .: "bytes" <*> capture .: "capturedAt")) entries
+        unless ((crBytes <$> Map.lookup name records) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
+    pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map crCapturedAt (Map.elems records))))
 
 evidence :: ProxyProcess -> IORef (Int, Int) -> Maybe Int -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
 evidence proxy upstreamCount capacity rawBytes measuredBodies knobs requestTrace selected evaluationTime = do

@@ -12,11 +12,10 @@ module Main (main) where
 import Prelude hiding (universe)
 
 import Control.Exception qualified as Exception
-import Data.Aeson (withObject, (.:))
 import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.Universe.Class (universe)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getAllocationCounter)
@@ -25,22 +24,25 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Temp (withSystemTempDirectory)
 
 import Ecluse.Acceptance (
+    Fetched (Fetched, Refused, Unreachable),
     Leg (FullAllAdvisoryRules, FullDocument, FullShippedAdvisories, SingleVersion),
     Measurement (Measurement),
     OperatingPoint (OperatingPoint),
     PackageOutcome (Failed, Measured, Unavailable),
     Sample (Sample),
     assessCaptures,
+    capturesAnnotations,
     capturesExitCode,
+    classifyFetch,
     legKey,
+    liveAnnotations,
     liveExitCode,
     loadCriteria,
     renderCapturesReport,
     renderLiveReport,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (..), isSuccessStatus)
 import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
@@ -50,7 +52,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloo
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
@@ -71,25 +73,17 @@ captures = do
     criteria <- loadCriteria
     benches <- ecosystemBenches
     runs <- forM benches $ \bench -> withCorpusAdvisories (ebEcosystem bench) $ \advisories -> do
-        capturedAt <- captureTimes (ebEcosystem bench)
+        records <- readCaptureRecords (ebEcosystem bench) >>= either fail pure
         outcomes <- forM (ebCorpus bench) $ \(package, raw, _, _) ->
-            case Map.lookup (cpName package) capturedAt of
+            case crCapturedAt <$> Map.lookup (cpName package) records of
                 Nothing -> pure (Failed (cpName package) "bench/corpus/pins.json records no capture time")
                 Just clock -> outcomeFrom (cpName package) Nothing <$> measureDocument bench advisories (EvalContext clock Nothing) (cpPackage package) raw
         pure (ebEcosystem bench, outcomes)
     let report = assessCaptures criteria runs
     op <- operatingPoint
     publish (renderCapturesReport op report)
+    traverse_ putTextLn (capturesAnnotations report)
     exitWith (capturesExitCode report)
-
--- The capture time of each committed capture, by package name.
-captureTimes :: Ecosystem -> IO (Map Text UTCTime)
-captureTimes eco = readCorpusPins parser >>= either fail pure
-  where
-    parser pins = do
-        recorded <- pins .: "captures"
-        entries <- recorded .: fromString (toString (ecosystemName eco))
-        traverse (withObject "capture" (.: "capturedAt")) entries
 
 -- | Report each leg over live registry documents, and exit 1 when the proxy refused a document.
 live :: IO ()
@@ -101,6 +95,7 @@ live = do
         (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
     publish (renderLiveReport op runs)
+    traverse_ putTextLn (liveAnnotations runs)
     exitWith (liveExitCode runs)
 
 -- Compile the ecosystem's corpus advisories, and serve them to the advisory legs while the action runs.
@@ -123,25 +118,12 @@ measureLive manager advisories ctx bench package = do
     pkg = cpPackage package
     name = cpName package
 
--- | A live fetch: the document, a refusal by the proxy's own code or limits, or an upstream that did not deliver.
-data Fetched
-    = Fetched ByteString
-    | Refused Text
-    | Unreachable Text
-
 fetchDocument :: Manager -> Ecosystem -> PackageName -> IO Fetched
 fetchDocument manager eco pkg = case liveRequest eco pkg of
     Left reason -> pure (Refused reason)
     Right request ->
-        classify
+        classifyFetch
             <$> boundedFetch manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
-  where
-    classify = \case
-        Left fault@(FetchTransport _) -> Unreachable (show fault)
-        Left fault -> Refused (show fault)
-        Right response
-            | isSuccessStatus (responseStatusCode response) -> Fetched (responseBody response)
-            | otherwise -> Unreachable ("registry HTTP " <> show (responseStatusCode response))
 
 liveRequest :: Ecosystem -> PackageName -> Either Text Request
 liveRequest eco pkg = case eco of
@@ -183,7 +165,9 @@ measurePasses operation raw = do
     passes <- traverse (measurePass operation) copies
     pure (summarise <$> (nonEmpty =<< sequence passes))
   where
-    summarise measured = Measurement (median (fmap fst measured)) (median (fmap snd measured))
+    summarise measured =
+        let bytes = NE.sort (fmap fst measured)
+         in Measurement (median bytes) (NE.head bytes) (NE.last bytes) (median (fmap snd measured))
 
 -- The allocation counter counts down, and covers only the calling thread.
 measurePass :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe (Int64, Double))

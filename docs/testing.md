@@ -343,11 +343,13 @@ install, so the harness passes `--only-binary=:all:` and installs a wheel alone,
 
 ## Allocation budgets: `perf-allocation` (gating)
 
-The `allocation` job in `ci.yml` holds the metadata work behind each request to reviewed budgets,
-and the `CI gate` requires it. It runs `task perf-allocation`, the `captures` mode of the
-performance-acceptance harness in `acceptance/`, over the committed captures in `bench/corpus/`:
-nine npm packuments and three PyPI Simple JSON documents. The input never changes between runs, so
-a changed figure comes from a changed build.
+The `allocation` job in `ci.yml` holds the bytes that the metadata work behind each request
+allocates to reviewed budgets, and the `CI gate` requires it. It runs `task perf-allocation`, the
+`captures` mode of the performance-acceptance harness in `acceptance/`, over the committed captures
+in `bench/corpus/`: nine npm packuments and three PyPI Simple JSON documents. The input never
+changes between runs, so a changed figure comes from a changed build. The budgets cover allocation
+only. CPU work that allocates nothing leaves the figure unchanged, and shows only in the reports'
+time columns, which carry no budget.
 
 Each package has four legs:
 
@@ -364,9 +366,9 @@ The advisory legs use the captured corpus advisories in `bench/corpus/advisories
 with no range would make the advisory rules abstain and pass for a speed-up, so setup fails on one.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
-median. It counts the bytes each pass allocates with GHC's per-thread allocation counter. For one
-build over one input, that figure moves by a few bytes at most between runs. Wall-clock time appears in the
-report for information only. The age rules evaluate at each capture's `capturedAt` time in
+median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
+GHC's per-thread allocation counter. For one build over one input, that figure moves by a few bytes
+at most between runs. Wall-clock time appears in the report for information only. The age rules evaluate at each capture's `capturedAt` time in
 `bench/corpus/pins.json`, so they admit the same versions on every run. The harness links the
 shipped server's RTS options (the `shipped-rts` stanza in `ecluse.cabal`), and the report prints
 the capabilities and allocation area it read from the running RTS.
@@ -379,13 +381,21 @@ from. The job fails closed. It fails when:
 - a leg allocates more than its budget,
 - a measured leg has no calibrated figure,
 - a capture is missing or does not project, or a leg does not complete,
-- the criteria calibrate a package that the run did not measure,
-- the run's CPU architecture differs from the calibration's.
+- the criteria calibrate a package that the run did not measure.
 
-A red result needs a human decision: fix the regression, or recalibrate. To recalibrate, take every
-figure from the report of one arm64 CI run, and record that run's runner, commit, and URL in the
-calibration. The job writes its report to the run summary and uploads it as
+A red result needs a human decision: fix the regression, or recalibrate. A leg that allocates more
+than the margin below its figure passes, and the job raises a warning on it that asks for a
+recalibration, because the budget no longer holds the gain. To recalibrate, take every figure from
+the report of one arm64 CI run, and record that run's runner, URL, and the commit it checked out in
+the calibration. A pull request run checks out the merge of its head into the base, and the log of
+its checkout step names that commit. The job writes its report to the run summary and uploads it as
 `perf-allocation-report.md`.
+
+Arm64 CI is the calibration source, and you can also run `task perf-allocation` on x86_64. On an
+architecture other than the calibration's, the run still holds every leg to its budget and names
+both architectures in the report. Allocation on x86_64 has agreed with arm64 within about 1% in the
+work-per-request benchmarks, so a leg close to its budget can read differently there. The job is
+not part of `task check` or `task gate`.
 
 ## Benchmarks (non-gating)
 
@@ -405,9 +415,11 @@ Read a red result according to its measurement:
 
 - Work-per-request benchmarks fail on build errors, harness crashes, failed complexity assertions, or an advisory row that leaves a version undecidable. They do not compare performance against regression thresholds.
 - Performance acceptance runs `task perf-acceptance`, the harness's `live` mode. It fails when the proxy's own code or limits
-  refuse a document, for example a body over the metadata size limit. An upstream that does not deliver makes its package
-  unavailable, and the report marks the run incomplete instead of failed. Live documents grow as packages publish, so no
-  budget applies to them. Its report separates upstream time from the legs.
+  refuse a document, for example a body over the metadata size limit, and when a document does not decode. It also fails on
+  a TLS or protocol fault, and on a status that says the proxy asked wrongly, such as a 404 for a pinned package. A
+  timeout, an unreachable registry, a 408, a 429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report
+  then marks the run incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget
+  applies to them. Its report separates upstream time from the legs.
 - Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
   when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other way than the clean
   shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot boot, when `oha`

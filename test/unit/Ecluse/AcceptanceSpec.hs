@@ -17,25 +17,32 @@ import Ecluse.Acceptance (
     CapturesReport (..),
     CapturesSection (..),
     Criteria (..),
+    Fetched (Fetched, Refused, Unreachable),
     Leg (FullAllAdvisoryRules, FullDocument, FullShippedAdvisories, SingleVersion),
     Measurement (Measurement),
     OperatingPoint (OperatingPoint),
     PackageOutcome (Failed, Measured, Unavailable),
     Row (Assessed, FailedPackage),
     Sample (Sample),
-    Verdict (Breached, NoBudget, Uncalibrated, Within),
+    Verdict (Breached, NoBudget, Within),
     assessCaptures,
     budgetBytes,
+    capturesAnnotations,
     capturesExitCode,
     capturesProblems,
+    classifyFetch,
     decodeCriteria,
     hostArch,
+    liveAnnotations,
     liveExitCode,
     loadCriteria,
     renderCapturesReport,
     renderLiveReport,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), RegistryResponse (RegistryResponse), UrlFormationError (EmptyBaseUrl))
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 
 spec :: Spec
 spec = do
@@ -86,15 +93,17 @@ spec = do
             reportUnmeasured (assessCaptures criteriaFixture [(Npm, [measured "lodash" 1 1])]) `shouldBe` [(Npm, "react")]
         it "counts a failed package as measured, not unmeasured" $
             reportUnmeasured (assessCaptures criteriaFixture [(Npm, [measured "lodash" 1 1, Failed "react" "refused"])]) `shouldBe` []
-        it "marks every leg uncalibrated on another architecture" $
-            verdicts (assessCaptures elsewhere [(Npm, [measured "lodash" 1 1])])
-                `shouldBe` [("lodash", FullDocument, Uncalibrated), ("lodash", SingleVersion, Uncalibrated)]
+        it "assesses every leg on another architecture too" $
+            verdicts (assessCaptures elsewhere [(Npm, [measured "lodash" 1100 200])])
+                `shouldBe` [("lodash", FullDocument, Within), ("lodash", SingleVersion, Breached 90)]
 
     describe "capturesExitCode" $ do
         it "passes when every leg is within its budget and every calibrated package ran" $ do
             let report = assessCaptures criteriaFixture{critAllocatedBytes = lodashOnly} [(Npm, [measured "lodash" 1100 110])]
             capturesProblems report `shouldBe` []
             capturesExitCode report `shouldBe` ExitSuccess
+        it "takes its verdict from the legs on another architecture" $
+            capturesExitCode (assessCaptures elsewhere{critAllocatedBytes = lodashOnly} [(Npm, [measured "lodash" 1100 110])]) `shouldBe` ExitSuccess
         for_ failingRuns $ \(name, criteria, runs, problem) ->
             it name $ do
                 let report = assessCaptures criteria runs
@@ -105,8 +114,18 @@ spec = do
         let rendered = renderCapturesReport operatingPoint (assessCaptures criteriaFixture [(Npm, [measured "lodash" 1050 200, Failed "react" "refused"])])
         it "leads with the failure and its causes" $
             rendered `shouldSatisfy` T.isInfixOf "Result: FAIL: 1 leg(s) over budget, 1 package(s) failed"
-        it "shows each leg's allocation, calibrated figure, change, and budget" $
-            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | full | 1050 | 1000 | +5.0% | 1100 | 5.000 | within |"
+        it "shows each leg's allocation, spread, calibrated figure, change, and budget" $
+            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | full | 1050 | 1049 / 1051 | 1000 | +5.0% | 1100 | 5.000 | within |"
+        it "renders a drop too small to show as 0.0%" $
+            renderCapturesReport operatingPoint (assessCaptures criteriaFixture{critAllocatedBytes = Map.fromList [(Npm, Map.fromList [("lodash", Map.fromList [(FullDocument, 1_000_000)])])]} [(Npm, [measured "lodash" 999_999 100])])
+                `shouldSatisfy` T.isInfixOf "| 1000000 | 0.0% |"
+        it "marks a leg more than the margin below its figure for recalibration" $
+            renderCapturesReport operatingPoint (assessCaptures criteriaFixture [(Npm, [measured "lodash" 700 100])])
+                `shouldSatisfy` T.isInfixOf "| -30.0% | 1100 | 5.000 | within, recalibrate |"
+        it "names both architectures when the run is not on the calibration's" $ do
+            let other = renderCapturesReport operatingPoint (assessCaptures elsewhere [(Npm, [measured "lodash" 1 1])])
+            other `shouldSatisfy` T.isInfixOf ("the budgets were calibrated on not-" <> hostArch <> " and this run is on " <> hostArch)
+            rendered `shouldNotSatisfy` T.isInfixOf "Architecture:"
         it "names the bytes a breached leg is over by" $
             rendered `shouldSatisfy` T.isInfixOf "OVER by 90 bytes"
         it "lists a failed package with its reason" $
@@ -124,13 +143,25 @@ spec = do
             renderCapturesReport operatingPoint (assessCaptures criteriaFixture{critAllocatedBytes = lodashOnly} [(Npm, [measured "lodash" 1 1])])
                 `shouldSatisfy` T.isInfixOf "Result: PASS"
 
+    describe "capturesAnnotations" $ do
+        it "warns, naming the leg, when a leg allocates more than the margin below its figure" $
+            capturesAnnotations (assessCaptures criteriaFixture [(Npm, [measured "lodash" 899 100])])
+                `shouldBe` ["::warning title=Allocation below its calibration::npm lodash full allocated 899 bytes against a calibrated 1000, more than the margin below it. Recalibrate acceptance/criteria.json."]
+        it "stays quiet within the margin below, and above" $
+            capturesAnnotations (assessCaptures criteriaFixture [(Npm, [measured "lodash" 900 200])]) `shouldBe` []
+
+    describe "classifyFetch" $
+        for_ fetchCases $ \(name, outcome, expected) ->
+            it name $ classifyFetch outcome `shouldBe` expected
+
     describe "the live run" $ do
-        let upstream = Measured (Sample "lodash" 10 (Just 12) [(FullDocument, Measurement 1050 5), (SingleVersion, Measurement 200 1)])
+        let upstream = Measured (Sample "lodash" 10 (Just 12) [(FullDocument, Measurement 1050 1049 1051 5), (SingleVersion, Measurement 200 200 200 1)])
         it "fails when the proxy refused a document" $
             liveExitCode [(Npm, [upstream, Failed "typescript" "FetchBoundExceeded"])] `shouldBe` ExitFailure 1
         it "passes, incomplete, when a registry is unavailable" $ do
             let runs = [(Npm, [upstream, Unavailable "react" "registry HTTP 503"])]
             liveExitCode runs `shouldBe` ExitSuccess
+            liveAnnotations runs `shouldBe` ["::warning title=Live performance acceptance incomplete::1 package(s) unavailable. The report names each one."]
             renderLiveReport operatingPoint runs `shouldSatisfy` T.isInfixOf "Result: incomplete: 1 package(s) unavailable"
             renderLiveReport operatingPoint runs `shouldSatisfy` T.isInfixOf "unavailable: registry HTTP 503"
         it "reports a refusal as a failure, never as unavailable" $ do
@@ -140,7 +171,8 @@ spec = do
         it "reports every leg with its upstream time and no budget" $ do
             let rendered = renderLiveReport operatingPoint [(Npm, [upstream])]
             rendered `shouldSatisfy` T.isInfixOf "Result: complete"
-            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | full | 1050 | 5.000 | measured |"
+            liveAnnotations [(Npm, [upstream])] `shouldBe` []
+            rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | full | 1050 | 1049 / 1051 | 5.000 | measured |"
             rendered `shouldSatisfy` T.isInfixOf "| lodash | 10 | 12.000 | singleVersion | 200 | 1.000 | measured |"
 
 -- Each run fails the captures check, with a problem naming why.
@@ -152,7 +184,6 @@ failingRuns =
     , ("fails an unavailable package, which a captures run never expects", lodashCriteria, [(Npm, [Unavailable "lodash" "HTTP 503"])], "1 package(s) failed")
     , ("fails a calibrated package the run did not measure", criteriaFixture, [(Npm, [measured "lodash" 1 1])], "1 calibrated package(s) not measured")
     , ("fails a run that measured nothing", lodashCriteria{critAllocatedBytes = mempty}, [], "no package was measured")
-    , ("fails on another architecture", elsewhere{critAllocatedBytes = lodashOnly}, [(Npm, [measured "lodash" 1 1])], "so no leg is assessed")
     ]
   where
     lodashCriteria = criteriaFixture{critAllocatedBytes = lodashOnly}
@@ -160,8 +191,31 @@ failingRuns =
 verdicts :: CapturesReport -> [(Text, Leg, Verdict)]
 verdicts report = [(alPackage leg, alLeg leg, alVerdict leg) | section <- reportSections report, Assessed leg <- sectionRows section]
 
+-- The full leg's passes spread a byte either side of its median.
 measured :: Text -> Int64 -> Int64 -> PackageOutcome
-measured name full single = Measured (Sample name 10 Nothing [(FullDocument, Measurement full 5), (SingleVersion, Measurement single 1)])
+measured name full single = Measured (Sample name 10 Nothing [(FullDocument, Measurement full (full - 1) (full + 1) 5), (SingleVersion, Measurement single single single 1)])
+
+-- Each fetch outcome, and how the live run classifies it.
+fetchCases :: [(String, Either FetchFault RegistryResponse, Fetched)]
+fetchCases =
+    [ ("refuses a request the proxy could not form", Left unformable, Refused (show unformable))
+    , ("refuses a body over the proxy's size limit", Left tooLarge, Refused (show tooLarge))
+    , ("reports a transport timeout as unreachable", Left (transport TransportTimeout), Unreachable (show (transport TransportTimeout)))
+    , ("reports a peer it cannot reach as unreachable", Left (transport TransportUnreachable), Unreachable (show (transport TransportUnreachable)))
+    , ("refuses a TLS refusal, which needs an operator", Left (transport TransportTls), Refused (show (transport TransportTls)))
+    , ("refuses an answer the client could not use", Left (transport TransportProtocol), Refused (show (transport TransportProtocol)))
+    , ("keeps a 2xx body", Right (response 200), Fetched "body")
+    , ("refuses a 404, which a pinned package never answers", Right (response 404), Refused "registry HTTP 404")
+    , ("refuses a 400, which says the proxy asked wrongly", Right (response 400), Refused "registry HTTP 400")
+    ]
+        <> [ ("reports HTTP " <> show code <> " as unreachable", Right (response code), Unreachable ("registry HTTP " <> show code))
+           | code <- [401, 403, 408, 429, 500, 503]
+           ]
+  where
+    unformable = FetchUrlUnformable EmptyBaseUrl
+    tooLarge = FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 12))
+    transport cause = FetchTransport (transportFault cause "detail")
+    response code = RegistryResponse code 4 "body"
 
 calibration :: Calibration
 calibration = Calibration hostArch "ubuntu-24.04-arm" "abc123" ("https://example.test/runs/1" :| []) 10
