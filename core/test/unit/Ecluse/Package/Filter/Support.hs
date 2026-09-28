@@ -2,20 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A per-artifact reference for the artifact-location check in "Ecluse.Core.Package.Filter".
-It re-derives the upstream's authority and host for every artifact, lower-cases whole URLs, and
-checks the filename before and after normalising, so a spec can hold the per-document check to it.
+{- | A per-artifact reference for the location check in "Ecluse.Core.Package.Filter.Internal". It
+re-derives the upstream's authority and host for every artifact, lower-cases whole URLs, and checks
+the filename before and after normalising, so a spec can hold the per-document check to it.
 -}
-module Ecluse.Test.Package.Filter (referenceResolveArtifact) where
+module Ecluse.Package.Filter.Support (referenceResolveArtifact) where
 
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (Artifact (artFilename, artUrl))
-import Ecluse.Core.Package.Filter (ArtifactRefusal (..))
+import Ecluse.Core.Package.Filter.Internal (ArtifactRefusal (..))
 import Ecluse.Core.Security (AllowedHostPorts, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
 import Ecluse.Core.Text (urlFilename)
 
--- | The reference for 'Ecluse.Core.Package.Filter.resolveArtifact', given the upstream base URL.
+-- | The reference for 'Ecluse.Core.Package.Filter.Internal.resolveArtifact', given the upstream base URL.
 referenceResolveArtifact :: AllowedHostPorts -> Text -> Artifact -> Either ArtifactRefusal Artifact
 referenceResolveArtifact ecosystemHosts upstreamBaseUrl art = do
     checkFilename art

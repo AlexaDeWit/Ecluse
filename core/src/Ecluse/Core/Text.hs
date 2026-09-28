@@ -14,6 +14,10 @@ module Ecluse.Core.Text (
     urlFilenameComponent,
     isSafeComponent,
     afterFirst,
+    LowerPrefix,
+    httpsPrefix,
+    httpPrefix,
+    lowerPrefixChars,
     isPrefixOfLowered,
     registryPath,
     readDecimalText,
@@ -90,15 +94,32 @@ matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on th
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
-{- | Whether @prefix@ begins the lower-cased text. It lowers only the first @length prefix@
-characters, which suffices because 'T.toLower' maps each character on its own to at least one.
+{- | A lower-case prefix with its length in characters, so a test for it never measures a text. The
+constructor stays private, so each count sits beside its prefix in this module.
 -}
-isPrefixOfLowered :: Text -> Text -> Bool
-isPrefixOfLowered prefix t = lowered == prefix
+data LowerPrefix = LowerPrefix Int Text
+    deriving stock (Show)
+
+-- | The @https://@ scheme prefix.
+httpsPrefix :: LowerPrefix
+httpsPrefix = LowerPrefix 8 "https://"
+
+-- | The @http://@ scheme prefix.
+httpPrefix :: LowerPrefix
+httpPrefix = LowerPrefix 7 "http://"
+
+-- | The prefix's length in characters.
+lowerPrefixChars :: LowerPrefix -> Int
+lowerPrefixChars (LowerPrefix chars _) = chars
+
+{- | Whether the prefix begins the lower-cased text. It lowers only the prefix's length of the text,
+which suffices because 'T.toLower' maps each character on its own to at least one.
+-}
+isPrefixOfLowered :: LowerPrefix -> Text -> Bool
+isPrefixOfLowered (LowerPrefix chars prefix) t = lowered == prefix
   where
-    n = T.length prefix
     -- Equality, not 'T.isPrefixOf', which streams both texts and allocates for each character.
-    lowered = T.take n (T.toLower (T.take n t))
+    lowered = T.take chars (T.toLower (T.take chars t))
 
 {- | The path half of an absolute URL, from the first slash after the authority. It splits on the
 first scheme separator, so a later one inside the URL cannot move where the path starts.
@@ -117,8 +138,11 @@ readDecimalText = readWholly TR.decimal
 -}
 readHexText :: (Integral a) => Text -> Maybe a
 readHexText t
-    | T.toLower (T.take 2 t) == "0x" = Nothing
+    | isPrefixOfLowered hexPrefix t = Nothing
     | otherwise = readWholly TR.hexadecimal t
+
+hexPrefix :: LowerPrefix
+hexPrefix = LowerPrefix 2 "0x"
 
 -- The value a reader produced, only when it consumed the whole input. Trailing text is a
 -- refusal rather than a silent prefix parse.

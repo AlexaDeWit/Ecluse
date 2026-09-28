@@ -19,7 +19,7 @@ module Ecluse.Core.Security.Egress.Internal (
 import Data.Text qualified as T
 
 import Ecluse.Core.Security.Authority (refuseCredentialMaterial)
-import Ecluse.Core.Text (isPrefixOfLowered)
+import Ecluse.Core.Text (httpsPrefix, isPrefixOfLowered)
 
 {- | An outbound registry-egress URL, https by construction and stored with surrounding
 whitespace trimmed. A plain-HTTP registry target cannot be represented in a running system.
@@ -39,7 +39,7 @@ Left "registry URL must use https (got http://registry.npmjs.org)"
 mkRegistryUrl :: Text -> Either Text RegistryUrl
 mkRegistryUrl raw
     | T.null trimmed = Left "expected a non-empty https URL"
-    | "https://" `isPrefixOfLowered` trimmed = Right (RegistryUrl trimmed)
+    | isPrefixOfLowered httpsPrefix trimmed = Right (RegistryUrl trimmed)
     | otherwise = Left ("registry URL must use https (got " <> trimmed <> ")")
   where
     trimmed = T.strip raw
