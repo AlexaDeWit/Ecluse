@@ -15,6 +15,7 @@ module Ecluse.Test.OsvDb (
     -- * Reading an artifact back
     scoresOf,
     metaOf,
+    withServedArtifact,
 
     -- * Pilot configuration over the stubs
     stubSourceEnv,
@@ -26,15 +27,22 @@ import Data.Map.Strict qualified as Map
 import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
 import Network.HTTP.Types.Status (Status, status200)
 import System.IO.Temp (withSystemTempDirectory)
+import UnliftIO.Exception (bracket)
 
+import Ecluse.Core.Cve (CveDb (cveDbClose), openCveDb)
+import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
+import Ecluse.Test.Rules (slotRuleDeps)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
+import Ecluse.Test.Support (expectRight)
 
 -- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath
@@ -92,6 +100,14 @@ scoresOf dbFile = withConnection dbFile $ \conn ->
 metaOf :: FilePath -> IO (Map Text Text)
 metaOf dbFile = withConnection dbFile $ \conn ->
     Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
+
+-- | Serve the artifact from a fresh slot, as a synced mount reads it, and close it once the action returns.
+withServedArtifact :: Ecosystem -> FilePath -> (RuleDeps -> CveDb -> IO a) -> IO a
+withServedArtifact eco path use =
+    bracket (openCveDb eco EpssRequired path >>= expectRight) cveDbClose $ \db -> do
+        slot <- newCveSlot
+        swapIn slot (DbEtag (toText path)) Nothing db
+        use (slotRuleDeps slot) db
 
 -- | Configuration that points both advisory sources at stubs.
 stubSourceEnv :: Stub -> Stub -> [(String, String)]

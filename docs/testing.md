@@ -349,12 +349,19 @@ performance-acceptance harness in `acceptance/`, over the committed captures in 
 nine npm packuments and three PyPI Simple JSON documents. The input never changes between runs, so
 a changed figure comes from a changed build.
 
-Each package has two legs:
+Each package has four legs:
 
 | Leg | Work measured |
 |---|---|
-| `full` | Decode, projection, rules, assembly, and serialisation of the whole document |
+| `full` | Decode, projection, rules, assembly, and serialisation of the whole document, under a one-day minimum age and no advisory database |
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
+| `fullShippedAdvisories` | `full` under the shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
+| `fullAllAdvisoryRules` | `full` under the shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
+
+The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
+[advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
+`Ecluse.Core.Osv.Compile`, and a slot serves the artifact, as a synced mount reads it. An artifact
+with no range would make the advisory rules abstain and pass for a speed-up, so setup fails on one.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median. It counts the bytes each pass allocates with GHC's per-thread allocation counter, which

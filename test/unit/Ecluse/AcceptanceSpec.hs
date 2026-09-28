@@ -17,7 +17,7 @@ import Ecluse.Acceptance (
     CapturesReport (..),
     CapturesSection (..),
     Criteria (..),
-    Leg (FullDocument, SingleVersion),
+    Leg (FullAllAdvisoryRules, FullDocument, FullShippedAdvisories, SingleVersion),
     Measurement (Measurement),
     OperatingPoint (OperatingPoint),
     PackageOutcome (Failed, Measured, Unavailable),
@@ -43,6 +43,9 @@ spec = do
         it "decodes the calibration and each package's figure per leg" $
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] 10) [("npm", lodashFigures)])
                 `shouldBe` Right (Criteria calibration (Map.fromList [(Npm, Map.fromList [("lodash", Map.fromList [(FullDocument, 1000), (SingleVersion, 100)])])]))
+        it "decodes the advisory legs' keys" $
+            (Map.lookup Npm . critAllocatedBytes <$> decodeCriteria (document validCalibration [("npm", object ["react" .= object ["fullShippedAdvisories" .= (3 :: Int), "fullAllAdvisoryRules" .= (4 :: Int)]])]))
+                `shouldBe` Right (Just (Map.fromList [("react", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])]))
         it "rejects an unknown leg" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["partial" .= (1 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects an unknown ecosystem" $

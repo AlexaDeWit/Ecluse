@@ -9,6 +9,7 @@ module Ecluse.Test.Server.Transform (
     serveTransformSize,
     serveDocumentBytes,
     serveDocumentSize,
+    serveDocumentSizeUnder,
     SelectedDepth (..),
     selectiveDepth,
     detailsDepth,
@@ -26,7 +27,8 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssembl
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 
-import Ecluse.Core.Rules.Types (EvalContext)
+import Ecluse.Core.Rules (RuleDeps)
+import Ecluse.Core.Rules.Types (EvalContext, PrecededRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Core.Version (Version)
@@ -37,27 +39,31 @@ import Ecluse.Test.Snapshot (readDetails)
 
 -- | Measure the npm transform against the original fetch snapshot, excluding its digest cost.
 serveTransformSize :: EvalContext -> (Snapshot Value, PackageInfo) -> IO Int
-serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody assemble ctx input
+serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody inertRuleDeps permissiveAgeRules assemble ctx input
   where
     assemble sources plan base = encode (assembleMergedPackument syntheticProxyBase sources plan base)
 
 -- | Transform an adapter's cached document using the supplied fetch snapshot and projection.
 serveDocumentBytes :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO ByteString
-serveDocumentBytes adapter ctx input = BSL.toStrict <$> serveDocumentBody adapter ctx input
+serveDocumentBytes adapter ctx input = BSL.toStrict <$> serveDocumentBody inertRuleDeps permissiveAgeRules adapter ctx input
 
 -- | Force the served body without adding a strict-buffer copy to the measured transform.
 serveDocumentSize :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
-serveDocumentSize adapter ctx input = fromIntegral . BSL.length <$> serveDocumentBody adapter ctx input
+serveDocumentSize = serveDocumentSizeUnder inertRuleDeps permissiveAgeRules
 
-serveDocumentBody :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
-serveDocumentBody adapter = transformBody assemble
+-- | 'serveDocumentSize' with the rule phase's dependencies and policy supplied.
+serveDocumentSizeUnder :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO Int
+serveDocumentSizeUnder deps policy adapter ctx input = fromIntegral . BSL.length <$> serveDocumentBody deps policy adapter ctx input
+
+serveDocumentBody :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
+serveDocumentBody deps policy adapter = transformBody deps policy assemble
   where
     assemble sources plan base =
         metadataSerialise adapter (metadataAssemble adapter syntheticProxyBase sources plan (Just base))
 
-transformBody :: (Map SourceId (Snapshot raw) -> MergePlan -> raw -> LByteString) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO LByteString
-transformBody assemble ctx (source, info) = do
-    plan <- filterPlan inertRuleDeps ctx permissiveAgeRules info
+transformBody :: RuleDeps -> [PrecededRule] -> (Map SourceId (Snapshot raw) -> MergePlan -> raw -> LByteString) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO LByteString
+transformBody deps policy assemble ctx (source, info) = do
+    plan <- filterPlan deps ctx policy info
     pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info <$ source)] of
         Just merged
             | not (Map.null (mpSurvivors merged)) ->

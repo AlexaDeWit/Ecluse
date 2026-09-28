@@ -1114,6 +1114,7 @@ test-suite ecluse-unit
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
+    Ecluse.Test.Corpus.AdvisoriesSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 
@@ -1654,6 +1655,7 @@ executable perf-acceptance
     , containers       ^>=0.7
     , http-client      ^>=0.7
     , http-client-tls  >=0.3.6 && <0.5
+    , temporary        ^>=1.3
     , text             ^>=2.1
     , time             ^>=1.12
     , universe-base    ^>=1.1

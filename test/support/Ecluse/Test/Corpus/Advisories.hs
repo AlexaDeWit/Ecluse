@@ -5,13 +5,16 @@
 {- | Advisory inputs for the benchmark corpus: the OSV records and EPSS rows captured under
 @bench/corpus/advisories/@, and a generated worst case with many ranges per package. Both take
 the served shape, an OSV export archive and a gzipped EPSS feed, for Pilot's compiler to read.
-The benchmarks and the load harness deny on them at the same suggested thresholds.
+The performance harnesses deny on them at the same suggested thresholds.
 -}
 module Ecluse.Test.Corpus.Advisories (
     AdvisoryInputs (..),
     corpusAdvisories,
+    compileCorpusAdvisories,
     suggestedDenyIfCve,
     suggestedDenyIfEpss,
+    shippedPolicy,
+    allAdvisoryRules,
     SyntheticTarget (..),
     fillerTargets,
     syntheticAdvisories,
@@ -25,14 +28,25 @@ import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (nominalDay)
+import Network.HTTP.Types (status200)
 import System.FilePath (takeFileName, (</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (DenyIfCveParams),
+    DenyIfEpssParams (DenyIfEpssParams),
+    FailureAlignment (FailDeny),
+    PrecededRule,
+    Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
+ )
 import Ecluse.Core.Version (parseVersionKey)
 import Ecluse.Test.Corpus (readCorpusPins)
 import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
+import Ecluse.Test.Rules (atDefaultPrecedence)
 
 -- | One ecosystem's OSV export archive and the gzipped EPSS feed that scores it.
 data AdvisoryInputs = AdvisoryInputs
@@ -48,6 +62,25 @@ corpusAdvisories eco = do
     archive <- osvZipOf entries
     feed <- readPinned epss
     pure AdvisoryInputs{aiOsvZip = archive, aiEpssFeed = GZip.compress feed}
+
+{- | Compile the ecosystem's corpus advisories into the directory, returning the artifact's path.
+An artifact with no range would leave every advisory rule abstaining, so it fails.
+-}
+compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
+compileCorpusAdvisories eco dir = do
+    inputs <- corpusAdvisories eco
+    compiled <- compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
+    ranges <- scoresOf compiled
+    when (null ranges) (fail ("the " <> toString (ecosystemName eco) <> " corpus advisories compiled to no range"))
+    pure compiled
+
+-- | The shipped policy: the minimum-age quarantine and the remediation fast lane.
+shippedPolicy :: [PrecededRule]
+shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+
+-- | The shipped policy with both advisory denies, at the suggested thresholds.
+allAdvisoryRules :: [PrecededRule]
+allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
 
 -- | @DenyIfCve@ at the CVSS threshold @config/default.yaml@ suggests, failing closed.
 suggestedDenyIfCve :: DenyIfCveParams
