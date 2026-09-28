@@ -1201,6 +1201,12 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010d
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
+  - id: mit-keyed-intern-hash
+    title: Per-read keyed hash for the metadata intern table
+    prose: The per-document intern table keys its hash with SipHash-1-3 under a random key drawn for each read, so an attacker cannot precompute colliding strings and a read's table stays linear.
+    status: implemented
+    threats:
+      - a883d9d9-0aa3-4a27-9653-cae0424abdba
 threats:
   - id: 0ec10e5e-0000-4000-8000-000000000101
     number: 1
@@ -1683,8 +1689,8 @@ threats:
       methodology: STRIDE
       category: denial-of-service
     severity: low
-    status: accepted-risk
-    description: "Each metadata read keeps one copy of every key and string its releases or files repeat, in a table that lasts only for that read. The table hashes upstream text with a fixed seed. A package author who publishes a packument or index with many colliding strings can therefore make the read of that package take quadratic time. The metadata body limit bounds the input, and the request timeout bounds the serve path. A package is read only after an internal client requests it: the proxy reads it for that request, and once it is in a store the Dredger rereads it on each sweep under the body limit, without the request timeout. An operator can deny the package by identity once it causes harm, and the Dredger then deletes it. The owner accepts this residual."
+    status: mitigated
+    description: "Each metadata read keeps one copy of every key and string its releases or files repeat, in a table that lasts only for that read. A package author who publishes a packument or index with many strings that collide under the table's hash would make the read of that package take quadratic time. The metadata body limit bounds the input, and the request timeout bounds the serve path. A package is read only after an internal client requests it: the proxy reads it for that request, and once it is in a store the Dredger rereads it on each sweep under the body limit, without the request timeout. An operator can deny the package by identity once it causes harm, and the Dredger then deletes it."
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
       - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
