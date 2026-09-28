@@ -2,10 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Each shape against the json-stream combinator of the same name, on generated shapes and bodies.
+{- | Each shape against the json-stream combinator of the same name, on generated shapes and bodies,
+and the packed tree against aeson's tree for the same read.
+-}
 module Ecluse.Core.Registry.Json.ShapeSpec (spec) where
 
-import Data.Aeson (Value (Array, Null, Number, String))
+import Data.Aeson (Value (Array, Null, Number, String), encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Hedgehog (Gen, forAll, (===))
@@ -14,6 +16,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
+import Ecluse.Core.Registry.Json.Pack (Tree, packTree, sealTable, treeValue)
+import Ecluse.Core.Registry.Json.Packed (packedValue)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), readShape)
 import Ecluse.Core.Registry.Json.Shape qualified as Shape
 import Ecluse.Core.Registry.Json.Walk (Step (Finished), withElement)
@@ -21,11 +25,28 @@ import Ecluse.Core.Registry.JsonStream qualified as JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.Packed (renderAlone)
 
 -- | Every generated shape reads every generated body to the same value, or fails the same way.
 spec :: Spec
 spec = describe "readShape" $
-    modifyMaxSuccess (const 3000) $
+    modifyMaxSuccess (const 3000) $ do
+        it "builds a packed tree that decodes and renders as the tree aeson would hold, for generated shapes and bodies" $
+            hedgehog $ do
+                shape <- forAll (genShape 3)
+                body <- forAll (genJsonBytes names >>= damaged)
+                chunks <- forAll (genChunks body)
+                share <- forAll Gen.bool
+                let bound = MetadataBodyLimit (BS.length body)
+                    mode = if share then Share else Keep
+                    walk finish tokens = withElement tokens $ \element rest -> readShape (toShape shape) mode (testTable ["url"]) element rest (\built table _ -> Finished (Just (finish built table)))
+                    held (value :: Value) _ = (value, value, toStrict (encode (object ["k" .= [value]])))
+                    packed (tree :: Tree) table =
+                        let docTable = sealTable table
+                            form = packTree [] tree
+                         in (treeValue tree, packedValue docTable form Nothing, renderAlone docTable form Nothing)
+                readOutcome (walkJsonChunks bound (walk held) chunks) === readOutcome (walkJsonChunks bound (walk packed) chunks)
+
         it "reads what the json-stream combinators read, for generated shapes and bodies" $
             hedgehog $ do
                 shape <- forAll (genShape 3)

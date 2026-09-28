@@ -24,7 +24,9 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, npmRendered, rendered)
+import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..), holeText, renderPlan, replacement)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.ServedDocument (
@@ -32,6 +34,7 @@ import Ecluse.Core.Registry.ServedDocument (
     assembleAcross,
     documentObject,
     objectField,
+    overlayObjectSources,
     overlayObjectSurvivors,
     rebaseArtifactUrl,
     safeDocumentName,
@@ -66,15 +69,8 @@ rewriteDist servedUrl = \case
 -- | The plan supplies versions, tags and timestamps. Other top-level fields come from the base.
 assembleMergedPackument :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
-    Object rebuilt
+    Object (KeyMap.insert "versions" (Object survivingVersions) (servedMembers plan baseObject))
   where
-    rebuilt :: KeyMap Value
-    rebuilt =
-        baseObject
-            & KeyMap.insert "versions" (Object survivingVersions)
-            & KeyMap.insert "dist-tags" (Object distTags)
-            & KeyMap.insert "time" (Object reconciledTime)
-
     baseObject :: KeyMap Value
     baseObject = documentObject base
 
@@ -90,6 +86,13 @@ assembleMergedPackument mountBase bySource plan base =
             | (version, object) <- overlayObjectSurvivors versionEntries bySource plan
             ]
 
+-- The base's top-level members with the plan's tags and times, before the served versions go in.
+servedMembers :: MergePlan -> KeyMap Value -> KeyMap Value
+servedMembers plan baseObject =
+    baseObject
+        & KeyMap.insert "dist-tags" (Object distTags)
+        & KeyMap.insert "time" (Object reconciledTime)
+  where
     distTags :: KeyMap Value
     distTags =
         KeyMap.fromList
@@ -116,13 +119,30 @@ assembleMergedPackument mountBase bySource plan base =
                 ]
         _ -> mempty
 
--- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
+{- | 'assembleMergedPackument' over packed full reads: the survivors render from their own sources'
+tables, and each rebased tarball URL replaces its release's hole.
+-}
+assemblePackedPackument :: Text -> Map SourceId (Snapshot PackedPackument) -> MergePlan -> Maybe PackedPackument -> RenderPlan
+assemblePackedPackument mountBase bySource plan base =
+    RenderPlan (servedMembers plan baseObject) "versions" (ObjectPieces [(Key.toText version, served) | (version, served) <- KeyMap.toAscList survivors])
+  where
+    baseObject = maybe mempty packumentTop base
+    servedUrl = servedTarballUrl mountBase <$> npmDocumentName baseObject
+    survivors = KeyMap.fromList [(Key.fromText version, piece source packed) | (version, source, packed) <- overlayObjectSources packumentVersions bySource plan]
+    piece source packed = Piece (packumentTable source) packed (replacement <$> (servedUrl >>= \render -> holeText (packumentTable source) packed >>= rebaseArtifactUrl render))
+
+{- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
+Packed sources and base render from their tables. Any other document goes through aeson's trees.
+-}
 assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
+assembleMergedDocument mountBase bySource plan base =
+    case (traverse (traverse (snd npmPacked)) bySource, traverse (snd npmPacked) base) of
+        (Just packed, Just packedBase) -> npmRendered (assemblePackedPackument mountBase packed plan packedBase)
+        _ -> assembleAcross npmCached assembleMergedPackument mountBase bySource plan base
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = serialiseAcross (fmap toEncoding . snd npmCached)
+serialiseMergedDocument doc = maybe (serialiseAcross (fmap toEncoding . snd npmCached) doc) (fromStrict . renderPlan) (rendered doc)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject

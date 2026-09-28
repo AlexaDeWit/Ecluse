@@ -19,7 +19,7 @@ import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField, NpmFieldOf (..))
 import Ecluse.Core.Registry.Npm.StreamingProjection
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (..))

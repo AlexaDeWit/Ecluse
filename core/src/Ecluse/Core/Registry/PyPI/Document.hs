@@ -9,13 +9,22 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleEnvelope,
     simpleFiles,
     simpleEncoding,
+
+    -- * The packed form of a full read
+    PackedSimple (..),
+    packedSimple,
+    packedSimpleDocument,
+    packedSimpleBytes,
+    urlHole,
 ) where
 
 import Data.Aeson (Encoding, Object, Value, toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 
 import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, packedBytes, packedValue, tableBytes)
 
 -- | Supported envelope fields and files associated with their original source positions.
 data SimpleDocument = SimpleDocument
@@ -36,3 +45,28 @@ simpleEncoding document =
     Encoding.pairs (KeyMap.foldMapWithKey Encoding.pair (KeyMap.insert "files" files (toEncoding <$> simpleEnvelope document)))
   where
     files = Encoding.list (toEncoding . snd) (simpleFiles document)
+
+-- | A full read's envelope, its table, and each retained file packed, with its source coordinate.
+data PackedSimple = PackedSimple
+    { packedEnvelope :: Object
+    , packedTable :: DocTable
+    , packedFiles :: [(EntryKey, Packed)]
+    }
+    deriving stock (Eq, Show)
+
+-- | Bind packed files to their source coordinates, as 'simpleDocument' binds decoded ones.
+packedSimple :: Object -> DocTable -> [(EntryKey, Packed)] -> PackedSimple
+packedSimple envelope = PackedSimple (KeyMap.delete "files" envelope)
+
+-- | The document as aeson's trees, as the read would have built it.
+packedSimpleDocument :: PackedSimple -> SimpleDocument
+packedSimpleDocument packed =
+    SimpleDocument (packedEnvelope packed) [(key, packedValue (packedTable packed) file Nothing) | (key, file) <- packedFiles packed]
+
+-- | The bytes the packed files and the table hold.
+packedSimpleBytes :: PackedSimple -> Int
+packedSimpleBytes packed = tableBytes (packedTable packed) + sum (map (packedBytes . snd) (packedFiles packed))
+
+-- | The member path of the string a served file rebases.
+urlHole :: [Key.Key]
+urlHole = ["url"]

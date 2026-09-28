@@ -39,7 +39,7 @@ import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutp
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (digestOf)
@@ -488,7 +488,7 @@ nestedValue = object ["nested" .= object ["deeper" .= True]]
 corpusRead :: ByteString -> CorpusRead
 corpusRead bytes =
     CorpusRead
-        { crProject = \package -> fmap (second (fst npmCached)) . projectNpmManifest limits package
+        { crProject = projectNpmFull limits
         , crUpstream = npmCaptureUpstream
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \package raw document key ->

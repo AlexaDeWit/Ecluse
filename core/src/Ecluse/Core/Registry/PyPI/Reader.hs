@@ -8,6 +8,7 @@ retained file once. A full read interns each file's keys and strings as read.
 -}
 module Ecluse.Core.Registry.PyPI.Reader (
     pypiWalk,
+    pypiWalkTable,
     fileUniqueFields,
 ) where
 
@@ -16,11 +17,12 @@ import Data.Aeson.Key qualified as Key
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), knownMembers, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Pack (Tree)
+import Ecluse.Core.Registry.Json.Shape (Mode (..), Retained (..), Shape (..), knownMembers, namedMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIFieldOf (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
 
 -- | Members whose values differ in every file, so the table keeps them as read.
@@ -30,12 +32,22 @@ fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 {- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
 full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
-pypiWalk depth mode step keeps table0 initial tokens
+pypiWalk :: (Retained r) => Int -> PyPIRead -> (s -> PyPIFieldOf r -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk depth mode step keeps = pypiWalkWith depth mode step keeps (const id)
+{-# INLINEABLE pypiWalk #-}
+{-# SPECIALIZE pypiWalk :: Int -> PyPIRead -> (s -> PyPIFieldOf Value -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s #-}
+
+-- | 'pypiWalk' that also hands back the read's table, which a packed document indexes.
+pypiWalkTable :: Int -> PyPIRead -> (s -> PyPIFieldOf Tree -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step (InternTable, s)
+pypiWalkTable depth mode step keeps = pypiWalkWith depth mode step keeps (,)
+
+{-# INLINEABLE pypiWalkWith #-}
+pypiWalkWith :: (Retained r) => Int -> PyPIRead -> (s -> PyPIFieldOf r -> Either LimitError s) -> (s -> Bool) -> (InternTable -> s -> t) -> InternTable -> s -> TokenResult -> Step t
+pypiWalkWith depth mode step keeps seal table0 initial tokens
     | depth <= 0 = withElement tokens tooDeep
     | otherwise = withElement tokens $ \element rest -> case element of
-        ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-        _ -> skipFrom element rest (const (Finished initial))
+        ObjectBegin -> eachMember topField (\(Walked table acc) _ -> Finished (seal table acc)) (Walked table0 initial) rest
+        _ -> skipFrom element rest (const (Finished (seal table0 initial)))
   where
     full = case mode of
         FullRead -> True
@@ -65,7 +77,7 @@ pypiWalk depth mode step keeps table0 initial tokens
         | depth <= 2 = tooDeep element rest
         | otherwise = case mode of
             FullRead -> readShape (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained Just)
-            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained id)
+            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained (fmap whole))
       where
         retained wrap payload table' afterValue = emit acc (FileField position (wrap payload)) (\acc' -> continue (Walked table' acc') afterValue)
 

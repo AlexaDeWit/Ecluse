@@ -42,18 +42,19 @@ import UnliftIO.Exception (bracket, evaluate)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, npmPacked, pypiPacked, weighCachedDoc)
 
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmStream, selectNpmRead)
+import Ecluse.Core.Registry.Npm.Metadata (packedWalk, projectNpmPacked, projectNpmStream, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, keepsRelease)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata qualified as PyPIMetadata
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming qualified as PyPIStream
 import Ecluse.Core.Registry.PyPI.StreamingProjection qualified as PyPIProjection
@@ -66,9 +67,9 @@ import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIFull)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, untaggedRead)
@@ -290,12 +291,12 @@ prepare shape package = do
 -- | The full read as production returns it, with artifact locations enforced against the capture's registry.
 project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
 project package bytes = case pkgEcosystem name of
-    Npm -> either (fail . show) (pure . located npmCaptureUpstream (fst npmCached)) (projectNpmManifest defaultLimits name bytes)
-    PyPI -> either (fail . show) (pure . located pypiCaptureUpstream (fst pypiSimpleCached)) (projectPyPIIndex defaultLimits name bytes)
+    Npm -> either (fail . show) (pure . located npmCaptureUpstream) (projectNpmFull defaultLimits name bytes)
+    PyPI -> either (fail . show) (pure . located pypiCaptureUpstream) (projectPyPIFull defaultLimits name bytes)
     RubyGems -> fail "no RubyGems metadata residency corpus"
   where
     name = cpPackage package
-    located upstream cached (info, document) = (enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream) info, cached document)
+    located upstream (info, document) = (enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream) info, document)
 
 forceShown :: (Show a) => a -> IO Int
 forceShown value = evaluate (length (show value :: String))
@@ -376,8 +377,8 @@ readNpmSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString
 readNpmSource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
     BufferedCompact -> buffered $ \_ body ->
-        first show (walkJsonChunks bound (walk WholePackument (testTable releaseUniqueFields)) [body]) >>= fullResult . (,digestOf body)
-    StreamedFull -> digested (walked WholePackument) fullResult
+        first show (walkJsonChunks bound (packedWalk limits name registry (testTable releaseUniqueFields)) [body]) >>= fullResult . (,digestOf body)
+    StreamedFull -> digested packedRead fullResult
     StreamedSelected -> digested (walked (OneRelease (renderVersion version))) selectedResult
     StreamedVersions -> digested (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList) versionsResult
   where
@@ -386,11 +387,15 @@ readNpmSource mode limits name version next = case mode of
     walked readMode chunks = do
         table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
         readJsonWalk bound (walk readMode table) chunks
+    packedRead chunks = do
+        table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
+        readJsonWalk bound (packedWalk limits name registry table) chunks
+    registry = "https://registry.npmjs.org"
     buffered projectBody = boundedRead bound next <&> (first show >=> uncurry projectBody)
     digested consume result = digestingRead consume next <&> (first show >=> result)
     fullResult (streamed, digest) = do
-        (info, raw) <- first show (projectNpmStream limits name "https://registry.npmjs.org" streamed)
-        pure (HeldShared (CacheEntry info (fst npmCached raw) (streamBytes streamed) digest), streamBytes streamed, digest)
+        (info, packed) <- first show (projectNpmPacked limits name registry streamed)
+        pure (HeldShared (CacheEntry info (fst npmPacked packed) (streamBytes streamed) digest), streamBytes streamed, digest)
     selectedResult (streamed, digest) = do
         projected <- first show (projectNpmStream limits name "https://registry.npmjs.org" streamed)
         let selected = selectNpmRead version (streamBytes streamed) projected
@@ -402,8 +407,8 @@ readNpmSource mode limits name version next = case mode of
 readPyPISource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readPyPISource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (walkJsonChunks bound (walk PyPIStream.FullRead (testTable fileUniqueFields)) [body]) >>= fullResult . (,digestOf body))
-    StreamedFull -> digested (walked PyPIStream.FullRead) fullResult
+    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (walkJsonChunks bound (PyPIMetadata.packedWalk limits name (testTable fileUniqueFields)) [body]) >>= fullResult . (,digestOf body))
+    StreamedFull -> digested packedRead fullResult
     StreamedSelected -> digested (walked (PyPIStream.SelectedRead name (renderVersion version))) selectedResult
     StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
   where
@@ -412,10 +417,13 @@ readPyPISource mode limits name version next = case mode of
     walked readMode chunks = do
         table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
         readJsonWalk bound (walk readMode table) chunks
+    packedRead chunks = do
+        table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
+        readJsonWalk bound (PyPIMetadata.packedWalk limits name table) chunks
     digested consume result = digestingRead consume next <&> (first show >=> result)
     fullResult (streamed, digest) = do
-        (info, document) <- first show (projectPyPIStream limits name streamed)
-        pure (HeldShared (CacheEntry info (fst pypiSimpleCached document) (streamBytes streamed) digest), streamBytes streamed, digest)
+        (info, packed) <- first show (projectPyPIPacked limits name streamed)
+        pure (HeldShared (CacheEntry info (fst pypiPacked packed) (streamBytes streamed) digest), streamBytes streamed, digest)
     selectedResult (streamed, digest) = do
         (info, _) <- first show (projectPyPIStream limits name streamed)
         let selected = (untaggedRead (Map.lookup (renderVersion version) (infoVersions info))){vrBodyBytes = streamBytes streamed}

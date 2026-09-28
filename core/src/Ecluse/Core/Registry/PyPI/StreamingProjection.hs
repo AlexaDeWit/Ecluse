@@ -4,10 +4,14 @@
 
 -- | Join supported PyPI fields while preserving source positions and existing read limits.
 module Ecluse.Core.Registry.PyPI.StreamingProjection (
+    PyPIProjectionOf,
     PyPIProjection,
     emptyProjection,
     collectField,
+    collectFieldWith,
+    packedFile,
     keepsFile,
+    finishParts,
     finishProjection,
 ) where
 
@@ -19,19 +23,21 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey)
+import Ecluse.Core.Registry.Json.Pack (Tree, packTree, treeValue)
+import Ecluse.Core.Registry.Json.Packed (Packed)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, urlHole)
 import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersionKey), FilenameMemo, filenameMemo, projectName, projectSimpleIndex, readCoordinate)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIFieldOf (..), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename), checkApiVersion, decodeIndexFiles)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (maxArtifactCount), checkVersionCountOf)
 
 -- | Parsed files keep their read coordinate and share retained scalars with the compact serving records.
-data PyPIProjection = PyPIProjection
+data PyPIProjectionOf doc = PyPIProjection
     { projectedEnvelope :: KeyMap.KeyMap Value
-    , projectedFiles :: [(IndexFile, Maybe FileCoordinate, Value)]
+    , projectedFiles :: [(IndexFile, Maybe FileCoordinate, doc)]
     , projectedMemo :: FilenameMemo
     , projectedFileDrops :: [InvalidEntry]
     , projectedVersionDrops :: [InvalidEntry]
@@ -45,17 +51,28 @@ data PyPIProjection = PyPIProjection
     , projectedVersionsActive :: Bool
     }
 
+-- | A projection whose served files are aeson's trees.
+type PyPIProjection = PyPIProjectionOf Value
+
 -- | Start one project's source without retaining any input chunks.
-emptyProjection :: PackageName -> PyPIProjection
+emptyProjection :: PackageName -> PyPIProjectionOf doc
 emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] mempty 0 Nothing True False False False False
 
 -- | Whether a file read now would be retained: files in the first files array, until a limit trips.
-keepsFile :: PyPIProjection -> Bool
+keepsFile :: PyPIProjectionOf doc -> Bool
 keepsFile acc = projectedFilesActive acc && isNothing (projectedBound acc)
 
 -- | Decode one compact file and stop retaining payloads after an existing structural limit trips.
 collectField :: Limits -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
-collectField limits mode acc =
+collectField limits mode = collectFieldWith limits mode (\value -> (value, value))
+
+-- | Keep each file packed: its typed facts decode from its tree, and the served file packs with a @url@ hole.
+packedFile :: Tree -> (Value, Packed)
+packedFile tree = (treeValue tree, packTree urlHole tree)
+
+-- | 'collectField' for any file form: the pair is the tree its typed facts decode and the form served.
+collectFieldWith :: Limits -> PyPIRead -> (file -> (Value, doc)) -> PyPIProjectionOf doc -> PyPIFieldOf file -> Either LimitError (PyPIProjectionOf doc)
+collectFieldWith limits mode keep acc =
     Right . \case
         IgnoredField -> acc
         EnvelopeField key value
@@ -78,16 +95,17 @@ collectField limits mode acc =
          in case raw of
                 Just value | isNothing (projectedBound bounded) || mode == FullRead -> retainFile position value bounded
                 _ -> bounded
-    retainFile position value current = foldl' (retain value) withDrops files
+    retainFile position raw current = foldl' (retain served) withDrops files
       where
+        (value, served) = keep raw
         (files, drops) = decodeIndexFiles [(position, value)]
         withDrops
             | isNothing (projectedBound current) = current{projectedFileDrops = reverse drops <> projectedFileDrops current}
             | otherwise = current
-    retain value current file =
+    retain served current file =
         let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)
             next
-                | isNothing (projectedBound current) = current{projectedFiles = (file, coordinate, value) : projectedFiles current, projectedMemo = memo}
+                | isNothing (projectedBound current) = served `seq` current{projectedFiles = (file, coordinate, served) : projectedFiles current, projectedMemo = memo}
                 | otherwise = current
          in case (mode, fcVersionKey <$> coordinate) of
                 (FullRead, Just version) ->
@@ -102,7 +120,11 @@ collectField limits mode acc =
 
 -- | Check protocol and name before structural counts, then project the source's retained files.
 finishProjection :: PackageName -> PyPIProjection -> Either MetadataError (PackageInfo, SimpleDocument)
-finishProjection requested acc = do
+finishProjection requested acc = (\(info, envelope, files) -> (info, simpleDocument envelope files)) <$> finishParts requested acc
+
+-- | 'finishProjection' for any file form: the typed view, the envelope, and the served files in source order.
+finishParts :: PackageName -> PyPIProjectionOf doc -> Either MetadataError (PackageInfo, KeyMap.KeyMap Value, [(EntryKey, doc)])
+finishParts requested acc = do
     first (const MetadataUndecodable) (parseEither checkApiVersion (projectedEnvelope acc))
     reported <- validateReportedName projectName (KeyMap.lookup "name" (projectedEnvelope acc))
     _ <- projectionResult (checkNameAgreement requested reported ())
@@ -111,9 +133,10 @@ finishProjection requested acc = do
     let invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
     pure
         ( projectSimpleIndex reported invalid [(file, coordinate) | (file, coordinate, _) <- reverse (projectedFiles acc)]
-        , simpleDocument (projectedEnvelope acc) (servedFiles (projectedFiles acc))
+        , projectedEnvelope acc
+        , servedFiles (projectedFiles acc)
         )
 
 -- Restore source order with every key evaluated, so the served list holds no decoded file.
-servedFiles :: [(IndexFile, Maybe FileCoordinate, Value)] -> [(EntryKey, Value)]
+servedFiles :: [(IndexFile, Maybe FileCoordinate, doc)] -> [(EntryKey, doc)]
 servedFiles = foldl' (\served (file, _, value) -> let !key = ifEntryKey file in (key, value) : served) []

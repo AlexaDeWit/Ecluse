@@ -23,6 +23,7 @@ module Ecluse.Core.Registry.Json.Intern (
     Entry (..),
     Interned (..),
     internName,
+    tableStrings,
     sipHash,
 ) where
 
@@ -31,12 +32,15 @@ import Data.Aeson (Value (String))
 import Data.Bits (rotateL, shiftL, (.|.))
 import Data.ByteArray.Hash (SipKey (..))
 import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
 import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable (..))
 import Data.JsonStream.Unescape (unsafeDecodeASCII)
 import Data.Text.Array qualified as TA
 import Data.Text.Internal qualified as TI
+
+import Ecluse.Core.Registry.Json.Packed (TableString (..), encodeString, encodedLength, plain)
 
 -- | A member name or string as the lexer read it: plain ASCII bytes, or text decoded from escapes or UTF-8.
 data Name = Plain !ByteString | Decoded !Text ~ByteString
@@ -65,45 +69,57 @@ newTableKey = do
         (first8, last8) = BS.splitAt 8 bytes
     pure (SipKey (word first8) (word last8))
 
--- | One table entry: the shared text, its shared string value, and whether a member's value is kept as read.
+{- | One table entry: the shared text, its shared string value, whether a member's value is kept as
+read, its place in the table, and the length of its encoding.
+-}
 data Entry = Entry
     { entryText :: !Text
     , entryString :: !Value
     , entryKeeps :: !Bool
+    , entryIndex :: !Int
+    , entryLength :: !Int
     }
 
 -- | The table's entry for a name, with the table that holds it.
 data Interned = Interned !Entry !InternTable
 
--- | One read's table. Each entry's text is also its key, and each key carries its hash.
-data InternTable = InternTable !SipKey !(HashMap.HashMap Probe Entry)
+-- | One read's table and its entry count. Each entry's text is also its key, and each key carries its hash.
+data InternTable = InternTable !SipKey !(HashMap.HashMap Probe Entry) !Int
 
 {- | A table for one document that keeps the values of the named members as read. Name the members
 whose values differ in every release or file, so they never enter the table.
 -}
 newInternTable :: SipKey -> [Text] -> InternTable
-newInternTable key = foldl' seed (InternTable key mempty)
+newInternTable key = foldl' seed (InternTable key mempty 0)
   where
-    seed table name = insertEntry (encodeUtf8 name) (Entry name (String name) True) table
+    seed table@(InternTable _ _ count) name = insertEntry (encodeUtf8 name) (Entry name (String name) True count (encodedLength name)) table
 
 {- | The table's entry for a name. A name the table lacks gets an entry of its own text, which the
 returned table holds from then on.
 -}
 internName :: Name -> InternTable -> Interned
-internName name table@(InternTable key entries) = case HashMap.lookup (Probe code (Slice probe)) entries of
+internName name table@(InternTable key entries count) = case HashMap.lookup (Probe code (Slice probe)) entries of
     Just entry -> Interned entry table
     Nothing ->
         let text = nameText name
-            entry = Entry text (String text) False
-         in Interned entry (InternTable key (HashMap.insert (Probe code (Owned text)) entry entries))
+            entry = Entry text (String text) False count (encodedLength text)
+         in Interned entry (InternTable key (HashMap.insert (Probe code (Owned text)) entry entries) (count + 1))
   where
     probe = nameBytes name
     code = fromIntegral (sipHash 1 3 key probe)
 {-# INLINE internName #-}
 
 insertEntry :: ByteString -> Entry -> InternTable -> InternTable
-insertEntry bytes entry (InternTable key entries) =
-    InternTable key (HashMap.insert (Probe (fromIntegral (sipHash 1 3 key bytes)) (Owned (entryText entry))) entry entries)
+insertEntry bytes entry (InternTable key entries count) =
+    InternTable key (HashMap.insert (Probe (fromIntegral (sipHash 1 3 key bytes)) (Owned (entryText entry))) entry entries) (count + 1)
+
+-- | Every entry's string in index order, as the packed form's table lays them out.
+tableStrings :: InternTable -> [TableString]
+tableStrings (InternTable _ entries _) = map (layout . entryText) (sortOn entryIndex (HashMap.elems entries))
+  where
+    layout text
+        | plain text = PlainString text
+        | otherwise = EscapedString (SBS.toShort (encodeString text))
 
 -- A key with its hash computed once. A probe holds the bytes it looks up, and a stored key its entry's text.
 data Probe = Probe {-# UNPACK #-} !Int !Bytes

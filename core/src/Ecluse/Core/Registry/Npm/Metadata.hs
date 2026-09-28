@@ -19,6 +19,8 @@ module Ecluse.Core.Registry.Npm.Metadata (
 
     -- * Pure projection
     projectNpmStream,
+    packedWalk,
+    projectNpmPacked,
     selectNpmRead,
     selectNpmVersionDoc,
 ) where
@@ -28,19 +30,24 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 
+import Data.JsonStream.TokenParser (TokenResult)
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
-import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
+
+import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, newInternTable, newTableKey)
+import Ecluse.Core.Registry.Json.Pack (sealTable)
+import Ecluse.Core.Registry.Json.Packed (Packed)
+import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, npmWalkTable, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection, keepsRelease)
+import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, NpmProjectionOf, collectField, collectFieldWith, emptyProjection, finishParts, finishProjection, keepsRelease, packedDocument, packedRelease)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
@@ -71,14 +78,14 @@ npmChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name = do
-    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name WholePackument) . chargedRead (ocChargeFullRead origin))
+    result <- fetchNpmBody tracing origin name (digestingRead (decodePacked tracing origin name) . chargedRead (ocChargeFullRead origin))
     pure $ do
         (streamed, digest) <- result
-        (info, raw) <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
+        (info, packed) <- projectNpmPacked (ocLimits origin) name (originBaseUrl origin) streamed
         pure
             Manifest
                 { manifestInfo = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin) info
-                , manifestRaw = fst npmCached raw
+                , manifestRaw = fst npmPacked packed
                 , manifestBodyBytes = streamBytes streamed
                 , manifestDigest = digest
                 }
@@ -98,6 +105,29 @@ decodeNpm tracing origin name mode readChunk = do
         readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease table emptyProjection) readChunk
   where
     limits = ocLimits origin
+
+-- A full read packs each kept release against a table keyed for this read.
+decodePacked :: TracingPort -> OriginClient -> PackageName -> IO ByteString -> IO (Either LimitError (StreamResult (InternTable, NpmProjectionOf Packed)))
+decodePacked tracing origin name readChunk = do
+    table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
+    spanMetadataDecode tracing name $
+        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (packedWalk limits name (originBaseUrl origin) table) readChunk
+  where
+    limits = ocLimits origin
+
+-- | The full-read walk: each kept release packs against the read's table, with the author pointer.
+packedWalk :: Limits -> PackageName -> Text -> InternTable -> TokenResult -> Step (InternTable, NpmProjectionOf Packed)
+packedWalk limits name base table0 =
+    npmWalkTable (maxNestingDepth limits) WholePackument (collectFieldWith limits (packedRelease name authorKey pointer)) keepsRelease seeded emptyProjection
+  where
+    Interned authorKey withKey = internName (decodedName "author") table0
+    Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
+
+-- | Finish a packed full read over its sealed table, keeping its typed error classification.
+projectNpmPacked :: Limits -> PackageName -> Text -> StreamResult (InternTable, NpmProjectionOf Packed) -> Either MetadataError (PackageInfo, PackedPackument)
+projectNpmPacked limits name base streamed = do
+    (table, acc) <- first (streamError limits) (streamValue streamed)
+    second (packedDocument (authorPointer base name) (sealTable table)) <$> finishParts limits name acc
 
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version = do

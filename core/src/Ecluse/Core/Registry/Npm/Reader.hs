@@ -9,6 +9,7 @@ retained release once with its keys and strings interned as read.
 module Ecluse.Core.Registry.Npm.Reader (
     PackumentRead (..),
     npmWalk,
+    npmWalkTable,
     releaseUniqueFields,
 ) where
 
@@ -16,10 +17,11 @@ import Data.Aeson (Value (Null))
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (Entry (entryText), InternTable, Interned (..), internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), everyMember, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Pack (Tree)
+import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Retained, Shape (..), everyMember, namedMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..), versionFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionFields)
 import Ecluse.Core.Security (LimitError)
 
 -- | The whole packument, or one release with its timestamp and the latest tag.
@@ -35,12 +37,22 @@ releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 {- | Walk one packument, passing each field to the step as it completes. Only a release the consumer
 keeps enters the table, and only the first of each member it repeats.
 -}
-npmWalk :: Int -> PackumentRead -> (s -> NpmField -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
-npmWalk depth mode step keeps table0 initial tokens
+npmWalk :: (Retained r) => Int -> PackumentRead -> (s -> NpmFieldOf r -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
+npmWalk depth mode step keeps = npmWalkWith depth mode step keeps (const id)
+{-# INLINEABLE npmWalk #-}
+{-# SPECIALIZE npmWalk :: Int -> PackumentRead -> (s -> NpmFieldOf Value -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s #-}
+
+-- | 'npmWalk' that also hands back the read's table, which a packed document indexes.
+npmWalkTable :: Int -> PackumentRead -> (s -> NpmFieldOf Tree -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step (InternTable, s)
+npmWalkTable depth mode step keeps = npmWalkWith depth mode step keeps (,)
+
+{-# INLINEABLE npmWalkWith #-}
+npmWalkWith :: (Retained r) => Int -> PackumentRead -> (s -> NpmFieldOf r -> Either LimitError s) -> (s -> Text -> Bool) -> (InternTable -> s -> t) -> InternTable -> s -> TokenResult -> Step t
+npmWalkWith depth mode step keeps seal table0 initial tokens
     | depth <= 0 = withElement tokens tooDeep
     | otherwise = withElement tokens $ \element rest -> case element of
-        ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-        _ -> skipFrom element rest (const (Finished initial))
+        ObjectBegin -> eachMember topField (\(Walked table acc) _ -> Finished (seal table acc)) (Walked table0 initial) rest
+        _ -> skipFrom element rest (const (Finished (seal table0 initial)))
   where
     topField (Walked table acc) name after continue = case nameBytes name of
         "name" -> withElement after $ \element rest ->

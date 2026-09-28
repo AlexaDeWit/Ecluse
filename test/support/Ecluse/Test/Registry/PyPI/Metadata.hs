@@ -5,6 +5,7 @@
 -- | PyPI fixtures pass through the production extraction and projection, and documents convert to and from JSON.
 module Ecluse.Test.Registry.PyPI.Metadata (
     projectPyPIIndex,
+    projectPyPIFull,
     projectPyPIVersion,
     projectPyPIChunks,
     documentFromValue,
@@ -17,10 +18,11 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (packedWalk, projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
@@ -31,6 +33,12 @@ import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
 projectPyPIIndex limits name body = projectPyPIChunks limits name FullRead [body] >>= projectPyPIStream limits name
+
+-- | The production full read of held bytes: every kept file packed against the read's table.
+projectPyPIFull :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+projectPyPIFull limits name body = do
+    streamed <- first MetadataBoundExceeded (walkJsonChunks (MetadataBodyLimit (maxMetadataBytes limits)) (packedWalk limits name (testTable fileUniqueFields)) [body])
+    second (fst pypiPacked) <$> projectPyPIPacked limits name streamed
 
 -- | Select one release without retaining its siblings, using original file positions.
 projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)

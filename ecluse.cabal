@@ -170,6 +170,8 @@ library ecluse-core
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Json.Intern
+    Ecluse.Core.Registry.Json.Pack
+    Ecluse.Core.Registry.Json.Packed
     Ecluse.Core.Registry.Json.Shape
     Ecluse.Core.Registry.Json.Walk
     Ecluse.Core.Registry.JsonStream
@@ -185,6 +187,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Credential
+    Ecluse.Core.Registry.Npm.Document
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
@@ -355,6 +358,7 @@ library ecluse-core
     , iproute               ^>=1.7
     , katip                 ^>=0.8.8
     , ram                   ^>=0.22
+    , primitive             ^>=0.9
     , microlens             ^>=0.4.13
     , microlens-aeson       ^>=2.5
     , mtl                   ^>=2.3
@@ -712,6 +716,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
@@ -849,6 +854,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Json.InternSpec
+    Ecluse.Core.Registry.Json.PackedSpec
     Ecluse.Core.Registry.Json.ShapeSpec
     Ecluse.Core.Registry.Json.WalkSpec
     Ecluse.Core.Registry.JsonStreamSpec
@@ -1478,6 +1484,7 @@ benchmark ecluse-bench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
     Ecluse.Core.MergeBench
+    Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
     Ecluse.Core.SecurityBench
