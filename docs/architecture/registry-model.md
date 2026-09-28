@@ -421,9 +421,9 @@ consumes. Its shape follows the npm protocol. Three principles govern it:
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
 - **The model holds signals, not the document.** A cache keeps a snapshot for every version, so it
-  carries only the shared vocabulary below and the artifact facts that merge, admission and serving
-  read. Licences, publishers, per-file yanks and provenance reach clients in the served document,
-  within its supported fields.
+  carries only the typed rows of the vocabulary below, not dependencies, and the artifact facts
+  that merge, admission, serving and the mirror worker read. Licences, publishers, per-file yanks
+  and provenance reach clients in the served document, within its supported fields.
 
 ### The shared vocabulary
 
