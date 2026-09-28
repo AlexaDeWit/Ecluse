@@ -1684,7 +1684,8 @@ threats:
       category: denial-of-service
     severity: low
     status: accepted-risk
-    description: Each metadata read keeps one copy of every key and string its releases or files repeat, in a table that lasts only for that read. The table hashes upstream text with a fixed seed. A package author who publishes a packument or index with many colliding strings can therefore make the read of that package take quadratic time. The metadata body limit bounds the input, and the request timeout bounds the serve path. The read happens only when an internal client requests that package, and an operator can deny the package by identity once it causes harm. The owner accepts this residual.
+    description: "Each metadata read keeps one copy of every key and string its releases or files repeat, in a table that lasts only for that read. The table hashes upstream text with a fixed seed. A package author who publishes a packument or index with many colliding strings can therefore make the read of that package take quadratic time. The metadata body limit bounds the input, and the request timeout bounds the serve path. A package is read only after an internal client requests it: the proxy reads it for that request, and once it is in a store the Dredger rereads it on each sweep under the body limit, without the request timeout. An operator can deny the package by identity once it causes harm, and the Dredger then deletes it. The owner accepts this residual."
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
+      - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
 lastIssuedThreatNumber: 118

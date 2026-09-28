@@ -78,9 +78,10 @@ spec = describe "npmFields" $ do
 
     it "shares field names, dependency names and strings across releases, and nothing between reads" $ do
         let bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= release, "2.0.0" .= release]]))
-            releases compact = case fieldAt "versions" compact of
-                Just (Object versions) -> KeyMap.elems versions
-                _ -> []
+            versions compact = case fieldAt "versions" compact of
+                Just (Object listed) -> listed
+                _ -> mempty
+            releases = KeyMap.elems . versions
         (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
         -- A distinct limit keeps the compiler from sharing one read between both results.
         (_, again) <- expectRight (projectNpmManifest defaultLimits{maxMetadataBytes = BS.length bytes} name bytes)
@@ -89,6 +90,9 @@ spec = describe "npmFields" $ do
         sharesKey "dep" (mapMaybe (fieldAt "dependencies") (releases compact)) `shouldReturn` True
         sharesString "publisher" (mapMaybe (fieldAt "_npmUser" >=> fieldAt "name") (releases compact)) `shouldReturn` True
         sharesString "^2" (mapMaybe (fieldAt "dependencies" >=> fieldAt "dep") (releases compact <> releases again)) `shouldReturn` False
+        sharesString "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz" (mapMaybe (fieldAt "dist" >=> fieldAt "tarball") (releases compact)) `shouldReturn` False
+        let versionKeys = [String (Key.toText key) | key <- KeyMap.keys (versions compact), key == "1.0.0"]
+        sharesString "1.0.0" (versionKeys <> mapMaybe (fieldAt "version") (releases compact)) `shouldReturn` True
 
     it "mirrors the same supported fields and source author pointer" $ do
         (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)

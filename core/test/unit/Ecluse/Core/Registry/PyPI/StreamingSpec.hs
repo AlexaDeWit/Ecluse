@@ -81,6 +81,7 @@ retainedSpec = describe "supported PyPI fields" $ do
         sharesKey "custom" hashes `shouldReturn` False
         sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document)) `shouldReturn` True
         sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document <> files again)) `shouldReturn` False
+        sharesString "2026-05-14T19:25:26Z" (mapMaybe (fieldAt "upload-time") (files document)) `shouldReturn` False
 
     it "retains compatibility declarations outside the policy projection" $ do
         let fields =

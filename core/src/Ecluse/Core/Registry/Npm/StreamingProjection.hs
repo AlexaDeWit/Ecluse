@@ -116,6 +116,7 @@ collectField limits name acc = \case
         Right typed -> Right $! convert typed
 
 -- Artifact locations, digests and signatures differ in every release, so they stay out of the table.
+-- A name matches at any depth, so a rarer member such as _npmUser.url is kept as read too.
 releaseUniqueFields :: [Text]
 releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
