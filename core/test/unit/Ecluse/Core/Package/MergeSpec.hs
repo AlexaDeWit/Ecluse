@@ -57,7 +57,6 @@ detailsWith rawVer hs =
     (Package.sampleDetails name (mkVersion Npm rawVer))
         { pkgPublishedAt = Just t0
         , pkgArtifacts = artifactWith hs :| []
-        , pkgLicenses = ["MIT"]
         }
 
 t0 :: UTCTime

@@ -24,8 +24,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (artFilename, artHashes, artInterpreter, artKind, artProvenance, artSize, artUrl, artYanked),
-    ArtifactKind (Tarball),
+    Artifact (artFilename, artHashes, artSize, artUrl),
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     HashAlg (SHA1, SRI),
@@ -34,8 +33,6 @@ import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Person (Person),
-    Trust (TrustUnknown),
     mkPackageName,
     mkScope,
     pkgCanonical,
@@ -262,15 +259,6 @@ signalMappingSpec = describe "signal mapping" $ do
             d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
             pkgAvailability d `shouldBe` Available
 
-    describe "_npmUser → pkgPublisher" $ do
-        it "projects the publisher from the version object (is-odd)" $ do
-            d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
-            pkgPublisher d `shouldBe` Just (Person "jonschlinkert" (Just "github@sellside.com") Nothing)
-
-        it "leaves the publisher absent when _npmUser is missing (request)" $ do
-            d <- projectVersion "request.full.json" (mkVersion Npm "2.88.2")
-            pkgPublisher d `shouldBe` Nothing
-
     describe "time[version] → pkgPublishedAt" $ do
         it "fills the publish time from the packument time map (is-odd)" $ do
             d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
@@ -280,20 +268,6 @@ signalMappingSpec = describe "signal mapping" $ do
         it "leaves the publish time Nothing when no time entry exists (abbreviated)" $ do
             d <- projectVersion "core-js.abbreviated.json" (mkVersion Npm "3.49.0")
             pkgPublishedAt d `shouldBe` Nothing
-
-    describe "unfetched trust → TrustUnknown" $
-        it "leaves trust unknown (pure projection performs no signature check)" $ do
-            d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
-            pkgTrust d `shouldBe` TrustUnknown
-
-    describe "license → pkgLicenses" $ do
-        it "projects a bare SPDX string license (is-odd → MIT)" $ do
-            d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
-            pkgLicenses d `shouldBe` ["MIT"]
-
-        it "projects the legacy object license to its name (request → Apache-2.0)" $ do
-            d <- projectVersion "request.full.json" (mkVersion Npm "2.88.2")
-            pkgLicenses d `shouldBe` ["Apache-2.0"]
 
 integritySpec :: Spec
 integritySpec = describe "dist → Artifact integrity" $ do
@@ -309,21 +283,11 @@ integritySpec = describe "dist → Artifact integrity" $ do
     it "projects exactly one tarball artifact with the dist URL (is-odd)" $ do
         d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
         length (pkgArtifacts d) `shouldBe` 1
-        artKind (soleArtifact d) `shouldBe` Tarball
         artUrl (soleArtifact d) `shouldBe` "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz"
 
     it "derives the artifact filename from the URL's last path segment (is-odd)" $ do
         d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
         artFilename (soleArtifact d) `shouldBe` "is-odd-3.0.1.tgz"
-
-    it "leaves npm-irrelevant artifact fields at their explicit defaults (is-odd)" $ do
-        -- npm has no per-file yank, interpreter constraint, or provenance URL on the artifact,
-        -- so these stay at their unknown/false defaults. The projection fabricates nothing.
-        d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
-        let art = soleArtifact d
-        artInterpreter art `shouldBe` Nothing
-        artYanked art `shouldBe` False
-        artProvenance art `shouldBe` Nothing
 
     it "carries the unpacked size as the artifact size (inline dist)" $ do
         d <- projectVersionOf sizedPackument (mkVersion Npm "1.0.0")
@@ -385,6 +349,13 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         -- rather than failing the whole parse.
         info <- projectInfoOf "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}"
         Map.keys (infoVersions info) `shouldBe` []
+
+    it "drops a version whose publisher or licence has neither npm form, though neither is kept" $ do
+        info <- projectInfoOf unshapedPublisherAndLicencePackument
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
+        map invalidKey (infoInvalidEntries info) `shouldBe` ["2.0.0", "3.0.0"]
+        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length unshapedPublisherAndLicencePackument) unshapedPublisherAndLicencePackument))
+            `shouldBe` Right ["1.0.0"]
 
     it "lists only the versions that decode (parseVersionList)" $
         fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length mixedHealthAndBrokenPackument) mixedHealthAndBrokenPackument))
@@ -641,6 +612,14 @@ mixedHealthAndBrokenPackument =
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5},\
     \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"dist\":{\"shasum\":\"abc\"}},\
     \\"4.0.0\":42}}"
+
+-- | A sound 1.0.0 beside an @_npmUser@ and a @license@ that are neither a string nor an object.
+unshapedPublisherAndLicencePackument :: ByteString
+unshapedPublisherAndLicencePackument =
+    "{\"name\":\"mix\",\"versions\":{\
+    \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"_npmUser\":\"mix\",\"license\":\"MIT\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"_npmUser\":5,\"dist\":{\"tarball\":\"https://r/mix/-/mix-2.0.0.tgz\"}},\
+    \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"license\":[\"MIT\"],\"dist\":{\"tarball\":\"https://r/mix/-/mix-3.0.0.tgz\"}}}}"
 
 -- | A packument whose 1.0.0 is sound beside a malformed sibling in every per-entry-lenient axis.
 gracefulDegradationPackument :: ByteString

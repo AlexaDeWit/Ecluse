@@ -30,13 +30,10 @@ module Ecluse.Core.Package (
 
     -- * Normalised signals
     CodeExecSignal (..),
-    Trust (..),
-    TrustEvidence (..),
     Availability (..),
 
     -- * Artifacts
     Artifact (..),
-    ArtifactKind (..),
     Hash,
     hashAlg,
     hashValue,
@@ -54,9 +51,6 @@ module Ecluse.Core.Package (
     -- * Digest computation
     computeDigest,
     isComputable,
-
-    -- * People
-    Person (..),
 
     -- * Per-version details
     PackageDetails (..),
@@ -208,33 +202,6 @@ data CodeExecSignal
       CodeExecUnknown
     deriving stock (Eq, Show)
 
-{- | The trust\/provenance signal for a version. The /how/ of trust differs by
-ecosystem (npm @dist.signatures@, PyPI PEP 740 attestations, RubyGems signed
-gems\/MFA), but 'TrustEvidence' captures it, so rules stay ecosystem-blind.
--}
-data Trust
-    = -- | Determined trusted, with the evidence supporting it.
-      Trusted (NonEmpty TrustEvidence)
-    | -- | Determined: no trust signal established.
-      Untrusted
-    | -- | Not yet determined (e.g. signature verification needs a fetch).
-      TrustUnknown
-    deriving stock (Eq, Show)
-
-{- | A normalised reason a version is trusted. The adapter maps its ecosystem's
-mechanism onto this vocabulary.
--}
-data TrustEvidence
-    = -- | The artifact is cryptographically signed.
-      Signed
-    | -- | The artifact carries a provenance attestation (e.g. Sigstore).
-      Attested
-    | -- | The version was published under enforced multi-factor auth.
-      MfaPublished
-    | -- | An ecosystem mechanism not yet in this vocabulary (escape hatch).
-      OtherEvidence Text
-    deriving stock (Eq, Show)
-
 -- | Whether a version is offered, advisory-deprecated, or withdrawn.
 data Availability
     = -- | Offered normally.
@@ -247,18 +214,6 @@ data Availability
       Yanked (Maybe Text)
     deriving stock (Eq, Show)
 
--- | What kind of distribution file an artifact is.
-data ArtifactKind
-    = -- | An npm tarball.
-      Tarball
-    | -- | A PyPI source distribution (building it may execute code).
-      Sdist
-    | -- | A PyPI wheel. Carries its compatibility tag (e.g. @"cp310-…"@).
-      Wheel Text
-    | -- | A RubyGems gem. Carries its platform (@"ruby"@ = pure).
-      Gem Text
-    deriving stock (Eq, Show)
-
 {- | One distribution file for a version. A version owns a 'NonEmpty' list of
 these: npm has exactly one, PyPI has an sdist plus many wheels, RubyGems has one
 per platform.
@@ -268,38 +223,17 @@ data Artifact = Artifact
     -- ^ The coordinate in its source snapshot. Admission preserves it unchanged.
     , artFilename :: Text
     , artUrl :: Text
-    , artKind :: ArtifactKind
     , artHashes :: [Hash]
     -- ^ Integrity digests. The client verifies the download against these.
     , artSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not always the tarball byte count: npm populates
     it from @dist.unpackedSize@, the size of the unpacked tree.
     -}
-    , artInterpreter :: Maybe Text
-    -- ^ Interpreter constraint (@requires-python@ \/ @required_ruby_version@).
-    , artYanked :: Bool
-    {- ^ Whether this individual file is yanked (PyPI per-file yank). An ecosystem that yanks
-    whole versions leaves it 'False' and carries the status on 'pkgAvailability'.
-    -}
-    , artProvenance :: Maybe Text
-    -- ^ URL of a provenance\/attestation bundle, if any.
     }
     deriving stock (Eq, Show)
 
--- | A person associated with a package (author, maintainer, or publisher).
-data Person = Person
-    { personName :: Text
-    -- ^ The person's name, as declared by the package.
-    , personEmail :: Maybe Text
-    -- ^ Their email address, if given.
-    , personUrl :: Maybe Text
-    -- ^ A homepage / profile URL, if given.
-    }
-    deriving stock (Eq, Ord, Show)
-
-{- | The ecosystem-agnostic snapshot of a single package /version/ that the
-rules engine evaluates. A registry adapter projects its wire format into this. The
-rules engine never sees anything else, and never branches on the ecosystem.
+{- | The ecosystem-agnostic snapshot of one package /version/: the signals a rule sees and the
+artifact facts that merge, admission, serving and the mirror read. Adapters project into it.
 -}
 data PackageDetails = PackageDetails
     { pkgName :: PackageName
@@ -312,19 +246,10 @@ data PackageDetails = PackageDetails
     -}
     , pkgInstallCode :: CodeExecSignal
     -- ^ Whether installing the version executes code.
-    , pkgTrust :: Trust
-    -- ^ The trust\/provenance signal for the version.
     , pkgAvailability :: Availability
     -- ^ Whether the version is offered, deprecated, or withdrawn.
     , pkgArtifacts :: NonEmpty Artifact
     -- ^ The version's distribution files (one for npm, many for PyPI/RubyGems).
-    , pkgLicenses :: [Text]
-    -- ^ Declared licenses (SPDX expressions/ids). There may be several.
-    , pkgPublisher :: Maybe Person
-    {- ^ Who published __this__ version, if known. Dependencies and maintainers are deliberately
-    not modelled: a dependency is gated when the client fetches it, through this same gate, so
-    the wire layer never parses a heavy packument's thousands of per-version entries.
-    -}
     }
     deriving stock (Eq, Show)
 

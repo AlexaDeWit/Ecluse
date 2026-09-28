@@ -78,7 +78,7 @@ spec = do
         let name = mkPackageName Npm Nothing "thing"
             version = mkVersion Npm "1.0.0"
             publishedAt = UTCTime (fromGregorian 2026 6 21) 0
-            versionDetails = (sampleDetails name version){pkgLicenses = ["MIT"], pkgPublishedAt = Just publishedAt}
+            versionDetails = (sampleDetails name version){pkgPublishedAt = Just publishedAt}
             info =
                 PackageInfo
                     { infoName = name

@@ -39,18 +39,15 @@ rawWeight = toInteger . expandWireBytes . fromIntegral . weighCachedDoc
 detailsWeight :: PackageDetails -> Integer
 detailsWeight details =
     -- The base covers the entry, package record, scalar tags, and wrappers.
-    -- Artifact node allowances include size and yank flags as well as record fields.
+    -- Artifact node allowances include the size as well as record fields.
     16 * 1024
         + nameWeight (pkgName details)
         + textWeight rawVersion
         + 256 * toInteger rawLength
         + maybe 0 timeWeight (pkgPublishedAt details)
         + installWeight (pkgInstallCode details)
-        + trustWeight (pkgTrust details)
         + availabilityWeight (pkgAvailability details)
         + itemsWeight artifactWeight (pkgArtifacts details)
-        + itemsWeight textWeight (pkgLicenses details)
-        + maybe 0 personWeight (pkgPublisher details)
   where
     -- The opaque parsed version has flat token lists and bounded numeric components.
     -- The per-byte allowance also covers RubyGems hyphen expansion and copied parser text.
@@ -82,19 +79,6 @@ installWeight = \case
     RunsCodeOnInstall reason -> textWeight reason
     CodeExecUnknown -> 0
 
-trustWeight :: Trust -> Integer
-trustWeight = \case
-    Trusted evidence -> itemsWeight evidenceWeight evidence
-    Untrusted -> 0
-    TrustUnknown -> 0
-
-evidenceWeight :: TrustEvidence -> Integer
-evidenceWeight = \case
-    Signed -> 0
-    Attested -> 0
-    MfaPublished -> 0
-    OtherEvidence reason -> textWeight reason
-
 availabilityWeight :: Availability -> Integer
 availabilityWeight = \case
     Available -> 0
@@ -106,10 +90,7 @@ artifactWeight artifact =
     weighEntryKey (artEntryKey artifact)
         + textWeight (artFilename artifact)
         + textWeight (artUrl artifact)
-        + kindWeight (artKind artifact)
         + itemsWeight (textWeight . hashValue) (artHashes artifact)
-        + maybe 0 textWeight (artInterpreter artifact)
-        + maybe 0 textWeight (artProvenance artifact)
 
 -- | Charge an entry coordinate, including any retained text backing allocation.
 weighEntryKey :: EntryKey -> Integer
@@ -117,17 +98,3 @@ weighEntryKey = \case
     ArrayEntry _ -> 64
     ObjectEntry key -> 64 + textWeight key
     SingletonEntry -> 16
-
-kindWeight :: ArtifactKind -> Integer
-kindWeight = \case
-    Tarball -> 0
-    Sdist -> 0
-    Wheel tag -> textWeight tag
-    Gem platform -> textWeight platform
-
-personWeight :: Person -> Integer
-personWeight person =
-    256
-        + textWeight (personName person)
-        + maybe 0 textWeight (personEmail person)
-        + maybe 0 textWeight (personUrl person)
