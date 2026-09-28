@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.PyPI.Project (
 
     -- * File coordinates
     FileCoordinate (..),
+    DistributionKind (..),
     fileCoordinate,
     FileProject,
     fileProject,
@@ -37,7 +38,6 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Sdist, Wheel),
     Availability (Available, Yanked),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
@@ -46,7 +46,6 @@ import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Trust (TrustUnknown),
     canonicalise,
     mkHash,
     mkInvalidEntry,
@@ -66,13 +65,16 @@ import Ecluse.Core.Registry.WireSupport (
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
 
--- | A filename's canonical release and artifact kind.
+-- | A filename's canonical release and distribution kind.
 data FileCoordinate = FileCoordinate
     { fcVersionKey :: Text
     -- ^ The release key: the file's version in canonical PEP 440 form.
-    , fcKind :: ArtifactKind
-    -- ^ An 'Sdist', or a 'Wheel' carrying its compatibility tag (@py3-none-any@).
+    , fcKind :: DistributionKind
     }
+    deriving stock (Eq, Show)
+
+-- | Whether a file is a source distribution, whose install runs its own build, or a wheel.
+data DistributionKind = Sdist | Wheel
     deriving stock (Eq, Show)
 
 {- | Group decoded files by the coordinates their read produced. The decode's invalid entries come
@@ -123,12 +125,8 @@ projectDetails name entries =
         , pkgVersion = mkVersion PyPI (fcVersionKey (snd (NE.head entries)))
         , pkgPublishedAt = newestUpload files
         , pkgInstallCode = releaseInstallCode entries
-        , pkgTrust = TrustUnknown
         , pkgAvailability = releaseAvailability files
-        , pkgArtifacts = strictElements (fmap (uncurry projectArtifact) entries)
-        , -- Licence and publisher live in distribution metadata, outside the Simple index.
-          pkgLicenses = []
-        , pkgPublisher = Nothing
+        , pkgArtifacts = strictElements (fmap projectArtifact files)
         }
   where
     files = fmap fst entries
@@ -157,20 +155,14 @@ withdrawnReason file = case ifYanked file of
 
 -- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
 -- against the egress and host policies afterward.
-projectArtifact :: IndexFile -> FileCoordinate -> Artifact
-projectArtifact file coordinate =
+projectArtifact :: IndexFile -> Artifact
+projectArtifact file =
     Artifact
         { artEntryKey = ifEntryKey file
         , artFilename = ifFilename file
         , artUrl = ifUrl file
-        , artKind = fcKind coordinate
         , artHashes = strictElements (mapMaybe indexHash (Map.toAscList (ifHashes file)))
         , artSize = ifSize file
-        , artInterpreter = ifRequiresPython file
-        , artYanked = case ifYanked file of
-            FileWithdrawn _ -> True
-            FileOffered -> False
-        , artProvenance = ifProvenance file
         }
 
 indexHash :: (Text, Text) -> Maybe Hash
@@ -222,26 +214,24 @@ readCoordinate memo file = maybe (Nothing, memo) remember (filenameParts (memoPr
              in (coordinate kind known, memo{memoVersions = Map.insert version known (memoVersions memo)})
     coordinate kind = fmap (`FileCoordinate` kind)
 
--- A filename's version text and artifact kind, before PEP 440 canonicalisation.
-filenameParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+-- A filename's version text and distribution kind, before PEP 440 canonicalisation.
+filenameParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 filenameParts project file = wheelParts project file <|> sdistParts project file
 
 -- @{project}-{version}(-{build})?-{python}-{abi}-{platform}.whl@. The project and version
 -- parts escape @-@ as @_@, so the parts split exactly and the project part compares whole.
-wheelParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+wheelParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 wheelParts project file = do
     stem <- T.stripSuffix ".whl" file
     parts <- nonEmpty (T.splitOn "-" stem)
     guard (length parts == 5 || length parts == 6)
     guard (canonicalise PyPI (NE.head parts) == fpCanonical project)
     version <- toList parts !!? 1
-    pure (version, Wheel (T.intercalate "-" (lastThree parts)))
-  where
-    lastThree parts = drop (length parts - 3) (toList parts)
+    pure (version, Wheel)
 
 -- @{project}-{version}{archive suffix}@. A legacy project name can carry the separator a
 -- version can, so the split takes the longest project part that canonicalises to this one.
-sdistParts :: FileProject -> Text -> Maybe (Text, ArtifactKind)
+sdistParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 sdistParts project file = do
     stem <- asum (map (`T.stripSuffix` file) sdistSuffixes)
     version <- afterProjectName project stem

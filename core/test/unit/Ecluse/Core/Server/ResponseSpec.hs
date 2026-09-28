@@ -61,7 +61,6 @@ pkg scope ageDays code =
     (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
         { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
         , pkgInstallCode = code
-        , pkgLicenses = ["MIT"]
         }
 
 -- | A status as its code and reason phrase, since 'Status' equality compares the code alone.

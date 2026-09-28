@@ -69,7 +69,6 @@ detailsAt rawVer ageDays hasInstall =
     (sampleDetails name (mkVersion Npm rawVer))
         { pkgPublishedAt = Just (publishedDaysAgo ageDays)
         , pkgInstallCode = if hasInstall then RunsCodeOnInstall "postinstall" else NoCodeOnInstall
-        , pkgLicenses = ["MIT"]
         }
 
 infoOf :: Maybe Text -> [(Text, Integer, Bool)] -> PackageInfo

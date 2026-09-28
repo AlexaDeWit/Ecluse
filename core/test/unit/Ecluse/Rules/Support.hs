@@ -17,7 +17,7 @@ module Ecluse.Rules.Support (
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageDetails (pkgLicenses, pkgPublishedAt), mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName, mkScope)
 import Ecluse.Core.Rules.Freshness (MaxAdvisoryAge, maxAdvisoryAgeFor)
 import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
@@ -49,7 +49,6 @@ pkg mScope ageDays = completeEvidence details
     details =
         (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
             { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-            , pkgLicenses = ["MIT"]
             }
 
 {- | The maximum a mount deriving from a seven-day quarantine gets: six days. Push-age

@@ -62,9 +62,10 @@ checkMeasurement ecosystem shape size result = do
 {- A shared entry's gate is a regression limit above its measured maximum. Separately, it must stay
 within the memory gate's full-read charge, so a representation cannot outgrow what admission charges. -}
 envelopePermille :: Ecosystem -> Shape -> Integer
-envelopePermille Npm Typed = 750
+envelopePermille Npm Typed = 500
 envelopePermille Npm Shared = 1750
-envelopePermille PyPI Shared = 3750
+envelopePermille PyPI Typed = 1750
+envelopePermille PyPI Shared = 3500
 envelopePermille _ shape = case shape of
     Wire -> 1250
     Raw -> 7000

@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (Artifact (artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashValue)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
@@ -35,10 +35,10 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataB
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream)
-import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
+import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
@@ -133,6 +133,16 @@ spec = describe "npmFields" $ do
             let bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("bin", bin)] release]]))
             (_, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
             (fieldAt "versions" compact >>= fieldAt "1.0.0" >>= fieldAt "bin") `shouldBe` Just bin
+
+    it "holds each typed digest as the served document's own text" $ do
+        let dist = object ["tarball" .= ("https://registry.npmjs.org/thing/-/thing-1.0.0.tgz" :: Text), "integrity" .= validSha512Sri, "shasum" .= validSha1]
+            bytes = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("dist", dist)] release]]))
+        (info, compact) <- expectRight (projectNpmManifest defaultLimits name bytes)
+        let servedDist = fieldAt "versions" compact >>= fieldAt "1.0.0" >>= fieldAt "dist"
+            served = [text | Just (String text) <- [servedDist >>= fieldAt "integrity", servedDist >>= fieldAt "shasum"]]
+            typed = [hashValue h | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), h <- artHashes art]
+        map length [typed, served] `shouldBe` [2, 2]
+        sameTexts (zip typed served) `shouldReturn` True
 
     forM_ [(FullRead, versionFields, unshapedFields), (SelectedRead "1.0.0", versionFields, unshapedFields), (VersionListRead, versionListFields, [])] $ \(mode, supported, whole) ->
         it ("retains nested values whole only for supported fields without their own shape in " <> show mode) $ do
@@ -483,7 +493,7 @@ corpusRead bytes =
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \package raw document key ->
             let version = mkVersion Npm key
-             in [("selected", rendered (projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
+             in [("selected", rendered (selectedFacts <$> projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
         , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionList (RegistryResponse 200 (BS.length raw) raw)))]
         }
   where

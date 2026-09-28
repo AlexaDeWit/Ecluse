@@ -90,6 +90,8 @@ mkHash alg value
 mkSriHashes :: Text -> Either Text (NonEmpty Hash)
 mkSriHashes wire = case nonEmpty (T.words wire) of
     Nothing -> Left "malformed sri digest"
+    -- A lone component equal to the input is the input itself, so a retained hash adds no text object.
+    Just (only :| []) | only == wire -> pure <$> mkHash SRI wire
     Just comps -> traverse (mkHash SRI) comps
 
 -- | The lowercase hex a non-SRI digest is compared and reported in.

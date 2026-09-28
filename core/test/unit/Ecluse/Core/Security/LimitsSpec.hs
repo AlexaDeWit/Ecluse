@@ -22,7 +22,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
-    PackageName,
     renderPackageName,
  )
 
@@ -44,13 +43,9 @@ import Ecluse.Core.Security (
     serveCapMarginSeconds,
     serveCapSeconds,
  )
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
-
--- | A minimal per-version snapshot. Only the name and version are meaningful here.
-details :: PackageName -> Version -> PackageDetails
-details name version = (sampleDetails name version){pkgLicenses = ["MIT"]}
 
 {- | Drive 'boundedRead' with a 'State'-monad chunk producer. It pops one chunk per call and
 yields an empty 'ByteString', the @BodyReader@ EOF signal, once the list runs out.
@@ -353,7 +348,7 @@ packumentWith n =
             { infoName = name
             , infoVersions =
                 Map.fromList
-                    [ (ver i, details name (mkVersion Npm (ver i)))
+                    [ (ver i, sampleDetails name (mkVersion Npm (ver i)))
                     | i <- [1 .. n]
                     ]
             , infoDistTags = Map.empty

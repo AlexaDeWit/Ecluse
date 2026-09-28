@@ -17,7 +17,7 @@ module Ecluse.Core.Registry.Npm.Project (
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:?))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
@@ -27,16 +27,13 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Tarball),
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
     HashAlg (SHA1),
     PackageDetails (..),
     PackageName,
-    Person (..),
     Scope,
-    Trust (TrustUnknown),
     mkHash,
     mkPackageName,
     mkScope,
@@ -47,7 +44,6 @@ import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmField (BeginContainer, InvalidContainer, VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
-    License (LicenseObject, LicenseSpdx),
     VersionManifest (..),
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
@@ -61,15 +57,12 @@ import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
--- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@ publisher.
-data VersionEntry = VersionEntry
-    { veManifest :: VersionManifest
-    , vePublisher :: Maybe Wire.Person
-    }
+-- A decoded version object. A malformed @_npmUser@ drops the release, though nothing keeps it.
+newtype VersionEntry = VersionEntry VersionManifest
 
 instance FromJSON VersionEntry where
     parseJSON v =
-        withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
+        withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <* (o .:? "_npmUser" :: Parser (Maybe Wire.Person))) v
 
 -- | Project a compact release while retaining the decoder reason for the invalid-entry report.
 projectVersionEntryResult :: PackageName -> Version -> Maybe UTCTime -> Value -> Either String PackageDetails
@@ -88,25 +81,15 @@ versionListParser limits = J.objectFound VersionListObject VersionListObject (J.
 
 -- Every field is evaluated here, so a retained release never keeps its decoded manifest alive.
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
-projectDetails name version publishedAt entry =
+projectDetails name version publishedAt (VersionEntry vm) =
     PackageDetails
         { pkgName = name
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = installCode vm
-        , pkgTrust = TrustUnknown
         , pkgAvailability = availability vm
         , pkgArtifacts = (:| []) $! projectArtifact version (vmDist vm)
-        , pkgLicenses = maybeToList (licenseText <$!> vmLicense vm)
-        , pkgPublisher = projectPerson <$!> vePublisher entry
         }
-  where
-    vm = veManifest entry
-
-licenseText :: License -> Text
-licenseText = \case
-    LicenseSpdx spdx -> spdx
-    LicenseObject name _url -> name
 
 {- Fail closed across two independent wire signals: a @false@ @hasInstallScript@ cannot hide a
 hook the @scripts@ map declares. -}
@@ -135,12 +118,8 @@ projectArtifact version dist =
         { artEntryKey = ObjectEntry (renderVersion version)
         , artFilename = tarballFilename (distTarball dist) version
         , artUrl = distTarball dist
-        , artKind = Tarball
         , artHashes = strictElements (sriHashes <> maybeToList sha1Hash)
         , artSize = distUnpackedSize dist
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
         }
   where
     -- A malformed digest is absent, never degenerate: no bogus fingerprint may pass the
@@ -227,11 +206,3 @@ withinNpmNameLimit = withinNameLimit "npm name" npmNameLimit
 -- npm's own cap on a package name, the one its validator applies to a new package.
 npmNameLimit :: Int
 npmNameLimit = 214
-
-projectPerson :: Wire.Person -> Person
-projectPerson p =
-    Person
-        { personName = Wire.personName p
-        , personEmail = Wire.personEmail p
-        , personUrl = Wire.personUrl p
-        }

@@ -71,7 +71,6 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Tarball),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
     Hash,
@@ -79,7 +78,6 @@ import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Trust (Untrusted),
     mkHash,
     mkPackageName,
     mkScope,
@@ -229,12 +227,8 @@ sampleArtifact =
         { artEntryKey = SingletonEntry
         , artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://example.test/thing-1.0.0.tgz"
-        , artKind = Tarball
         , artHashes = []
         , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
         }
 
 {- | A minimal per-version snapshot. Only the name and version carry meaning, and the other fields
@@ -247,11 +241,8 @@ sampleDetails name version =
         , pkgVersion = version
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
         , pkgAvailability = Available
         , pkgArtifacts = sampleArtifact :| []
-        , pkgLicenses = []
-        , pkgPublisher = Nothing
         }
 
 -- | 'sampleArtifact' carrying the given integrity digests, so a test varies only integrity.

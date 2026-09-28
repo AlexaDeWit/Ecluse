@@ -411,15 +411,19 @@ catalogued in the [threat model](https://ecluse-proxy.com/docs/threat-model/).
 
 `PackageDetails` ([`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs))
 is the ecosystem-agnostic per-version snapshot every adapter produces and the rules engine
-consumes. Its shape follows the npm protocol. Two principles govern it:
+consumes. Its shape follows the npm protocol. Three principles govern it:
 
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.
   Adapters project each wire format into normalised signals: a rule sees `CodeExecSignal`,
-  `Trust`, `Availability`, never `hasInstallScript`, `packagetype`, or `extensions`.
+  `Availability`, never `hasInstallScript`, `packagetype`, or `extensions`.
 - **Signal availability is explicit.** A signal the adapter has not determined, or cannot
-  determine cheaply, has its own representation (`CodeExecUnknown`, `TrustUnknown`, `Nothing`).
+  determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it
   later.
+- **The model holds signals, not the document.** A cache keeps a snapshot for every version, so it
+  carries only the shared vocabulary below and the artifact facts that merge, admission and serving
+  read. Licences, publishers, per-file yanks and provenance reach clients in the served document,
+  within its supported fields.
 
 ### The shared vocabulary
 
@@ -428,9 +432,8 @@ consumes. Its shape follows the npm protocol. Two principles govern it:
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. `Unknown` carries the gemspec-fetch case. |
-| **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`. `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing, attestation, and MFA differ per ecosystem but reduce to one signal. The evidence captures the how without the ecosystem. |
-| **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so the per-file flag keeps "listed-but-yanked" and lets exact pins resolve. |
-| **Artifacts** | A version owns `NonEmpty Artifact`. Each carries algorithm-tagged `Hash`es, kind/platform, size, interpreter constraint, and a provenance URL. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
+| **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
+| **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
 | **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),

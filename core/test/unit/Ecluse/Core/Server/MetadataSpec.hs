@@ -19,14 +19,12 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Core.Fault (TransportCause (TransportTimeout, TransportUnreachable), TransportFault (tfCause), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Tarball),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
     InvalidEntry,
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Trust (TrustUnknown),
  )
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
@@ -453,11 +451,8 @@ details who rawVer =
         , pkgVersion = npmVersion rawVer
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = TrustUnknown
         , pkgAvailability = Available
         , pkgArtifacts = artifact :| []
-        , pkgLicenses = []
-        , pkgPublisher = Nothing
         }
   where
     artifact =
@@ -465,12 +460,8 @@ details who rawVer =
             { artEntryKey = ObjectEntry rawVer
             , artFilename = "pkg-" <> rawVer <> ".tgz"
             , artUrl = "https://example.test/pkg-" <> rawVer <> ".tgz"
-            , artKind = Tarball
             , artHashes = []
             , artSize = Nothing
-            , artInterpreter = Nothing
-            , artYanked = False
-            , artProvenance = Nothing
             }
 
 timeoutCause :: Either MetadataError () -> Maybe TransportCause

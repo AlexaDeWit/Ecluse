@@ -101,10 +101,10 @@ carrying :: Value -> VersionRead
 carrying raw = (untaggedRead (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untaggedRead (Just baseline))}
 
 oneArtifact :: Artifact
-oneArtifact = sampleArtifact{artHashes = [], artInterpreter = Nothing, artProvenance = Nothing}
+oneArtifact = sampleArtifact{artHashes = []}
 
 baseline :: PackageDetails
-baseline = (sampleDetails thingName v1_0_0){pkgArtifacts = oneArtifact :| [], pkgLicenses = [], pkgPublisher = Nothing, pkgTrust = Untrusted}
+baseline = (sampleDetails thingName v1_0_0){pkgArtifacts = oneArtifact :| []}
 
 retainedFields :: [(String, PackageDetails -> PackageDetails)]
 retainedFields =
@@ -112,22 +112,12 @@ retainedFields =
     , ("scope", \p -> p{pkgName = mkPackageName Npm (Just (mkScope longText)) "name"})
     , ("install reason", \p -> p{pkgInstallCode = RunsCodeOnInstall longText})
     , ("timestamp Integer payload", \p -> p{pkgPublishedAt = Just (UTCTime (ModifiedJulianDay (10 ^ (5000 :: Int))) 0)})
-    , ("trust evidence text", \p -> p{pkgTrust = Trusted (OtherEvidence longText :| [])})
-    , ("trust evidence nodes", \p -> p{pkgTrust = Trusted (Signed :| [Attested, MfaPublished])})
     , ("deprecation reason", \p -> p{pkgAvailability = Deprecated longText})
     , ("yank reason", \p -> p{pkgAvailability = Yanked (Just longText)})
-    , ("licences", \p -> p{pkgLicenses = replicate 100 longText})
-    , ("publisher name", \p -> p{pkgPublisher = Just (Person longText Nothing Nothing)})
-    , ("publisher email", \p -> p{pkgPublisher = Just (Person "a" (Just longText) Nothing)})
-    , ("publisher URL", \p -> p{pkgPublisher = Just (Person "a" Nothing (Just longText))})
     , ("entry coordinates", changeArtifact (\a -> a{artEntryKey = ObjectEntry longText}))
     , ("filenames", changeArtifact (\a -> a{artFilename = longText}))
     , ("artifact URLs", changeArtifact (\a -> a{artUrl = longText}))
-    , ("wheel tags", changeArtifact (\a -> a{artKind = Wheel longText}))
-    , ("gem platforms", changeArtifact (\a -> a{artKind = Gem longText}))
     , ("hash nodes and digest backing allocations", changeArtifact (\a -> a{artHashes = [unsafeHash SHA256 (T.take 64 (validSha256 <> longText))]}))
-    , ("interpreter constraints", changeArtifact (\a -> a{artInterpreter = Just longText}))
-    , ("provenance URLs", changeArtifact (\a -> a{artProvenance = Just longText}))
     ]
 
 parsedVersions :: [(String, Ecosystem, Text, Int)]

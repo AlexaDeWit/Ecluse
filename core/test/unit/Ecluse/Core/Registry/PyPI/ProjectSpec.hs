@@ -20,7 +20,6 @@ import UnliftIO (evaluate)
 
 import Ecluse.Core.Package (
     Artifact (..),
-    ArtifactKind (Sdist, Wheel),
     Availability (Available, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
@@ -35,6 +34,7 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry.PyPI.Project (
+    DistributionKind (Sdist, Wheel),
     FileCoordinate (..),
     fileCoordinate,
     fileProject,
@@ -45,9 +45,12 @@ import Ecluse.Core.Registry.PyPI.Project (
     readCoordinate,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Version (genPyPI)
@@ -102,17 +105,17 @@ canonicalNameSpec = describe "isCanonicalName" $ do
 
 coordinateSpec :: Spec
 coordinateSpec = describe "fileCoordinate" $ do
-    it "reads a wheel's release and compatibility tag" $
+    it "reads a wheel's release" $
         fileCoordinate requestsName "requests-2.34.2-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "2.34.2" (Wheel "py3-none-any"))
+            `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
 
     it "reads a wheel carrying a build tag" $
         fileCoordinate requestsName "requests-2.34.2-1-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "2.34.2" (Wheel "py3-none-any"))
+            `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
 
     it "cross-normalises a wheel's underscored name onto the PEP 503 canonical key" $
         fileCoordinate azureStorageBlob "azure_storage_blob-12.14.0-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "12.14" (Wheel "py3-none-any"))
+            `shouldBe` Just (FileCoordinate "12.14" Wheel)
 
     it "reads a source distribution's release" $
         fileCoordinate requestsName "requests-2.34.2.tar.gz"
@@ -171,9 +174,9 @@ memoSpec = describe "filenameMemo" $ do
             file <- forAll genFilename
             fileVersionKey (fileProject azureStorageBlob) file === (fcVersionKey <$> fileCoordinate azureStorageBlob file)
 
-    it "keeps each file's artifact kind when two files share a version text" $ do
+    it "keeps each file's distribution kind when two files share a version text" $ do
         let (wheel, memo) = readCoordinate (filenameMemo requestsName) "requests-2.34.2-py3-none-any.whl"
-        wheel `shouldBe` Just (FileCoordinate "2.34.2" (Wheel "py3-none-any"))
+        wheel `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
         fst (readCoordinate memo "requests-2.34.2.tar.gz") `shouldBe` Just (FileCoordinate "2.34.2" Sdist)
 
 -- Repeated version spellings make later files reuse a remembered version text.
@@ -230,10 +233,14 @@ projectionSpec = describe "projectSimpleIndexFromValue" $ do
         info <- shouldProject requestsName (indexOf [withFileKeys [("hashes", object ["blake2b_256" .= ("ab" :: Text)])] (wheelFile "2.34.2")])
         artifactHashes info "2.34.2" `shouldBe` []
 
-    it "carries requires-python and the yank marker per file" $ do
-        info <- shouldProject requestsName (indexOf [withFileKeys [("yanked", toJSON True)] (wheelFile "2.34.2")])
-        map artInterpreter (artifactsOf info "2.34.2") `shouldBe` [Just ">=3.10"]
-        map artYanked (artifactsOf info "2.34.2") `shouldBe` [True]
+    it "drops a file whose requires-python or provenance is not text, though neither is kept" $ do
+        let unshaped key = withFileKeys [(key, toJSON (5 :: Int))] (sdistFile "2.34.2")
+            index = indexOf [unshaped "requires-python", unshaped "provenance", wheelFile "2.34.2"]
+        info <- shouldProject requestsName index
+        (streamed, _) <- expectRight (projectPyPIIndex defaultLimits requestsName (encodeStrict index))
+        for_ [info, streamed] $ \projected -> do
+            artifactNames projected "2.34.2" `shouldBe` Just ["requests-2.34.2-py3-none-any.whl"]
+            map invalidKind (infoInvalidEntries projected) `shouldBe` [InvalidIndexFile, InvalidIndexFile]
 
     it "points latest at the highest release, preferring a final over a pre-release" $ do
         info <- shouldProject requestsName (indexOf [wheelFile "2.34.2", wheelFile "3.0.0rc1"])
