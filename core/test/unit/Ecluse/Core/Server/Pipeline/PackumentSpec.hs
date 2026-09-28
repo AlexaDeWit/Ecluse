@@ -2,23 +2,24 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Validator identity, framing, and first-party private misses.
+-- | Validator identity, framing, first-party private misses, and the output charge's basis.
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package (PackageName, mkPackageName, pkgEcosystem)
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
-import Ecluse.Core.Registry.Metadata (ContentDigest)
+import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
+import Ecluse.Core.Registry.Metadata (ContentDigest, Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
-import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     firstPartyMissDecision,
     firstPartyMissReply,
+    outputBasisBytes,
     packumentETag,
  )
 import Ecluse.Core.Server.Response (
@@ -26,8 +27,10 @@ import Ecluse.Core.Server.Response (
     ServeDecision,
     Transience (WillResolve),
  )
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Test.Package (thingName)
+import Ecluse.Core.Version (Version)
+import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, thingName)
 import Ecluse.Test.Server.Response (reasonOf)
 import Ecluse.Test.Snapshot (digestOf)
 
@@ -35,6 +38,7 @@ spec :: Spec
 spec = do
     packumentETagSpec
     firstPartyMissSpec
+    outputBasisSpec
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
@@ -117,6 +121,39 @@ firstPartyMissSpec = describe "a first-party name whose private origin yielded n
     it "counts an unread origin as an outage, suggesting no delay" $ do
         packumentServeDecision [decisionFor MissUnresolved] `shouldBe` Metric.Unavailable
         reasonOf (decisionFor MissUnresolved) `shouldBe` Just (Unavailable (WillResolve Nothing))
+
+outputBasisSpec :: Spec
+outputBasisSpec = describe "outputBasisBytes -- the source bytes a listing's output charge scales" $
+    forM_ [(thingName, npmVersion), (requestsName, pypiVersion)] $ \(name, version) ->
+        describe (show (pkgEcosystem name)) $ do
+            let source = listingSource name version
+            it "is a single source's size" $
+                basisOf [source GatedSource 900 ["1.0.0", "2.0.0"]] `shouldBe` Just 900
+
+            it "counts one copy of sources that hold the same versions" $
+                basisOf [source TrustedSource 900 ["1.0.0", "2.0.0"], source GatedSource 900 ["1.0.0", "2.0.0"]] `shouldBe` Just 900
+
+            it "counts both sources when they share no version" $
+                basisOf [source TrustedSource 400 ["1.0.0"], source GatedSource 900 ["2.0.0", "3.0.0"]] `shouldBe` Just 1300
+
+            it "adds the smaller source's share for the versions the larger lacks" $
+                basisOf [source TrustedSource 600 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 900 ["2.0.0", "3.0.0", "4.0.0"]] `shouldBe` Just 1100
+
+            it "takes the larger source whole on either side of the merge" $
+                basisOf [source TrustedSource 900 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 300 ["3.0.0", "4.0.0", "5.0.0"]] `shouldBe` Just 1100
+
+            it "rounds a share up" $
+                basisOf [source TrustedSource 100 ["1.0.0", "2.0.0", "3.0.0"], source GatedSource 900 ["2.0.0", "3.0.0", "4.0.0"]] `shouldBe` Just 934
+
+-- A merge source holding the given versions, whose body is the given number of bytes.
+listingSource :: PackageName -> (Text -> Version) -> Provenance -> Int -> [Text] -> Contribution
+listingSource name version provenance bytes keys =
+    Contribution provenance (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest) bytes
+  where
+    manifest = sampleManifest name (map version keys)
+
+basisOf :: [Contribution] -> Maybe Int
+basisOf sources = (`outputBasisBytes` sources) <$> mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
 
 -- Each reply factory answers its own name, so a case reads back which one the pipeline chose.
 namedReplies :: PackumentReplies Text

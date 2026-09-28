@@ -8,10 +8,11 @@ module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMa
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Object, encode, object, (.:), (.=))
 import Data.Aeson.Key qualified as Key
-import Data.Aeson.Types (Parser)
+import Data.Aeson.Types (Pair, Parser)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Test.Hspec
+import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
@@ -25,13 +26,13 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), MergeShape (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, mergeDocuments, packages, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
 
 {- | Reject unauthenticated captures, roots that do not survive or release across collections, and
-listings whose read or render outgrows what the memory gate charges.
+listings, of one source or two, whose reads or render outgrow what the memory gate charges.
 -}
 spec :: Spec
 spec = do
@@ -54,10 +55,27 @@ spec = do
             measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
                 Left failure -> expectationFailure failure
                 Right peaks -> do
-                    reportListing package peaks
+                    reportListing "metadata-listing" [] package peaks
                     listingSourceBytes peaks `shouldBe` size
-                    let ecosystem = pkgEcosystem (cpPackage package)
-                    for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) (uncurry (checkListing peaks))
+                    listingBasisBytes peaks `shouldBe` size
+                    for_ (listingBounds package) $ \(factors, limits) -> do
+                        checkPaid factors peaks
+                        checkReadPeak factors limits peaks
+                        checkOutput factors limits peaks
+    describe "merged listing peak heap" $ forM_ packages $ \package ->
+        forM_ [minBound .. maxBound] $ \shape ->
+            it (toString (cpName package) <> "/" <> show shape) $ do
+                (size, _) <- authenticate package
+                withSystemTempDirectory "ecluse-merge" $ \directory -> do
+                    (private, public) <- mergeDocuments shape directory package
+                    measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package >>= \case
+                        Left failure -> expectationFailure failure
+                        Right peaks -> do
+                            reportListing "metadata-merge" ["shape" .= (show shape :: Text)] package peaks
+                            checkBasis shape size peaks
+                            for_ (listingBounds package) $ \(factors, limits) -> do
+                                checkPaid factors peaks
+                                checkOutput factors limits peaks
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -92,47 +110,83 @@ collection is major and the high-water samples live data at least once per 128 K
 majorSampling :: [String]
 majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
-{- A read's peak from one meter step of source up has a regression limit above its measured maximum.
-Separately, it must stay within the full-read charge, whose margin is kept for run time. -}
-readPeakEnvelopePermille :: Ecosystem -> Maybe Integer
-readPeakEnvelopePermille = \case
-    Npm -> Just 2000
-    PyPI -> Just 3750
+-- Regression limits per source byte, in thousandths.
+data PeakLimits = PeakLimits
+    { readPeakLimit :: Integer
+    , outputLimit :: Integer
+    -- ^ Per byte of the output basis.
+    }
+
+{- From one meter step up, a read's peak and a listing's output working set each have a regression
+limit above their measured maxima. Separately, each fits its charge, whose margin is kept for run time. -}
+peakLimits :: Ecosystem -> Maybe PeakLimits
+peakLimits = \case
+    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 1750}
+    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1500}
     RubyGems -> Nothing
 
-{- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
-source up, each phase's own charge covers its peak, and the read's peak stays under its envelope. -}
-checkListing :: ListingPeaks -> ChargeFactors -> Integer -> Expectation
-checkListing peaks factors envelope = do
+listingBounds :: CorpusPackage -> Maybe (ChargeFactors, PeakLimits)
+listingBounds package = (,) <$> chargeFactors ecosystem <*> peakLimits ecosystem
+  where
+    ecosystem = pkgEcosystem (cpPackage package)
+
+-- A listing pays whole meter steps from its entry step on, for its reads and then its render.
+checkPaid :: ChargeFactors -> ListingPeaks -> Expectation
+checkPaid factors peaks = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
-    when (size >= meterStepBytes) $ do
-        (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
-        (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= envelope * toInteger size)
-        -- Collections miss the instant the lazy encoding and its strict copy are both live.
-        max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks)) `shouldSatisfy` (<= toInteger output)
+  where
+    fullRead = scaleCharge (cfFullReadPermille factors) (listingSourceBytes peaks)
+    output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)
+    paid = toInteger . roundUpToStep meterStepBytes . max meterStepBytes
+
+-- From one step of source up, a read's peak fits the full-read charge and stays under its limit.
+checkReadPeak :: ChargeFactors -> PeakLimits -> ListingPeaks -> Expectation
+checkReadPeak factors limits peaks = when (size >= meterStepBytes) $ do
+    (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
+    (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= readPeakLimit limits * toInteger size)
   where
     size = listingSourceBytes peaks
-    fullRead = scaleCharge (cfFullReadPermille factors) size
-    output = scaleCharge (cfOutputPermille factors) size
-    paid = toInteger . roundUpToStep meterStepBytes . max meterStepBytes
+
+-- From one step of basis up, the output working set fits the output charge and stays under its limit.
+checkOutput :: ChargeFactors -> PeakLimits -> ListingPeaks -> Expectation
+checkOutput factors limits peaks = when (basis >= meterStepBytes) $ do
+    outputWorkingSet peaks `shouldSatisfy` (<= toInteger (scaleCharge (cfOutputPermille factors) basis))
+    (1000 * outputWorkingSet peaks) `shouldSatisfy` (<= outputLimit limits * toInteger basis)
+  where
+    basis = listingBasisBytes peaks
+
+-- Collections miss the instant the lazy encoding and its strict copy are both live, so both count.
+outputWorkingSet :: ListingPeaks -> Integer
+outputWorkingSet peaks = max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks))
+
+-- The basis counts one copy of the versions both documents hold and every copy of the rest.
+checkBasis :: MergeShape -> Int -> ListingPeaks -> Expectation
+checkBasis shape size peaks = case shape of
+    Identical -> do
+        listingSourceBytes peaks `shouldBe` 2 * size
+        listingBasisBytes peaks `shouldBe` size
+    Overlapping -> listingBasisBytes peaks `shouldSatisfy` (< listingSourceBytes peaks)
+    Disjoint -> listingBasisBytes peaks `shouldBe` listingSourceBytes peaks
 
 rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
 rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
 
-reportListing :: CorpusPackage -> ListingPeaks -> IO ()
-reportListing package peaks =
-    putStrLn . ("metadata-listing " <>) . decodeUtf8 . LBS.toStrict . encode $
-        object
-            [ "package" .= cpName package
-            , "read_peak_per_source_byte" .= perSourceByte (rise listingReadPeak listingBaseline peaks)
-            , "entry_per_source_byte" .= perSourceByte (rise listingEntryLive listingBaseline peaks)
-            , "peak_above_entry_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
-            , "served_per_source_byte" .= perSourceByte (toInteger (listingServedBytes peaks))
-            , "peaks" .= peaks
-            ]
+reportListing :: Text -> [Pair] -> CorpusPackage -> ListingPeaks -> IO ()
+reportListing label details package peaks =
+    putStrLn . toString . ((label <> " ") <>) . decodeUtf8 . LBS.toStrict . encode . object $
+        details
+            <> [ "package" .= cpName package
+               , "read_peak_per_source_byte" .= perByte listingSourceBytes (rise listingReadPeak listingBaseline peaks)
+               , "entry_per_source_byte" .= perByte listingSourceBytes (rise listingEntryLive listingBaseline peaks)
+               , "peak_above_entry_per_source_byte" .= perByte listingSourceBytes (rise listingPeak listingEntryLive peaks)
+               , "served_per_source_byte" .= perByte listingSourceBytes (toInteger (listingServedBytes peaks))
+               , "basis_per_source_byte" .= perByte listingSourceBytes (toInteger (listingBasisBytes peaks))
+               , "output_working_set_per_basis_byte" .= perByte listingBasisBytes (outputWorkingSet peaks)
+               , "peaks" .= peaks
+               ]
   where
-    perSourceByte bytes = fromInteger bytes / fromIntegral (listingSourceBytes peaks) :: Double
+    perByte denominator bytes = fromInteger bytes / fromIntegral (denominator peaks) :: Double
 
 chargeFactors :: Ecosystem -> Maybe ChargeFactors
 chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
