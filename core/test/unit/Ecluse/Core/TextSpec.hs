@@ -55,6 +55,12 @@ isPrefixOfLoweredSpec = describe "isPrefixOfLowered" $ do
             filter (\c -> T.toLower (T.pack ['a', c]) /= "a" <> lowerOne c || T.toLower (T.pack [c, 'a']) /= lowerOne c <> "a") [minBound .. maxBound]
                 `shouldBe` []
 
+    it "matches each scheme prefix whole, and not one character short" $ do
+        isPrefixOfLowered httpsPrefix "HTTPS://x" `shouldBe` True
+        isPrefixOfLowered httpsPrefix "HTTPS:/x" `shouldBe` False
+        isPrefixOfLowered httpPrefix "HTTP://x" `shouldBe` True
+        isPrefixOfLowered httpPrefix "HTTP:/x" `shouldBe` False
+
     it "agrees with lowering the whole text, including characters that lower to several" $
         hedgehog $ do
             (prefix, spelled) <- forAll (Gen.element [(httpsPrefix, "https://"), (httpPrefix, "http://")])

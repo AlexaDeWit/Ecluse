@@ -94,8 +94,8 @@ matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on th
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
-{- | A lower-case prefix with its length in characters, so a test for it never measures a text. The
-constructor stays private, so each count sits beside its prefix in this module.
+{- | A lower-case prefix with its length in characters, so checking for it never measures a text.
+The constructor stays private, so each count sits beside its prefix in this module.
 -}
 data LowerPrefix = LowerPrefix Int Text
     deriving stock (Show)
