@@ -357,8 +357,8 @@ Each package has two legs:
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
-median. It counts the bytes each pass allocates with GHC's per-thread allocation counter, which
-gives the same figure on every run of one build over one input. Wall-clock time appears in the
+median. It counts the bytes each pass allocates with GHC's per-thread allocation counter. For one
+build over one input, that figure moves by a few bytes at most between runs. Wall-clock time appears in the
 report for information only. The age rules evaluate at each capture's `capturedAt` time in
 `bench/corpus/pins.json`, so they admit the same versions on every run. The harness links the
 shipped server's RTS options (the `shipped-rts` stanza in `ecluse.cabal`), and the report prints
