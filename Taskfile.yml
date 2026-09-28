@@ -349,10 +349,7 @@ tasks:
       # Vendored files carry their licence through REUSE.toml instead.
       - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" ":(exclude)vendor/" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
   vendor-check:
-    desc: Check every vendored json-stream file against its pinned SHA-256
-    sources:
-      - 'vendor/**'
-      - 'scripts/vendored-json-stream.sh'
+    desc: Check the vendored json-stream paths, modes and SHA-256 digests against their pins
     cmds:
       - bash scripts/vendored-json-stream.sh check
   vendor-pin:
@@ -360,7 +357,7 @@ tasks:
     cmds:
       - bash scripts/vendored-json-stream.sh pin
   vendor-diff:
-    desc: Diff the vendored json-stream tree against its upstream commit
+    desc: Diff the vendored json-stream tree against its upstream commit (exits 1 by design, so nothing gates on it)
     cmds:
       - bash scripts/vendored-json-stream.sh diff
   fuzz-json-lexer:

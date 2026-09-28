@@ -13,6 +13,7 @@ This folder holds json-stream's library modules and C lexer, which Écluse build
 - [`json-stream.freeze`](json-stream.freeze) names the upstream release the tree derives from, so
   advisories against json-stream still reach Écluse's dependency scanners.
 
-CI compares every file here with the SHA-256 list in [`../json-stream.sha256`](../json-stream.sha256).
+CI compares every path here, with its mode and SHA-256 digest, against
+[`../json-stream.sha256`](../json-stream.sha256).
 After an intended change, record it with `task vendor-pin`. To compare the tree with the upstream
 commit, run `task vendor-diff`.

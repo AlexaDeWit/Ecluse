@@ -1,10 +1,20 @@
+100644 1aaf2b9db0e2438999f03d5225e222244f2f90e1 0	vendor/json-stream/Data/JsonStream/CLexType.hsc
+100644 8342f5c60661a4769e91e870b15f365f6234c07b 0	vendor/json-stream/Data/JsonStream/CLexer.hs
+100644 d971d15a5f32c0e8be9429f097bd9f50aa158be4 0	vendor/json-stream/Data/JsonStream/Parser.hs
+100644 b11becac71e712df519ba9311b7acd77b8bd4bd8 0	vendor/json-stream/Data/JsonStream/TokenParser.hs
+100644 15a0c41c41b8b8e4d268b9a3387b2b12c3925915 0	vendor/json-stream/Data/JsonStream/Unescape.hs
+100644 8fda45c33d4dd72088000111c97dc37b8af3b2f1 0	vendor/json-stream/LICENSE
+100644 cc1e5e4c8ba3f694ccdbbb82939550429e235d54 0	vendor/json-stream/README.md
+100644 1c803710bda0a7246399f67cb2c0e28dcd6a00ea 0	vendor/json-stream/c_lib/lexer.c
+100644 ea1886e54b8ad8d96340a13b235310c6126c10a3 0	vendor/json-stream/c_lib/lexer.h
+100644 f89f118312744a35fb44b3d341e06f79de17e7b1 0	vendor/json-stream/json-stream.freeze
 a196f7e7fb9d26dc814b7578fc3df1267c09d1205b5f852de696b4b4766a8e7c  vendor/json-stream/Data/JsonStream/CLexType.hsc
 d78fdaf440f69b04e7dd44d33c036bc5b1e9425f66a684754efa0d4151fad26f  vendor/json-stream/Data/JsonStream/CLexer.hs
 6de036de3703097a4eabff8a97f3bc8f352101617e1df3909790ec4839a2db63  vendor/json-stream/Data/JsonStream/Parser.hs
 145a68fbc5f9de4cf06a09ae42adbd8d723ae502aeab177ff7776bdfab379ac5  vendor/json-stream/Data/JsonStream/TokenParser.hs
 82fc258448dbe99fca2452fced468052b990f0484f0a4cd1582c104a9c385a8a  vendor/json-stream/Data/JsonStream/Unescape.hs
 1780d22e76d6263ad3c5ea10516afb565430b26e2701227e6550e91b2756f020  vendor/json-stream/LICENSE
-e17259234e92736a7723aa0678072d9358d031a25adb55456b372803b5d10b88  vendor/json-stream/README.md
+b12ed6b733bf29222ca5f43dc8d9320913e41c74bcaa27305668acf90dc21e0f  vendor/json-stream/README.md
 2f80e126cd17548b01e49f1418143b476faf4b7bccbfa04dabb796592593616f  vendor/json-stream/c_lib/lexer.c
 40f6e25d05087aefb93c75754e8e3a182389b204993a49e99d052f30d4370deb  vendor/json-stream/c_lib/lexer.h
 fff7efe2adabaef5c2f436b0d84dae0ef921d74691dbf57fed95bd8348953131  vendor/json-stream/json-stream.freeze

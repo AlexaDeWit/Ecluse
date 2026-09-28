@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Guard the vendored json-stream tree.
-#   check  compares every file under vendor/json-stream with vendor/json-stream.sha256, offline.
+#   check  compares the tree with vendor/json-stream.sha256, offline: each tracked path with its
+#          mode and blob, then the SHA-256 of each regular file.
 #   pin    rewrites vendor/json-stream.sha256 from the tree, after an intended change.
 #   diff   fetches the upstream commit the tree's README names, diffs every upstream file the tree
 #          holds apart from the README, and checks that json-stream.freeze names upstream's
-#          version at that commit.
+#          version at that commit. It exits 1 while any file differs, as three do by design.
 set -euo pipefail
 
 tree=vendor/json-stream
@@ -12,8 +13,14 @@ pins=vendor/json-stream.sha256
 upstream=https://github.com/ondrap/json-stream.git
 cd "$(git rev-parse --show-toplevel)"
 
+# git's index entries catch an added, removed or renamed path, a mode change and a symlink.
 digests() {
-  find "$tree" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+  git ls-files --stage -- "$tree"
+  git ls-files --stage -z -- "$tree" | while IFS= read -r -d '' entry; do
+    case "$entry" in
+      100644\ * | 100755\ *) sha256sum -- "${entry#*$'\t'}" ;;
+    esac
+  done
 }
 
 case "${1:?expected check, pin or diff}" in
