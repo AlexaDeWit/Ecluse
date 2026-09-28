@@ -156,8 +156,8 @@ A full read's charge per source byte is 1.25 times the highest peak per source b
 residency tier measures for one ecosystem, among captures of at least one 1 MiB meter step, rounded
 up to a tenth. The peak is the most live data the read holds while it parses and projects, which is
 more than it keeps afterwards. npm's charge is 2.1 (typescript peaks at 1.65) and PyPI's is 4.2
-(boto3 peaks at 3.31). A capture under one step can peak above its per-byte charge, up to 2.49 for
-npm (request) and 4.41 for PyPI (requests). The 1 MiB entry step covers one such read. A request
+(boto3 peaks at 3.29). A capture under one step can peak above its per-byte charge, up to 2.36 for
+npm (request). The 1 MiB entry step covers one such read. A request
 for a name that is not first-party reads its private and public documents at once on one ticket,
 so two such reads can exceed the entry step by a fraction of a step. The sampler's measurement of
 live data outside the charges absorbs that excess. The margin covers packages shaped unlike the

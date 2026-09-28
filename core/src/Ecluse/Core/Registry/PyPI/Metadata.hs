@@ -51,7 +51,7 @@ newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
 {- | PyPI's memory charges per source byte, above the largest read peak from one meter step of source
-up (3.31, boto3) and a listing's encoding with its strict copy (1.57, requests).
+up (3.29, boto3) and a listing's encoding with its strict copy (1.57, requests).
 -}
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4200, cfOutputPermille = 1600}
