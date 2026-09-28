@@ -187,29 +187,29 @@ The checks compare bytes with each ecosystem's charges:
   encoding and its strict copy are both live, so the check counts both.
 - From one step of source up, the read's peak also stays within a regression limit per ecosystem,
   so a rise fails well before it reaches the charge. Each limit is the smallest quarter step at
-  least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.677,
-  19.3% margin) and 3.75 for PyPI (boto3, 3.342, 12.2% margin).
+  least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.649,
+  21.3% margin) and 3.75 for PyPI (boto3, 3.311, 13.3% margin).
 
 The following figures come from the arm64 Build job of
-[CI run 36404684497](https://github.com/AlexaDeWit/Ecluse/actions/runs/36404684497/job/108870538869),
+[CI run 36484291962](https://github.com/AlexaDeWit/Ecluse/actions/runs/36484291962/job/109137361615),
 with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
 read's peak and the held entry above the baseline, the listing's peak through the read and the
 render above the held entry, and the served body's length.
 
 | Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
 |---|---|--:|--:|--:|--:|--:|
-| npm | typescript | 14.97 | 1.677 | 1.571 | 0.661 | 0.659 |
-| npm | @types/node | 10.63 | 0.695 | 0.603 | 0.177 | 0.175 |
-| npm | react | 6.67 | 1.590 | 1.408 | 0.498 | 0.495 |
-| npm | webpack | 4.96 | 1.242 | 1.157 | 0.713 | 0.712 |
-| npm | @aws-sdk/client-s3 | 3.97 | 1.404 | 1.302 | 0.766 | 0.762 |
-| npm | express | 0.77 | 1.954 | 1.568 | 0.605 | 0.576 |
-| npm | @babel/core | 0.76 | 1.690 | 1.376 | 0.578 | 0.575 |
-| npm | request | 0.29 | 2.306 | 1.641 | 0.665 | 0.529 |
-| npm | lodash | 0.24 | 2.153 | 1.363 | 0.790 | 0.362 |
-| PyPI | numpy | 2.65 | 2.470 | 2.158 | 0.883 | 0.596 |
-| PyPI | boto3 | 2.10 | 3.342 | 2.972 | 0.995 | 0.621 |
-| PyPI | requests | 0.12 | 3.969 | 3.645 | 0.608 | 0.657 |
+| npm | typescript | 14.97 | 1.649 | 1.544 | 0.661 | 0.659 |
+| npm | @types/node | 10.63 | 0.692 | 0.601 | 0.177 | 0.175 |
+| npm | react | 6.67 | 1.584 | 1.402 | 0.498 | 0.495 |
+| npm | webpack | 4.96 | 1.263 | 1.156 | 0.713 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 1.419 | 1.297 | 0.765 | 0.762 |
+| npm | express | 0.77 | 2.027 | 1.571 | 0.602 | 0.576 |
+| npm | @babel/core | 0.76 | 1.722 | 1.374 | 0.575 | 0.575 |
+| npm | request | 0.29 | 2.492 | 1.629 | 0.863 | 0.529 |
+| npm | lodash | 0.24 | 2.235 | 1.358 | 0.877 | 0.362 |
+| PyPI | numpy | 2.65 | 2.446 | 2.134 | 0.883 | 0.596 |
+| PyPI | boto3 | 2.10 | 3.311 | 2.942 | 0.995 | 0.621 |
+| PyPI | requests | 0.12 | 4.407 | 3.612 | 0.795 | 0.657 |
 
 The full-read charges and the read-peak limits derive from the read peaks of captures of at least
 one step, as [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling)

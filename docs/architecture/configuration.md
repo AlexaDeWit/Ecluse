@@ -155,9 +155,10 @@ never deadlocks.
 A full read's charge per source byte is 1.25 times the highest peak per source byte that the
 residency tier measures for one ecosystem, among captures of at least one 1 MiB meter step, rounded
 up to a tenth. The peak is the most live data the read holds while it parses and projects, which is
-more than it keeps afterwards. npm's charge is 2.1 (typescript peaks at 1.68) and PyPI's is 4.2
-(boto3 peaks at 3.34). A capture under one step can peak above its per-byte charge, up to 2.31 for
-npm (request), but each such peak stays under the 1 MiB entry step that every request pays first.
+more than it keeps afterwards. npm's charge is 2.1 (typescript peaks at 1.65) and PyPI's is 4.2
+(boto3 peaks at 3.31). A capture under one step can peak above its per-byte charge, up to 2.49 for
+npm (request) and 4.41 for PyPI (requests), but each such peak stays under the 1 MiB entry step
+that every request pays first.
 The margin covers packages shaped unlike the corpus. A listing's response pays 1.6 per source byte.
 That covers the encoding with its strict copy, which exceeds the listing's measured peak above the
 entry it holds. The residency tier in
