@@ -9,6 +9,12 @@ module Ecluse.Core.Registry.PyPI.Streaming (
     PyPIRead (..),
     PyPIField (..),
     pypiFields,
+    fileScalars,
+    hashNames,
+    SelectedFileEvent (..),
+    SelectedFile (..),
+    collectSelected,
+    finishSelected,
 ) where
 
 import Data.Aeson (Value (Array, Null, Object, String))
@@ -85,16 +91,18 @@ scalar budget
     | budget <= 0 = retainedValue 0
     | otherwise = retainedScalar <|> pure (Array mempty)
 
+-- | The scalar members a file retains.
 fileScalars :: [Text]
 fileScalars = ["filename", "url", "requires-python", "size", "upload-time", "yanked", "provenance"]
 
 isFileScalar :: Text -> Bool
 isFileScalar key = key `elem` fileScalars
 
--- The digest names a file's @hashes@ object can use. Any other name keeps its own key.
+-- | The digest names a file's @hashes@ object can use. Any other name keeps its own key.
 hashNames :: [Text]
 hashNames = [renderHashAlg alg | alg <- Universe.universe, alg /= SRI]
 
+-- | One member event of a file object that a selected read inspects.
 data SelectedFileEvent
     = FileScalar Key.Key Value
     | HashesStart
@@ -102,6 +110,7 @@ data SelectedFileEvent
     | HashField Key.Key Value
     | HashesValue Value
 
+-- | A file under selection: rejected by its name, or a candidate with its fields so far.
 data SelectedFile
     = RejectedFile
     | CandidateFile Bool [(Key.Key, Value)] (Maybe Value) Bool
@@ -120,6 +129,7 @@ selectedFile budget project wanted = finishSelected <$> J.foldI (collectSelected
         | otherwise = mempty
     hashField key = HashField (Key.fromText key) <$> scalar (budget - 1)
 
+-- | Fold one member event into a file under selection. The first of each field wins.
 collectSelected :: FileProject -> Text -> SelectedFile -> SelectedFileEvent -> SelectedFile
 collectSelected _ _ RejectedFile _ = RejectedFile
 collectSelected project wanted current@(CandidateFile matched scalars hashes active) event = case event of
@@ -142,6 +152,7 @@ collectSelected project wanted current@(CandidateFile matched scalars hashes act
             CandidateFile matched scalars (Just (Object (KeyMap.insert key value fields))) active
         | otherwise -> current
 
+-- | The retained object of a file the requested release names.
 finishSelected :: SelectedFile -> Maybe Value
 finishSelected (CandidateFile True fields hashes _) =
     Just (Object (KeyMap.fromList (maybeToList ((,) "hashes" <$> hashes) <> fields)))

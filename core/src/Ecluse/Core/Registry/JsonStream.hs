@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Incremental registry extraction within a decompressed body ceiling, and the per-document sharing
-of what it retains. With json-stream 0.4.6.1 and text 2.1.3, decoded strings and keys own their
-arrays, including chunk-spanning tokens.
+{- | Incremental registry extraction within a decompressed body ceiling. With json-stream 0.4.6.1 and
+text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
 See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
 -}
 module Ecluse.Core.Registry.JsonStream (
@@ -20,10 +19,6 @@ module Ecluse.Core.Registry.JsonStream (
     retainedScalar,
     retainedObjectWith,
     retainedArrayWith,
-    InternTable,
-    internTableKeeping,
-    internValue,
-    internText,
 ) where
 
 import Data.Aeson (Value (..))
@@ -32,12 +27,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
-import Data.Map.Internal (Map (Bin, Tip))
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Security (BodyLimit, LimitError (BodyTooLarge), bodyLimitBytes)
-import Ecluse.Core.Text (ownedText)
 
 -- | Extracted data and the size of the complete decompressed source, including ignored fields.
 data StreamResult a = StreamResult
@@ -160,65 +153,3 @@ foldRetained = fmap finish . J.foldI collect Missing
 -- | Read a scalar without materialising an object or array when the field has the wrong shape.
 retainedScalar :: J.Parser Value
 retainedScalar = (String <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
-
-{- | The first copy of each key and string that one document's retained values hold. Keep one table
-per document and drop it when the read ends, so no table outlives the documents it serves.
--}
-newtype InternTable = InternTable (HashMap Text Copy)
-
--- A key and a string with the same text share one copy. A key's copy says what happens to its values.
-data Copy = Copy Text Value Values
-
-data Values = ShareValues | KeepValues
-
-{- | A table for one document that keeps the values of the named members as read. Name the members
-whose values differ in every release or file, so they never enter the table.
--}
-internTableKeeping :: [Text] -> InternTable
-internTableKeeping names = InternTable (HashMap.fromList [(name, Copy name (String name) KeepValues) | name <- names])
-
-{- | The value with every key and string replaced by the table's copy. A text the table lacks is
-stored as an owned copy. Member order, first-occurrence precedence and every text are unchanged.
--}
-internValue :: InternTable -> Value -> (InternTable, Value)
-internValue table value = case intern table value of
-    Interned held shared -> (held, shared)
-
--- | The table's copy of a text, such as a member name read outside a retained value.
-internText :: InternTable -> Text -> (InternTable, Text)
-internText table text = case copyOf table text of
-    Interned held (Copy shared _ _) -> (held, shared)
-
-data Interned a = Interned InternTable a
-    deriving stock (Functor)
-
-intern :: InternTable -> Value -> Interned Value
-intern table = \case
-    String text -> (\(Copy _ shared _) -> shared) <$> copyOf table text
-    Object members -> Object . KeyMap.fromMap <$> internMembers table (KeyMap.toMap members)
-    Array items -> Array . V.fromListN (V.length items) . reverse <$> V.foldl' internItem (Interned table []) items
-    other -> Interned table other
-  where
-    internItem (Interned held shared) item = (: shared) <$> intern held item
-
--- Data.Map.Internal is outside containers' PVP guarantee. Its constructors rebuild each node once, and
--- the public route (foldlWithKey' into fromDistinctDescList) allocates about 111 more bytes per member.
-internMembers :: InternTable -> Map Key.Key Value -> Interned (Map Key.Key Value)
-internMembers table = \case
-    Tip -> Interned table Tip
-    Bin size key value left right ->
-        let !(Interned afterLeft left') = internMembers table left
-            !(Interned afterKey (Copy name _ values)) = copyOf afterLeft (Key.toText key)
-            !(Interned afterValue value') = case values of
-                ShareValues -> intern afterKey value
-                KeepValues -> Interned afterKey value
-            !(Interned afterRight right') = internMembers afterValue right
-         in Interned afterRight (Bin size (Key.fromText name) value' left' right')
-
-copyOf :: InternTable -> Text -> Interned Copy
-copyOf table@(InternTable copies) text = case HashMap.lookup text copies of
-    Just known -> Interned table known
-    Nothing ->
-        let owned = ownedText text
-            copy = Copy owned (String owned) ShareValues
-         in Interned (InternTable (HashMap.insert owned copy copies)) copy

@@ -2,18 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pure chunk inputs for the production registry stream driver, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString, sameTexts) where
+-- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
+import Data.JsonStream.TokenParser (TokenResult)
 import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
+import Ecluse.Core.Registry (ParseError (ParseError))
+import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable, tableHashWith)
+import Ecluse.Core.Registry.Json.Walk (Step, nestingLimit, readJsonWalk)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
@@ -23,6 +27,24 @@ parseJsonChunks bound parser step initial = evalState (readJsonStream bound pars
     next = state $ \case
         [] -> (BS.empty, [])
         chunk : rest -> (chunk, rest)
+
+-- | Run the production walk driver against explicit chunks.
+walkJsonChunks :: BodyLimit -> (TokenResult -> Step s) -> [ByteString] -> Either LimitError (StreamResult s)
+walkJsonChunks bound walk = evalState (readJsonWalk bound walk next)
+  where
+    next = state $ \case
+        [] -> (BS.empty, [])
+        chunk : rest -> (chunk, rest)
+
+-- | A document table with the production hash under a fixed key, for reads that must repeat exactly.
+testTable :: [Text] -> InternTable
+testTable = newInternTable (tableHashWith (SipKey 0x0706050403020100 0x0f0e0d0c0b0a0908))
+
+{- | What a caller acts on in a read: the refusal, or the byte count with the result or whether its
+parse error is the nesting limit. Other parse errors carry no meaning past their failure.
+-}
+readOutcome :: Either LimitError (StreamResult a) -> Either LimitError (Int, Either Bool a)
+readOutcome = fmap (\result -> (streamBytes result, first (\(ParseError message) -> message == nestingLimit) (streamValue result)))
 
 -- | Whether at least two objects hold the member and all of them hold its key as one heap object.
 sharesKey :: Key.Key -> [Value] -> IO Bool

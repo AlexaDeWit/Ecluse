@@ -173,6 +173,9 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
+    Ecluse.Core.Registry.Json.Intern
+    Ecluse.Core.Registry.Json.Shape
+    Ecluse.Core.Registry.Json.Walk
     Ecluse.Core.Registry.JsonStream
     Ecluse.Core.Registry.VersionList
     Ecluse.Core.Registry.Maintenance
@@ -190,6 +193,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Registry.Npm.Reader
     Ecluse.Core.Registry.Npm.Streaming
     Ecluse.Core.Registry.Npm.StreamingProjection
     Ecluse.Core.Registry.Npm.Publish
@@ -218,6 +222,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
     Ecluse.Core.Registry.PyPI.Project
+    Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
     Ecluse.Core.Registry.PyPI.Route.Internal
@@ -346,6 +351,7 @@ library ecluse-core
     , http-client-tls       >=0.3.6 && <0.5
     , http-conduit          ^>=2.3
     , http-types            ^>=0.12
+    , hashable              ^>=1.5
     , hs-opentelemetry-api  ^>=1.0
     , integer-logarithms    ^>=1.0
     , scientific            ^>=0.3
@@ -708,6 +714,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
@@ -844,6 +851,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
+    Ecluse.Core.Registry.Json.InternSpec
+    Ecluse.Core.Registry.Json.ShapeSpec
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
     Ecluse.Core.Registry.VersionListSpec
@@ -867,6 +876,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
     Ecluse.Core.Registry.Npm.MetadataSpec
+    Ecluse.Core.Registry.Npm.ReaderSpec
     Ecluse.Core.Registry.Npm.StreamingSpec
     Ecluse.Core.Registry.Npm.StreamingProjectionSpec
     Ecluse.Core.Registry.Npm.ProjectSpec
@@ -886,6 +896,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
+    Ecluse.Core.Registry.PyPI.ReaderSpec
     Ecluse.Core.Registry.PyPI.StreamingSpec
     Ecluse.Core.Registry.PyPI.WireSpec
     Ecluse.Core.Registry.RequestSpec

@@ -459,9 +459,10 @@ are CodeArtifact, any host that speaks the protocol, and Verdaccio for developme
 
 ### Incremental npm extraction
 
-npm reads run `json-stream` inside the HTTP response lifetime. The reader feeds chunks of at most
-32 KiB and counts decompressed bytes. A full read passes the response body through a digesting
-source, which updates SHA-256 from each chunk the reader consumes. A selected read reads the body
+npm and PyPI reads walk the tokens of the vendored json-stream lexer (`vendor/json-stream/`) inside
+the HTTP response lifetime. The reader feeds chunks of at most 32 KiB and counts decompressed bytes.
+A full read passes the response body through a digesting source, which updates SHA-256 from each
+chunk the reader consumes. A selected read reads the body
 directly, because a selected release carries no source digest. A successful result consumes the
 complete response, including data after extraction finishes. Transport failure, body limits and
 cancellation still close the response through `withResponse`.
@@ -475,13 +476,16 @@ The [operator field contract](https://ecluse-proxy.com/docs/protocol-support/#np
 owns the retained set. Extraction skips unknown fields before constructing values. The parser does
 not establish whole-document JSON validity. A scalar or empty retained container consumes one depth
 level, and each enclosing retained container adds one. Specialised readers check their own level
-before reading members. Skipped structures use the library's constant-state skip path. Body and
-version ceilings bound other work.
+before reading members. Skipped structures pass token by token without decoding. Body and version
+ceilings bound other work. The walk accepts and refuses the same input as json-stream's parser
+combinators, and it builds each retained object once from its members.
 
-The pinned library's native lexer allocates batches proportional to the input chunk size
-(`20 + chunkBytes / 5` result records). Its key accumulator stops at about 64 KiB and its number
-accumulator at about 200,000 digits. Retained strings become owned `Text`. A full or selected read
-keeps one copy of each key and string its releases or files repeat, in a table it drops when it ends.
+The vendored lexer allocates batches proportional to the input chunk size (`20 + chunkBytes / 5`
+result records). Its key accumulator stops at about 64 KiB and its number accumulator at about
+200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
+copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
+read, in a table keyed by SipHash-1-3 under a key drawn for that read, and drops the table when the
+read ends.
 Parser continuations advance before the next chunk, so successful reads do not retain a complete
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and

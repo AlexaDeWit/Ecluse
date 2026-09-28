@@ -21,11 +21,12 @@ import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
@@ -42,11 +43,9 @@ projectPyPIVersion limits name version body = do
 projectPyPIChunks :: Limits -> PackageName -> PyPIRead -> [ByteString] -> Either MetadataError (StreamResult PyPIProjection)
 projectPyPIChunks limits name mode =
     first MetadataBoundExceeded
-        . parseJsonChunks
+        . walkJsonChunks
             (MetadataBodyLimit (maxMetadataBytes limits))
-            (pypiFields (maxNestingDepth limits) mode)
-            (collectField limits mode)
-            (emptyProjection name)
+            (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) (testTable fileUniqueFields) (emptyProjection name))
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.
 documentFromValue :: Value -> SimpleDocument
