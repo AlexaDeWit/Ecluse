@@ -5,26 +5,25 @@
 
 {- | The first copy of each key and string that one document's retained values hold, found by the
 bytes the lexer read before any text is built. Keep one table per read and drop it when the read
-ends, so no table outlives the document it serves.
+ends, so no table outlives the document it serves. The table hashes with SipHash-1-3 under a key
+drawn for its read, so upstream text cannot choose which names collide.
 -}
 module Ecluse.Core.Registry.Json.Intern (
     -- * Names as read
-    Name (..),
+    Name (Plain),
+    decodedName,
     nameText,
     nameBytes,
 
     -- * The table
     InternTable,
-    TableHash (..),
     SipKey (..),
+    newTableKey,
     newInternTable,
-    readTableHash,
-    tableHashWith,
     Entry (..),
     Interned (..),
     internName,
-    sipHash13,
-    sipHash24,
+    sipHash,
 ) where
 
 import Crypto.Random (getRandomBytes)
@@ -36,41 +35,35 @@ import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable (..))
 import Data.JsonStream.Unescape (unsafeDecodeASCII)
-import Data.Map.Strict qualified as Map
+import Data.Text.Array qualified as TA
+import Data.Text.Internal qualified as TI
 
 -- | A member name or string as the lexer read it: plain ASCII bytes, or text decoded from escapes or UTF-8.
-data Name = Plain !ByteString | Decoded !Text
+data Name = Plain !ByteString | Decoded !Text ~ByteString
+
+-- | A name decoded from escapes or UTF-8. Its bytes are encoded once, when first asked for.
+decodedName :: Text -> Name
+decodedName text = Decoded text (encodeUtf8 text)
 
 -- | The name's text on an array of its own. Plain bytes are copied, so no text keeps its input chunk.
 nameText :: Name -> Text
 nameText = \case
     Plain bytes -> unsafeDecodeASCII bytes
-    Decoded text -> text
+    Decoded text _ -> text
 
 -- | The name's UTF-8 bytes. Plain bytes are the input's own, so hold them only for the current lookup.
 nameBytes :: Name -> ByteString
 nameBytes = \case
     Plain bytes -> bytes
-    Decoded text -> encodeUtf8 text
+    Decoded _ bytes -> bytes
 
--- | How the table finds a name: a fixed-seed hash, a keyed SipHash, or byte order with no hash.
-data TableHash
-    = FixedSeed
-    | SipHash13 !SipKey
-    | SipHash24 !SipKey
-    | ByteOrder
-
--- | The hash a read uses, with a fresh key per read, so no key outlives the table it seeds.
-readTableHash :: IO TableHash
-readTableHash = do
+-- | A fresh key for one read's table, so no key outlives the table it seeds.
+newTableKey :: IO SipKey
+newTableKey = do
     bytes <- getRandomBytes 16 :: IO ByteString
     let word = BS.foldl' (\total byte -> total * 256 + fromIntegral byte) 0
         (first8, last8) = BS.splitAt 8 bytes
-    pure (tableHashWith (SipKey (word first8) (word last8)))
-
--- | The hash reads use, given the key a keyed hash takes.
-tableHashWith :: SipKey -> TableHash
-tableHashWith = SipHash13
+    pure (SipKey (word first8) (word last8))
 
 -- | One table entry: the shared text, its shared string value, and whether a member's value is kept as read.
 data Entry = Entry
@@ -82,62 +75,66 @@ data Entry = Entry
 -- | The table's entry for a name, with the table that holds it.
 data Interned = Interned !Entry !InternTable
 
--- | One read's table. The hashed forms cache each key's hash, so a lookup hashes the probe once.
-data InternTable
-    = Hashed !TableHash !(HashMap.HashMap Probe Entry)
-    | Ordered !(Map.Map ByteString Entry)
+-- | One read's table. Each entry's text is also its key, and each key carries its hash.
+data InternTable = InternTable !SipKey !(HashMap.HashMap Probe Entry)
 
 {- | A table for one document that keeps the values of the named members as read. Name the members
 whose values differ in every release or file, so they never enter the table.
 -}
-newInternTable :: TableHash -> [Text] -> InternTable
-newInternTable kind = foldl' seed blank
+newInternTable :: SipKey -> [Text] -> InternTable
+newInternTable key = foldl' seed (InternTable key mempty)
   where
-    blank = case kind of
-        ByteOrder -> Ordered mempty
-        _ -> Hashed kind mempty
     seed table name = insertEntry (encodeUtf8 name) (Entry name (String name) True) table
 
 {- | The table's entry for a name. A name the table lacks gets an entry of its own text, which the
 returned table holds from then on.
 -}
 internName :: Name -> InternTable -> Interned
-internName name table = case lookupEntry probe table of
+internName name table@(InternTable key entries) = case HashMap.lookup (Probe code (Slice probe)) entries of
     Just entry -> Interned entry table
     Nothing ->
         let text = nameText name
             entry = Entry text (String text) False
-         in Interned entry (insertEntry (BS.copy probe) entry table)
+         in Interned entry (InternTable key (HashMap.insert (Probe code (Owned text)) entry entries))
   where
     probe = nameBytes name
+    code = fromIntegral (sipHash 1 3 key probe)
 {-# INLINE internName #-}
 
-lookupEntry :: ByteString -> InternTable -> Maybe Entry
-lookupEntry probe = \case
-    Hashed kind entries -> HashMap.lookup (Probe (hashBytes kind probe) probe) entries
-    Ordered entries -> Map.lookup probe entries
-
--- A stored key is a copy of its own, never a slice that keeps an input chunk alive.
 insertEntry :: ByteString -> Entry -> InternTable -> InternTable
-insertEntry stored entry = \case
-    Hashed kind entries -> Hashed kind (HashMap.insert (Probe (hashBytes kind stored) stored) entry entries)
-    Ordered entries -> Ordered (Map.insert stored entry entries)
+insertEntry bytes entry (InternTable key entries) =
+    InternTable key (HashMap.insert (Probe (fromIntegral (sipHash 1 3 key bytes)) (Owned (entryText entry))) entry entries)
 
-hashBytes :: TableHash -> ByteString -> Int
-hashBytes kind bytes = case kind of
-    SipHash13 key -> fromIntegral (sipHash13 key bytes)
-    SipHash24 key -> fromIntegral (sipHash24 key bytes)
-    _ -> hash bytes
+-- A key with its hash computed once. A probe holds the bytes it looks up, and a stored key its entry's text.
+data Probe = Probe {-# UNPACK #-} !Int !Bytes
 
--- | SipHash-1-3, the table's keyed hash.
-sipHash13 :: SipKey -> ByteString -> Word64
-sipHash13 = sipHash 1 3
+data Bytes = Slice !ByteString | Owned !Text
 
--- | SipHash-2-4, the reference form, which the table can use in place of SipHash-1-3.
-sipHash24 :: SipKey -> ByteString -> Word64
-sipHash24 = sipHash 2 4
+instance Eq Probe where
+    Probe left leftBytes == Probe right rightBytes = left == right && sameBytes leftBytes rightBytes
 
--- SipHash with one to four compression and finalisation rounds, with the state in unboxed words.
+instance Hashable Probe where
+    hashWithSalt salt (Probe code _) = hashWithSalt salt code
+    hash (Probe code _) = code
+
+sameBytes :: Bytes -> Bytes -> Bool
+sameBytes = curry $ \case
+    (Owned left, Owned right) -> left == right
+    (Slice left, Slice right) -> left == right
+    (Slice bytes, Owned text) -> sliceMatches bytes text
+    (Owned text, Slice bytes) -> sliceMatches bytes text
+
+sliceMatches :: ByteString -> Text -> Bool
+sliceMatches bytes (TI.Text array offset len) = BS.length bytes == len && go 0
+  where
+    go !index
+        | index >= len = True
+        | BSU.unsafeIndex bytes index == TA.unsafeIndex array (offset + index) = go (index + 1)
+        | otherwise = False
+
+{- | SipHash with the given compression and finalisation rounds, from one to four each, over the
+message's little-endian words. The table uses SipHash-1-3.
+-}
 sipHash :: Int -> Int -> SipKey -> ByteString -> Word64
 {-# INLINE sipHash #-}
 sipHash compression finalisation (SipKey k0 k1) bytes =
@@ -167,7 +164,7 @@ sipHash compression finalisation (SipKey k0 k1) bytes =
       where
         go !index !acc
             | index >= count = acc
-            | otherwise = go (index + 1) (acc .|. (fromIntegral (BSU.unsafeIndex bytes (offset + index)) `shiftL` (8 * index)))
+            | otherwise = go (index + 1) (acc .|. (byte (offset + index) `shiftL` (8 * index)))
 
 -- Rounds are unrolled, so no state word is boxed between them.
 rounds :: Int -> Word64 -> Word64 -> Word64 -> Word64 -> (# Word64, Word64, Word64, Word64 #)
@@ -192,13 +189,3 @@ sipRound !v0 !v1 !v2 !v3 =
         !c2 = rotateL c1 32
      in (# a2, b1, c2, d1 #)
 {-# INLINE sipRound #-}
-
--- A key with its hash computed once, from its bytes.
-data Probe = Probe {-# UNPACK #-} !Int !ByteString
-
-instance Eq Probe where
-    Probe left leftBytes == Probe right rightBytes = left == right && leftBytes == rightBytes
-
-instance Hashable Probe where
-    hashWithSalt salt (Probe code _) = hashWithSalt salt code
-    hash (Probe code _) = code

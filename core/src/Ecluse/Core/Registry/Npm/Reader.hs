@@ -17,7 +17,8 @@ import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (Entry (entryText), InternTable, Interned (..), internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), everyMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..), versionFields)
 import Ecluse.Core.Security (LimitError)
 
@@ -31,9 +32,12 @@ at any depth, so a rarer member such as @_npmUser.url@ is kept as read too.
 releaseUniqueFields :: [Text]
 releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
--- | Walk one packument, passing each field to the step as it completes.
-npmWalk :: Int -> PackumentRead -> (s -> NpmField -> Either LimitError s) -> InternTable -> s -> TokenResult -> Step s
-npmWalk depth mode step table0 initial tokens
+{- | Walk one packument, passing each field to the step as it completes. Before it reads a release,
+the walk asks whether the consumer keeps a release under that key. Only a kept release's keys and
+strings enter the table, so a dropped release leaves nothing behind.
+-}
+npmWalk :: Int -> PackumentRead -> (s -> NpmField -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
+npmWalk depth mode step keeps table0 initial tokens
     | depth <= 0 = withElement tokens tooDeep
     | otherwise = withElement tokens $ \element rest -> case element of
         ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
@@ -51,7 +55,7 @@ npmWalk depth mode step table0 initial tokens
             WholePackument -> everyScalar TagField table
             OneRelease _ -> oneScalar "latest" (TagField "latest") table
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked table acc))
-    emit acc field next = either Refused next (step acc field)
+    emit = Walk.emit step
     target = case mode of
         OneRelease version -> Just (encodeUtf8 version)
         WholePackument -> Nothing
@@ -71,10 +75,16 @@ npmWalk depth mode step table0 initial tokens
     release (Walked table acc) key after continue = case target of
         Just wanted | nameBytes key /= wanted -> withElement after $ \element rest ->
             skipFrom element rest (\afterValue -> emit acc (VersionField "" Nothing) (\acc' -> continue (Walked table acc') afterValue))
-        _ -> case internName key table of
-            Interned entry keyed -> withElement after $ \element rest ->
-                readShape (Checked (depth - 2) (ObjectOr Null releaseFields)) Share keyed element rest $ \release' table' afterValue ->
-                    emit acc (VersionField (entryText entry) (Just release')) (\acc' -> continue (Walked table' acc') afterValue)
+        _
+            | keeps acc text -> case internName key table of
+                Interned entry keyed -> withElement after $ \element rest ->
+                    readShape releaseShape Share keyed element rest $ \release' table' afterValue ->
+                        emit acc (VersionField (entryText entry) (Just release')) (\acc' -> continue (Walked table' acc') afterValue)
+            | otherwise -> withElement after $ \element rest ->
+                readShape releaseShape Keep table element rest $ \release' _ afterValue ->
+                    emit acc (VersionField text (Just release')) (\acc' -> continue (Walked table acc') afterValue)
+      where
+        text = nameText key
 
     everyScalar field table acc rest finish = eachMember (timestamp field) finish (Walked table acc) rest
     timestamp field (Walked table acc) key after continue = withElement after $ \element rest ->
@@ -90,9 +100,7 @@ npmWalk depth mode step table0 initial tokens
                     emit current (field scalar) (skipRest 1 afterValue . finish . Walked held)
             | otherwise = withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked held current))
 
-    releaseFields = releaseMembers depth
-
-data Walked s = Walked !InternTable s
+    releaseShape = Checked (depth - 2) (ObjectOr Null (releaseMembers depth))
 
 -- The release fields "Ecluse.Core.Registry.Npm.Streaming" retains for full and selected reads.
 releaseMembers :: Int -> Members

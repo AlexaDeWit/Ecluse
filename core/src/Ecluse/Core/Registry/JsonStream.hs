@@ -7,8 +7,13 @@ text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning 
 See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
 -}
 module Ecluse.Core.Registry.JsonStream (
+    -- * Bounded reads
     StreamResult (..),
+    Step (..),
+    readSteps,
     readJsonStream,
+
+    -- * Retained values
     retainedValue,
     withinRetainedDepth,
     Members,
@@ -38,36 +43,49 @@ data StreamResult a = StreamResult
     }
     deriving stock (Eq, Show)
 
--- | Drain successful bodies even when extraction ends early. An empty chunk ends the response.
-readJsonStream :: (Monad m) => BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonStream bound parser step initial readChunk = go 0 initial (J.runParser parser)
+-- | A read in progress: it needs input, stops on a parse error or a refused value, or has finished.
+data Step s
+    = NeedData (ByteString -> Step s)
+    | Failed Text
+    | Refused LimitError
+    | Finished s
+
+{- | Feed a read in pieces of at most 32 KiB, within the body ceiling, and drain the body after the
+read finishes. An empty chunk ends the body.
+-}
+readSteps :: (Monad m) => BodyLimit -> Step s -> m ByteString -> m (Either LimitError (StreamResult s))
+readSteps bound start readChunk = go 0 start
   where
-    go !seen !acc output = case output of
-        J.ParseYield value next -> case step acc value of
-            Left fault -> pure (Left fault)
-            Right updated -> go seen updated next
-        J.ParseFailed err -> pure (Right (StreamResult (Left (ParseError (toText err))) seen))
+    go !seen step = case step of
+        Refused fault -> pure (Left fault)
+        Failed err -> pure (Right (StreamResult (Left (ParseError err)) seen))
         _ -> do
             chunk <- readChunk
             if BS.null chunk
-                then pure . Right $ StreamResult (finish acc output) seen
+                then pure . Right $ StreamResult (finish step) seen
                 else
                     if BS.length chunk > bodyLimitBytes bound - seen
                         then pure (Left (BodyTooLarge bound))
-                        else feed (seen + BS.length chunk) acc output chunk
-    feed seen acc output chunk = case output of
-        J.ParseYield value next -> case step acc value of
-            Left fault -> pure (Left fault)
-            Right updated -> feed seen updated next chunk
-        J.ParseNeedData next
+                        else feed (seen + BS.length chunk) step chunk
+    feed seen step chunk = case step of
+        NeedData next
             | not (BS.null chunk) ->
                 let (piece, remaining) = BS.splitAt 32768 chunk
-                 in feed seen acc (next piece) remaining
-        J.ParseDone _ -> go seen acc (J.ParseDone BS.empty)
-        _ -> go seen acc output
-    finish acc = \case
-        J.ParseDone _ -> Right acc
+                 in feed seen (next piece) remaining
+        _ -> go seen step
+    finish = \case
+        Finished result -> Right result
         _ -> Left (ParseError "incomplete registry JSON")
+
+-- | Fold each value the parser yields through the step, as 'readSteps' feeds it.
+readJsonStream :: (Monad m) => BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> m ByteString -> m (Either LimitError (StreamResult s))
+readJsonStream bound parser step initial = readSteps bound (parserSteps initial (J.runParser parser))
+  where
+    parserSteps !acc = \case
+        J.ParseYield value next -> either Refused (`parserSteps` next) (step acc value)
+        J.ParseNeedData next -> NeedData (parserSteps acc . next)
+        J.ParseFailed err -> Failed (toText err)
+        J.ParseDone _ -> Finished acc
 
 -- | Decode a retained field within a structural budget. Unknown fields never call this parser.
 retainedValue :: Int -> J.Parser Value

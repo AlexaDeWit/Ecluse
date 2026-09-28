@@ -11,6 +11,8 @@ module Ecluse.Core.Registry.Json.Walk (
     Step (..),
     readJsonWalk,
     nestingLimit,
+    Walked (..),
+    emit,
 
     -- * Tokens
     withElement,
@@ -29,48 +31,25 @@ import Data.ByteString qualified as BS
 import Data.JsonStream.CLexer (tokenParser, unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 
-import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Json.Intern (Name (..))
-import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Security (BodyLimit, LimitError (BodyTooLarge), bodyLimitBytes)
-
--- | What a walk does next: ask for input, stop with a parse error or a refused event, or finish.
-data Step s
-    = NeedData (ByteString -> Step s)
-    | Failed Text
-    | Refused LimitError
-    | Finished s
+import Ecluse.Core.Registry.Json.Intern (InternTable, Name (Plain), decodedName)
+import Ecluse.Core.Registry.JsonStream (Step (..), StreamResult, readSteps)
+import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | The parse error that marks a retained value past its structural budget.
 nestingLimit :: Text
 nestingLimit = "retained JSON nesting limit"
 
-{- | Walk a body in the pieces 'Ecluse.Core.Registry.JsonStream.readJsonStream' feeds json-stream,
-with the same ceiling and the same drain after the walk finishes. An empty chunk ends the body.
--}
+-- | Walk a body as 'Ecluse.Core.Registry.JsonStream.readJsonStream' reads one, from the lexer's first token.
 readJsonWalk :: (Monad m) => BodyLimit -> (TokenResult -> Step s) -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonWalk bound walk readChunk = go 0 (walk (tokenParser BS.empty))
-  where
-    go !seen step = case step of
-        Refused fault -> pure (Left fault)
-        Failed err -> pure (Right (StreamResult (Left (ParseError err)) seen))
-        _ -> do
-            chunk <- readChunk
-            if BS.null chunk
-                then pure . Right $ StreamResult (finish step) seen
-                else
-                    if BS.length chunk > bodyLimitBytes bound - seen
-                        then pure (Left (BodyTooLarge bound))
-                        else feed (seen + BS.length chunk) step chunk
-    feed seen step chunk = case step of
-        NeedData next
-            | not (BS.null chunk) ->
-                let (piece, remaining) = BS.splitAt 32768 chunk
-                 in feed seen (next piece) remaining
-        _ -> go seen step
-    finish = \case
-        Finished result -> Right result
-        _ -> Left (ParseError "incomplete registry JSON")
+readJsonWalk bound walk = readSteps bound (walk (tokenParser BS.empty))
+
+-- | A walk's state between tokens: the read's table and the consumer's accumulator.
+data Walked s = Walked !InternTable s
+
+-- | Pass a field to the consumer's step. A refused field ends the walk.
+emit :: (s -> field -> Either LimitError s) -> s -> field -> (s -> Step r) -> Step r
+emit step acc field next = either Refused next (step acc field)
+{-# INLINE emit #-}
 
 -- | The next element, suspending for input at a chunk boundary.
 withElement :: TokenResult -> (Element -> TokenResult -> Step s) -> Step s
@@ -140,17 +119,17 @@ readString :: Element -> TokenResult -> (Name -> TokenResult -> Step s) -> Step 
 readString element rest next = case element of
     StringRaw bytes True _ -> next (Plain bytes) rest
     StringRaw bytes False _ -> case unescapeText bytes of
-        Right text -> next (Decoded text) rest
+        Right text -> next (decodedName text) rest
         Left err -> Failed (show err)
     StringContent part -> longString [part] rest next
-    JValue (Aeson.String text) -> next (Decoded text) rest
+    JValue (Aeson.String text) -> next (decodedName text) rest
     _ -> Failed "expected a string"
 
 longString :: [ByteString] -> TokenResult -> (Name -> TokenResult -> Step s) -> Step s
 longString parts tokens next = withElement tokens $ \element rest -> case element of
     StringContent part -> longString (part : parts) rest next
     StringEnd _ -> case unescapeText (BS.concat (reverse parts)) of
-        Right text -> next (Decoded text) rest
+        Right text -> next (decodedName text) rest
         Left _ -> Failed "Error decoding UTF8"
     _ -> Failed "unexpected token in a string"
 
@@ -168,10 +147,10 @@ eachMember visit done = loop
 -- | Decode the object key at the element, or skip its member when json-stream drops it unread.
 memberName :: Element -> TokenResult -> (Name -> TokenResult -> Step s) -> (TokenResult -> Step s) -> Step s
 memberName element rest named dropped = case element of
-    JValue (Aeson.String key) -> named (Decoded key) rest
+    JValue (Aeson.String key) -> named (decodedName key) rest
     StringRaw bytes True _ -> named (Plain bytes) rest
     StringRaw bytes False _ -> case unescapeText bytes of
-        Right key -> named (Decoded key) rest
+        Right key -> named (decodedName key) rest
         Left err -> Failed (show err)
     StringContent part -> longKey [part] (BS.length part) rest named dropped
     _ -> Failed "unexpected token where an object key belongs"
@@ -180,7 +159,7 @@ memberName element rest named dropped = case element of
 longKey :: [ByteString] -> Int -> TokenResult -> (Name -> TokenResult -> Step s) -> (TokenResult -> Step s) -> Step s
 longKey parts !size tokens next dropped = withElement tokens $ \element rest -> case element of
     StringEnd _ -> case unescapeText (BS.concat (reverse parts)) of
-        Right key -> next (Decoded key) rest
+        Right key -> next (decodedName key) rest
         Left _ -> Failed "Error decoding UTF8"
     StringContent part
         | size > 65536 -> skipStringThen rest (\after -> withElement after (\value afterValue -> skipFrom value afterValue dropped))

@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Npm.StreamingProjection (
     NpmProjection,
     emptyProjection,
     collectField,
+    keepsRelease,
     finishProjection,
 ) where
 
@@ -56,6 +57,10 @@ emptyProjection =
         , projectedActiveContainer = Nothing
         , projectedInvalidContainer = False
         }
+
+-- | Whether a release read now under the key would be kept: the key's first in the first versions object.
+keepsRelease :: NpmProjection -> Text -> Bool
+keepsRelease acc key = projectedActiveContainer acc == Just VersionsContainer && Map.notMember key (projectedVersions acc)
 
 -- | Project each release once and enforce the version ceiling while receiving source fields.
 collectField :: Limits -> PackageName -> NpmProjection -> NpmField -> Either LimitError NpmProjection

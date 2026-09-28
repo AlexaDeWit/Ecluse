@@ -17,7 +17,8 @@ import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), knownMembers, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
@@ -26,9 +27,12 @@ import Ecluse.Core.Security (LimitError)
 fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
--- | Walk one project's Simple index, passing each field to the step as it completes.
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> InternTable -> s -> TokenResult -> Step s
-pypiWalk depth mode step table0 initial tokens
+{- | Walk one project's Simple index, passing each field to the step as it completes. Before it
+reads a file in a full read, the walk asks whether the consumer keeps the next file. Only a kept
+file's keys and strings enter the table.
+-}
+pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk depth mode step keeps table0 initial tokens
     | depth <= 0 = withElement tokens tooDeep
     | otherwise = withElement tokens $ \element rest -> case element of
         ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
@@ -37,7 +41,7 @@ pypiWalk depth mode step table0 initial tokens
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
-    emit acc field next = either Refused next (step acc field)
+    emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
         "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
@@ -61,7 +65,7 @@ pypiWalk depth mode step table0 initial tokens
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
         | otherwise = case mode of
-            FullRead -> readShape (ObjectOr Null fileFields) Share table element rest (retained Just)
+            FullRead -> readShape (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained Just)
             SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained id)
       where
         retained wrap payload table' afterValue = emit acc (FileField position (wrap payload)) (\acc' -> continue (Walked table' acc') afterValue)
@@ -76,8 +80,6 @@ pypiWalk depth mode step table0 initial tokens
     fileFields = namedMembers (("hashes", ObjectWith (depth - 3) (knownMembers hashNames (Scalar (depth - 4))) (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
     metaFields = namedMembers ([("tracks", ArrayWith (depth - 2) (Scalar (depth - 3)) (Scalar (depth - 2))) | full] <> [("api-version", Scalar (depth - 2))] <> [("_last-serial", Scalar (depth - 2)) | full])
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
-
-data Walked s = Walked !InternTable s
 
 data Selecting = Selecting !InternTable SelectedFile
 

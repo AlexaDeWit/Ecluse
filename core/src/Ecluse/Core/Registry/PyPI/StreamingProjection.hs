@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.PyPI.StreamingProjection (
     PyPIProjection,
     emptyProjection,
     collectField,
+    keepsFile,
     finishProjection,
 ) where
 
@@ -47,6 +48,10 @@ data PyPIProjection = PyPIProjection
 -- | Start one project's source without retaining any input chunks.
 emptyProjection :: PackageName -> PyPIProjection
 emptyProjection name = PyPIProjection mempty [] (filenameMemo name) [] [] mempty 0 Nothing True False False False False
+
+-- | Whether a file read now would be retained: files in the first files array, until a limit trips.
+keepsFile :: PyPIProjection -> Bool
+keepsFile acc = projectedFilesActive acc && isNothing (projectedBound acc)
 
 -- | Decode one compact file and stop retaining payloads after an existing structural limit trips.
 collectField :: Limits -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection

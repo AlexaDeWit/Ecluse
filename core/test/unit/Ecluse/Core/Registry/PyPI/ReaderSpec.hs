@@ -38,4 +38,4 @@ spec = describe "pypiWalk" $
                         Just most | length events >= most -> Left (TooManyVersions (length events) most)
                         _ -> Right (field : events)
                 readOutcome (parseJsonChunks bound (pypiFields depth mode) step [] chunks)
-                    === readOutcome (walkJsonChunks bound (pypiWalk depth mode step (testTable fileUniqueFields) []) chunks :: Either LimitError (StreamResult [PyPIField]))
+                    === readOutcome (walkJsonChunks bound (pypiWalk depth mode step (const True) (testTable fileUniqueFields) []) chunks :: Either LimitError (StreamResult [PyPIField]))

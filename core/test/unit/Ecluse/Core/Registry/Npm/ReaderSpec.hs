@@ -51,7 +51,7 @@ spec = describe "npmWalk" $ do
 bothReads :: Int -> Maybe Text -> Maybe Int -> [ByteString] -> (Either LimitError (Int, Either Bool [NpmField]), Either LimitError (Int, Either Bool [NpmField]))
 bothReads depth selected cap chunks =
     ( readOutcome (parseJsonChunks bound (npmFields depth (maybe FullRead SelectedRead selected)) step [] chunks)
-    , readOutcome (walkJsonChunks bound (npmWalk depth (maybe WholePackument OneRelease selected) step (testTable releaseUniqueFields) []) chunks :: Either LimitError (StreamResult [NpmField]))
+    , readOutcome (walkJsonChunks bound (npmWalk depth (maybe WholePackument OneRelease selected) step (\_ _ -> True) (testTable releaseUniqueFields) []) chunks :: Either LimitError (StreamResult [NpmField]))
     )
   where
     bound = MetadataBodyLimit (sum (map BS.length chunks))

@@ -24,7 +24,7 @@ import Data.JsonStream.CLexer (unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry (..), InternTable, Interned (..), Name (..), internName, nameBytes, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry (..), InternTable, Interned (..), Name (Plain), decodedName, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Walk (Step (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
@@ -138,7 +138,7 @@ raceFailure !level tokens = case tokens of
 readScalar :: Mode -> InternTable -> Element -> TokenResult -> (Value -> InternTable -> TokenResult -> Step s) -> (TokenResult -> Step s) -> Step s
 readScalar mode table element rest next container = case element of
     JInteger number -> let !value = Number (fromIntegral number) in next value table rest
-    JValue (String text) -> string mode table next (Decoded text) rest
+    JValue (String text) -> string mode table next (decodedName text) rest
     JValue value -> next value table rest
     ObjectBegin -> skipFrom element rest container
     ArrayBegin -> skipFrom element rest container
@@ -225,8 +225,8 @@ direct shape mode table element = case shape of
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
     StringRaw bytes True _ -> direct' (Plain bytes)
-    StringRaw bytes False _ -> either (const Indirect) (direct' . Decoded) (unescapeText bytes)
-    JValue (String text) -> direct' (Decoded text)
+    StringRaw bytes False _ -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
+    JValue (String text) -> direct' (decodedName text)
     JValue scalar -> Direct scalar table
     JInteger number -> Direct (Number (fromIntegral number)) table
     _ -> Indirect

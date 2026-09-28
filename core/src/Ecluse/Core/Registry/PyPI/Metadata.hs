@@ -17,7 +17,7 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Json.Intern (newInternTable, readTableHash)
+import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection, keepsFile)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
@@ -78,9 +78,9 @@ fetchPyPIBody tracing origin name consume =
 
 decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
 decodePyPI tracing origin name mode readChunk = do
-    table <- newInternTable <$> readTableHash <*> pure fileUniqueFields
+    table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
     spanMetadataDecode tracing name $
-        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) table (emptyProjection name)) readChunk
+        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)) readChunk
   where
     limits = ocLimits origin
 

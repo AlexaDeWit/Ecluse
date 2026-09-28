@@ -15,7 +15,7 @@ import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry (ParseError (ParseError))
-import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable, tableHashWith)
+import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, nestingLimit, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError)
@@ -38,7 +38,7 @@ walkJsonChunks bound walk = evalState (readJsonWalk bound walk next)
 
 -- | A document table with the production hash under a fixed key, for reads that must repeat exactly.
 testTable :: [Text] -> InternTable
-testTable = newInternTable (tableHashWith (SipKey 0x0706050403020100 0x0f0e0d0c0b0a0908))
+testTable = newInternTable (SipKey 0x0706050403020100 0x0f0e0d0c0b0a0908)
 
 {- | What a caller acts on in a read: the refusal, or the byte count with the result or whether its
 parse error is the nesting limit. Other parse errors carry no meaning past their failure.

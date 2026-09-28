@@ -1335,8 +1335,11 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
+    Ecluse.Core.Registry.Npm.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
@@ -1350,6 +1353,7 @@ test-suite ecluse-residency
     , crypton           >=1.0 && <1.2
     , ecluse
     , ecluse:ecluse-core
+    , ecluse:ecluse-json-stream
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
     , ecluse:ecluse-runtime-test-support

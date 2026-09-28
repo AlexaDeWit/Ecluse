@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpl
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
@@ -45,7 +45,7 @@ projectPyPIChunks limits name mode =
     first MetadataBoundExceeded
         . walkJsonChunks
             (MetadataBodyLimit (maxMetadataBytes limits))
-            (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) (testTable fileUniqueFields) (emptyProjection name))
+            (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection name))
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.
 documentFromValue :: Value -> SimpleDocument

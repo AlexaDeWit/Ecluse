@@ -15,7 +15,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), Ver
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmStream, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
-import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection)
+import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, keepsRelease)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -38,7 +38,7 @@ projectBytes limits name mode body = do
             MetadataBoundExceeded
             ( walkJsonChunks
                 (MetadataBodyLimit (BS.length body))
-                (npmWalk (maxNestingDepth limits) mode (collectField limits name) (testTable releaseUniqueFields) emptyProjection)
+                (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease (testTable releaseUniqueFields) emptyProjection)
                 [body]
             )
     projected <- projectNpmStream limits name "https://registry.npmjs.org" streamed

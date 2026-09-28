@@ -33,14 +33,14 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Json.Intern (newInternTable, readTableHash)
+import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection, keepsRelease)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
@@ -93,9 +93,9 @@ fetchNpmBody tracing origin name consume =
 
 decodeNpm :: TracingPort -> OriginClient -> PackageName -> PackumentRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
 decodeNpm tracing origin name mode readChunk = do
-    table <- newInternTable <$> readTableHash <*> pure releaseUniqueFields
+    table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
     spanMetadataDecode tracing name $
-        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalk (maxNestingDepth limits) mode (collectField limits name) table emptyProjection) readChunk
+        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease table emptyProjection) readChunk
   where
     limits = ocLimits origin
 
