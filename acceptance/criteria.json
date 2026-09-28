@@ -1,16 +1,66 @@
 {
-  "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds, per ecosystem, package and leg, the bytes the leg allocated over its committed capture on the calibration run. A leg's budget is that figure plus marginPercent, rounded up to a whole byte. Wall-clock time has no budget. Recalibrate every figure from one arm64 CI run of the captures run, and record that run's runner, commit and URL in calibration.",
+  "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds, per ecosystem, package and leg, the bytes the leg allocated over its committed capture on the calibration run. A leg's budget is that figure plus marginPercent, rounded up to a whole byte. Wall-clock time has no budget. Recalibrate every figure from one arm64 CI run of the captures run, and record that run's runner, commit and URL in calibration. The commit is the pull request head the run measured.",
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-24.04-arm",
-    "commit": "uncalibrated",
+    "commit": "3dc963cc08b795d9d20f53b536fbb5e04aabccaf",
     "runs": [
-      "uncalibrated"
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36489408213/job/109154183105"
     ],
     "marginPercent": 10
   },
   "allocatedBytes": {
-    "npm": {},
-    "pypi": {}
+    "npm": {
+      "lodash": {
+        "full": 13464528,
+        "singleVersion": 6880704
+      },
+      "request": {
+        "full": 18032448,
+        "singleVersion": 7679392
+      },
+      "react": {
+        "full": 401248432,
+        "singleVersion": 164937792
+      },
+      "@babel/core": {
+        "full": 41899320,
+        "singleVersion": 18157424
+      },
+      "typescript": {
+        "full": 1029335256,
+        "singleVersion": 404163984
+      },
+      "express": {
+        "full": 52803144,
+        "singleVersion": 23947344
+      },
+      "@aws-sdk/client-s3": {
+        "full": 221737016,
+        "singleVersion": 88798152
+      },
+      "webpack": {
+        "full": 261302592,
+        "singleVersion": 106456008
+      },
+      "@types/node": {
+        "full": 447506992,
+        "singleVersion": 294835104
+      }
+    },
+    "pypi": {
+      "requests": {
+        "full": 10307016,
+        "singleVersion": 5759472
+      },
+      "numpy": {
+        "full": 158702816,
+        "singleVersion": 109454536
+      },
+      "boto3": {
+        "full": 178413232,
+        "singleVersion": 102856928
+      }
+    }
   }
 }
