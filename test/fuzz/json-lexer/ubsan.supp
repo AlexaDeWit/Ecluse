@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
+# Both lexers overflow a signed long in handle_number on a number of 19 digits or more, then
+# discard the value. See docs/testing.md, "Fuzzing the vendored lexer".
+signed-integer-overflow:handle_number
+signed-integer-overflow:upstream_handle_number

@@ -363,6 +363,10 @@ tasks:
     desc: Diff the vendored json-stream tree against its upstream commit
     cmds:
       - bash scripts/vendored-json-stream.sh diff
+  fuzz-json-lexer:
+    desc: Fuzz the vendored JSON lexer against upstream's (pass libFuzzer options after --)
+    cmds:
+      - bash scripts/fuzz-json-lexer.sh {{.CLI_ARGS | default "-max_total_time=600"}}
   test-scripts:
     desc: Run the shell-script unit tests
     sources:

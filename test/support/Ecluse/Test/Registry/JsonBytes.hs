@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Generated registry bodies for differential reader tests. Most are well formed, and each can
-carry escapes, surrogates, invalid UTF-8, raw control bytes, deep nesting, long and malformed
-numbers, duplicate keys, the separators json-stream's lexer skips, and truncation or stray bytes.
+carry escapes of every code unit, lone surrogates, invalid and overlong UTF-8, raw control bytes
+from 0x00, deep nesting, long and malformed numbers, exponents past 'Int', duplicate keys, the
+separators json-stream's lexer skips, and truncation or stray bytes.
 -}
 module Ecluse.Test.Registry.JsonBytes (
     genJsonBytes,
@@ -187,12 +188,12 @@ genString = quoted . mconcat <$> Gen.list (Range.linear 0 6) piece
         Gen.frequency
             [ (10, Builder.byteString . encodeUtf8 <$> Gen.text (Range.linear 0 10) Gen.alphaNum)
             , (3, Gen.element ["\\n", "\\\"", "\\\\", "\\/", "\\b", "\\f", "\\r", "\\t"])
-            , (2, (\code -> "\\u" <> Builder.word16HexFixed code) <$> Gen.word16 (Range.linear 0x20 0xd7ff))
+            , (2, (\code -> "\\u" <> Builder.word16HexFixed code) <$> Gen.word16 Range.constantBounded)
             , (1, pure "\\ud83d\\ude00")
             , (1, Gen.element ["\\ud800", "\\udc00", "\\ud800x", "\\ud800\\u0041", "\\uDBFF\\uDFFF"])
             , (2, Builder.byteString . encodeUtf8 <$> Gen.text (Range.linear 1 3) Gen.unicode)
-            , (1, Builder.byteString <$> Gen.element ["\xff", "\xc0\x80", "\xe2\x82", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x80"])
-            , (1, Builder.word8 <$> Gen.word8 (Range.linear 1 31))
+            , (1, Builder.byteString <$> Gen.element ["\xff", "\xc0\x80", "\xe0\x80\xaf", "\xe0\x9f\xbf", "\xf0\x80\x80\xaf", "\xf0\x8f\xbf\xbf", "\xe2\x82", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x80"])
+            , (1, Builder.word8 <$> Gen.word8 (Range.constant 0 31))
             , (1, Gen.element ["\\x", "\\u12", "\\uZZZZ", "\\"])
             ]
 
@@ -201,7 +202,8 @@ genNumber =
     Gen.frequency
         [ (6, Builder.intDec <$> Gen.int (Range.linearFrom 0 (-100000) 100000))
         , (2, (\whole fraction -> Builder.intDec whole <> "." <> Builder.intDec fraction) <$> Gen.int (Range.linearFrom 0 (-1000) 1000) <*> Gen.int (Range.linear 0 99999))
-        , (2, (\whole power -> Builder.intDec whole <> "e" <> Builder.intDec power) <$> Gen.int (Range.linear (-9) 9) <*> Gen.int (Range.linear (-40) 40))
+        , (2, (\whole power -> Builder.intDec whole <> "e" <> Builder.intDec power) <$> Gen.int (Range.linear (-9) 9) <*> Gen.int (Range.linearFrom 0 (-100000) 100000))
+        , (1, (\power -> "1e" <> Builder.string7 power) <$> Gen.list (Range.linear 19 25) Gen.digit)
         , (1, Builder.string7 <$> Gen.list (Range.linear 19 400) Gen.digit)
         , (1, Gen.element ["-", "1.2.3", "--1", "1e", "+1", ".", "-0", "01", "1E+2", "0.000"])
         ]

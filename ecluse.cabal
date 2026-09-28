@@ -850,6 +850,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Json.InternSpec
     Ecluse.Core.Registry.Json.ShapeSpec
+    Ecluse.Core.Registry.Json.WalkSpec
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
     Ecluse.Core.Registry.VersionListSpec

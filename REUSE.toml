@@ -17,3 +17,14 @@ SPDX-License-Identifier = "BSD-3-Clause"
 path = ["vendor/json-stream/README.md", "vendor/json-stream/json-stream.freeze", "vendor/json-stream.sha256"]
 SPDX-FileCopyrightText = "2026 Alexandra de Wit"
 SPDX-License-Identifier = "MIT"
+
+# Upstream's lexer at the vendored tree's base commit, the lexer fuzz harness's oracle.
+[[annotations]]
+path = "test/fuzz/json-lexer/lexer-537a43a7.c"
+SPDX-FileCopyrightText = "2015 Ondrej Palkovsky"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "test/fuzz/json-lexer/seeds/**"
+SPDX-FileCopyrightText = "2026 Alexandra de Wit"
+SPDX-License-Identifier = "MIT"
