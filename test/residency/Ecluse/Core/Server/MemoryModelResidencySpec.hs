@@ -186,7 +186,7 @@ reportListing label details package peaks =
                , "peaks" .= peaks
                ]
   where
-    perByte denominator bytes = fromInteger bytes / fromIntegral (denominator peaks) :: Double
+    perByte bytesOf bytes = fromInteger bytes / fromIntegral (bytesOf peaks) :: Double
 
 chargeFactors :: Ecosystem -> Maybe ChargeFactors
 chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
