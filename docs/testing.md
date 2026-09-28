@@ -131,7 +131,7 @@ gate keeps its default.
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
 same test also checks that it stays within the memory gate's full-read charge, read from each
 ecosystem's adapter. The same test checks the listing output charge: twice a shared entry's encoded
-size, for the lazy encoding and its strict copy, must stay within the 1.6 output charge. The
+size, for the lazy encoding and its strict copy, must stay within the output charge. The
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
@@ -174,48 +174,80 @@ default flags, the typescript read's high-water equalled what it keeps, because 
 fell inside its transient. A 1 MiB nursery misses the peaks of captures under 1 MiB, which finish
 within a few collections.
 
+A merged listing gets the same measurement in three shapes per capture. The child reads a trusted
+private document and a gated public one the same way, holds both, and renders their merge through
+the serving path's assembly. It reports the output basis the serving path computes. In the
+identical shape both documents are the capture, as a private mirror of the whole package holds. In
+the overlapping shape each holds two thirds of the capture's versions, one third of them in both.
+In the disjoint shape each holds half, none in both. The spec writes the split documents from the
+capture, and each keeps the files and timestamps of its versions.
+
 The checks compare bytes with each ecosystem's charges:
 
-- The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
-  the entry step. A capture under one step can peak above its per-byte charge, and this check shows
-  that the entry step still covers it.
-- The peak through the read and the render fits what the meter holds after both charges, counted
-  the same way.
-- From one step of source up, the read's peak fits the full-read charge itself, which keeps the
-  charge's whole margin for run time. The larger of the listing's peak above the held entry and
-  twice the served body fits the output charge. No collection observes the instant the lazy
-  encoding and its strict copy are both live, so the check counts both.
-- From one step of source up, the read's peak also stays within a regression limit per ecosystem,
-  so a rise fails well before it reaches the charge. Each limit is the smallest quarter step at
-  least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.649,
-  21.3% margin) and 3.75 for PyPI (boto3, 3.311, 13.3% margin).
+- The reads' peak fits what the meter holds after the full-read charges: whole 1 MiB steps, at
+  least the entry step. A capture under one step can peak above its per-byte charge, and this check
+  shows that the entry step still covers it.
+- The peak through the reads and the render fits what the meter holds after the full-read and
+  output charges, counted the same way.
+- From one step of source up, a single read's peak fits the full-read charge itself, which keeps
+  the charge's whole margin for run time.
+- From one step of basis up, the output working set fits the output charge on the basis. The
+  working set is the larger of the listing's peak above the documents it holds and twice the
+  served body. No collection observes the instant the lazy encoding and its strict copy are both
+  live, so the check counts both.
+- The basis of an identical merge is one document, that of a disjoint merge is both, and that of an
+  overlapping merge is less than both.
+- From one step up, a single read's peak and every output working set also stay within a
+  regression limit per ecosystem, so a rise fails well before it reaches the charge. Each limit is
+  the smallest quarter step at least 8% above the maximum in the tables below. For reads the limits
+  are 2.0 per source byte for npm (typescript, 1.649, 21.3% margin) and 3.75 for PyPI (boto3,
+  3.311, 13.3% margin). For output they are 1.75 per basis byte for npm (@aws-sdk/client-s3, 1.524,
+  14.8% margin) and 1.5 for PyPI (boto3, 1.242, 20.7% margin).
 
 The following figures come from the arm64 Build job of
-[CI run 36484291962](https://github.com/AlexaDeWit/Ecluse/actions/runs/36484291962/job/109137361615),
-with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
-read's peak and the held entry above the baseline, the listing's peak through the read and the
-render above the held entry, and the served body's length.
+[CI run 36487011012](https://github.com/AlexaDeWit/Ecluse/actions/runs/36487011012/job/109146835675),
+with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte of a
+single-source listing: the read's peak and the held entry above the baseline, the listing's peak
+through the read and the render above the held entry, the served body's length, and the output
+working set.
 
-| Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
-|---|---|--:|--:|--:|--:|--:|
-| npm | typescript | 14.97 | 1.649 | 1.544 | 0.661 | 0.659 |
-| npm | @types/node | 10.63 | 0.692 | 0.601 | 0.177 | 0.175 |
-| npm | react | 6.67 | 1.584 | 1.402 | 0.498 | 0.495 |
-| npm | webpack | 4.96 | 1.263 | 1.156 | 0.713 | 0.712 |
-| npm | @aws-sdk/client-s3 | 3.97 | 1.419 | 1.297 | 0.765 | 0.762 |
-| npm | express | 0.77 | 2.027 | 1.571 | 0.602 | 0.576 |
-| npm | @babel/core | 0.76 | 1.722 | 1.374 | 0.575 | 0.575 |
-| npm | request | 0.29 | 2.492 | 1.629 | 0.863 | 0.529 |
-| npm | lodash | 0.24 | 2.235 | 1.358 | 0.877 | 0.362 |
-| PyPI | numpy | 2.65 | 2.446 | 2.134 | 0.883 | 0.596 |
-| PyPI | boto3 | 2.10 | 3.311 | 2.942 | 0.995 | 0.621 |
-| PyPI | requests | 0.12 | 4.407 | 3.612 | 0.795 | 0.657 |
+| Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body | Output working set |
+|---|---|--:|--:|--:|--:|--:|--:|
+| npm | typescript | 14.97 | 1.649 | 1.544 | 0.661 | 0.659 | 1.319 |
+| npm | @types/node | 10.63 | 0.693 | 0.601 | 0.177 | 0.175 | 0.350 |
+| npm | react | 6.67 | 1.584 | 1.402 | 0.498 | 0.495 | 0.990 |
+| npm | webpack | 4.96 | 1.263 | 1.156 | 0.713 | 0.712 | 1.423 |
+| npm | @aws-sdk/client-s3 | 3.97 | 1.419 | 1.297 | 0.765 | 0.762 | 1.524 |
+| npm | express | 0.77 | 2.028 | 1.571 | 0.602 | 0.576 | 1.151 |
+| npm | @babel/core | 0.76 | 1.721 | 1.374 | 0.575 | 0.575 | 1.149 |
+| npm | request | 0.29 | 2.492 | 1.629 | 0.863 | 0.529 | 1.058 |
+| npm | lodash | 0.24 | 2.235 | 1.358 | 0.877 | 0.362 | 0.877 |
+| PyPI | numpy | 2.65 | 2.446 | 2.134 | 0.883 | 0.596 | 1.193 |
+| PyPI | boto3 | 2.10 | 3.311 | 2.941 | 0.995 | 0.621 | 1.242 |
+| PyPI | requests | 0.12 | 4.407 | 3.612 | 0.795 | 0.657 | 1.315 |
 
-The full-read charges and the read-peak limits derive from the read peaks of captures of at least
-one step, as [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling)
-sets out.
-From one step of source up, each listing's peak above its entry stays below twice its served body,
-and the output charge covers both.
+The same run gives each merge's output working set per byte of its basis. An overlapping merge's
+basis is about three quarters of the bytes it reads.
+
+| Ecosystem | Package | Identical | Overlapping | Disjoint |
+|---|---|--:|--:|--:|
+| npm | typescript | 1.319 | 1.318 | 1.318 |
+| npm | @types/node | 0.350 | 0.350 | 0.350 |
+| npm | react | 0.990 | 0.987 | 0.988 |
+| npm | webpack | 1.423 | 1.411 | 1.402 |
+| npm | @aws-sdk/client-s3 | 1.524 | 1.513 | 1.502 |
+| npm | express | 1.151 | 1.120 | 1.088 |
+| npm | @babel/core | 1.149 | 1.148 | 1.147 |
+| npm | request | 1.058 | 0.943 | 0.854 |
+| npm | lodash | 0.901 | 0.696 | 0.650 |
+| PyPI | numpy | 1.193 | 1.195 | 1.199 |
+| PyPI | boto3 | 1.242 | 1.242 | 1.242 |
+| PyPI | requests | 1.315 | 1.324 | 1.320 |
+
+The charges and the limits derive from the captures of at least one step, as
+[configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
+From one step up, each listing's peak above the documents it holds stays below twice its served
+body, so twice the served body sets the output working set.
 
 ### Read evaluation
 
