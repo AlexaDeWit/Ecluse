@@ -53,3 +53,8 @@ check =
   , { type = "Exclude", id = "STAN-0101", scope = "all" }
   , { type = "Exclude", id = "STAN-0212", file = "src/Ecluse/Config/DefaultConfig.hs" }
   ]
+
+# Vendored json-stream stays as upstream wrote it, so stan skips its directory. The owner approved
+# this exception on 2026-09-28.
+[[remove]]
+directory = "vendor/json-stream"

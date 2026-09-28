@@ -4,7 +4,10 @@
 
 {- | A resumable walk over the vendored json-stream lexer's tokens, and its body-bounded driver.
 Each primitive keeps the acceptance of the json-stream combinator it stands in for: which strings
-and keys are decoded, which malformed input is skipped, and where a read fails.
+and keys are decoded, which malformed input is skipped, and where a read fails. The lexer's own
+leniency passes through unchanged. It reads @:@ and @,@ as whitespace, reads a lone @-@, @.@ or
+@-.@ within a piece as 0 but fails one at a piece's end, and wraps an exponent past 'Int', so
+@1e18446744073709551617@ reads as 10.
 -}
 module Ecluse.Core.Registry.Json.Walk (
     -- * Driving a walk

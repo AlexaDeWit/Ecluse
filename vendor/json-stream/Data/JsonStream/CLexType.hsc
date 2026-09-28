@@ -1,7 +1,3 @@
--- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
---
--- SPDX-License-Identifier: BSD-3-Clause
-
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Data.JsonStream.CLexType where
 

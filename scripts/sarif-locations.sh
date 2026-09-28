@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Normalise artifact locations in a SARIF report so GitHub code scanning
-# accepts the upload. Point every empty or absolute location URI at the given
+# accepts the upload. Make every location URI inside the repository
+# repo-relative, and point every other empty or absolute one at the given
 # repo-relative path. Rewrites the file in place.
 #
 # Why: code scanning maps findings onto repository files. So it rejects an
@@ -20,16 +21,18 @@ set -euo pipefail
 sarif="${1:?usage: sarif-locations.sh <sarif-file> <repo-relative-path>}"
 target="${2:?usage: sarif-locations.sh <sarif-file> <repo-relative-path>}"
 
+root="$(git rev-parse --show-toplevel)"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-jq --arg target "$target" '
+jq --arg target "$target" --arg root "$root/" '
   (.runs[]?.results[]?.locations[]?.physicalLocation.artifactLocation.uri,
    .runs[]?.artifacts[]?.location.uri)
-    |= (if (. // "") == "" or startswith("file://") or startswith("/")
-        then $target
-        else .
-        end)
+    |= ((. // "") | ltrimstr("file://")
+        | if startswith($root) then ltrimstr($root)
+          elif . == "" or startswith("/") then $target
+          else .
+          end)
 ' "$sarif" >"$tmp"
 
 mv "$tmp" "$sarif"

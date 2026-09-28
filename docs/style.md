@@ -413,4 +413,5 @@ passage a maintainer writes in Swedish. No em-dashes, en-dashes, or emoji, with 
 
 Every tracked `.hs` file opens with an SPDX header (`SPDX-FileCopyrightText`,
 `SPDX-License-Identifier: MIT`) above any pragma, so the licence travels with the file. Never type
-it: `task spdx-fix` stamps it and `task lint-spdx` gates it.
+it: `task spdx-fix` stamps it and `task lint-spdx` gates it. Vendored third-party files under
+`vendor/` carry their licence through `REUSE.toml`, not in-file headers.

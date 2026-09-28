@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Incremental registry extraction within a decompressed body ceiling. With json-stream 0.4.6.1 and
-text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
+{- | Incremental registry extraction within a decompressed body ceiling. With the vendored json-stream
+and text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
 See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
 -}
 module Ecluse.Core.Registry.JsonStream (

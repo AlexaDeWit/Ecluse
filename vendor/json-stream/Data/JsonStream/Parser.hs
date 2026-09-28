@@ -1,7 +1,3 @@
--- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
---
--- SPDX-License-Identifier: BSD-3-Clause
-
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -97,7 +93,7 @@ module Data.JsonStream.Parser (
   , objectFound
 ) where
 
-import Control.Applicative ( Alternative(..), optional, Applicative (liftA2) )
+import Control.Applicative ( Alternative(..), optional )
 import qualified Data.Aeson                  as AE
 import qualified Data.Aeson.Types            as AE
 import qualified Data.ByteString.Char8       as BS

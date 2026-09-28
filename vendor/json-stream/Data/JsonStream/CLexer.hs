@@ -1,8 +1,3 @@
--- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
--- SPDX-FileCopyrightText: 2026 Alexandra de Wit
---
--- SPDX-License-Identifier: BSD-3-Clause
-
 {-# LANGUAGE BangPatterns             #-}
 {-# LANGUAGE CPP                      #-}
 {-# LANGUAGE ForeignFunctionInterface #-}

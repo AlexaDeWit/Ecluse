@@ -91,10 +91,8 @@ common shared
 common shipped-rts
   ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T --disable-delayed-os-memory-return"
 
--- json-stream 0.4.6.1, vendored at the fork commit vendor/json-stream/README.md names. Its files
--- keep upstream's form and BSD-3-Clause licence, so this stanza keeps upstream's language and
--- warning settings instead of importing `shared`. Écluse code reaches it only through the
--- registry JSON readers in ecluse-core.
+-- json-stream under its own BSD-3-Clause licence, vendored as vendor/json-stream/README.md describes.
+-- The stanza keeps upstream's language and warning settings instead of importing `shared`.
 library ecluse-json-stream
   hs-source-dirs:   vendor/json-stream
   exposed-modules:
@@ -108,9 +106,7 @@ library ecluse-json-stream
   include-dirs:     vendor/json-stream/c_lib
   includes:         lexer.h
   default-language: Haskell2010
-  -- Upstream's own warning set. base 4.18 exports liftA2 from the Prelude, so Parser.hs's explicit
-  -- import of it now warns, and cabal.project turns that warning into an error for this package.
-  ghc-options:      -Wall -fwarn-incomplete-uni-patterns -Wno-unused-imports
+  ghc-options:      -Wall -fwarn-incomplete-uni-patterns
   build-depends:
     , aeson                 >=2.2      && <2.4
     , base                  ^>=4.20

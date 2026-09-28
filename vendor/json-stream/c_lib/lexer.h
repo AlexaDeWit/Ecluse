@@ -1,7 +1,3 @@
-// SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
-//
-// SPDX-License-Identifier: BSD-3-Clause
-
 #ifndef _LEXER_H_
 #define _LEXER_H_
 

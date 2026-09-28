@@ -4,7 +4,8 @@ name: Security
 # with disclosure time, not with in-PR changes. osv-scanner matches every exact pin in
 # cabal.project.freeze against OSV.dev, home to the HSEC advisories the GitHub Advisory
 # Database lacks. The freeze is the committed projection of the Nix package set, so it
-# covers the statically linked Haskell libraries no image scan can see.
+# covers the statically linked Haskell libraries no image scan can see. The vendored
+# json-stream's own freeze names the upstream release its source derives from.
 #
 # The SARIF goes to GitHub code scanning, so a human triages every finding in the
 # Security tab. The C closure's grype scan runs in ci.yml's nightly run. See
@@ -12,7 +13,7 @@ name: Security
 # updates".
 on:
   pull_request:
-    paths: ["flake.lock", "flake.nix", "cabal.project.freeze", ".github/workflows/security.yml"]
+    paths: ["flake.lock", "flake.nix", "cabal.project.freeze", "vendor/json-stream/json-stream.freeze", ".github/workflows/security.yml"]
   schedule:
     - cron: "27 6 * * *" # daily, off-peak minute
   workflow_dispatch:
@@ -42,7 +43,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
 
       # Findings are report-only, so only a scanner error fails here.
-      - name: Scan cabal.project.freeze (osv-scanner)
+      - name: Scan the freezes (osv-scanner)
         run: nix develop .#ci --command task scan-osv
 
       - name: Upload osv-scanner SARIF to code scanning
