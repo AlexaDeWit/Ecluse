@@ -111,7 +111,7 @@ response limits admit each capture.
 
 The retained-byte gate uses the following corpus envelopes. The calibration used all nine npm and
 three PyPI captures in the arm64 Build job of
-[CI run 36392431999](https://github.com/AlexaDeWit/Ecluse/actions/runs/36392431999/job/108832038539),
+[CI run 36393895834](https://github.com/AlexaDeWit/Ecluse/actions/runs/36393895834/job/108835849423),
 with GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process.
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 A calibrated gate is the smallest quarter step at least 8% above its measured maximum. The PyPI raw
