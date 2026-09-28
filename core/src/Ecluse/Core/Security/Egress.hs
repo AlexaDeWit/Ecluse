@@ -29,20 +29,16 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Text (isPrefixOfLowered)
 
 {- | Resolve a packument's @dist.tarball@ under the https-only posture: plaintext upgrades
 to https only on its own host. A refusal names the authority, since the URL can carry a credential.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url
-    | "https://" `T.isPrefixOf` lowered = mkRegistryUrl url
-    | "http://" `T.isPrefixOf` lowered =
+    | "https://" `isPrefixOfLowered` url = mkRegistryUrl url
+    | "http://" `isPrefixOfLowered` url =
         if hostAddress url == upstreamHost
-            then mkRegistryUrl ("https://" <> T.drop httpSchemeChars url)
+            then mkRegistryUrl ("https://" <> T.drop (T.length "http://") url)
             else Left ("dist.tarball is http on a host other than the upstream registry: " <> authorityLabel url)
     | otherwise = Left ("dist.tarball is not an https URL: " <> authorityLabel url)
-  where
-    lowered = T.toLower url
-    -- The character count of the "http://" prefix. Dropping it from the original @url@, not
-    -- @lowered@, rewrites the scheme and preserves the rest of the URL verbatim.
-    httpSchemeChars = 7 :: Int

@@ -702,6 +702,7 @@ library ecluse-test-support
     Ecluse.Test.Osv.Withdrawal
     Ecluse.Test.OsvDb
     Ecluse.Test.Package
+    Ecluse.Test.Package.Filter
     Ecluse.Test.Poll
     Ecluse.Test.Port
     Ecluse.Test.Queue

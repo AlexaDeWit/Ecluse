@@ -8,13 +8,13 @@ module Ecluse.Core.TextSpec (spec) where
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Hedgehog (forAll, (===))
+import Hedgehog (cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
 
 -- | Text parsing contracts, ISO-8601 rendering parity and text storage.
 spec :: Spec
@@ -25,6 +25,7 @@ spec = do
     urlFilenameSpec
     urlFilenameComponentSpec
     afterFirstSpec
+    isPrefixOfLoweredSpec
     readDecimalTextSpec
     readHexTextSpec
     renderIso8601Spec
@@ -38,6 +39,21 @@ afterFirstSpec = describe "afterFirst" $ do
 
     it "returns the whole input when the needle is absent" $
         afterFirst "://" "registry.npmjs.org:443" `shouldBe` "registry.npmjs.org:443"
+
+isPrefixOfLoweredSpec :: Spec
+isPrefixOfLoweredSpec = describe "isPrefixOfLowered" $ do
+    it "rests on text lowering every Char to at least one Char" $
+        filter (T.null . T.toLower . T.singleton) [minBound .. maxBound] `shouldBe` []
+
+    it "agrees with lowering the whole text, including characters that lower to several" $
+        hedgehog $ do
+            prefix <- forAll (Gen.element ["https://", "http://", "i\x307", "k", ""])
+            lead <- forAll (Gen.element ["", "HTTPS://", "hTtP://", "HTTPS:", "\x130", "\x212A"])
+            rest <- forAll (Gen.text (Range.linear 0 8) (Gen.frequency [(4, Gen.element ("hHtTpPsS:/ i\x130\x212A" :: String)), (1, Gen.unicode)]))
+            let t = lead <> rest
+                expected = prefix `T.isPrefixOf` T.toLower t
+            cover 5 "the prefix begins the lowered text" (expected && not (T.null prefix))
+            isPrefixOfLowered prefix t === expected
 
 readDecimalTextSpec :: Spec
 readDecimalTextSpec = describe "readDecimalText" $ do

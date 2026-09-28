@@ -14,6 +14,7 @@ module Ecluse.Core.Text (
     urlFilenameComponent,
     isSafeComponent,
     afterFirst,
+    isPrefixOfLowered,
     registryPath,
     readDecimalText,
     readHexText,
@@ -88,6 +89,16 @@ matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on th
 -}
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
+
+{- | Whether @prefix@ begins the lower-cased text. It lowers only the first @length prefix@
+characters, which suffices because 'T.toLower' maps each character on its own to at least one.
+-}
+isPrefixOfLowered :: Text -> Text -> Bool
+isPrefixOfLowered prefix t = lowered == prefix
+  where
+    n = T.length prefix
+    -- Equality, not 'T.isPrefixOf', which streams both texts and allocates for each character.
+    lowered = T.take n (T.toLower (T.take n t))
 
 {- | The path half of an absolute URL, from the first slash after the authority. It splits on the
 first scheme separator, so a later one inside the URL cannot move where the path starts.
