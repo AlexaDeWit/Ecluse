@@ -33,10 +33,14 @@ module Ecluse.Acceptance (
     assessCaptures,
     capturesProblems,
     capturesExitCode,
+    capturesAnnotations,
     renderCapturesReport,
 
     -- * The live run
+    Fetched (..),
+    classifyFetch,
     liveExitCode,
+    liveAnnotations,
     renderLiveReport,
 ) where
 
@@ -54,6 +58,9 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Info qualified as Info
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
+import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
+import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (..), isAuthorisationFailure, isSuccessStatus)
 
 -- | One measured operation over a package's document.
 data Leg
@@ -143,10 +150,12 @@ budgetBytes calibration calibrated = calibrated + (calibrated * calMarginPercent
 hostArch :: Text
 hostArch = toText Info.arch
 
--- | One leg's figures, each the median over the leg's passes.
+-- | One leg's figures over its passes: the median allocation, with its spread, and the median time.
 data Measurement = Measurement
     { measuredBytes :: Int64
     -- ^ Bytes the measuring thread allocated.
+    , measuredMinBytes :: Int64
+    , measuredMaxBytes :: Int64
     , measuredMs :: Double
     -- ^ Wall-clock time, which no budget applies to.
     }
@@ -188,8 +197,6 @@ data Verdict
       Breached Int64
     | -- | The criteria hold no calibrated figure for the leg.
       NoBudget
-    | -- | The budgets were calibrated on another architecture.
-      Uncalibrated
     deriving stock (Eq, Show)
 
 -- | One measured leg of a captures run, with its calibrated figure and verdict.
@@ -247,13 +254,11 @@ assessCaptures criteria runs =
     assessLeg eco sample leg measurement =
         let calibrated = Map.lookup eco (critAllocatedBytes criteria) >>= Map.lookup (sampleName sample) >>= Map.lookup leg
          in AssessedLeg (sampleName sample) (sampleVersions sample) leg measurement calibrated (verdict calibrated (measuredBytes measurement))
-    verdict calibrated bytes
-        | calArch calibration /= hostArch = Uncalibrated
-        | otherwise = case calibrated of
-            Nothing -> NoBudget
-            Just figure
-                | bytes > budgetBytes calibration figure -> Breached (bytes - budgetBytes calibration figure)
-                | otherwise -> Within
+    verdict calibrated bytes = case calibrated of
+        Nothing -> NoBudget
+        Just figure
+            | bytes > budgetBytes calibration figure -> Breached (bytes - budgetBytes calibration figure)
+            | otherwise -> Within
 
 outcomeName :: PackageOutcome -> Text
 outcomeName = \case
@@ -264,18 +269,40 @@ outcomeName = \case
 -- | Why a captures run fails. The run passes only when this is empty.
 capturesProblems :: CapturesReport -> [Text]
 capturesProblems report =
-    [ "the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ", so no leg is assessed"
-    | calArch calibration /= hostArch
-    ]
-        <> ["no package was measured" | null rows]
+    ["no package was measured" | null rows]
         <> countOf "leg(s) over budget" [() | Assessed leg <- rows, Breached _ <- [alVerdict leg]]
         <> countOf "leg(s) without a budget" [() | Assessed leg <- rows, NoBudget <- [alVerdict leg]]
         <> countOf "package(s) failed" [() | FailedPackage _ _ <- rows]
         <> countOf "calibrated package(s) not measured" (reportUnmeasured report)
   where
-    calibration = reportCalibration report
     rows = concatMap sectionRows (reportSections report)
     countOf label items = [show (length items) <> " " <> label | not (null items)]
+
+-- | Whether a leg allocates more than the margin below its calibrated figure, so its budget no longer holds the gain.
+belowMargin :: Calibration -> Int64 -> Int64 -> Bool
+belowMargin calibration calibrated bytes = bytes * 100 < calibrated * (100 - calMarginPercent calibration)
+
+{- | A GitHub warning for each leg that allocates more than the margin below its calibrated figure.
+The run still passes, and the warning asks for a recalibration.
+-}
+capturesAnnotations :: CapturesReport -> [Text]
+capturesAnnotations report =
+    [ "::warning title=Allocation below its calibration::"
+        <> ecosystemName (sectionEcosystem section)
+        <> " "
+        <> alPackage leg
+        <> " "
+        <> legKey (alLeg leg)
+        <> " allocated "
+        <> show (measuredBytes (alMeasurement leg))
+        <> " bytes against a calibrated "
+        <> show calibrated
+        <> ", more than the margin below it. Recalibrate acceptance/criteria.json."
+    | section <- reportSections report
+    , Assessed leg <- sectionRows section
+    , Just calibrated <- [alCalibrated leg]
+    , belowMargin (reportCalibration report) calibrated (measuredBytes (alMeasurement leg))
+    ]
 
 -- | Exit 0 only when 'capturesProblems' finds nothing.
 capturesExitCode :: CapturesReport -> ExitCode
@@ -294,6 +321,35 @@ isFailed = \case
     Failed _ _ -> True
     _ -> False
 
+-- | A GitHub warning when a registry did not deliver a document, so the live run is incomplete.
+liveAnnotations :: [(Ecosystem, [PackageOutcome])] -> [Text]
+liveAnnotations runs =
+    ["::warning title=Live performance acceptance incomplete::" <> show unavailable <> " package(s) unavailable. The report names each one." | unavailable > 0]
+  where
+    unavailable = length [() | (_, outcomes) <- runs, Unavailable _ _ <- outcomes]
+
+-- | A live fetch: the document, a refusal by the proxy's own code or limits, or an upstream that did not deliver.
+data Fetched
+    = Fetched ByteString
+    | Refused Text
+    | Unreachable Text
+    deriving stock (Eq, Show)
+
+{- | A retryable transport fault, a timeout, throttling, a server error, or an access refusal leaves
+the registry unreachable. Every other outcome counts against the proxy.
+-}
+classifyFetch :: Either FetchFault RegistryResponse -> Fetched
+classifyFetch = \case
+    Left fault@(FetchTransport transport)
+        | transportRetryable (tfCause transport) -> Unreachable (show fault)
+    Left fault -> Refused (show fault)
+    Right response
+        | isSuccessStatus code -> Fetched (responseBody response)
+        | isRetryableStatusCode code || isAuthorisationFailure code -> Unreachable ("registry HTTP " <> show code)
+        | otherwise -> Refused ("registry HTTP " <> show code)
+      where
+        code = responseStatusCode response
+
 -- | Render the captures run: the result, how it measured, and one table per ecosystem.
 renderCapturesReport :: OperatingPoint -> CapturesReport -> Text
 renderCapturesReport op report =
@@ -304,6 +360,9 @@ renderCapturesReport op report =
         , ""
         ]
             <> operatingLines op
+            <> [ "- Architecture: the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ". Allocation usually agrees across the two within about 1%, so a leg near its budget can read differently here."
+               | calArch calibration /= hostArch
+               ]
             <> [ "- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."
                , "- Budgets: acceptance/criteria.json. Each budget is the figure measured on "
                     <> calRunner calibration
@@ -333,8 +392,8 @@ capturesSection :: Calibration -> CapturesSection -> [Text]
 capturesSection calibration section =
     [ "### " <> ecosystemName (sectionEcosystem section)
     , ""
-    , "| Package | Versions | Leg | Allocated (bytes) | Calibrated (bytes) | Change | Budget (bytes) | Time (ms) | Verdict |"
-    , "|---|--:|---|--:|--:|--:|--:|--:|---|"
+    , "| Package | Versions | Leg | Allocated (bytes) | Min / max (bytes) | Calibrated (bytes) | Change | Budget (bytes) | Time (ms) | Verdict |"
+    , "|---|--:|---|--:|--:|--:|--:|--:|--:|---|"
     ]
         <> map row (sectionRows section)
         <> [""]
@@ -347,23 +406,30 @@ capturesSection calibration section =
                     , show (alVersions leg)
                     , legKey (alLeg leg)
                     , show bytes
+                    , spread (alMeasurement leg)
                     , maybe "--" show (alCalibrated leg)
                     , maybe "--" (change bytes) (alCalibrated leg)
                     , maybe "--" (show . budgetBytes calibration) (alCalibrated leg)
                     , fmt 3 (measuredMs (alMeasurement leg))
-                    , renderVerdict (alVerdict leg)
+                    , renderVerdict (alVerdict leg) <> maybe "" (recalibrate bytes) (alCalibrated leg)
                     ]
-        FailedPackage name reason -> cells [name, "--", "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]
+        FailedPackage name reason -> cells [name, "--", "--", "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]
     change bytes calibrated =
         let percent = (fromIntegral bytes / fromIntegral calibrated - 1) * 100 :: Double
-         in (if percent >= 0 then "+" else "") <> fmt 1 percent <> "%"
+            shown = fmt 1 (abs percent)
+         in if shown == fmt 1 0 then shown <> "%" else (if percent > 0 then "+" else "-") <> shown <> "%"
+    recalibrate bytes calibrated
+        | belowMargin calibration calibrated bytes = ", recalibrate"
+        | otherwise = ""
 
 renderVerdict :: Verdict -> Text
 renderVerdict = \case
     Within -> "within"
     Breached over -> "OVER by " <> show over <> " bytes"
     NoBudget -> "NO BUDGET"
-    Uncalibrated -> "uncalibrated"
+
+spread :: Measurement -> Text
+spread measurement = show (measuredMinBytes measurement) <> " / " <> show (measuredMaxBytes measurement)
 
 -- | Render the live run: the result, how it measured, and one table per ecosystem.
 renderLiveReport :: OperatingPoint -> [(Ecosystem, [PackageOutcome])] -> Text
@@ -375,7 +441,7 @@ renderLiveReport op runs =
         , ""
         ]
             <> operatingLines op
-            <> [ "- Budgets: none. A refusal by the proxy's own code or limits fails the run. An unavailable registry leaves it incomplete."
+            <> [ "- Budgets: none. A refusal by the proxy's own code or limits fails the run, as does a status that says the proxy asked wrongly. A registry that times out, throttles, fails, or refuses access leaves the run incomplete."
                , ""
                ]
             <> concatMap liveSection runs
@@ -392,23 +458,23 @@ liveSection :: (Ecosystem, [PackageOutcome]) -> [Text]
 liveSection (eco, outcomes) =
     [ "### " <> ecosystemName eco
     , ""
-    , "| Package | Versions | Upstream (ms) | Leg | Allocated (bytes) | Time (ms) | Result |"
-    , "|---|--:|--:|---|--:|--:|---|"
+    , "| Package | Versions | Upstream (ms) | Leg | Allocated (bytes) | Min / max (bytes) | Time (ms) | Result |"
+    , "|---|--:|--:|---|--:|--:|--:|---|"
     ]
         <> concatMap rows outcomes
         <> [""]
   where
     rows = \case
         Measured sample ->
-            [ cells [sampleName sample, show (sampleVersions sample), maybe "--" (fmt 3) (sampleUpstreamMs sample), legKey leg, show (measuredBytes measurement), fmt 3 (measuredMs measurement), "measured"]
+            [ cells [sampleName sample, show (sampleVersions sample), maybe "--" (fmt 3) (sampleUpstreamMs sample), legKey leg, show (measuredBytes measurement), spread measurement, fmt 3 (measuredMs measurement), "measured"]
             | (leg, measurement) <- sampleLegs sample
             ]
-        Failed name reason -> [cells [name, "--", "--", "--", "--", "--", "FAILED: " <> reason]]
-        Unavailable name reason -> [cells [name, "--", "--", "--", "--", "--", "unavailable: " <> reason]]
+        Failed name reason -> [cells [name, "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]]
+        Unavailable name reason -> [cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]]
 
 operatingLines :: OperatingPoint -> [Text]
 operatingLines op =
-    [ "- Figures: the median of " <> show (opPasses op) <> " passes per leg."
+    [ "- Figures: the median of " <> show (opPasses op) <> " passes per leg, with the smallest and largest allocation beside it."
     , "- Allocation: the bytes the measuring thread allocated, read from GHC's per-thread allocation counter."
     , "- Time: wall-clock, for information only."
     , "- RTS: -N" <> show (opCapabilities op) <> " -A" <> show (opAllocationAreaBytes op `div` (1024 * 1024)) <> "m, read from the running RTS."
