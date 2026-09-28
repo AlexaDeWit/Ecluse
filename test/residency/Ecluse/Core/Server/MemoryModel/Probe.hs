@@ -29,7 +29,6 @@ import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
@@ -51,20 +50,17 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssembl
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
 
 import Ecluse.Core.Registry.Exchange (digestingRead)
-import Ecluse.Core.Registry.Json.Intern (InternTable, newInternTable, newTableKey)
-import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmStream, selectNpmRead)
+import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmStream, readNpmPackument, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, keepsRelease)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
+import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, readPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Streaming qualified as PyPIStream
 import Ecluse.Core.Registry.PyPI.StreamingProjection qualified as PyPIProjection
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, Limits, boundedRead, defaultLimits, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
@@ -74,7 +70,7 @@ import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, untaggedRead)
@@ -223,6 +219,8 @@ probeListing :: CorpusPackage -> IO ListingPeaks
 probeListing package = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
+    -- A first read settles the process's one-off state, so the baseline holds it.
+    bracket (prepareListingRead package) freeStablePtr (void . deRefStablePtr)
     before <- sample
     bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
         held <- sample
@@ -462,9 +460,9 @@ readNpmSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString
 readNpmSource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
     BufferedCompact -> buffered $ \_ body ->
-        first show (walkJsonChunks bound (npmWalker limits name WholePackument (testTable releaseUniqueFields)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
+        first show (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
     StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> digested (walkNpm limits name (OneRelease (renderVersion version))) selectedResult
+    StreamedSelected -> digested (readNpmPackument limits name (OneRelease (renderVersion version))) selectedResult
     StreamedVersions -> digested (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList) versionsResult
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
@@ -481,9 +479,9 @@ readNpmSource mode limits name version next = case mode of
 readPyPISource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readPyPISource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (walkJsonChunks bound (pypiWalker limits name PyPIStream.FullRead (testTable fileUniqueFields)) [body]) >>= fmap heldEntry . pypiEntry limits name . (,digestOf body))
+    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (projectPyPIChunks limits name PyPIStream.FullRead [body]) >>= fmap heldEntry . pypiEntry limits name . (,digestOf body))
     StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> digested (walkPyPI limits name (PyPIStream.SelectedRead name (renderVersion version))) selectedResult
+    StreamedSelected -> digested (readPyPIIndex limits name (PyPIStream.SelectedRead name (renderVersion version))) selectedResult
     StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
@@ -496,26 +494,9 @@ readPyPISource mode limits name version next = case mode of
 -- | Stream a full read through the production walk and projection, digesting the source as it goes.
 streamFull :: Limits -> PackageName -> IO ByteString -> IO (Either Text CacheEntry)
 streamFull limits name next = case pkgEcosystem name of
-    Npm -> digestingRead (walkNpm limits name WholePackument) next <&> (first show >=> npmEntry limits name)
-    PyPI -> digestingRead (walkPyPI limits name PyPIStream.FullRead) next <&> (first show >=> pypiEntry limits name)
+    Npm -> digestingRead (readNpmPackument limits name WholePackument) next <&> (first show >=> npmEntry limits name)
+    PyPI -> digestingRead (readPyPIIndex limits name PyPIStream.FullRead) next <&> (first show >=> pypiEntry limits name)
     RubyGems -> pure (Left "no RubyGems source-read measurement")
-
--- The production reads, each over a table keyed afresh for the read.
-walkNpm :: Limits -> PackageName -> PackumentRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
-walkNpm limits name readMode chunks = do
-    table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
-    readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalker limits name readMode table) chunks
-
-walkPyPI :: Limits -> PackageName -> PyPIStream.PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection.PyPIProjection))
-walkPyPI limits name readMode chunks = do
-    table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
-    readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiWalker limits name readMode table) chunks
-
-npmWalker :: Limits -> PackageName -> PackumentRead -> InternTable -> TokenResult -> Step NpmProjection
-npmWalker limits name readMode table = npmWalk (maxNestingDepth limits) readMode (collectField limits name) keepsRelease table emptyProjection
-
-pypiWalker :: Limits -> PackageName -> PyPIStream.PyPIRead -> InternTable -> TokenResult -> Step PyPIProjection.PyPIProjection
-pypiWalker limits name readMode table = pypiWalk (maxNestingDepth limits) readMode (PyPIProjection.collectField limits readMode) PyPIProjection.keepsFile table (PyPIProjection.emptyProjection name)
 
 npmEntry :: Limits -> PackageName -> (StreamResult NpmProjection, ContentDigest) -> Either Text CacheEntry
 npmEntry limits name (streamed, digest) = do

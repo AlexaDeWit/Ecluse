@@ -459,9 +459,10 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
-The per-byte charges sit above the largest the residency tests measure on the captured package
-corpus: the most a full read holds while it parses, and a response's encoding with its copy. The
-tests fail when a package would need more, so the charges stay above the measured peaks.
+For packages of at least 1 MiB, the per-byte charges sit above the largest the residency tests
+measure on the captured package corpus: the most a full read holds while it parses, and a
+response's encoding with its copy. A smaller package's read stays within the entry step. The tests
+fail when a package would need more, so the charges stay above the measured peaks.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until

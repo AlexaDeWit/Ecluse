@@ -92,8 +92,8 @@ collection is major and the high-water samples live data at least once per 128 K
 majorSampling :: [String]
 majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
-{- A read's peak from one meter step of source up has a regression limit above its measured maximum.
-Separately, it must stay within the full-read charge, whose margin is kept for run time. -}
+{- From one meter step of source up, a read's peak fails the tier past this limit, the smallest quarter
+step at least 8% above its measured maximum. The limit sits below the full-read charge. -}
 readPeakEnvelopePermille :: Ecosystem -> Maybe Integer
 readPeakEnvelopePermille = \case
     Npm -> Just 2000
@@ -101,13 +101,13 @@ readPeakEnvelopePermille = \case
     RubyGems -> Nothing
 
 {- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
-source up, each phase's own charge covers its peak, and the read's peak stays under its envelope. -}
+source up, the read's peak stays under its limit and the render's working set under its charge. -}
 checkListing :: ListingPeaks -> ChargeFactors -> Integer -> Expectation
 checkListing peaks factors envelope = do
+    envelope `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
     when (size >= meterStepBytes) $ do
-        (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= envelope * toInteger size)
         -- Collections miss the instant the lazy encoding and its strict copy are both live.
         max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks)) `shouldSatisfy` (<= toInteger output)

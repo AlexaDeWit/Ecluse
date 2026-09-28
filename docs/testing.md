@@ -166,7 +166,8 @@ capture, a fresh child process:
 2. renders the served body of a single-source listing in which every version survives, as the
    strict bytes a response sends
 
-It samples live bytes before the read, holding the entry, and holding the served body. The
+It reads and releases the capture once first, so the baseline holds the process's one-off state.
+It samples live bytes before the measured read, holding the entry, and holding the served body. The
 runtime's high-water after each phase gives that phase's peak. The child runs with
 `+RTS -F1 -A128k`: the old generation may not grow past its live data, so nearly every collection
 is major, and the high-water samples live data at least once per 128 KiB allocated. Under the
@@ -178,17 +179,19 @@ The checks compare bytes with each ecosystem's charges:
 
 - The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
   the entry step. A capture under one step can peak above its per-byte charge, and this check shows
-  that the entry step still covers it.
+  that the entry step covers one such read. It does not check two at once. A listing that reads a
+  private and a public document of under one step on one ticket can exceed the entry step by a
+  fraction of a step, which the sampler's measurement of live data outside the charges absorbs.
 - The peak through the read and the render fits what the meter holds after both charges, counted
   the same way.
-- From one step of source up, the read's peak fits the full-read charge itself, which keeps the
-  charge's whole margin for run time. The larger of the listing's peak above the held entry and
-  twice the served body fits the output charge. No collection observes the instant the lazy
-  encoding and its strict copy are both live, so the check counts both.
-- From one step of source up, the read's peak also stays within a regression limit per ecosystem,
-  so a rise fails well before it reaches the charge. Each limit is the smallest quarter step at
-  least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.649,
-  21.3% margin) and 3.75 for PyPI (boto3, 3.311, 13.3% margin).
+- From one step of source up, the larger of the listing's peak above the held entry and twice the
+  served body fits the output charge. No collection observes the instant the lazy encoding and its
+  strict copy are both live, so the check counts both.
+- From one step of source up, the tier fails before a read's peak passes a regression limit per
+  ecosystem, and each limit sits below the full-read charge. Each limit is the smallest quarter step
+  at least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.649,
+  21.3% margin), 0.1 under its charge, and 3.75 for PyPI (boto3, 3.311, 13.3% margin), 0.45 under
+  its charge.
 
 The following figures come from the arm64 Build job of
 [CI run 36484291962](https://github.com/AlexaDeWit/Ecluse/actions/runs/36484291962/job/109137361615),

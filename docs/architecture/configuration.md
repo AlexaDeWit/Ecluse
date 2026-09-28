@@ -157,16 +157,18 @@ residency tier measures for one ecosystem, among captures of at least one 1 MiB 
 up to a tenth. The peak is the most live data the read holds while it parses and projects, which is
 more than it keeps afterwards. npm's charge is 2.1 (typescript peaks at 1.65) and PyPI's is 4.2
 (boto3 peaks at 3.31). A capture under one step can peak above its per-byte charge, up to 2.49 for
-npm (request) and 4.41 for PyPI (requests), but each such peak stays under the 1 MiB entry step
-that every request pays first.
-The margin covers packages shaped unlike the corpus. A listing's response pays 1.6 per source byte.
-That covers the encoding with its strict copy, which exceeds the listing's measured peak above the
-entry it holds. The residency tier in
-[`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's read or render outgrows its
-charge, so a representation change cannot silently outgrow it. It also holds each read's peak from
-one step of source up under a regression limit, the smallest quarter step at least 8% above the
-measured maximum: 2.0 per source byte for npm and 3.75 for PyPI. A rise then fails the tier well
-before it spends the charge's margin, which stays whole for run time.
+npm (request) and 4.41 for PyPI (requests). The 1 MiB entry step covers one such read. A request
+for a name that is not first-party reads its private and public documents at once on one ticket,
+so two such reads can exceed the entry step by a fraction of a step. The sampler's measurement of
+live data outside the charges absorbs that excess. The margin covers packages shaped unlike the
+corpus. A listing's response pays 1.6 per source byte. From one step of source up, that covers the
+encoding with its strict copy, which exceeds the listing's measured peak above the entry it holds.
+
+The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's read
+or render outgrows what the meter holds for it, so a representation change cannot silently outgrow
+a charge. From one step of source up, it fails before a read's peak passes a regression limit, the
+smallest quarter step at least 8% above the measured maximum: 2.0 per source byte for npm and 3.75
+for PyPI, 0.1 and 0.45 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder
