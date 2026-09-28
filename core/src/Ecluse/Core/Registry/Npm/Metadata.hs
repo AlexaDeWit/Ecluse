@@ -33,12 +33,14 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
+import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
-import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection, keepsRelease)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
@@ -69,7 +71,7 @@ npmChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name = do
-    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name FullRead) . chargedRead (ocChargeFullRead origin))
+    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name WholePackument) . chargedRead (ocChargeFullRead origin))
     pure $ do
         (streamed, digest) <- result
         (info, raw) <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
@@ -89,16 +91,17 @@ fetchNpmBody tracing origin name consume =
             name
             (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
 
-decodeNpm :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
-decodeNpm tracing origin name mode =
-    spanMetadataDecode tracing name
-        . readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (npmFields (maxNestingDepth limits) mode) (collectField limits name) emptyProjection
+decodeNpm :: TracingPort -> OriginClient -> PackageName -> PackumentRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
+decodeNpm tracing origin name mode readChunk = do
+    table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
+    spanMetadataDecode tracing name $
+        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease table emptyProjection) readChunk
   where
     limits = ocLimits origin
 
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version = do
-    result <- fetchNpmBody tracing origin name (decodeNpm tracing origin name (SelectedRead (renderVersion version)))
+    result <- fetchNpmBody tracing origin name (decodeNpm tracing origin name (OneRelease (renderVersion version)))
     pure $ do
         streamed <- result
         projected <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed

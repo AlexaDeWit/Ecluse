@@ -16,7 +16,7 @@ source_files() {
   git ls-files --cached --others --exclude-standard -z |
     while IFS= read -r -d '' path; do
       case "$path" in
-        scratchpad/* | .agents/* | .claude/* | dist-*/* | coverage/* | _site/*) continue ;;
+        scratchpad/* | .agents/* | .claude/* | dist-*/* | vendor/* | coverage/* | _site/*) continue ;;
         *."$extension")
           if [[ -f "$path" && ! -L "$path" ]]; then
             printf '%s\0' "$path"

@@ -9,6 +9,8 @@ module Main (main) where
 
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
+import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
+import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIReaderResidencySpec
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, evaluationMain, probe)
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
@@ -27,5 +29,7 @@ main =
         _ -> hspec $ do
             JsonStreamResidencySpec.spec
             MetadataResidencySpec.spec
+            NpmReaderResidencySpec.spec
+            PyPIReaderResidencySpec.spec
             TarballResidencySpec.spec
             MemoryModelResidencySpec.spec

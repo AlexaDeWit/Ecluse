@@ -190,15 +190,6 @@
             openapi3 = hlib.doJailbreak hsuper.openapi3;
           };
 
-        jsonStreamOverlay = hself: _hsuper: {
-          json-stream = hlib.dontCheck (hself.callCabal2nix "json-stream" (pkgs.fetchFromGitHub {
-            owner = "AlexaDeWit";
-            repo = "json-stream";
-            rev = "520e25758baa5b2665b45eee71ecf8e6a9759868";
-            hash = "sha256-LtgBrwGxR7Sw3BR6xF6Z/J+t7tRUX2EwXMLinC6MjJ0=";
-          }) { });
-        };
-
         # nixpkgs passes haddock -j$NIX_BUILD_CORES, and GHC 9.10's haddock then
         # sometimes deadlocks in the RTS scheduler (GHC #21539). -j1 avoids it.
         sequentialHaddock = drv: hlib.overrideCabal drv (old: {
@@ -223,7 +214,6 @@
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
-            jsonStreamOverlay
             sequentialHaddockOverlay
           ];
         };

@@ -673,6 +673,30 @@ are historical diagnostics prepared before measurement, not retained local bytes
 TTL zero changes both eligible stores. Keep 200-body replay separate from the legacy 304 scenario,
 because 304 avoids assembled-store resolution.
 
+## The vendored JSON lexer
+
+The npm and PyPI metadata reads walk the tokens of the lexer in `vendor/json-stream/`. Two kinds of
+check hold that walk and that lexer to upstream json-stream's behaviour.
+
+- **Differential properties** in `ecluse-core-unit` compare the walk with json-stream's own parser
+  combinators on generated bodies: every emitted field, the byte count, the refusal, and whether a
+  failure is the nesting limit. The bodies carry escapes, lone surrogates, invalid and overlong
+  UTF-8, raw control bytes, deep nesting, long numbers and wide exponents, duplicate keys and
+  truncation, split at random. They run with the suite, or alone with
+  `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`.
+- **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the vendored C lexer beside
+  upstream's at the vendored tree's base commit under libFuzzer, AddressSanitizer and
+  UndefinedBehaviorSanitizer. It fails on any difference in return code, lexer state or result
+  records, with the input cut into pieces at random. Run it with `task fuzz-json-lexer`, ten minutes
+  by default, or pass libFuzzer options after `--`. clang and libFuzzer come from the flake's pinned
+  nixpkgs, and the corpus grows under `dist-fuzz/json-lexer/`. It does not run in CI.
+
+Both lexers overflow a signed `long` in `handle_number` on an integer of 19 digits or more, before
+they discard the value and parse the digits again. Nixpkgs' hardening makes the overflow wrap, so the
+harness builds with `-fno-wrapv` to let UndefinedBehaviorSanitizer see it, and
+`test/fuzz/json-lexer/ubsan.supp` names those two functions so fuzzing continues past it. The seed
+`nineteen-digit-integer` reaches it. `FUZZ_KNOWN=report task fuzz-json-lexer` reports it instead.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.

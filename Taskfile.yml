@@ -346,7 +346,24 @@ tasks:
     cmds:
       # Annotate only tracked files without the tag. Re-annotation can discard a comment
       # that fourmolu joined to the header. git grep exits 1 when all files carry the tag.
-      - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
+      # Vendored files carry their licence through REUSE.toml instead.
+      - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" ":(exclude)vendor/" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
+  vendor-check:
+    desc: Check the vendored json-stream paths, modes and SHA-256 digests against their pins
+    cmds:
+      - bash scripts/vendored-json-stream.sh check
+  vendor-pin:
+    desc: Re-pin the vendored json-stream files after an intended change
+    cmds:
+      - bash scripts/vendored-json-stream.sh pin
+  vendor-diff:
+    desc: Diff the vendored json-stream tree against its upstream commit (exits 1 by design, so nothing gates on it)
+    cmds:
+      - bash scripts/vendored-json-stream.sh diff
+  fuzz-json-lexer:
+    desc: Fuzz the vendored JSON lexer against upstream's (pass libFuzzer options after --)
+    cmds:
+      - bash scripts/fuzz-json-lexer.sh {{.CLI_ARGS | default "-max_total_time=600"}}
   test-scripts:
     desc: Run the shell-script unit tests
     sources:
@@ -407,6 +424,7 @@ tasks:
     desc: Run all static analysis checks concurrently
     deps:
       - format-check
+      - vendor-check
       - lint
       - sast
       - lint-workflows
@@ -578,11 +596,12 @@ tasks:
     cmds:
       - bash -c 'vulnix -C $(nix build .#ecluse-bin --no-link --print-out-paths)'
   scan-osv:
-    desc: Scan the pinned Haskell closure for HSEC advisories (osv-scanner over the freeze)
+    desc: Scan the pinned Haskell closure for HSEC advisories (osv-scanner over the freezes)
     cmds:
       # Exit 1 means findings, which are report-only: the SARIF upload in
-      # security.yml surfaces them. Only a scanner error (>1) fails the task.
-      - osv-scanner scan source --lockfile cabal.project.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
+      # security.yml surfaces them. Only a scanner error (>1) fails the task. The vendored
+      # json-stream's freeze has its own name, so the scanner is told to read it as a freeze.
+      - osv-scanner scan source --lockfile cabal.project.freeze --lockfile cabal.project.freeze:vendor/json-stream/json-stream.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
       - bash scripts/sarif-locations.sh osv-freeze.sarif cabal.project.freeze
   clean:
     desc: Remove build artifacts

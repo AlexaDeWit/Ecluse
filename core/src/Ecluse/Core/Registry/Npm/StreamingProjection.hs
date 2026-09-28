@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Npm.StreamingProjection (
     NpmProjection,
     emptyProjection,
     collectField,
+    keepsRelease,
     finishProjection,
 ) where
 
@@ -20,7 +21,6 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
-import Ecluse.Core.Registry.JsonStream (InternTable, internTableKeeping, internText, internValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
@@ -34,7 +34,6 @@ import Ecluse.Core.Version (Version, mkVersion)
 data NpmProjection = NpmProjection
     { projectedName :: Maybe Value
     , projectedVersions :: Map Text (Either InvalidEntry PackageDetails, Value)
-    , projectedStrings :: InternTable
     , projectedTimes :: Map Text (Either InvalidEntry UTCTime)
     , projectedTags :: Map Text (Either InvalidEntry Version)
     , projectedBookkeeping :: Map Text Value
@@ -50,7 +49,6 @@ emptyProjection =
     NpmProjection
         { projectedName = Nothing
         , projectedVersions = mempty
-        , projectedStrings = internTableKeeping releaseUniqueFields
         , projectedTimes = mempty
         , projectedTags = mempty
         , projectedBookkeeping = mempty
@@ -59,6 +57,10 @@ emptyProjection =
         , projectedActiveContainer = Nothing
         , projectedInvalidContainer = False
         }
+
+-- | Whether a release read now under the key would be kept: the key's first in the first versions object.
+keepsRelease :: NpmProjection -> Text -> Bool
+keepsRelease acc key = projectedActiveContainer acc == Just VersionsContainer && Map.notMember key (projectedVersions acc)
 
 -- | Project each release once and enforce the version ceiling while receiving source fields.
 collectField :: Limits -> PackageName -> NpmProjection -> NpmField -> Either LimitError NpmProjection
@@ -101,12 +103,10 @@ collectField limits name acc = \case
     TagField key _ | Map.member key (projectedTags acc) -> Right acc
     TagField key value -> Right acc{projectedTags = firstInsert key (decode (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
   where
-    -- The typed release reads the shared copies, so its texts are the served document's own.
+    -- The walk interned the key and release, so the typed release reads the served document's texts.
     retain key value current =
-        let (keyed, sharedKey) = internText (projectedStrings current) key
-            (strings, shared) = internValue keyed value
-            !typed = release sharedKey shared
-         in current{projectedVersions = Map.insert sharedKey (typed, shared) (projectedVersions current), projectedStrings = strings}
+        let !typed = release key value
+         in current{projectedVersions = Map.insert key (typed, value) (projectedVersions current)}
     release key value = case projectVersionEntryResult name (mkVersion Npm key) Nothing value of
         Left err -> Left $! mkInvalidEntry InvalidVersionManifest key value (toText err)
         Right details -> Right $! details
@@ -114,11 +114,6 @@ collectField limits name acc = \case
     decode convert kind key value = case parseEither parseJSON value of
         Left err -> Left $! mkInvalidEntry kind key value (toText err)
         Right typed -> Right $! convert typed
-
--- Artifact locations, digests and signatures differ in every release, so they stay out of the table.
--- A name matches at any depth, so a rarer member such as _npmUser.url is kept as read too.
-releaseUniqueFields :: [Text]
-releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
 firstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
 firstInsert = Map.insertWith (\_ old -> old)

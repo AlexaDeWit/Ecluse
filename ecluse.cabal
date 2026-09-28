@@ -33,6 +33,9 @@ extra-source-files:
   test/fixtures/osv/withdrawal/*.json
   test/unit/fixtures/epss/*.gz
   test/unit/fixtures/osv/*.zip
+  vendor/json-stream/LICENSE
+  vendor/json-stream/README.md
+  vendor/json-stream/c_lib/lexer.h
 
 source-repository head
   type:     git
@@ -88,6 +91,33 @@ common shared
 common shipped-rts
   ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T --disable-delayed-os-memory-return"
 
+-- json-stream under its own BSD-3-Clause licence, vendored as vendor/json-stream/README.md describes.
+-- The stanza keeps upstream's language and warning settings instead of importing `shared`.
+library ecluse-json-stream
+  hs-source-dirs:   vendor/json-stream
+  exposed-modules:
+    Data.JsonStream.CLexType
+    Data.JsonStream.CLexer
+    Data.JsonStream.Parser
+    Data.JsonStream.TokenParser
+    Data.JsonStream.Unescape
+
+  c-sources:        vendor/json-stream/c_lib/lexer.c
+  include-dirs:     vendor/json-stream/c_lib
+  includes:         lexer.h
+  default-language: Haskell2010
+  ghc-options:      -Wall -fwarn-incomplete-uni-patterns
+  build-depends:
+    , aeson                 >=2.2      && <2.4
+    , base                  ^>=4.20
+    , bytestring            ^>=0.12
+    , containers            ^>=0.7
+    , primitive             ^>=0.9
+    , scientific            ^>=0.3
+    , text                  ^>=2.1
+    , unordered-containers  ^>=0.2
+    , vector                ^>=0.13
+
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, the rule engine, the queue abstraction, and security. It also
 -- holds the agnostic server layer (Route, Response, Conditional, Stream) and the
@@ -139,6 +169,9 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
+    Ecluse.Core.Registry.Json.Intern
+    Ecluse.Core.Registry.Json.Shape
+    Ecluse.Core.Registry.Json.Walk
     Ecluse.Core.Registry.JsonStream
     Ecluse.Core.Registry.VersionList
     Ecluse.Core.Registry.Maintenance
@@ -156,6 +189,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Registry.Npm.Reader
     Ecluse.Core.Registry.Npm.Streaming
     Ecluse.Core.Registry.Npm.StreamingProjection
     Ecluse.Core.Registry.Npm.Publish
@@ -184,6 +218,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
     Ecluse.Core.Registry.PyPI.Project
+    Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
     Ecluse.Core.Registry.PyPI.Route.Internal
@@ -312,10 +347,11 @@ library ecluse-core
     , http-client-tls       >=0.3.6 && <0.5
     , http-conduit          ^>=2.3
     , http-types            ^>=0.12
+    , hashable              ^>=1.5
     , hs-opentelemetry-api  ^>=1.0
     , integer-logarithms    ^>=1.0
     , scientific            ^>=0.3
-    , json-stream           ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , iproute               ^>=1.7
     , katip                 ^>=0.8.8
     , ram                   ^>=0.22
@@ -674,12 +710,14 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Metadata
     Ecluse.Test.Registry.PyPI.Project
+    Ecluse.Test.Registry.PyPI.Streaming
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
     Ecluse.Test.RegistryCapture
@@ -707,7 +745,7 @@ library ecluse-test-support
 
   build-depends:
     , ecluse:ecluse-core
-    , json-stream       ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
@@ -810,6 +848,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
+    Ecluse.Core.Registry.Json.InternSpec
+    Ecluse.Core.Registry.Json.ShapeSpec
+    Ecluse.Core.Registry.Json.WalkSpec
     Ecluse.Core.Registry.JsonStreamSpec
     Ecluse.Core.Registry.ProgressSpec
     Ecluse.Core.Registry.VersionListSpec
@@ -833,6 +874,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
     Ecluse.Core.Registry.Npm.MetadataSpec
+    Ecluse.Core.Registry.Npm.ReaderSpec
     Ecluse.Core.Registry.Npm.StreamingSpec
     Ecluse.Core.Registry.Npm.StreamingProjectionSpec
     Ecluse.Core.Registry.Npm.ProjectSpec
@@ -852,6 +894,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
+    Ecluse.Core.Registry.PyPI.ReaderSpec
     Ecluse.Core.Registry.PyPI.StreamingSpec
     Ecluse.Core.Registry.PyPI.WireSpec
     Ecluse.Core.Registry.RequestSpec
@@ -936,7 +979,7 @@ test-suite ecluse-core-unit
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
-    , json-stream       ==0.4.6.1
+    , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
     , autodocodec       ^>=0.5
@@ -1289,8 +1332,11 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec
+    Ecluse.Core.Registry.Npm.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
@@ -1304,6 +1350,7 @@ test-suite ecluse-residency
     , crypton           >=1.0 && <1.2
     , ecluse
     , ecluse:ecluse-core
+    , ecluse:ecluse-json-stream
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
     , ecluse:ecluse-runtime-test-support

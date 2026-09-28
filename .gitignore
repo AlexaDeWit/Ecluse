@@ -29,6 +29,7 @@ http_cache.sqlite
 dist-analysis/
 dist-docs/
 dist-bench-prof/
+dist-fuzz/
 /ecluse-bench.prof
 /ecluse-bench.svg
 *.hi

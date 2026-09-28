@@ -17,14 +17,17 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
+import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection, keepsFile)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
@@ -74,9 +77,10 @@ fetchPyPIBody tracing origin name consume =
             (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
 
 decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
-decodePyPI tracing origin name mode =
-    spanMetadataDecode tracing name
-        . readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (pypiFields (maxNestingDepth limits) mode) (collectField limits mode) (emptyProjection name)
+decodePyPI tracing origin name mode readChunk = do
+    table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
+    spanMetadataDecode tracing name $
+        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)) readChunk
   where
     limits = ocLimits origin
 

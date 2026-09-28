@@ -11,8 +11,12 @@
 # weeder). So a change lands its scaffolding and the wiring that reaches it
 # together, or roots the definition below.
 
-# Reachability roots: the executable entry point, Cabal's generated Paths_, and
-# one documented structural exception.
+# Reachability roots: the executable entry point, Cabal's generated Paths_, the vendored
+# json-stream modules, and one documented structural exception.
+#
+# Vendored json-stream stays as upstream wrote it, so every Data.JsonStream definition is a
+# root and upstream's unused API raises no finding. The owner approved this exception on
+# 2026-09-28.
 #
 # Ecluse.Core.Security.Egress.DevHttp.loopbackRegistryUrl stays rooted here rather
 # than moving out of ecluse-core. The plain-http RegistryUrl former stays locked
@@ -26,6 +30,7 @@ roots = [
   "^Main\\.main$",
   "^Paths_",
   "^Ecluse\\.Core\\.Security\\.Egress\\.DevHttp\\.loopbackRegistryUrl$",
+  "^Data\\.JsonStream\\.",
 ]
 
 # Treat instance methods as roots, so weeder does not report a lawful type-class
