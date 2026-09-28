@@ -453,15 +453,15 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | Work | What it pays |
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
-| A full metadata read, which a listing makes | 4.5 bytes per decompressed source byte, chunk by chunk before parsing |
+| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 2.1 bytes for npm, 4.2 bytes for PyPI |
 | A listing's response | 1.6 bytes per source byte of the documents it merges, before assembly |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
-The per-byte charges sit at or above the largest the residency tests measure on the captured
-package corpus: what a full read holds, and a response's encoding with its copy. The tests fail
-when a package would hold more, so the charges stay above the measured retention.
+The per-byte charges sit above the largest the residency tests measure on the captured package
+corpus: the most a full read holds while it parses, and a response's encoding with its copy. The
+tests fail when a package would need more, so the charges stay above the measured peaks.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until

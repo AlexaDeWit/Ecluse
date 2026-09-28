@@ -105,9 +105,9 @@ The retained samples include any backing arrays reachable through the selected s
 
 These counters distinguish the retained heap from allocation and cache accounting.
 The high-water sample includes rendering and cannot establish the production read/decode/project
-peak or a bound on transient buffers. The probes use production projection functions with the
-default structural limits. They do not execute the HTTP bounded read or prove that shipping
-response limits admit each capture.
+peak or a bound on transient buffers. The [listing probe](#listing-peaks) measures that peak. The
+probes use production projection functions with the default structural limits. They do not execute
+the HTTP bounded read or prove that shipping response limits admit each capture.
 
 The retained-byte gate uses the following corpus envelopes. The calibration used all nine npm and
 three PyPI captures in the arm64 Build job of
@@ -129,11 +129,11 @@ gate keeps its default.
 | PyPI | Shared cache entry | 3.130036392 | requests | 3.5 | 11.8% |
 
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
-same test also checks that it stays within the memory gate's full-read charge, 4.5 bytes per source
-byte, read from each ecosystem's adapter. The same test checks the listing output charge: twice a
-shared entry's encoded size, for the lazy encoding and its strict copy, must stay within the 1.6
-output charge. That check covers the encoding, not the working set while the merged document is
-built. Raise a charge in the adapter, not here, when a representation outgrows it.
+same test also checks that it stays within the memory gate's full-read charge, read from each
+ecosystem's adapter. The same test checks the listing output charge: twice a shared entry's encoded
+size, for the lazy encoding and its strict copy, must stay within the 1.6 output charge. The
+[listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
+set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
 For example, the TypeScript shared shape retains 24,595,192 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
@@ -154,6 +154,60 @@ These residency measurements do not determine the shared entry-count allowance.
 Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6.4900 and 6.4389.
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.
+
+### Listing peaks
+
+`MemoryModelResidencySpec` also measures the most live data a listing holds, which the memory gate's
+[charges](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) must cover. For each
+capture, a fresh child process:
+
+1. streams the capture in 32 KiB chunks through the production parser, digest and projection,
+   enforces artifact locations against the capture's registry, and holds the cache entry
+2. renders the served body of a single-source listing in which every version survives, as the
+   strict bytes a response sends
+
+It samples live bytes before the read, holding the entry, and holding the served body. The
+runtime's high-water after each phase gives that phase's peak. The child runs with
+`+RTS -F1 -A1m`: the old generation may not grow past its live data, so nearly every collection is
+major, and the high-water samples live data at least once per MiB allocated. Under the default
+flags, the typescript read's high-water equalled what it keeps, because no major collection fell
+inside its transient.
+
+The checks compare bytes with each ecosystem's charges:
+
+- The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
+  the entry step.
+- The peak through the read and the render fits what the meter holds after both charges, counted
+  the same way.
+- From one step of source up, the read's peak fits the full-read charge itself. The larger of the
+  render's peak above the held entry and twice the served body fits the output charge. No
+  collection observes the instant the lazy encoding and its strict copy are both live, so the check
+  counts both.
+
+The following figures come from the arm64 Build job of
+[CI run 36394636324](https://github.com/AlexaDeWit/Ecluse/actions/runs/36394636324/job/108838853819),
+with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
+read's peak and the held entry above the baseline, the render's peak above the held entry, and the
+served body's length.
+
+| Ecosystem | Package | Source MiB | Read peak | Entry | Render peak | Served body |
+|---|---|--:|--:|--:|--:|--:|
+| npm | typescript | 14.97 | 1.676 | 1.571 | 0.659 | 0.659 |
+| npm | @types/node | 10.63 | 0.694 | 0.603 | 0.177 | 0.175 |
+| npm | react | 6.67 | 1.587 | 1.408 | 0.494 | 0.495 |
+| npm | webpack | 4.96 | 1.237 | 1.157 | 0.713 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 1.393 | 1.302 | 0.765 | 0.762 |
+| npm | express | 0.77 | 1.954 | 1.568 | 0.570 | 0.576 |
+| npm | @babel/core | 0.76 | 1.686 | 1.376 | 0.574 | 0.575 |
+| npm | request | 0.29 | 1.996 | 1.641 | 0.505 | 0.529 |
+| npm | lodash | 0.24 | 1.398 | 1.363 | 0.333 | 0.362 |
+| PyPI | numpy | 2.65 | 2.471 | 2.158 | 0.871 | 0.596 |
+| PyPI | boto3 | 2.10 | 3.335 | 2.972 | 0.995 | 0.621 |
+| PyPI | requests | 0.12 | 3.715 | 3.645 | 0.608 | 0.657 |
+
+The full-read charges derive from the read peaks of captures of at least one step, as
+[configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
+Each render's peak stays below twice its served body, and the output charge covers both.
 
 ### Read evaluation
 
