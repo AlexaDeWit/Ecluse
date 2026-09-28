@@ -244,10 +244,7 @@ probeListing package = do
 {-# NOINLINE prepareListingRead #-}
 prepareListingRead :: CorpusPackage -> IO (StablePtr CacheEntry)
 prepareListingRead package = do
-    upstream <- case pkgEcosystem name of
-        Npm -> pure npmCaptureUpstream
-        PyPI -> pure pypiCaptureUpstream
-        RubyGems -> fail "no RubyGems metadata residency corpus"
+    upstream <- captureUpstream (pkgEcosystem name)
     streamed <- withBinaryFile (cpPath package) ReadMode (streamFull defaultLimits name . (`BS.hGetSome` 32768)) >>= either (fail . toString) pure
     let entry = streamed{entryInfo = located upstream (entryInfo streamed)}
     void (evaluate (sourceSize (HeldShared entry)))
@@ -259,7 +256,7 @@ prepareListingRead package = do
 {-# NOINLINE prepareListingRender #-}
 prepareListingRender :: Ecosystem -> CacheEntry -> IO (StablePtr ByteString)
 prepareListingRender ecosystem entry = do
-    metadata <- maybe (fail "no RubyGems metadata residency corpus") (pure . adapterMetadata) (adapterFor ecosystem)
+    metadata <- maybe noRubyGemsCorpus (pure . adapterMetadata) (adapterFor ecosystem)
     plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(GatedSource, Snapshot (entryDigest entry) (entryInfo entry))])
     let document = entryRaw entry
         sources = Map.singleton 0 (Snapshot (entryDigest entry) document)
@@ -361,12 +358,27 @@ prepare shape package = do
 
 -- | The full read as production returns it, with artifact locations enforced against the capture's registry.
 project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
-project package bytes = case pkgEcosystem name of
-    Npm -> either (fail . show) (pure . bimap (located npmCaptureUpstream) (fst npmCached)) (projectNpmManifest defaultLimits name bytes)
-    PyPI -> either (fail . show) (pure . bimap (located pypiCaptureUpstream) (fst pypiSimpleCached)) (projectPyPIIndex defaultLimits name bytes)
-    RubyGems -> fail "no RubyGems metadata residency corpus"
+project package bytes = do
+    upstream <- captureUpstream (pkgEcosystem name)
+    case pkgEcosystem name of
+        Npm -> settled upstream (fst npmCached) (projectNpmManifest defaultLimits name bytes)
+        PyPI -> settled upstream (fst pypiSimpleCached) (projectPyPIIndex defaultLimits name bytes)
+        RubyGems -> noRubyGemsCorpus
   where
     name = cpPackage package
+
+settled :: (Show e) => CaptureUpstream -> (raw -> CachedDoc) -> Either e (PackageInfo, raw) -> IO (PackageInfo, CachedDoc)
+settled upstream cached = either (fail . show) (pure . bimap (located upstream) cached)
+
+-- The registry each ecosystem's captures came from.
+captureUpstream :: Ecosystem -> IO CaptureUpstream
+captureUpstream = \case
+    Npm -> pure npmCaptureUpstream
+    PyPI -> pure pypiCaptureUpstream
+    RubyGems -> noRubyGemsCorpus
+
+noRubyGemsCorpus :: IO a
+noRubyGemsCorpus = fail "no RubyGems metadata residency corpus"
 
 located :: CaptureUpstream -> PackageInfo -> PackageInfo
 located upstream = enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream)

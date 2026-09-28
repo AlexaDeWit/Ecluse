@@ -86,19 +86,23 @@ envelopePermille _ shape = case shape of
     Typed -> 2250
     Shared -> 7500
 
-{- The old generation may not outgrow its live data and the nursery holds 1 MiB, so nearly every
-collection is major and the high-water samples live data at least once per MiB allocated. -}
+{- The old generation may not outgrow its live data and the nursery holds 128 KiB, so nearly every
+collection is major and the high-water samples live data at least once per 128 KiB allocated. -}
 majorSampling :: [String]
-majorSampling = ["+RTS", "-F1", "-A1m", "-RTS"]
+majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
+
+-- The full-read charge's margin above the largest read peak from one meter step of source up.
+chargeMarginPermille :: Integer
+chargeMarginPermille = 1250
 
 {- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
-source up, each phase's own charge covers its high-water, as the factors' derivation requires. -}
+source up, the read's peak keeps the margin under its charge and the output charge covers the rest. -}
 checkListing :: ListingPeaks -> ChargeFactors -> Expectation
 checkListing peaks factors = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
     when (size >= meterStepBytes) $ do
-        rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= toInteger fullRead)
+        (chargeMarginPermille * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         -- Collections miss the instant the lazy encoding and its strict copy are both live.
         max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks)) `shouldSatisfy` (<= toInteger output)
   where
@@ -117,7 +121,7 @@ reportListing package peaks =
             [ "package" .= cpName package
             , "read_peak_per_source_byte" .= perSourceByte (rise listingReadPeak listingBaseline peaks)
             , "entry_per_source_byte" .= perSourceByte (rise listingEntryLive listingBaseline peaks)
-            , "render_peak_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
+            , "peak_above_entry_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
             , "served_per_source_byte" .= perSourceByte (toInteger (listingServedBytes peaks))
             , "peaks" .= peaks
             ]

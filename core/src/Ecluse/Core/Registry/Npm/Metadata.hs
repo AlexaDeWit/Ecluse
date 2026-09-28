@@ -62,8 +62,8 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
-{- | npm's memory charges per source byte, which the residency tier holds above its maxima: a full read's
-peak (1.68, typescript) and a listing's encoding with its strict copy (1.52, @aws-sdk/client-s3).
+{- | npm's memory charges per source byte, above the largest read peak from one meter step of source up
+(1.68, typescript) and a listing's encoding with its strict copy (1.52, @aws-sdk/client-s3).
 -}
 npmChargeFactors :: ChargeFactors
 npmChargeFactors = ChargeFactors{cfFullReadPermille = 2100, cfOutputPermille = 1600}

@@ -168,46 +168,49 @@ capture, a fresh child process:
 
 It samples live bytes before the read, holding the entry, and holding the served body. The
 runtime's high-water after each phase gives that phase's peak. The child runs with
-`+RTS -F1 -A1m`: the old generation may not grow past its live data, so nearly every collection is
-major, and the high-water samples live data at least once per MiB allocated. Under the default
-flags, the typescript read's high-water equalled what it keeps, because no major collection fell
-inside its transient.
+`+RTS -F1 -A128k`: the old generation may not grow past its live data, so nearly every collection
+is major, and the high-water samples live data at least once per 128 KiB allocated. Under the
+default flags, the typescript read's high-water equalled what it keeps, because no major collection
+fell inside its transient. A 1 MiB nursery misses the peaks of captures under 1 MiB, which finish
+within a few collections.
 
 The checks compare bytes with each ecosystem's charges:
 
 - The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
-  the entry step.
+  the entry step. A capture under one step can peak above its per-byte charge, and this check shows
+  that the entry step still covers it.
 - The peak through the read and the render fits what the meter holds after both charges, counted
   the same way.
-- From one step of source up, the read's peak fits the full-read charge itself. The larger of the
-  render's peak above the held entry and twice the served body fits the output charge. No
-  collection observes the instant the lazy encoding and its strict copy are both live, so the check
-  counts both.
+- From one step of source up, 1.25 times the read's peak fits the full-read charge, so a change
+  that uses up the charge's margin fails. The larger of the listing's peak above the held entry and
+  twice the served body fits the output charge. No collection observes the instant the lazy
+  encoding and its strict copy are both live, so the check counts both.
 
 The following figures come from the arm64 Build job of
-[CI run 36394636324](https://github.com/AlexaDeWit/Ecluse/actions/runs/36394636324/job/108838853819),
+[CI run 36404684497](https://github.com/AlexaDeWit/Ecluse/actions/runs/36404684497/job/108870538869),
 with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
-read's peak and the held entry above the baseline, the render's peak above the held entry, and the
-served body's length.
+read's peak and the held entry above the baseline, the listing's peak through the read and the
+render above the held entry, and the served body's length.
 
-| Ecosystem | Package | Source MiB | Read peak | Entry | Render peak | Served body |
+| Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
 |---|---|--:|--:|--:|--:|--:|
-| npm | typescript | 14.97 | 1.676 | 1.571 | 0.659 | 0.659 |
-| npm | @types/node | 10.63 | 0.694 | 0.603 | 0.177 | 0.175 |
-| npm | react | 6.67 | 1.587 | 1.408 | 0.494 | 0.495 |
-| npm | webpack | 4.96 | 1.237 | 1.157 | 0.713 | 0.712 |
-| npm | @aws-sdk/client-s3 | 3.97 | 1.393 | 1.302 | 0.765 | 0.762 |
-| npm | express | 0.77 | 1.954 | 1.568 | 0.570 | 0.576 |
-| npm | @babel/core | 0.76 | 1.686 | 1.376 | 0.574 | 0.575 |
-| npm | request | 0.29 | 1.996 | 1.641 | 0.505 | 0.529 |
-| npm | lodash | 0.24 | 1.398 | 1.363 | 0.333 | 0.362 |
-| PyPI | numpy | 2.65 | 2.471 | 2.158 | 0.871 | 0.596 |
-| PyPI | boto3 | 2.10 | 3.335 | 2.972 | 0.995 | 0.621 |
-| PyPI | requests | 0.12 | 3.715 | 3.645 | 0.608 | 0.657 |
+| npm | typescript | 14.97 | 1.677 | 1.571 | 0.661 | 0.659 |
+| npm | @types/node | 10.63 | 0.695 | 0.603 | 0.177 | 0.175 |
+| npm | react | 6.67 | 1.590 | 1.408 | 0.498 | 0.495 |
+| npm | webpack | 4.96 | 1.242 | 1.157 | 0.713 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 1.404 | 1.302 | 0.766 | 0.762 |
+| npm | express | 0.77 | 1.954 | 1.568 | 0.605 | 0.576 |
+| npm | @babel/core | 0.76 | 1.690 | 1.376 | 0.578 | 0.575 |
+| npm | request | 0.29 | 2.306 | 1.641 | 0.665 | 0.529 |
+| npm | lodash | 0.24 | 2.153 | 1.363 | 0.790 | 0.362 |
+| PyPI | numpy | 2.65 | 2.470 | 2.158 | 0.883 | 0.596 |
+| PyPI | boto3 | 2.10 | 3.342 | 2.972 | 0.995 | 0.621 |
+| PyPI | requests | 0.12 | 3.969 | 3.645 | 0.608 | 0.657 |
 
 The full-read charges derive from the read peaks of captures of at least one step, as
 [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
-Each render's peak stays below twice its served body, and the output charge covers both.
+From one step of source up, each listing's peak above its entry stays below twice its served body,
+and the output charge covers both.
 
 ### Read evaluation
 
