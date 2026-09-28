@@ -68,7 +68,7 @@ retainedSpec = describe "supported PyPI fields" $ do
         map snd (simpleFiles document) `shouldBe` [simpleFile filename]
         fieldAt "unknown" (simpleValue document) `shouldBe` Nothing
 
-    it "shares field names, digest names and repeated strings across files, and nothing between reads" $ do
+    it "shares field names, known digest names and repeated strings across files, and nothing between reads" $ do
         let file other = withFileKeys [("hashes", object ["sha256" .= validSha256, "custom" .= ("digest" :: Text)])] (simpleFile other)
             body = encodeStrict (simpleIndex "requests" [file filename, file "requests-2.0.tar.gz"])
             files document = map snd (simpleFiles document)
@@ -78,7 +78,7 @@ retainedSpec = describe "supported PyPI fields" $ do
         let hashes = mapMaybe (fieldAt "hashes") (files document)
         sharesKey "filename" (files document) `shouldReturn` True
         sharesKey "sha256" hashes `shouldReturn` True
-        sharesKey "custom" hashes `shouldReturn` True
+        sharesKey "custom" hashes `shouldReturn` False
         sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document)) `shouldReturn` True
         sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document <> files again)) `shouldReturn` False
 

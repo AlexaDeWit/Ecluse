@@ -20,7 +20,7 @@ module Ecluse.Core.Text (
     renderIso8601Utc,
     displayExceptionT,
     textStorageBytes,
-    compactText,
+    ownedText,
 ) where
 
 import Data.Array.Byte (ByteArray (..))
@@ -170,7 +170,7 @@ textStorageBytes :: Text -> Int
 textStorageBytes (TI.Text (ByteArray array) _ _) = I# (sizeofByteArray# array)
 
 -- | The text on an array of exactly its own bytes. A slice, or a text on a larger array, is copied.
-compactText :: Text -> Text
-compactText text@(TI.Text _ offset len)
+ownedText :: Text -> Text
+ownedText text@(TI.Text _ offset len)
     | offset == 0 && textStorageBytes text == len = text
     | otherwise = T.copy text

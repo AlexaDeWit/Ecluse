@@ -20,7 +20,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
-import Ecluse.Core.Registry.JsonStream (InternTable, emptyInternTable, internText, internValue)
+import Ecluse.Core.Registry.JsonStream (InternTable, internTableKeeping, internText, internValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
@@ -50,7 +50,7 @@ emptyProjection =
     NpmProjection
         { projectedName = Nothing
         , projectedVersions = mempty
-        , projectedStrings = emptyInternTable
+        , projectedStrings = internTableKeeping releaseUniqueFields
         , projectedTimes = mempty
         , projectedTags = mempty
         , projectedBookkeeping = mempty
@@ -114,6 +114,10 @@ collectField limits name acc = \case
     decode convert kind key value = case parseEither parseJSON value of
         Left err -> Left $! mkInvalidEntry kind key value (toText err)
         Right typed -> Right $! convert typed
+
+-- Artifact locations, digests and signatures differ in every release, so they stay out of the table.
+releaseUniqueFields :: [Text]
+releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
 firstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
 firstInsert = Map.insertWith (\_ old -> old)

@@ -8,8 +8,8 @@ A retained raw version object is charged on the shared wire-to-resident model, w
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
-import Data.Text.Internal qualified as Text
 import Data.Text.Short qualified as TS
+import Data.Text.Unsafe (lengthWord8)
 import Data.Time (UTCTime (..), diffTimeToPicoseconds, toModifiedJulianDay)
 
 import Ecluse.Core.Package
@@ -36,9 +36,6 @@ expansion, estimated by one walk of the tree so the serve path never encodes it.
 rawWeight :: CachedDoc -> Integer
 rawWeight = toInteger . expandWireBytes . fromIntegral . weighCachedDoc
 
-utf8Length :: Text -> Int
-utf8Length (Text.Text _ _ len) = len
-
 detailsWeight :: PackageDetails -> Integer
 detailsWeight details =
     -- The base covers the entry, package record, scalar tags, and wrappers.
@@ -58,7 +55,7 @@ detailsWeight details =
     -- The opaque parsed version has flat token lists and bounded numeric components.
     -- The per-byte allowance also covers RubyGems hyphen expansion and copied parser text.
     rawVersion = renderVersion (pkgVersion details)
-    rawLength = utf8Length rawVersion
+    rawLength = lengthWord8 rawVersion
 
 nameWeight :: PackageName -> Integer
 nameWeight name =

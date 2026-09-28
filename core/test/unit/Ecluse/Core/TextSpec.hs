@@ -17,7 +17,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Text (afterFirst, compactText, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, joinUrlPath, nonBlank, ownedText, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
 
 -- | Text parsing contracts, ISO-8601 rendering parity and text storage.
 spec :: Spec
@@ -31,7 +31,7 @@ spec = do
     readDecimalTextSpec
     readHexTextSpec
     renderIso8601Spec
-    compactTextSpec
+    ownedTextSpec
 
 afterFirstSpec :: Spec
 afterFirstSpec = describe "afterFirst" $ do
@@ -228,13 +228,13 @@ renderIso8601Spec = describe "renderIso8601Utc" $ do
         let t = UTCTime (fromGregorian 2016 12 31) (picosecondsToDiffTime 86_400_500_000_000_000)
         renderIso8601Utc t `shouldBe` toText (iso8601Show t)
 
-compactTextSpec :: Spec
-compactTextSpec = describe "compactText" $ do
+ownedTextSpec :: Spec
+ownedTextSpec = describe "ownedText" $ do
     it "keeps the array of a text that owns exactly its bytes" $ do
         text <- evaluate (T.copy (T.replicate 65536 "x"))
         textStorageBytes text `shouldBe` 65536
         counted <- getAllocationCounter
-        kept <- evaluate (compactText text)
+        kept <- evaluate (ownedText text)
         remaining <- getAllocationCounter
         kept `shouldBe` text
         -- A copy would allocate the whole 64 KiB array. The counter is accurate to about 4 KiB.
@@ -243,7 +243,7 @@ compactTextSpec = describe "compactText" $ do
     it "copies a slice onto an array of its own" $ do
         let slice = T.take 3 (T.drop 2 "prefixed")
         textStorageBytes slice `shouldBe` 8
-        textStorageBytes (compactText slice) `shouldBe` 3
+        textStorageBytes (ownedText slice) `shouldBe` 3
 
     it "keeps the text of any slice" $
         hedgehog $ do
@@ -251,5 +251,5 @@ compactTextSpec = describe "compactText" $ do
             start <- forAll (Gen.int (Range.linear 0 40))
             count <- forAll (Gen.int (Range.linear 0 40))
             let slice = T.take count (T.drop start text)
-            compactText slice === slice
-            textStorageBytes (compactText slice) === BS.length (encodeUtf8 slice)
+            ownedText slice === slice
+            textStorageBytes (ownedText slice) === BS.length (encodeUtf8 slice)

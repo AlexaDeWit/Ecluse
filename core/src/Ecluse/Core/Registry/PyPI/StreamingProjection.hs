@@ -18,7 +18,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (InvalidVersionListing), PackageInfo, PackageName, mkInvalidEntry)
 import Ecluse.Core.Package.Entry (EntryKey)
-import Ecluse.Core.Registry.JsonStream (InternTable, emptyInternTable, internValue)
+import Ecluse.Core.Registry.JsonStream (InternTable, internTableKeeping, internValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataUndecodable))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument)
@@ -48,7 +48,11 @@ data PyPIProjection = PyPIProjection
 
 -- | Start one project's source without retaining any input chunks.
 emptyProjection :: PackageName -> PyPIProjection
-emptyProjection name = PyPIProjection mempty [] emptyInternTable (filenameMemo name) [] [] mempty 0 Nothing True False False False False
+emptyProjection name = PyPIProjection mempty [] (internTableKeeping fileUniqueFields) (filenameMemo name) [] [] mempty 0 Nothing True False False False False
+
+-- Names, locations, digests, upload times and attestations differ per file, so they stay out of the table.
+fileUniqueFields :: [Text]
+fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
 -- | Decode one compact file and stop retaining payloads after an existing structural limit trips.
 collectField :: Limits -> PyPIRead -> PyPIProjection -> PyPIField -> Either LimitError PyPIProjection
