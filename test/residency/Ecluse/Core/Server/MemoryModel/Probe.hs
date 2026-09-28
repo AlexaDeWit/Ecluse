@@ -172,10 +172,14 @@ probeEvaluation package = do
         -- Forcing renders names into pinned memory, which retires the pinned block holding the digest.
         -- 128 strings of 16 bytes, 32 each with their header, fill a 4 KiB block first, so both samples count it.
         forM_ [1 .. 128 :: Int] $ \i -> evaluate (BS.replicate 16 (fromIntegral i))
-        weakHead <- live <$> sample
+        weakHead <- lowestLive
         forceEntry root
-        forced <- live <$> sample
-        pure (Evaluated count (live before) weakHead forced)
+        Evaluated count (live before) weakHead <$> lowestLive
+
+-- A deferred value is part of the heap graph and shows in every sample, so the lower of two cannot
+-- hide one. Taking it discards a one-off high sample from the runtime's own bookkeeping.
+lowestLive :: IO Word64
+lowestLive = min . live <$> sample <*> (live <$> sample)
 
 {-# NOINLINE prepareEntry #-}
 prepareEntry :: CorpusPackage -> IO (StablePtr CacheEntry, Int)
