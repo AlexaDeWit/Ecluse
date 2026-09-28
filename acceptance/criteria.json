@@ -3,63 +3,87 @@
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-24.04-arm",
-    "commit": "3dc963cc08b795d9d20f53b536fbb5e04aabccaf",
+    "commit": "7cd559e23c5ca79864f797448f5df96cd20c2e1e",
     "runs": [
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36489408213/job/109154183105"
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36490249761/job/109156922518"
     ],
     "marginPercent": 10
   },
   "allocatedBytes": {
     "npm": {
       "lodash": {
-        "full": 13464528,
-        "singleVersion": 6880704
+        "full": 13464520,
+        "singleVersion": 6880704,
+        "fullShippedAdvisories": 13686848,
+        "fullAllAdvisoryRules": 10431600
       },
       "request": {
         "full": 18032448,
-        "singleVersion": 7679392
+        "singleVersion": 7679392,
+        "fullShippedAdvisories": 18157256,
+        "fullAllAdvisoryRules": 18333784
       },
       "react": {
-        "full": 401248432,
-        "singleVersion": 164937792
+        "full": 401248448,
+        "singleVersion": 164937792,
+        "fullShippedAdvisories": 402744456,
+        "fullAllAdvisoryRules": 404879648
       },
       "@babel/core": {
         "full": 41899320,
-        "singleVersion": 18157424
+        "singleVersion": 18157440,
+        "fullShippedAdvisories": 42017760,
+        "fullAllAdvisoryRules": 42337048
       },
       "typescript": {
         "full": 1029335256,
-        "singleVersion": 404163984
+        "singleVersion": 404163984,
+        "fullShippedAdvisories": 1031348520,
+        "fullAllAdvisoryRules": 1036560976
       },
       "express": {
         "full": 52803144,
-        "singleVersion": 23947344
+        "singleVersion": 23947344,
+        "fullShippedAdvisories": 53031608,
+        "fullAllAdvisoryRules": 53430048
       },
       "@aws-sdk/client-s3": {
-        "full": 221737016,
-        "singleVersion": 88798152
+        "full": 221737024,
+        "singleVersion": 88798152,
+        "fullShippedAdvisories": 222024320,
+        "fullAllAdvisoryRules": 223086064
       },
       "webpack": {
         "full": 261302592,
-        "singleVersion": 106456008
+        "singleVersion": 106456008,
+        "fullShippedAdvisories": 261665504,
+        "fullAllAdvisoryRules": 242721240
       },
       "@types/node": {
         "full": 447506992,
-        "singleVersion": 294835104
+        "singleVersion": 294835104,
+        "fullShippedAdvisories": 448949648,
+        "fullAllAdvisoryRules": 452181928
       }
     },
     "pypi": {
       "requests": {
-        "full": 10307016,
-        "singleVersion": 5759472
+        "full": 10307008,
+        "singleVersion": 5759472,
+        "fullShippedAdvisories": 21066264,
+        "fullAllAdvisoryRules": 18507184
       },
       "numpy": {
         "full": 158702816,
-        "singleVersion": 109454536
+        "singleVersion": 109454536,
+        "fullShippedAdvisories": 163889336,
+        "fullAllAdvisoryRules": 151099144
       },
       "boto3": {
-        "full": 178413232,
-        "singleVersion": 102856928
+        "full": 178413240,
+        "singleVersion": 102856936,
+        "fullShippedAdvisories": 179889472,
+        "fullAllAdvisoryRules": 182779048
       }
     }
   }
