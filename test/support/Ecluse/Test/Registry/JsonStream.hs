@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pure chunk inputs for the production registry stream driver, and checks for shared keys and strings.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString) where
+-- | Pure chunk inputs for the production registry stream driver, and checks for shared keys and texts.
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString, sameTexts) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
@@ -38,3 +38,7 @@ oneObject texts = do
     pure $ case names of
         stable : rest@(_ : _) -> all (== stable) rest
         _ -> False
+
+-- | Whether each pair holds one heap object twice, so the second holder adds only a pointer.
+sameTexts :: [(Text, Text)] -> IO Bool
+sameTexts pairs = and <$> traverse (\(held, other) -> oneObject [held, other]) pairs

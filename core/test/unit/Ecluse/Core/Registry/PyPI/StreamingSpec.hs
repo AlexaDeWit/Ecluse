@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Package (Artifact (artFilename, artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashValue)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
@@ -26,7 +26,7 @@ import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, releaseFacts, rendered)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Support (expectRight)
@@ -106,6 +106,14 @@ retainedSpec = describe "supported PyPI fields" $ do
         map fst (simpleFiles document) `shouldBe` [ArrayEntry 0]
         fieldAt "project-status" (simpleValue document) `shouldBe` Nothing
         streamBytes streamed `shouldBe` BS.length body
+
+    it "holds each typed file name and digest as the served document's own text" $ do
+        let body = encodeStrict (simpleIndex "requests" [withFileKeys [("hashes", object ["sha256" .= validSha256])] (simpleFile filename)])
+        (info, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+        let served = [text | (_, file) <- simpleFiles document, Just (String text) <- [fieldAt "filename" file, fieldAt "hashes" file >>= fieldAt "sha256"]]
+            typed = [text | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), text <- artFilename art : map hashValue (artHashes art)]
+        map length [typed, served] `shouldBe` [2, 2]
+        sameTexts (zip typed served) `shouldReturn` True
 
 selectedFieldSpec :: Spec
 selectedFieldSpec = describe "selected file fields" $ do

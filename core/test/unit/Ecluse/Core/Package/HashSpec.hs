@@ -24,6 +24,8 @@ import Ecluse.Core.Package.Hash (
  )
 
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Registry.JsonStream (sameTexts)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -140,6 +142,14 @@ spec = do
         it "yields a singleton for the common single-component wire string" $
             (fmap hashValue <$> mkSriHashes "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==")
                 `shouldBe` Right ("sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==" :| [])
+
+        it "keeps a lone component as the input text itself, and a padded one as its own text" $ do
+            let wire = Package.validSha512Sri
+            lone :| _ <- expectRight (mkSriHashes wire)
+            padded :| _ <- expectRight (mkSriHashes (" " <> wire))
+            sameTexts [(hashValue lone, wire)] `shouldReturn` True
+            sameTexts [(hashValue padded, wire)] `shouldReturn` False
+            hashValue padded `shouldBe` wire
 
         it "rejects the whole wire string when any component is malformed" $
             -- All-or-nothing: a partly valid attacker-shaped value never yields a
