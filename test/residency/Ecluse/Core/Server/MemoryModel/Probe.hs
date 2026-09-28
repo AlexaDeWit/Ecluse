@@ -23,6 +23,7 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     probeSource,
 ) where
 
+import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -174,8 +175,7 @@ probeEvaluation package = do
         forM_ [1 .. 128 :: Int] $ \i -> evaluate (BS.replicate 16 (fromIntegral i))
         weakHead <- live <$> sample
         forceEntry root
-        forced <- live <$> sample
-        pure (Evaluated count (live before) weakHead forced)
+        Evaluated count (live before) weakHead . live <$> sample
 
 {-# NOINLINE prepareEntry #-}
 prepareEntry :: CorpusPackage -> IO (StablePtr CacheEntry, Int)
@@ -237,10 +237,13 @@ measureRetained prepareShape = do
             , preparationMaxLive = samplePeakLive held
             }
 
--- Full RTSStats records must die before the next collection measures a small retained root.
+-- Full RTSStats records must die before the next collection measures a small retained root. A dead
+-- object with a finalizer, such as a closed file handle, stays live until its finalizer thread runs.
 {-# NOINLINE sample #-}
 sample :: IO HeapSample
 sample = do
+    performMajorGC
+    yield
     performMajorGC
     stats <- getRTSStats
     evaluate (HeapSample (gcdetails_live_bytes (gc stats)) (allocated_bytes stats) (max_live_bytes stats))

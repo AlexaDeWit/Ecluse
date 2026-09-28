@@ -2,26 +2,40 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Chunk boundaries, source size and cancellation for incremental registry reads.
+-- | Chunk boundaries, source size, cancellation and shared texts for incremental registry reads.
 module Ecluse.Core.Registry.JsonStreamSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Null, Number, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Vector qualified as V
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Async (cancel, waitCatch, withAsync)
 import UnliftIO.Exception (finally)
 
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
+import Ecluse.Core.Text (textStorageBytes)
+import Ecluse.Test.Json (fieldAt)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
 import Ecluse.Test.Support (expectRight)
 
--- | Verify retained-depth boundaries, source size and response cancellation.
+-- | Verify retained-depth boundaries, source size, response cancellation and the intern table.
 spec :: Spec
-spec = describe "readJsonStream" $ do
+spec = do
+    readSpec
+    internSpec
+
+readSpec :: Spec
+readSpec = describe "readJsonStream" $ do
     forM_ [("ASCII", "plain", "value"), ("Unicode", "clé😀", "été𝄞"), ("escaped", "key\\\"\n", "value\t\\\""), ("long", T.replicate 40000 "k", T.replicate 40000 "v")] $ \(label, key, value) ->
         it ("preserves " <> label <> " keys and values across source chunks") $ do
             let expected = object [Key.fromText key .= value]
@@ -125,6 +139,89 @@ spec = describe "readJsonStream" $ do
             cancel worker
             waitCatch worker >>= (`shouldSatisfy` isLeft)
             takeMVar released
+
+internSpec :: Spec
+internSpec = describe "internValue" $ do
+    it "holds every occurrence of a repeated key and string as one copy" $ do
+        items <- repeatedItems
+        sharesKey "dep" items `shouldReturn` False
+        let held = internAll noneKept items
+        sharesKey "dep" held `shouldReturn` True
+        sharesString "^2" (mapMaybe (fieldAt "dep") held) `shouldReturn` True
+
+    it "keeps the first of duplicate keys as the reader kept it" $ do
+        result <- expectRight (decode (retainedValue 2) ["{\"dep\":\"^2\",\"dep\":\"^3\"}"])
+        item <- either (fail . show) (maybe (fail "no object") pure) (streamValue result)
+        snd (internValue noneKept item) `shouldBe` object ["dep" .= ("^2" :: Text)]
+
+    it "shares nothing between the tables of two documents" $ do
+        items <- repeatedItems
+        let held = concatMap (internAll noneKept . one) items
+        sharesKey "dep" held `shouldReturn` False
+        sharesString "^2" (mapMaybe (fieldAt "dep") held) `shouldReturn` False
+
+    it "holds a key and a string with the same text as one copy" $ do
+        items <- expectRight (decode (retainedValue 2) ["{\"dep\":\"dep\"}"])
+        item <- either (fail . show) (maybe (fail "no object") pure) (streamValue items)
+        let texts value = case value of
+                Object fields -> map (String . Key.toText) (KeyMap.keys fields) <> KeyMap.elems fields
+                _ -> []
+        sharesString "dep" (texts item) `shouldReturn` False
+        sharesString "dep" (texts (snd (internValue noneKept item))) `shouldReturn` True
+
+    it "keeps the values of the named members as read, and shares their keys" $ do
+        result <- expectRight (decode (retainedValue 3) ["[{\"url\":\"^2\",\"dep\":\"^2\"},{\"url\":\"^2\",\"dep\":\"^2\"}]"])
+        items <- either (fail . show) (maybe (fail "no array") (pure . arrayItems)) (streamValue result)
+        let held = internAll (internTableKeeping ["url"]) items
+        sharesKey "url" held `shouldReturn` True
+        sharesString "^2" (mapMaybe (fieldAt "url") held) `shouldReturn` False
+        sharesString "^2" (mapMaybe (fieldAt "dep") held) `shouldReturn` True
+
+    it "stores an owned copy of a text cut from a larger one" $ do
+        let slice = T.drop 1 "xvalue"
+        textStorageBytes slice `shouldBe` 6
+        textStorageBytes (snd (internText noneKept slice)) `shouldBe` 5
+
+    it "changes no value and no encoding, and leaves every object map valid" $
+        hedgehog $ do
+            kept <- forAll (Gen.subsequence pool)
+            values <- forAll (Gen.list (Range.linear 1 4) (genPooledObject 2))
+            let held = internAll (internTableKeeping kept) values
+            held === values
+            map encode held === map encode values
+            all validMaps held === True
+
+-- Keys come from a wide pool, so an object can hold about 40 members. Strings come from a small pool
+-- that overlaps the keys, so table hits and a key equal to a string are common.
+genPooledObject :: Int -> Gen Value
+genPooledObject depth = Object . KeyMap.fromList <$> Gen.list (Range.linear 0 40) ((,) . Key.fromText <$> Gen.element keys <*> member)
+  where
+    keys = pool <> ["key" <> show index | index <- [1 .. 60 :: Int]]
+    member
+        | depth <= 0 = scalar
+        | otherwise = Gen.frequency [(6, scalar), (1, genPooledObject (depth - 1)), (1, Array . V.fromList <$> Gen.list (Range.linear 0 4) scalar)]
+    scalar = Gen.frequency [(4, String <$> Gen.element pool), (1, pure Null), (1, Number . fromIntegral <$> Gen.int (Range.linear 0 9))]
+
+pool :: [Text]
+pool = ["dep", "url", "^2", "é𝄞", "", "key1", "key2"]
+
+validMaps :: Value -> Bool
+validMaps = \case
+    Object members -> Map.valid (KeyMap.toMap members) && all validMaps (KeyMap.elems members)
+    Array items -> all validMaps items
+    _ -> True
+
+noneKept :: InternTable
+noneKept = internTableKeeping []
+
+internAll :: InternTable -> [Value] -> [Value]
+internAll table = snd . mapAccumL internValue table
+
+-- Two equal objects the reader decoded separately, so they share no key or string yet.
+repeatedItems :: IO [Value]
+repeatedItems = do
+    result <- expectRight (decode (retainedValue 3) ["[{\"dep\":\"^2\"},{\"dep\":\"^2\"}]"])
+    either (fail . show) (maybe (fail "no array") (pure . arrayItems)) (streamValue result)
 
 arrayItems :: Value -> [Value]
 arrayItems = \case
