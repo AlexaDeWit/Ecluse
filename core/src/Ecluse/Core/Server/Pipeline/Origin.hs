@@ -81,7 +81,7 @@ data Contribution = Contribution
     , srcValue :: CachedDoc
     , srcDigest :: ContentDigest
     , srcBodyBytes :: Int
-    -- ^ The decompressed source size, which the listing's output charge scales.
+    -- ^ The decompressed source size, from which the listing's output charge takes its basis.
     }
 
 -- | Scope surviving versions and exact artifact coordinates to their source digest and provenance.

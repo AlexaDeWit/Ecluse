@@ -18,6 +18,10 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
     -- * The derived validator (exported for its unit spec)
     packumentETag,
+
+    -- * The served body and its output charge basis (exported for the residency probe and a unit spec)
+    assembleServedBody,
+    outputBasisBytes,
 ) where
 
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
@@ -411,13 +415,36 @@ servedBytes serving sources plan etag =
     deps = psvDeps serving
     key = renderETag etag
     flight = FlightKey ("assembled " <> key)
-    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (sum (map srcBodyBytes sources))
+    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (outputBasisBytes plan sources)
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
+{- | The source bytes a listing's output charge scales: the largest source's, plus each other source's
+share for the versions the largest does not hold. It reads only map sizes.
+-}
+outputBasisBytes :: MergePlan -> [Contribution] -> Int
+outputBasisBytes plan sources = case sortOn (Down . srcBodyBytes) sources of
+    [] -> 0
+    largest : others -> srcBodyBytes largest + sum (map (addedShare (Map.size (mpSurvivors plan) - versionCount largest)) others)
+
+-- A source's bytes pro rata for the survivors outside the largest source, rounded up.
+addedShare :: Int -> Contribution -> Int
+addedShare outside source
+    | count <= 0 = srcBodyBytes source
+    | otherwise = (srcBodyBytes source * min count (max 0 outside) + count - 1) `div` count
+  where
+    count = versionCount source
+
+versionCount :: Contribution -> Int
+versionCount = Map.size . infoVersions . srcInfo
+
 renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> CachedDoc
-renderServedBody deps sources plan =
-    metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources)
+renderServedBody deps = assembleServedBody (pdMetadata deps) (pdMountBaseUrl deps)
+
+-- | The served document of a merge whose plan names the sources by their position.
+assembleServedBody :: AdapterMetadata -> Text -> [Contribution] -> MergePlan -> CachedDoc
+assembleServedBody metadata mountBase sources plan =
+    metadataAssemble metadata mountBase bySource plan (baseDocument sources)
   where
     bySource :: Map SourceId (Snapshot CachedDoc)
     bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])

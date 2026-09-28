@@ -28,7 +28,9 @@ data ChargeFactors = ChargeFactors
     residency capture of at least one meter step, rounded up to a tenth.
     -}
     , cfOutputPermille :: Int
-    -- ^ Per source byte a listing merges and encodes into its response.
+    {- ^ Per byte of a listing's output basis: 1.25 times the largest output working set per basis byte
+    on a residency capture of at least one meter step, rounded up to a tenth.
+    -}
     }
     deriving stock (Eq, Show)
 

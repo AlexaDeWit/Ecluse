@@ -16,6 +16,9 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     project,
     ListingPeaks (..),
     probeListing,
+    MergeShape (..),
+    mergeDocuments,
+    probeMerge,
     measureInChild,
     childMain,
     packageMain,
@@ -26,10 +29,13 @@ module Ecluse.Core.Server.MemoryModel.Probe (
 ) where
 
 import Control.Concurrent (yield)
-import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
+import Data.Aeson (FromJSON, ToJSON, Value (Array, Object, String), eitherDecodeStrict, encode, toJSON)
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -42,11 +48,11 @@ import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
+import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
 
 import Ecluse.Core.Registry.Exchange (digestingRead)
@@ -63,6 +69,8 @@ import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, f
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Server.Pipeline.Origin (Contribution (..))
+import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
@@ -127,17 +135,20 @@ data Evaluated = Evaluated
 instance ToJSON Evaluated
 instance FromJSON Evaluated
 
--- | Absolute live bytes around one listing's full read and its render. Memory quantities use bytes.
+-- | Absolute live bytes around one listing's full reads and its render. Memory quantities use bytes.
 data ListingPeaks = ListingPeaks
     { listingSourceBytes :: Int
+    -- ^ Every source the listing reads.
+    , listingBasisBytes :: Int
+    -- ^ The source bytes the output charge scales.
     , listingServedBytes :: Int
     , listingBaseline :: Word64
     , listingReadPeak :: Word64
-    -- ^ The high-water through the full read.
+    -- ^ The high-water through the full reads.
     , listingEntryLive :: Word64
-    -- ^ Live bytes holding the read's cache entry.
+    -- ^ Live bytes holding the reads' sources.
     , listingPeak :: Word64
-    -- ^ The high-water through the read and the render of the served body.
+    -- ^ The high-water through the reads and the render of the served body.
     }
     deriving stock (Show, Generic)
 
@@ -212,25 +223,33 @@ prepareEntry package = do
 forceEntry :: StablePtr CacheEntry -> IO ()
 forceEntry root = deRefStablePtr root >>= void . forceShown
 
-{- | Read one capture as a listing does, then render its served body from the held entry. High-water
-marks come from major collections, so the caller runs this where most collections are major.
+{- | Read one capture as a public-only listing does, then render its served body. High-water marks
+come from major collections, so the caller runs this where most collections are major.
 -}
 probeListing :: CorpusPackage -> IO ListingPeaks
-probeListing package = do
+probeListing package = probeReads [(GatedSource, cpPath package)] package
+
+-- | 'probeListing' for a listing that merges a trusted private document with a public one.
+probeMerge :: FilePath -> FilePath -> CorpusPackage -> IO ListingPeaks
+probeMerge private public = probeReads [(TrustedSource, private), (GatedSource, public)]
+
+probeReads :: [(Provenance, FilePath)] -> CorpusPackage -> IO ListingPeaks
+probeReads documents package = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
     -- A first read settles the read's one-off state, so the baseline holds it.
-    bracket (prepareListingRead package) freeStablePtr (void . deRefStablePtr)
+    bracket (prepareListingReads (cpPackage package) (take 1 documents)) freeStablePtr (void . deRefStablePtr)
     before <- sample
-    bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
+    bracket (prepareListingReads (cpPackage package) documents) freeStablePtr $ \sourcesRoot -> do
         held <- sample
-        entry <- deRefStablePtr entryRoot
-        bracket (prepareListingRender (pkgEcosystem (cpPackage package)) entry) freeStablePtr $ \servedRoot -> do
+        sources <- deRefStablePtr sourcesRoot
+        bracket (prepareListingRender (pkgEcosystem (cpPackage package)) sources) (freeStablePtr . fst) $ \(servedRoot, basis) -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
             pure
                 ListingPeaks
-                    { listingSourceBytes = entryBodyBytes entry
+                    { listingSourceBytes = sum (map srcBodyBytes sources)
+                    , listingBasisBytes = basis
                     , listingServedBytes = BS.length served
                     , listingBaseline = live before
                     , listingReadPeak = samplePeakLive held
@@ -238,27 +257,77 @@ probeListing package = do
                     , listingPeak = samplePeakLive rendered
                     }
 
--- The production full read in 32 KiB chunks, with artifact locations enforced and the entry forced.
-{-# NOINLINE prepareListingRead #-}
-prepareListingRead :: CorpusPackage -> IO (StablePtr CacheEntry)
-prepareListingRead package = do
+-- The production full reads in 32 KiB chunks, with artifact locations enforced and each source forced.
+{-# NOINLINE prepareListingReads #-}
+prepareListingReads :: PackageName -> [(Provenance, FilePath)] -> IO (StablePtr [Contribution])
+prepareListingReads name documents = do
     upstream <- captureUpstream (pkgEcosystem name)
-    streamed <- withBinaryFile (cpPath package) ReadMode (streamFull defaultLimits name . (`BS.hGetSome` 32768)) >>= either (fail . toString) pure
-    let entry = streamed{entryInfo = located upstream (entryInfo streamed)}
-    void (evaluate (sourceSize (HeldShared entry)))
-    newStablePtr entry
-  where
-    name = cpPackage package
+    sources <- forM documents $ \(provenance, path) -> do
+        streamed <- withBinaryFile path ReadMode (streamFull defaultLimits name . (`BS.hGetSome` 32768)) >>= either (fail . toString) pure
+        let entry = streamed{entryInfo = located upstream (entryInfo streamed)}
+        void (evaluate (sourceSize (HeldShared entry)))
+        pure (Contribution provenance (entryInfo entry) (entryRaw entry) (entryDigest entry) (entryBodyBytes entry))
+    newStablePtr sources
 
--- The strict served body of a single-source listing in which every version survives.
+-- The strict served body of the sources' merge in which every version survives, and its output basis.
 {-# NOINLINE prepareListingRender #-}
-prepareListingRender :: Ecosystem -> CacheEntry -> IO (StablePtr ByteString)
-prepareListingRender ecosystem entry = do
+prepareListingRender :: Ecosystem -> [Contribution] -> IO (StablePtr ByteString, Int)
+prepareListingRender ecosystem sources = do
     metadata <- maybe noRubyGemsCorpus (pure . adapterMetadata) (adapterFor ecosystem)
-    plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(GatedSource, Snapshot (entryDigest entry) (entryInfo entry))])
-    let document = entryRaw entry
-        sources = Map.singleton 0 (Snapshot (entryDigest entry) document)
-    evaluate (LBS.toStrict (metadataSerialise metadata (metadataAssemble metadata syntheticProxyBase sources plan (Just document)))) >>= newStablePtr
+    plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
+    basis <- evaluate (outputBasisBytes plan sources)
+    served <- evaluate (LBS.toStrict (metadataSerialise metadata (assembleServedBody metadata syntheticProxyBase sources plan)))
+    root <- newStablePtr served
+    pure (root, basis)
+
+-- | How the private and public documents of a two-source listing share a capture's versions.
+data MergeShape
+    = -- | Both hold every version, as a private mirror of the whole package does.
+      Identical
+    | -- | Each holds two thirds of the versions, one third of them in both.
+      Overlapping
+    | -- | Each holds half of the versions, none of them in both.
+      Disjoint
+    deriving stock (Eq, Show, Enum, Bounded)
+
+{- | The private and public documents of a merge in the shape, written under the directory when they
+differ from the capture. Each keeps the capture's other fields.
+-}
+mergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
+mergeDocuments shape directory package = case shape of
+    Identical -> pure (cpPath package, cpPath package)
+    Overlapping -> splitBy (\position -> position `mod` 3 /= 2) (\position -> position `mod` 3 /= 0)
+    Disjoint -> splitBy even odd
+  where
+    splitBy private public = do
+        bytes <- BS.readFile (cpPath package)
+        (info, _) <- project package bytes
+        document <- either fail pure (eitherDecodeStrict bytes)
+        let positions = zip [0 :: Int ..] (Map.keys (infoVersions info))
+            write file keeps = do
+                let path = directory <> "/" <> file
+                    kept = Set.fromList [key | (position, key) <- positions, keeps position]
+                LBS.writeFile path (encode (keepVersions (pkgEcosystem (cpPackage package)) info kept document))
+                pure path
+        (,) <$> write "private.json" private <*> write "public.json" public
+
+-- The document with only the given versions, their files, and their timestamps.
+keepVersions :: Ecosystem -> PackageInfo -> Set Text -> Value -> Value
+keepVersions ecosystem info kept = \case
+    Object fields -> Object (KeyMap.mapWithKey (keepField . Key.toText) fields)
+    other -> other
+  where
+    dropped = Map.keysSet (infoVersions info) `Set.difference` kept
+    files = Set.fromList [artFilename artifact | details <- Map.elems (Map.restrictKeys (infoVersions info) kept), artifact <- toList (pkgArtifacts details)]
+    keepField field value = case (ecosystem, field, value) of
+        (Npm, "versions", Object releases) -> Object (KeyMap.filterWithKey (\key _ -> Key.toText key `Set.member` kept) releases)
+        (Npm, "time", Object times) -> Object (KeyMap.filterWithKey (\key _ -> Key.toText key `Set.notMember` dropped) times)
+        (PyPI, "files", Array entries) -> toJSON (filter keptFile (toList entries))
+        (PyPI, "versions", Array _) -> toJSON (Set.toList kept)
+        _ -> value
+    keptFile = \case
+        Object entry | Just (String filename) <- KeyMap.lookup "filename" entry -> filename `Set.member` files
+        _ -> False
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
