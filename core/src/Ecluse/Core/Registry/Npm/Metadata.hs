@@ -14,6 +14,9 @@ module Ecluse.Core.Registry.Npm.Metadata (
     -- * npm full-manifest fetch
     fetchNpmManifest,
 
+    -- * The memory budget
+    npmChargeFactors,
+
     -- * Pure projection
     projectNpmStream,
     selectNpmRead,
@@ -29,16 +32,17 @@ import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderP
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -56,10 +60,16 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
+{- | npm's memory charges per source byte, which the residency tier holds above its maxima: a full read's
+retention (4.04, typescript) and a listing's encoding with its strict copy (1.51, @aws-sdk/client-s3).
+-}
+npmChargeFactors :: ChargeFactors
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
+
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name = do
-    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name FullRead))
+    result <- fetchNpmBody tracing origin name (digestingRead (decodeNpm tracing origin name FullRead) . chargedRead (ocChargeFullRead origin))
     pure $ do
         (streamed, digest) <- result
         (info, raw) <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed

@@ -9,7 +9,6 @@ module Main (main) where
 
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
-import Ecluse.Core.Server.MemoryModel.MaterialProbe qualified as MaterialProbe
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue), childMain, evaluationMain, probe)
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
@@ -23,7 +22,6 @@ main =
         ["--metadata-evaluation-probe", path] -> evaluationMain path
         ["--metadata-source-probe", mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain "npm" mode name version limit path
         ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain ecosystem mode name version limit path
-        ["--metadata-material-probe", ecosystem, mode, name, version, limit, path] -> MaterialProbe.materialMain ecosystem mode name version limit path
         ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
         ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path
         _ -> hspec $ do

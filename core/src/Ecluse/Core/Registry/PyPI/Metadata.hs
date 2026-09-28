@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.PyPI.Metadata (
     newPyPIMetadataReads,
     fetchPyPIManifest,
+    pypiChargeFactors,
     projectPyPIStream,
 ) where
 
@@ -15,16 +16,17 @@ import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageNam
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -42,10 +44,16 @@ newPyPIMetadataReads ::
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
+{- | PyPI's memory charges per source byte, which the residency tier holds above its maxima: a full
+read's retention (3.31, requests) and a listing's encoding with its strict copy (1.57, requests).
+-}
+pypiChargeFactors :: ChargeFactors
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
+
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchPyPIManifest tracing origin name = do
-    result <- fetchPyPIBody tracing origin name (digestingRead (decodePyPI tracing origin name FullRead))
+    result <- fetchPyPIBody tracing origin name (digestingRead (decodePyPI tracing origin name FullRead) . chargedRead (ocChargeFullRead origin))
     pure $ do
         (streamed, digest) <- result
         (info, document) <- projectPyPIStream (ocLimits origin) name streamed

@@ -14,6 +14,7 @@ module Ecluse.Test.Corpus.Outputs (
 ) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -71,7 +72,7 @@ servedOutputs corpus name raw document info (label, survivors) =
   where
     restricted = restrictToSurvivors survivors info
     render (shape, provenances) = do
-        let sources = [Contribution provenance restricted document (digestOf raw) | provenance <- provenances]
+        let sources = [Contribution provenance restricted document (digestOf raw) (BS.length raw) | provenance <- provenances]
         plan <- maybeToRight "no merge plan" (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
         let bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest s) (srcValue s) | s <- sources])
             body = metadataSerialise (crMetadata corpus) (metadataAssemble (crMetadata corpus) syntheticProxyBase bySource plan (Just document))

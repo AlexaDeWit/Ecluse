@@ -41,6 +41,24 @@ data MetricName
       ServeAdmissionInFlight
     | -- | @ecluse.serve.admission.queued@: admissions that waited for a slot (counter).
       ServeAdmissionQueued
+    | -- | @ecluse.serve.admission.memory.budget_bytes@: the metadata memory budget (observable gauge).
+      MemoryAdmissionBudgetBytes
+    | -- | @ecluse.serve.admission.memory.charged_bytes@: bytes requests hold against the budget (observable gauge).
+      MemoryAdmissionChargedBytes
+    | -- | @ecluse.serve.admission.memory.brake_level@: 0 calm, 1 holding, 2 braking (observable gauge).
+      MemoryAdmissionBrakeLevel
+    | -- | @ecluse.serve.admission.memory.waiting@: new requests waiting at the memory gate (observable gauge).
+      MemoryAdmissionWaiting
+    | -- | @ecluse.serve.admission.memory.paused_now@: started requests paused for memory (observable gauge).
+      MemoryAdmissionPausedNow
+    | -- | @ecluse.serve.admission.memory.queued@: requests that waited for their entry step (counter).
+      MemoryAdmissionQueued
+    | -- | @ecluse.serve.admission.memory.shed@: requests shed at the memory gate (counter).
+      MemoryAdmissionShed
+    | -- | @ecluse.serve.admission.memory.pauses@: times a started request paused for memory (counter).
+      MemoryAdmissionPauses
+    | -- | @ecluse.serve.admission.memory.overdraws@: steps the token holder took past the budget (counter).
+      MemoryAdmissionOverdraws
     | -- | @ecluse.publish.body.in_flight_bytes@: bytes reserved for buffered publish bodies (up-down counter).
       PublishBodyInFlightBytes
     | -- | @ecluse.publish.body.shed@: publishes shed at the body-byte budget (counter).
@@ -118,6 +136,15 @@ metricName = \case
     RuleBreakerState -> "ecluse.rule.breaker.state"
     ServeAdmissionInFlight -> "ecluse.serve.admission.in_flight"
     ServeAdmissionQueued -> "ecluse.serve.admission.queued"
+    MemoryAdmissionBudgetBytes -> "ecluse.serve.admission.memory.budget_bytes"
+    MemoryAdmissionChargedBytes -> "ecluse.serve.admission.memory.charged_bytes"
+    MemoryAdmissionBrakeLevel -> "ecluse.serve.admission.memory.brake_level"
+    MemoryAdmissionWaiting -> "ecluse.serve.admission.memory.waiting"
+    MemoryAdmissionPausedNow -> "ecluse.serve.admission.memory.paused_now"
+    MemoryAdmissionQueued -> "ecluse.serve.admission.memory.queued"
+    MemoryAdmissionShed -> "ecluse.serve.admission.memory.shed"
+    MemoryAdmissionPauses -> "ecluse.serve.admission.memory.pauses"
+    MemoryAdmissionOverdraws -> "ecluse.serve.admission.memory.overdraws"
     PublishBodyInFlightBytes -> "ecluse.publish.body.in_flight_bytes"
     PublishBodyShed -> "ecluse.publish.body.shed"
     MergeDivergence -> "ecluse.registry.merge.divergence"

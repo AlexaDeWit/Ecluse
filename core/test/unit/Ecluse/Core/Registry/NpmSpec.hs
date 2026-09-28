@@ -114,6 +114,15 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             fmap manifestBodyBytes resp `shouldBe` Right (BS.length oversizedBody)
             fmap manifestDigest resp `shouldBe` Right (digestOf oversizedBody)
 
+    it "charges a full read for every decompressed byte it hands the parser" $
+        withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy oversizedBody)) $ \stub -> do
+            base <- stubConfig loopbackRegistryUrl stub
+            charges <- newIORef []
+            let config = base{ocLimits = defaultLimits{maxMetadataBytes = BS.length oversizedBody}, ocChargeFullRead = \n -> modifyIORef' charges (n :)}
+            _ <- fetchNpmManifest passthroughTracingPort config isOdd
+            recorded <- readIORef charges
+            sum recorded `shouldBe` BS.length oversizedBody
+
     it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap is refused" $
         -- The size cap must cover decompressed bytes, including expansion from a gzip bomb.
         withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do

@@ -24,11 +24,15 @@ module Ecluse.Core.Registry.Exchange (
     -- * Source digests
     digestingRead,
 
+    -- * Metered reads
+    chargedRead,
+
     -- * Request formation
     formThen,
 ) where
 
 import Crypto.Hash (hashInit, hashUpdate)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (
@@ -163,3 +167,10 @@ digestingRead consume readChunk = do
             modifyIORef' context (`hashUpdate` chunk)
             pure chunk
     consume next >>= traverse (\result -> (result,) . digestFromContext <$> readIORef context)
+
+-- | Pay for each chunk's length before the consumer sees it.
+chargedRead :: (Int -> IO ()) -> IO ByteString -> IO ByteString
+chargedRead charge readChunk = do
+    chunk <- readChunk
+    charge (BS.length chunk)
+    pure chunk

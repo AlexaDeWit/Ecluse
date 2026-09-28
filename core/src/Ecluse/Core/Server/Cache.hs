@@ -21,6 +21,7 @@ module Ecluse.Core.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
+    metadataKey,
 
     -- * Single-version resolution
     resolveVersion,
@@ -54,6 +55,10 @@ import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
+
+-- | The key a full read of one package from one source is shared and retained under.
+metadataKey :: Source -> PackageName -> Text
+metadataKey = keyText
 
 keyText :: Source -> PackageName -> Text
 keyText (Source source) name =
@@ -103,7 +108,7 @@ resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Versi
 resolveVersion metrics cache source name version fetch =
     prepareVersion metrics cache source name version fetch >>= executePrepared
 
--- | Pin a selected local value, including absence, before material admission.
+-- | Pin a selected local value, including absence, before any remote work.
 prepareVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (PreparedStore MetadataError VersionRead)
 prepareVersion metrics cache source name version =
     prepareStore

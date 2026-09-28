@@ -32,12 +32,12 @@ runProxy :: ServiceRuntime -> IO ()
 runProxy runtime =
     -- The background tasks never return, so the race cancels them at shutdown. A dropped job
     -- re-enqueues on the next demand and a cancelled sync resumes on next boot.
-    case (svcMirrorDrain runtime, svcSyncTasks runtime) of
-        -- Racing the front door against an empty task list would cancel it instantly.
-        (Nothing, []) -> frontDoor
-        (Nothing, tasks) -> race_ frontDoor (mapConcurrently_ id tasks)
-        (Just drain, tasks) -> race_ frontDoor (concurrently_ drain (mapConcurrently_ id tasks))
+    case svcMirrorDrain runtime of
+        Nothing -> race_ frontDoor (mapConcurrently_ id tasks)
+        Just drain -> race_ frontDoor (concurrently_ drain (mapConcurrently_ id tasks))
   where
+    -- The memory sampler always runs, so the list is never empty and the race never ends at once.
+    tasks = svcMemorySampler runtime : svcSyncTasks runtime
     env = svcEnv runtime
     serverConfig = proxyServerConfig runtime
     frontDoor

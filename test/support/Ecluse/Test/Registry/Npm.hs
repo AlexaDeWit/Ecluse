@@ -59,7 +59,7 @@ import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashVal
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
-import Ecluse.Core.Registry.Origin (OriginClient (..))
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Version (renderVersion)
@@ -273,13 +273,7 @@ publicRegistryBaseUrl = "https://registry.npmjs.org"
 supplies the base as an egress witness, so one fixture serves the public registry and a stub.
 -}
 defaultNpmConfig :: RegistryUrl -> Manager -> OriginClient
-defaultNpmConfig baseUrl manager =
-    OriginClient
-        { ocBaseUrl = baseUrl
-        , ocManager = manager
-        , ocToken = Nothing
-        , ocLimits = defaultLimits
-        }
+defaultNpmConfig baseUrl manager = originClient defaultLimits manager baseUrl Nothing
 
 {- | 'defaultNpmConfig' carrying the mirror-write token as a bare credential, at caller-chosen
 response bounds. The maintenance verbs read the token off the origin, so a store fixture needs it.

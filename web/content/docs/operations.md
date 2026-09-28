@@ -436,34 +436,88 @@ The controls serve different purposes:
 | Metadata ingest ceiling | The maximum decompressed source body accepted from one metadata response |
 | Structural limits | Protocol-specific version and file counts, and retained structure depth |
 | CPU admission | How much metadata work runs concurrently |
-| Materialisation admission | How much estimated transient metadata work runs concurrently |
+| Memory admission | How much live data the metadata requests in flight hold at once |
 | Cache budget | How much eligible metadata the selected provider retains locally |
 | Runtime heap ceiling | The heap limit applied to the process |
 
 The default data ceilings leave growth room for large real-world metadata while keeping input work bounded.
 They express policy headroom, not a measured maximum that fits every pod. A larger ingest ceiling
 does not automatically enlarge the cache or reduce CPU concurrency.
-Materialisation admission uses static allowances for cold selected reads, captured local selected
-results, full origins and listing output. A local retained result receives the smaller allowance
-only while that request holds the result. Deferred fetches and external-provider reads receive the
-cold allowance. A listing charges each permitted configured origin plus its output before fetching,
-even when it later finds an assembled hit or returns `304`. An estimate above the materialisation
-capacity charges that entire capacity, so one request can still run alone. This does not prove
-that its actual memory use fits.
 
-Either admission gate can return `503` with `Retry-After: 1` when its waiting room fills or its wait
-expires. Treat these responses as backpressure and review concurrency alongside process memory.
+### Memory admission
 
-These allowances estimate slightly-worse-than-average work. They are not a worst-case heap bound.
-They use no package-size history or expiring estimates. Streaming skips unsupported fields, but
-supported fields and useful listing results still occupy memory. Keep process headroom and edge
-rate limits, then measure your package mix under concurrent traffic.
+Memory admission keeps the heap's live data where the garbage collector still works normally, so
+the process neither thrashes its collector nor overflows its heap ceiling. Écluse charges each
+listing and each public artifact decision for the memory it uses, as it uses it, against one budget:
 
-The memory plan still accounts for runtime reserve, enqueue buffer, cache retention, materialisation,
-publish bodies, in-memory queue and mirror-artifact work. Their accounted sum does not measure
-all live process allocations. Small automatic plans shed mirror-artifact capacity before cache
-retention. Read each warning for the resulting loss of capacity. An explicit override can still
-fail plan validation. The ingest ceiling is independent of those tenant allocations.
+| Work | What it pays |
+|---|---|
+| Entering, before the request takes a CPU slot | One 1 MiB step |
+| A full metadata read, which a listing makes | 4.5 bytes per decompressed source byte, chunk by chunk before parsing |
+| A listing's response | 1.6 bytes per source byte of the documents it merges, before assembly |
+| A selected read, which a public artifact decision makes | Nothing beyond the entry step |
+| An assembled hit or a `304` | Its reads, but no response charge |
+| A request that joins another request's public fetch or render | Nothing for that fetch or render |
+
+The per-byte charges sit at or above the largest the residency tests measure on the captured
+package corpus: what a full read holds, and a response's encoding with its copy. The tests fail
+when a package would hold more, so the charges stay above the measured retention.
+
+A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
+with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until
+memory frees. A pause during an upstream read fails when it outlives the 50-second cap on that
+exchange, and a pause before a render fails at the 60-second request timeout. Only one request at a
+time may run past the budget, and it keeps that right until it ends. Work that request waits on, a
+public fetch or a render another request leads, runs past the budget with it. So the overshoot stays
+near one request and the shared work it waits on, and a pause always leaves a request that
+finishes. Everything a request paid returns when it ends. Trusted private artifact hits and
+artifact relay pay nothing.
+
+The budget starts at a quarter of the heap the nursery leaves, less the cache budget, the queue
+tenants and the idle process. That is the live data at which the copying collector still runs
+normally. A sampler reads the collector and the cgroup ten times a second and moves the budget:
+
+- It halves the budget when the collector takes more than half the CPU over the last second, when
+  live data after a major collection passes 80% of the point where copying would overflow the heap,
+  or when the cgroup's memory use, less reclaimable page cache, passes 90% of its limit. It halves
+  at most once a second, so a sustained surge still drives the budget down, one step each second.
+- After each major collection it measures the live data outside the charges: the cache, the idle
+  process and any error in the charges. The budget may grow until the charges and that remainder
+  reach a third of the heap the nursery leaves, and it drops at once when a larger remainder lowers
+  that ceiling. A smaller remainder counts a quarter at a time.
+- The ceiling also leaves room under the heap's overflow point for the largest request seen lately,
+  since that one request may run past the budget.
+- After a calm second, with the collector under 35% of the CPU, it grows the budget by an eighth
+  toward that ceiling.
+
+The `memory plan: transient budget` boot line names the starting budget, its live target, the
+deductions, the floor and the live ceiling. Without a heap ceiling the budget starts at 1 GiB, and
+only the collector's share moves it.
+
+| Metric | What it reports |
+|---|---|
+| `ecluse.serve.admission.memory.budget_bytes` | The current budget |
+| `ecluse.serve.admission.memory.charged_bytes` | What the requests in flight hold against it |
+| `ecluse.serve.admission.memory.brake_level` | `0` calm, `1` holding, `2` braking |
+| `ecluse.serve.admission.memory.waiting` | New requests waiting at the memory gate now |
+| `ecluse.serve.admission.memory.paused_now` | Started requests paused for memory now |
+| `ecluse.serve.admission.memory.queued` | Requests that waited for their entry step |
+| `ecluse.serve.admission.memory.shed` | Requests refused at the memory gate |
+| `ecluse.serve.admission.memory.pauses` | Times a started request paused for memory |
+| `ecluse.serve.admission.memory.overdraws` | Steps a request took past the budget |
+
+A `503` with `Retry-After` from either gate is backpressure, so exclude it from alerts. A brake
+level that stays at `2`, or a `shed` count that keeps rising, means the pod needs more memory for
+its package mix.
+
+### The rest of the plan
+
+The memory plan also accounts for the runtime reserve, the enqueue buffer, cache retention, publish
+bodies, the in-memory queue and mirror-artifact work. The cache budget is 30% of the live target, at
+least 64 MiB, so it grows with the pod. Their accounted sum does not measure all live process
+allocations. Small automatic plans shed mirror-artifact capacity before cache retention. Read each
+warning for the resulting loss of capacity. An explicit override can still fail plan validation. The
+ingest ceiling is independent of those tenant allocations.
 
 Cores and the heap ceiling resolve at boot from config, else the cgroup, else a capped fallback.
 The log records each decision and its source. The
@@ -490,14 +544,13 @@ the document, so removing a document pin alone does not restore the automatic va
 | `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
 | A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
 | Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
-| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins | Review it against the separate materialisation capacity and concurrent workload |
+| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins, and it also sizes the memory gate's waiting room | Review it against the pod's cores and concurrent workload |
 | No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
 
 Response and CPU pins are not silently clamped. Read the override warnings before rollout.
 The `memory plan: metadata ingest ceiling` line names the effective body limit.
-The `memory plan: material estimate budget` and `runtime: serve admission` lines name the two
-admission controls. The `metadata admission estimates` line reports each static workload allowance.
-A smaller material estimate budget does not reduce the body ceiling or CPU pin.
+The `memory plan: transient budget` and `runtime: serve admission` lines name the two admission
+controls. A smaller memory budget does not reduce the body ceiling or CPU pin.
 Raising the ingest ceiling admits more input, not more memory. A formerly refused package can now
 reach parsing, policy and assembly work, so repeat your install and latency checks without widening
 performance budgets to hide a regression.
@@ -645,25 +698,28 @@ container without a readable limit runs with, and the keys to set by hand.
 the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
 `ECLUSE_RUNTIME__CORES`, to use a bigger box fully.
 
-**Size a proxy pod from measured process usage as well as the RTS numbers.** The binary ships
-`-A64m -n4m`, a 64 MiB per-core allocation area in 4 MiB chunks. Budget the nursery, live heap,
-copying space during major collection and allocations outside the managed heap.
-The heap ceiling alone does not describe the container's peak memory.
+**Size a proxy pod from measured process usage as well as the RTS numbers.** The boot sizes the
+per-core allocation area (`-A`) from the memory limit: an eighth of the limit across the cores, in
+whole MiB from 4 to 64. A heap ceiling you set that is tighter than the memory limit, or set with no
+memory limit, takes the limit's place, so the nursery still fits. The heap ceiling (`-M`) is the
+limit less an eighth of it (at least 32 MiB) for memory outside the heap, and less one allocation
+area for the growth between collections. The nursery sits inside that ceiling. An allocation area
+you set through `GHCRTS` stands, unless it equals the shipped `-A64m`. The binary also ships `-T`
+for the memory sampler, and `--disable-delayed-os-memory-return` so memory the heap gives back
+leaves the cgroup's count at once.
 
 These examples meet the [1 GiB minimum](@/docs/operations.md#memory-plan-and-runtime-sizing).
-They show nursery arithmetic, not a workload guarantee:
+They show the arithmetic, not a workload guarantee:
 
-| Pod resources | Allocation area | Nursery arithmetic | What remains to verify |
-|---|---|---|---|
-| 2 CPU / 1 GiB | Default `-A64m` | 128 MiB | Effective controls, peak process memory and concurrent listings |
-| 4 CPU / 1 GiB | Default `-A64m` | 256 MiB | Effective controls, the capability count after any shed and peak process memory |
-| 4 CPU / 2 GiB | Default `-A64m` | 256 MiB | Effective controls and collection headroom under the package mix |
+| Pod resources | Allocation area | Nursery | Heap ceiling | Live target |
+|---|---|---|---|---|
+| 2 CPU / 1 GiB | 64 MiB | 128 MiB | 832 MiB | 176 MiB |
+| 4 CPU / 1 GiB | 32 MiB | 128 MiB | 864 MiB | 184 MiB |
+| 4 CPU / 2 GiB | 64 MiB | 256 MiB | 1,728 MiB | 368 MiB |
+| 8 CPU / 4 GiB | 64 MiB | 512 MiB | 3,520 MiB | 752 MiB |
 
-When the nursery exceeds a quarter of the heap ceiling, Écluse sheds capabilities until it fits.
-The boot log reports `memory plan: capability count shed to` and the new count, and the pod runs
-on fewer cores than it would otherwise claim. To keep every core, give the pod more memory or set
-a smaller allocation area through `GHCRTS`.
-
-Read the effective allocation area and admission controls from the boot log after each change.
-Compare cold reads, retained selected reads and listings under the intended concurrency.
+The live target is a quarter of the heap ceiling less the nursery. The memory budget starts there,
+less the cache budget and the idle process, so read the effective allocation area, the budget and
+the admission controls from the boot log after each change. Compare cold reads, retained selected
+reads and listings under the intended concurrency.
 Pilot runs a different workload, so measure its process memory and allocation area separately.

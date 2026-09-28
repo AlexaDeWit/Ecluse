@@ -21,10 +21,6 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     probeSelected,
     SourceMode (..),
     probeSource,
-    Held (..),
-    readSource,
-    sourceSize,
-    sourceSummary,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
@@ -102,7 +98,7 @@ data Measurement = Measurement
 instance ToJSON Measurement
 instance FromJSON Measurement
 
--- | A rooted representation shared by isolated retention and materialisation probes.
+-- A rooted representation the isolated retention and source probes hold through a collection.
 data Held = HeldWire ByteString | HeldRaw Value | HeldTyped PackageInfo | HeldShared CacheEntry | HeldSelected VersionRead | HeldVersions [Version] | HeldLegacy PackageInfo Value
 
 -- | Compare a selected value with the same read whose value is discarded before collection.

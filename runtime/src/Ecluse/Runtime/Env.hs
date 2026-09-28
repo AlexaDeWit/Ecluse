@@ -32,7 +32,7 @@ import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Server.Admission (ServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialAdmission)
+import Ecluse.Core.Server.Admission.Meter (MemoryMeter)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
 import Ecluse.Core.Worker (WorkerHeartbeat, WorkerPolicies, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
@@ -48,8 +48,8 @@ data Env = Env
     {- ^ The process-wide brief-wait bound for metadata-bearing serve work
     ("Ecluse.Core.Server.Admission"). Every mount shares this one aggregate cap and waiting room.
     -}
-    , envMaterialAdmission :: MaterialAdmission
-    -- ^ Independent material estimate capacity shared by every serving mount.
+    , envMemoryMeter :: MemoryMeter
+    -- ^ The process-wide memory budget every serving mount pays into.
     , envQueue :: MirrorQueue
     {- ^ The mirror-queue handle: the durable hand-off from the request path to the
     mirror worker.
@@ -89,8 +89,8 @@ data Env = Env
 {- | Assemble an 'Env' from its built handles and the two data-plane 'Manager's, one per origin.
 The caller supplies each handle and owns its lifetime, so assembly opens no socket itself.
 -}
-newEnvWithAdmission :: ServeAdmission -> MaterialAdmission -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnvWithAdmission admission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat = do
+newEnvWithAdmission :: ServeAdmission -> MemoryMeter -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     metrics <- newMetrics telemetry
     -- The dd log identity comes from the (already-normalised) OTEL_* environment, the
     -- same precedence table the exporter uses, so logs and traces share one identity.
@@ -98,7 +98,7 @@ newEnvWithAdmission admission materialAdmission queue manager privateManager met
     pure
         Env
             { envServeAdmission = admission
-            , envMaterialAdmission = materialAdmission
+            , envMemoryMeter = meter
             , envQueue = queue
             , envManager = manager
             , envPrivateManager = privateManager
@@ -116,7 +116,7 @@ The root borrows every resource it holds, so it has nothing to release and needs
 withEnvWithAdmission ::
     (MonadIO m) =>
     ServeAdmission ->
-    MaterialAdmission ->
+    MemoryMeter ->
     MirrorQueue ->
     Manager ->
     Manager ->
@@ -126,8 +126,8 @@ withEnvWithAdmission ::
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnvWithAdmission admission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
-    env <- liftIO (newEnvWithAdmission admission materialAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat)
+withEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat action = do
+    env <- liftIO (newEnvWithAdmission admission meter queue manager privateManager metadataCache logEnv telemetry heartbeat)
     action env
 
 {- | Project the 'ServeRuntime' the serve path closes over, built per request at dispatch.
@@ -137,7 +137,7 @@ serveRuntimeOf :: Env -> ServeRuntime
 serveRuntimeOf env =
     ServeRuntime
         { srAdmission = envServeAdmission env
-        , srMaterialAdmission = envMaterialAdmission env
+        , srMemoryMeter = envMemoryMeter env
         , srPublicManager = envManager env
         , srPrivateManager = envPrivateManager env
         , srMetadataCache = envMetadataCache env

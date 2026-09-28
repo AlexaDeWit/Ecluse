@@ -53,18 +53,19 @@ import Ecluse.Core.Package.Merge (
     integrityDivergences,
     mergePackuments,
  )
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataChargeFactors, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
-    Manifest (manifestDigest, manifestInfo, manifestRaw),
+    Manifest (manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     digestBytes,
  )
 import Ecluse.Core.Rules (newEvaluator)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Admission.Material (MaterialWork (ListingMaterial), withMaterialAdmission)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille), FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -166,8 +167,8 @@ data PackumentServe
       -- @Content-Length@ and the own @ETag@) with no body.
       PackumentHead
 
--- Everything a terminal arm of one packument serve answers through. It is assembled once
--- per request so each arm takes it whole instead of seven positional parameters.
+-- Everything a terminal arm of one admitted packument serve answers through. It is assembled once
+-- per request so each arm takes it whole instead of eight positional parameters.
 data PackumentServing response = PackumentServing
     { psvMode :: PackumentServe
     , psvReplies :: PackumentReplies response
@@ -176,11 +177,15 @@ data PackumentServing response = PackumentServing
     , psvRequest :: Request
     , psvRespond :: response -> IO ResponseReceived
     , psvRuntime :: ServeRuntime
+    , psvTicket :: MemoryTicket
+    -- ^ The request's account with the memory meter, which its reads and its output pay into.
     }
 
 servingMetrics :: PackumentServing response -> MetricsPort
 servingMetrics = srMetrics . psvRuntime
 
+-- The edge token is compared before any upstream is touched, so an unauthenticated client
+-- cannot drive egress. Admission is held only for the gated work.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -191,48 +196,30 @@ packumentWith ::
 packumentWith mode replies name request respond = do
     ctx <- ask
     let mount = ctxMount ctx
-        serving =
+        deps = bindingPackumentDeps mount
+        clientToken = forwardedCredential mount request
+        serving ticket =
             PackumentServing
                 { psvMode = mode
                 , psvReplies = replies
-                , psvDeps = bindingPackumentDeps mount
+                , psvDeps = deps
                 , psvName = name
                 , psvRequest = request
                 , psvRespond = respond
                 , psvRuntime = ctxRuntime ctx
+                , psvTicket = ticket
                 }
-    serveWithinGuards serving (forwardedCredential mount request)
-
--- The edge token is compared before any upstream is touched, so an unauthenticated client
--- cannot drive egress. Admission is held only for the gated work.
-serveWithinGuards :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
-serveWithinGuards serving clientToken
-    | not (edgeTokenMatches (pdInboundToken (psvDeps serving)) clientToken) =
-        liftIO (respond (packumentUnauthorised replies [] (mkRefusal Nothing unauthorisedMessage)))
-    | otherwise =
-        withAdmissionResultOrShed
-            (servingMetrics serving)
-            (liftIO (respond (packumentUnavailable replies [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-            ( fmap
-                join
-                ( withServeAdmission (servingMetrics serving) (srAdmission runtime) $
-                    withMaterialAdmission (srMaterialAdmission runtime) (ListingMaterial originCount) $
-                        serveAdmittedPackument serving clientToken
-                )
-            )
-            pure
+    if edgeTokenMatches (pdInboundToken deps) clientToken
+        then withMetadataAdmission (ctxRuntime ctx) (refuse packumentUnavailable [shedRetryAfter] shedMessage) (\ticket -> serveAdmittedPackument (serving ticket) clientToken) pure
+        else refuse packumentUnauthorised [] unauthorisedMessage
   where
-    replies = psvReplies serving
-    respond = psvRespond serving
-    runtime = psvRuntime serving
-    deps = psvDeps serving
-    originCount = length (catMaybes [void (pdPrivateBaseUrl deps), guard (not (pdFirstParty deps (psvName serving)))])
+    refuse reply headers message = liftIO (respond (reply replies headers (mkRefusal Nothing message)))
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
 serveAdmittedPackument serving clientToken = do
     logFM InfoS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
-    (privResult, pubResult) <- resolveOrigins deps (psvRuntime serving) clientToken (psvName serving)
+    (privResult, pubResult) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
     case privResult of
         OriginAuthorisationFailure _ -> privateAccessRefused serving
         _ -> serveMergedPackument serving evalCtx privResult pubResult
@@ -241,15 +228,15 @@ serveAdmittedPackument serving clientToken = do
 
 {- Resolve the origins this request may read: a first-party name reads the private origin alone
 and never the public leg. Every other name reads both concurrently. -}
-resolveOrigins :: PackumentDeps -> ServeRuntime -> Maybe ClientCredential -> PackageName -> Handler (OriginResult, OriginResult)
-resolveOrigins deps rt clientToken name
+resolveOrigins :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler (OriginResult, OriginResult)
+resolveOrigins deps rt ticket clientToken name
     | pdFirstParty deps name = do
-        privResult <- fetchPrivateOrigin deps rt clientToken name
+        privResult <- fetchPrivateOrigin deps rt ticket clientToken name
         pure (privResult, OriginAbsent)
     | otherwise =
         concurrently
-            (fetchPrivateOrigin deps rt clientToken name)
-            (fetchPublicOrigin deps rt name)
+            (fetchPrivateOrigin deps rt ticket clientToken name)
+            (fetchPublicOrigin deps rt ticket name)
 
 -- An explicit private refusal stops the request: no public document may stand in for it.
 privateAccessRefused :: PackumentServing response -> Handler ResponseReceived
@@ -289,7 +276,7 @@ admitTrusted minTrusted = \case
                 admitByIntegrity minTrusted trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
          in if Map.null (infoVersions admissible)
                 then (Nothing, integrityRefusals)
-                else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest)), integrityRefusals)
+                else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)), integrityRefusals)
 
 data PublicAdmission = PublicAdmission
     { paContribution :: Maybe Contribution
@@ -316,7 +303,7 @@ gatePublic tracing metrics deps name ctx trustedVersions = \case
                      in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts deniedEvidence
                 else
                     PublicAdmission
-                        (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest)))
+                        (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
                         integrityRefusals
                         []
                         deniedEvidence
@@ -358,7 +345,7 @@ answerPackumentConditional serving sources plan = do
             liftIO (respond (packumentNotModified replies [etagHeader matched]))
         Modified fresh -> do
             logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-            bytes <- liftIO (servedBytes (psvRuntime serving) deps sources plan fresh)
+            bytes <- liftIO (servedBytes serving sources plan fresh)
             liftIO (respond (packumentResponse replies (psvMode serving) fresh bytes))
   where
     deps = psvDeps serving
@@ -410,15 +397,21 @@ etagProvenanceTag = \case
     TrustedSource -> "t\0"
     GatedSource -> "g\0"
 
--- Distinct private views produce distinct cache keys, preventing reuse across clients.
--- A render escape breaks the totality contract and is wrapped only on a cache miss.
-servedBytes :: ServeRuntime -> PackumentDeps -> [Contribution] -> MergePlan -> ETag -> IO ByteString
-servedBytes rt deps sources plan etag =
-    resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
+-- Distinct private views produce distinct cache keys. A cache miss pays for the merged document and
+-- its encoding before either exists, and wraps a render escape, which breaks the totality contract.
+servedBytes :: PackumentServing response -> [Contribution] -> MergePlan -> ETag -> IO ByteString
+servedBytes serving sources plan etag =
+    awaitingFlight (psvTicket serving) flight . resolveAssembled (srMetrics rt) (srMetadataCache rt) key $ do
+        charge (servingFlight flight (psvTicket serving)) outputCharge
         markRenderEscape $
             pure $!
                 LBS.toStrict (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
   where
+    rt = psvRuntime serving
+    deps = psvDeps serving
+    key = renderETag etag
+    flight = FlightKey ("assembled " <> key)
+    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (sum (map srcBodyBytes sources))
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 

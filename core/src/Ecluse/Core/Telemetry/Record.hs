@@ -58,6 +58,14 @@ data MetricsPort = MetricsPort
     -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpServeAdmissionQueued :: IO ()
     -- ^ Record one admission that waited for a slot (@ecluse.serve.admission.queued@).
+    , mpMemoryAdmissionQueued :: IO ()
+    -- ^ Record one request that waited for its memory entry step (@ecluse.serve.admission.memory.queued@).
+    , mpMemoryAdmissionShed :: IO ()
+    -- ^ Record one request shed at the memory door (@ecluse.serve.admission.memory.shed@).
+    , mpMemoryAdmissionPause :: IO ()
+    -- ^ Record one started request pausing for memory (@ecluse.serve.admission.memory.pauses@).
+    , mpMemoryAdmissionOverdraw :: IO ()
+    -- ^ Record one step taken past the memory budget (@ecluse.serve.admission.memory.overdraws@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()
     {- ^ Record a change in the bytes held for buffered publish bodies, the reserved weight
     signed (@ecluse.publish.body.in_flight_bytes@).

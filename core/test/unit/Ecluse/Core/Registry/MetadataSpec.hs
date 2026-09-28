@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
-import Ecluse.Core.Registry.Origin (perCallerOrigin)
+import Ecluse.Core.Registry.Origin (chargingFullReads, perCallerOrigin)
 import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -50,7 +50,7 @@ spec = do
     versionEvaluationSpec
 
 rawReadersSpec :: Spec
-rawReadersSpec = describe "raw metadata readers" $
+rawReadersSpec = describe "raw metadata readers" $ do
     for_ [Npm, PyPI] $ \ecosystem ->
         for_ statusOutcomes $ \(code, expected) ->
             it (show ecosystem <> " preserves HTTP " <> show code <> " over a valid manifest body on full and version reads") $
@@ -74,6 +74,21 @@ rawReadersSpec = describe "raw metadata readers" $
                         fmap manifestBodyBytes full `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
                         fmap manifestDigest full `shouldBe` Right (digestOf (toStrict (bodyFor ecosystem)))
                         fmap vrBodyBytes single `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
+    for_ [Npm, PyPI] $ \ecosystem ->
+        it (show ecosystem <> " charges a full read for every source byte and a selected read for none") $
+            testWithApplication (pure (\_ respond -> respond (responseLBS (mkStatus 200 "ok") [] (bodyFor ecosystem)))) $ \port -> do
+                manager <- newManager defaultManagerSettings
+                charges <- newIORef (0 :: Int)
+                let name = mkPackageName ecosystem Nothing "thing"
+                    origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing)
+                    makeReads = case ecosystem of
+                        PyPI -> newPyPIMetadataReads
+                        _ -> newNpmMetadataReads
+                    client = privateMetadataClient (makeReads passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
+                _ <- fetchVersionMetadata client name (mkVersion ecosystem "1.0.0")
+                readIORef charges `shouldReturn` 0
+                _ <- fetchFullManifest client name
+                readIORef charges `shouldReturn` fromIntegral (BL.length (bodyFor ecosystem))
   where
     bodyFor PyPI = "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"thing\",\"files\":[]}"
     bodyFor _ = "{\"name\":\"thing\",\"versions\":{}}"
