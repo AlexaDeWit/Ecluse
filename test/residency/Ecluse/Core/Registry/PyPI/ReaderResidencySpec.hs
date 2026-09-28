@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A Simple-index walk holds nothing for the files its projection drops: repeated files arrays,
-repeated file members, and files past a tripped limit leave the live bytes where a few leave them.
+{- | A Simple-index walk holds nothing for what its projection drops: repeated files arrays, the
+members a file repeats, and files past a tripped limit leave the live bytes where a few leave them.
 -}
 module Ecluse.Core.Registry.PyPI.ReaderResidencySpec (spec) where
 
@@ -25,6 +25,8 @@ spec = describe "pypiWalk live bytes" $ do
         heldFor selected defaultLimits repeatedArrays >>= (`shouldSatisfy` level)
     it "a selected read holds the same bytes however often a file repeats a member" $
         heldFor selected defaultLimits repeatedMembers >>= (`shouldSatisfy` level)
+    it "a full read holds the same bytes however often a kept file repeats a member" $
+        heldFor FullRead defaultLimits repeatedMembers >>= (`shouldSatisfy` level)
     it "a full read holds the same bytes however many files follow a tripped artifact limit" $
         heldFor FullRead defaultLimits{maxArtifactCount = 2} filesPastLimit >>= (`shouldSatisfy` level)
   where

@@ -15,13 +15,16 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIRead (..))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions))
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes, releaseKeys)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
 
--- | Every generated body reads to the same fields, refusal or failure class as json-stream's reader.
+{- | Every generated body reads to the same fields, refusal or failure class as json-stream's reader,
+through the production projection with its keep predicate or with every file kept.
+-}
 spec :: Spec
 spec = describe "pypiWalk" $
     modifyMaxSuccess (const 2000) $
@@ -32,10 +35,18 @@ spec = describe "pypiWalk" $
                 depth <- forAll (Gen.frequency [(3, pure 64), (2, Gen.int (Range.linear 0 6))])
                 selected <- forAll (Gen.maybe (Gen.element ("9.9" : map decodeUtf8 releaseKeys)))
                 cap <- forAll (Gen.maybe (Gen.int (Range.linear 0 20)))
+                production <- forAll Gen.bool
                 let mode = maybe FullRead (SelectedRead (unscopedPyPI "thing")) selected
                     bound = MetadataBodyLimit (BS.length body)
-                    step events field = case cap of
-                        Just most | length events >= most -> Left (TooManyVersions (length events) most)
-                        _ -> Right (field : events)
-                readOutcome (parseJsonChunks bound (pypiFields depth mode) step [] chunks)
-                    === readOutcome (walkJsonChunks bound (pypiWalk depth mode step (const True) (testTable fileUniqueFields) []) chunks :: Either LimitError (StreamResult [PyPIField]))
+                    start = (emptyProjection (unscopedPyPI "thing"), [])
+                    keeps (projection, _) = not production || keepsFile projection
+                    step (projection, events) field = do
+                        projected <- collectField defaultLimits mode projection field
+                        case cap of
+                            Just most | length events >= most -> Left (TooManyVersions (length events) most)
+                            _ -> Right (projected, field : events)
+                emitted (parseJsonChunks bound (pypiFields depth mode) step start chunks)
+                    === emitted (walkJsonChunks bound (pypiWalk depth mode step keeps (testTable fileUniqueFields) start) chunks)
+
+emitted :: Either LimitError (StreamResult (PyPIProjection, [PyPIField])) -> Either LimitError (Int, Either Bool [PyPIField])
+emitted = fmap (second (fmap snd)) . readOutcome

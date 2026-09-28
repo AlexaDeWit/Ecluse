@@ -160,26 +160,30 @@ string :: Mode -> InternTable -> (Value -> InternTable -> TokenResult -> Step s)
 string mode table next name after = case stringValue mode table name of
     Built value held -> next value held after
 
+-- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
+-- then dropped, and nothing it holds enters the table.
 readObject :: Int -> Members -> Mode -> InternTable -> TokenResult -> (Value -> InternTable -> TokenResult -> Step s) -> Step s
-readObject open (Members named other) mode table0 tokens0 next = loop table0 [] tokens0
+readObject open (Members named other) mode table0 tokens0 next = loop table0 KeyMap.empty tokens0
   where
-    -- The last pair of a reversed member list is the first in the source, so it wins.
-    loop table fields tokens = case tokens of
-        PartialResult (ObjectEnd _) rest -> done table fields rest
+    loop table !fields tokens = case tokens of
+        PartialResult (ObjectEnd _) rest -> next (Object fields) table rest
         PartialResult (StringRaw bytes True _) rest -> member table fields (Plain bytes) rest
         _ -> withElement tokens $ \element rest -> case element of
-            ObjectEnd _ -> done table fields rest
+            ObjectEnd _ -> next (Object fields) table rest
             _ -> memberName element rest (member table fields) (loop table fields)
-    done table fields rest = let !object = Object (KeyMap.fromList fields) in next object table rest
     member table fields name rest = case HashMap.lookup (nameBytes name) named of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
         Nothing -> case other of
             Just shape -> value table fields name Nothing shape rest
             Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
     value table fields name shared shape rest = case memberKey mode table name shared of
-        Keyed key valueMode held -> withElement rest $ \element afterKey -> case direct shape valueMode held element of
-            Direct field table' -> loop table' ((key, field) : fields) afterKey
-            Indirect -> readAt open False shape valueMode held element afterKey $ \field table' afterValue -> loop table' ((key, field) : fields) afterValue
+        Keyed key valueMode held
+            | KeyMap.member key fields -> withElement rest $ \element afterKey -> case direct shape Keep table element of
+                Direct _ _ -> loop table fields afterKey
+                Indirect -> readAt open False shape Keep table element afterKey (\_ _ -> loop table fields)
+            | otherwise -> withElement rest $ \element afterKey -> case direct shape valueMode held element of
+                Direct field table' -> loop table' (KeyMap.insert key field fields) afterKey
+                Indirect -> readAt open False shape valueMode held element afterKey $ \field table' -> loop table' (KeyMap.insert key field fields)
 
 data Keyed = Keyed !Key.Key !Mode !InternTable
 

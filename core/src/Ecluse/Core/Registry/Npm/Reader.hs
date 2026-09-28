@@ -32,9 +32,8 @@ at any depth, so a rarer member such as @_npmUser.url@ is kept as read too.
 releaseUniqueFields :: [Text]
 releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
-{- | Walk one packument, passing each field to the step as it completes. Before it reads a release,
-the walk asks whether the consumer keeps a release under that key. Only a kept release's keys and
-strings enter the table, so a dropped release leaves nothing behind.
+{- | Walk one packument, passing each field to the step as it completes. Only a release the consumer
+keeps enters the table, and only the first of each member it repeats.
 -}
 npmWalk :: Int -> PackumentRead -> (s -> NpmField -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
 npmWalk depth mode step keeps table0 initial tokens

@@ -27,9 +27,8 @@ import Ecluse.Core.Security (LimitError)
 fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
-{- | Walk one project's Simple index, passing each field to the step as it completes. Before it
-reads a file in a full read, the walk asks whether the consumer keeps the next file. Only a kept
-file's keys and strings enter the table.
+{- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
+full read keeps enters the table, and only the first of each member it repeats.
 -}
 pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
 pypiWalk depth mode step keeps table0 initial tokens
