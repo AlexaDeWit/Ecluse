@@ -162,7 +162,10 @@ The margin covers packages shaped unlike the corpus. A listing's response pays 1
 That covers the encoding with its strict copy, which exceeds the listing's measured peak above the
 entry it holds. The residency tier in
 [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's read or render outgrows its
-charge, so a representation change cannot silently outgrow it.
+charge, so a representation change cannot silently outgrow it. It also holds each read's peak from
+one step of source up under a regression limit, the smallest quarter step at least 8% above the
+measured maximum: 2.0 per source byte for npm and 3.75 for PyPI. A rise then fails the tier well
+before it spends the charge's margin, which stays whole for run time.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder

@@ -56,7 +56,8 @@ spec = do
                 Right peaks -> do
                     reportListing package peaks
                     listingSourceBytes peaks `shouldBe` size
-                    for_ (chargeFactors (pkgEcosystem (cpPackage package))) (checkListing peaks)
+                    let ecosystem = pkgEcosystem (cpPackage package)
+                    for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) (uncurry (checkListing peaks))
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -91,18 +92,23 @@ collection is major and the high-water samples live data at least once per 128 K
 majorSampling :: [String]
 majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
--- The full-read charge's margin above the largest read peak from one meter step of source up.
-chargeMarginPermille :: Integer
-chargeMarginPermille = 1250
+{- A read's peak from one meter step of source up has a regression limit above its measured maximum.
+Separately, it must stay within the full-read charge, whose margin is kept for run time. -}
+readPeakEnvelopePermille :: Ecosystem -> Maybe Integer
+readPeakEnvelopePermille = \case
+    Npm -> Just 2000
+    PyPI -> Just 3750
+    RubyGems -> Nothing
 
 {- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
-source up, the read's peak keeps the margin under its charge and the output charge covers the rest. -}
-checkListing :: ListingPeaks -> ChargeFactors -> Expectation
-checkListing peaks factors = do
+source up, each phase's own charge covers its peak, and the read's peak stays under its envelope. -}
+checkListing :: ListingPeaks -> ChargeFactors -> Integer -> Expectation
+checkListing peaks factors envelope = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
     when (size >= meterStepBytes) $ do
-        (chargeMarginPermille * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
+        (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
+        (1000 * rise listingReadPeak listingBaseline peaks) `shouldSatisfy` (<= envelope * toInteger size)
         -- Collections miss the instant the lazy encoding and its strict copy are both live.
         max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks)) `shouldSatisfy` (<= toInteger output)
   where

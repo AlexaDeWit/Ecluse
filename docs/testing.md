@@ -181,10 +181,14 @@ The checks compare bytes with each ecosystem's charges:
   that the entry step still covers it.
 - The peak through the read and the render fits what the meter holds after both charges, counted
   the same way.
-- From one step of source up, 1.25 times the read's peak fits the full-read charge, so a change
-  that uses up the charge's margin fails. The larger of the listing's peak above the held entry and
+- From one step of source up, the read's peak fits the full-read charge itself, which keeps the
+  charge's whole margin for run time. The larger of the listing's peak above the held entry and
   twice the served body fits the output charge. No collection observes the instant the lazy
   encoding and its strict copy are both live, so the check counts both.
+- From one step of source up, the read's peak also stays within a regression limit per ecosystem,
+  so a rise fails well before it reaches the charge. Each limit is the smallest quarter step at
+  least 8% above the maximum in the table below: 2.0 per source byte for npm (typescript, 1.677,
+  19.3% margin) and 3.75 for PyPI (boto3, 3.342, 12.2% margin).
 
 The following figures come from the arm64 Build job of
 [CI run 36404684497](https://github.com/AlexaDeWit/Ecluse/actions/runs/36404684497/job/108870538869),
@@ -207,8 +211,9 @@ render above the held entry, and the served body's length.
 | PyPI | boto3 | 2.10 | 3.342 | 2.972 | 0.995 | 0.621 |
 | PyPI | requests | 0.12 | 3.969 | 3.645 | 0.608 | 0.657 |
 
-The full-read charges derive from the read peaks of captures of at least one step, as
-[configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
+The full-read charges and the read-peak limits derive from the read peaks of captures of at least
+one step, as [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling)
+sets out.
 From one step of source up, each listing's peak above its entry stays below twice its served body,
 and the output charge covers both.
 
