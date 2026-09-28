@@ -74,7 +74,7 @@ readAt :: Int -> Bool -> Shape -> Mode -> InternTable -> Element -> TokenResult 
 readAt open raced shape mode table element rest next = case shape of
     Scalar budget
         | budget <= 0 -> tooDeepAt open element rest
-        | otherwise -> readScalar mode table element rest next (next (Array mempty) table)
+        | otherwise -> readScalar mode table element rest next (next emptyArray table)
     Generic budget
         | budget <= 0 -> tooDeepAt open element rest
         | otherwise -> case element of
@@ -91,7 +91,7 @@ readAt open raced shape mode table element rest next = case shape of
         | otherwise -> readAt open True fallback mode table element rest next
     StringOr budget other
         | budget <= 0 -> tooDeepAt open element rest
-        | isString element -> readString element rest (uncurry next . stringValue mode table)
+        | isString element -> readString element rest (string mode table next)
         | otherwise -> readAt open True other mode table element rest next
     ObjectOr fallback members
         | ObjectBegin <- element -> readObject (entering raced) members mode table rest next
@@ -137,32 +137,40 @@ raceFailure !level tokens = case tokens of
 -- json-stream's scalar parsers: a container is skipped and handed to the last continuation.
 readScalar :: Mode -> InternTable -> Element -> TokenResult -> (Value -> InternTable -> TokenResult -> Step s) -> (TokenResult -> Step s) -> Step s
 readScalar mode table element rest next container = case element of
-    JInteger number -> next (Number (fromIntegral number)) table rest
-    JValue (String text) -> uncurry next (stringValue mode table (Decoded text)) rest
+    JInteger number -> let !value = Number (fromIntegral number) in next value table rest
+    JValue (String text) -> string mode table next (Decoded text) rest
     JValue value -> next value table rest
     ObjectBegin -> skipFrom element rest container
     ArrayBegin -> skipFrom element rest container
     _
-        | isString element -> readString element rest (uncurry next . stringValue mode table)
+        | isString element -> readString element rest (string mode table next)
         | otherwise -> Failed "unexpected token where a value belongs"
 
 -- The table's shared copy of a string, or a copy of its own when the mode keeps it.
-stringValue :: Mode -> InternTable -> Name -> (Value, InternTable)
+stringValue :: Mode -> InternTable -> Name -> Built
 stringValue mode table name = case mode of
-    Keep -> (String (nameText name), table)
+    Keep -> Built (String (nameText name)) table
     Share -> case internName name table of
-        Interned entry held -> (entryString entry, held)
+        Interned entry held -> Built (entryString entry) held
+
+-- A value built in full, so no retained value holds a thunk or a slice of an input chunk.
+data Built = Built !Value !InternTable
+
+string :: Mode -> InternTable -> (Value -> InternTable -> TokenResult -> Step s) -> Name -> TokenResult -> Step s
+string mode table next name after = case stringValue mode table name of
+    Built value held -> next value held after
 
 readObject :: Int -> Members -> Mode -> InternTable -> TokenResult -> (Value -> InternTable -> TokenResult -> Step s) -> Step s
 readObject open (Members named other) mode table0 tokens0 next = loop table0 [] tokens0
   where
     -- The last pair of a reversed member list is the first in the source, so it wins.
     loop table fields tokens = case tokens of
-        PartialResult (ObjectEnd _) rest -> next (Object (KeyMap.fromList fields)) table rest
+        PartialResult (ObjectEnd _) rest -> done table fields rest
         PartialResult (StringRaw bytes True _) rest -> member table fields (Plain bytes) rest
         _ -> withElement tokens $ \element rest -> case element of
-            ObjectEnd _ -> next (Object (KeyMap.fromList fields)) table rest
+            ObjectEnd _ -> done table fields rest
             _ -> memberName element rest (member table fields) (loop table fields)
+    done table fields rest = let !object = Object (KeyMap.fromList fields) in next object table rest
     member table fields name rest = case HashMap.lookup (nameBytes name) named of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
         Nothing -> case other of
@@ -187,7 +195,7 @@ readArray :: Int -> Shape -> Mode -> InternTable -> TokenResult -> (Value -> Int
 readArray open item mode table0 tokens0 next = loop table0 0 [] tokens0
   where
     loop table !count values tokens = withElement tokens $ \element rest -> case element of
-        ArrayEnd _ -> next (Array (V.fromListN count (reverse values))) table rest
+        ArrayEnd _ -> let !array = Array (V.fromListN count (reverse values)) in next array table rest
         _ -> case direct item mode table element of
             Direct field table' -> loop table' (count + 1) (field : values) rest
             Indirect -> readAt open False item mode table element rest $ \field table' afterValue -> loop table' (count + 1) (field : values) afterValue
@@ -216,9 +224,15 @@ direct shape mode table element = case shape of
 
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
-    StringRaw bytes True _ -> uncurry Direct (stringValue mode table (Plain bytes))
-    StringRaw bytes False _ -> either (const Indirect) (uncurry Direct . stringValue mode table . Decoded) (unescapeText bytes)
-    JValue (String text) -> uncurry Direct (stringValue mode table (Decoded text))
+    StringRaw bytes True _ -> direct' (Plain bytes)
+    StringRaw bytes False _ -> either (const Indirect) (direct' . Decoded) (unescapeText bytes)
+    JValue (String text) -> direct' (Decoded text)
     JValue scalar -> Direct scalar table
     JInteger number -> Direct (Number (fromIntegral number)) table
     _ -> Indirect
+  where
+    direct' name = case stringValue mode table name of
+        Built value held -> Direct value held
+
+emptyArray :: Value
+emptyArray = Array mempty
