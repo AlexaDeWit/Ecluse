@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Corpus-authenticated metadata measurements in one child process per retained shape.
+-- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
 import Crypto.Hash (Digest, SHA256, hash)
@@ -14,6 +14,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Test.Hspec
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
+import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
@@ -21,28 +22,41 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeF
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
 
--- | Reject unauthenticated captures and roots that do not survive or release across collections.
+{- | Reject unauthenticated captures, roots that do not survive or release across collections, and
+listings whose read or render outgrows what the memory gate charges.
+-}
 spec :: Spec
-spec = describe "metadata retained heap" $ do
-    it "includes an authenticated capture above the previous 3,687,514-byte maximum" $ do
-        sizes <- traverse authenticate packages
-        sizes `shouldSatisfy` any ((> 3687514) . fst)
-    forM_ packages $ \package ->
-        forM_ [minBound .. maxBound] $ \shape ->
-            it (toString (cpName package) <> "/" <> show shape) $ do
-                (size, digest) <- authenticate package
-                measureInChild ["--metadata-probe", show shape] package >>= \case
-                    Left failure -> expectationFailure failure
-                    Right result -> do
-                        report package digest shape result
-                        checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
+spec = do
+    describe "metadata retained heap" $ do
+        it "includes an authenticated capture above the previous 3,687,514-byte maximum" $ do
+            sizes <- traverse authenticate packages
+            sizes `shouldSatisfy` any ((> 3687514) . fst)
+        forM_ packages $ \package ->
+            forM_ [minBound .. maxBound] $ \shape ->
+                it (toString (cpName package) <> "/" <> show shape) $ do
+                    (size, digest) <- authenticate package
+                    measureInChild ["--metadata-probe", show shape] package >>= \case
+                        Left failure -> expectationFailure failure
+                        Right result -> do
+                            report package digest shape result
+                            checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
+    describe "listing peak heap" $ forM_ packages $ \package ->
+        it (toString (cpName package)) $ do
+            (size, _) <- authenticate package
+            measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
+                Left failure -> expectationFailure failure
+                Right peaks -> do
+                    reportListing package peaks
+                    listingSourceBytes peaks `shouldBe` size
+                    for_ (chargeFactors (pkgEcosystem (cpPackage package))) (checkListing peaks)
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -71,6 +85,44 @@ envelopePermille _ shape = case shape of
     Raw -> 7000
     Typed -> 2250
     Shared -> 7500
+
+{- The old generation may not outgrow its live data and the nursery holds 1 MiB, so nearly every
+collection is major and the high-water samples live data at least once per MiB allocated. -}
+majorSampling :: [String]
+majorSampling = ["+RTS", "-F1", "-A1m", "-RTS"]
+
+{- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
+source up, each phase's own charge covers its high-water, as the factors' derivation requires. -}
+checkListing :: ListingPeaks -> ChargeFactors -> Expectation
+checkListing peaks factors = do
+    rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
+    rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
+    when (size >= meterStepBytes) $ do
+        rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= toInteger fullRead)
+        -- Collections miss the instant the lazy encoding and its strict copy are both live.
+        max (rise listingPeak listingEntryLive peaks) (2 * toInteger (listingServedBytes peaks)) `shouldSatisfy` (<= toInteger output)
+  where
+    size = listingSourceBytes peaks
+    fullRead = scaleCharge (cfFullReadPermille factors) size
+    output = scaleCharge (cfOutputPermille factors) size
+    paid = toInteger . roundUpToStep meterStepBytes . max meterStepBytes
+
+rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
+rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
+
+reportListing :: CorpusPackage -> ListingPeaks -> IO ()
+reportListing package peaks =
+    putStrLn . ("metadata-listing " <>) . decodeUtf8 . LBS.toStrict . encode $
+        object
+            [ "package" .= cpName package
+            , "read_peak_per_source_byte" .= perSourceByte (rise listingReadPeak listingBaseline peaks)
+            , "entry_per_source_byte" .= perSourceByte (rise listingEntryLive listingBaseline peaks)
+            , "render_peak_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
+            , "served_per_source_byte" .= perSourceByte (toInteger (listingServedBytes peaks))
+            , "peaks" .= peaks
+            ]
+  where
+    perSourceByte bytes = fromInteger bytes / fromIntegral (listingSourceBytes peaks) :: Double
 
 chargeFactors :: Ecosystem -> Maybe ChargeFactors
 chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
