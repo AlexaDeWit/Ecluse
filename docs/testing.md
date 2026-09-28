@@ -170,8 +170,9 @@ The samples may differ by at most 1 KiB in either direction, because a deferred 
 more or less than its value. The entry's digest sits in a 4 KiB pinned memory block, and the names
 that forcing renders also use pinned memory. Once they fill that block, the runtime starts another
 and both stay live. So the child fills one pinned block before the first sample, and both samples
-count the same blocks. Each sample is the lower of two consecutive collections, because a deferred
-value stays in the heap and shows in both, while a one-off high reading from the runtime does not.
+count the same blocks. The file handle that read the capture has a finalizer, so it and its buffer
+stay live until the finalizer thread runs. Each sample therefore collects, lets that thread run, and
+collects again, so neither sample depends on when the thread was scheduled.
 
 A second check holds only the typed view. It places weak pointers on the served document, on each
 served release or file object, and on each non-empty member map. Every pointer must clear after a

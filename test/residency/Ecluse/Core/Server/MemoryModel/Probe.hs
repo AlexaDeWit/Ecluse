@@ -23,6 +23,7 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     probeSource,
 ) where
 
+import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -172,14 +173,9 @@ probeEvaluation package = do
         -- Forcing renders names into pinned memory, which retires the pinned block holding the digest.
         -- 128 strings of 16 bytes, 32 each with their header, fill a 4 KiB block first, so both samples count it.
         forM_ [1 .. 128 :: Int] $ \i -> evaluate (BS.replicate 16 (fromIntegral i))
-        weakHead <- lowestLive
+        weakHead <- live <$> sample
         forceEntry root
-        Evaluated count (live before) weakHead <$> lowestLive
-
--- A deferred value is part of the heap graph and shows in every sample, so the lower of two cannot
--- hide one. Taking it discards a one-off high sample from the runtime's own bookkeeping.
-lowestLive :: IO Word64
-lowestLive = min . live <$> sample <*> (live <$> sample)
+        Evaluated count (live before) weakHead . live <$> sample
 
 {-# NOINLINE prepareEntry #-}
 prepareEntry :: CorpusPackage -> IO (StablePtr CacheEntry, Int)
@@ -241,10 +237,13 @@ measureRetained prepareShape = do
             , preparationMaxLive = samplePeakLive held
             }
 
--- Full RTSStats records must die before the next collection measures a small retained root.
+-- Full RTSStats records must die before the next collection measures a small retained root. A dead
+-- object with a finalizer, such as a closed file handle, stays live until its finalizer thread runs.
 {-# NOINLINE sample #-}
 sample :: IO HeapSample
 sample = do
+    performMajorGC
+    yield
     performMajorGC
     stats <- getRTSStats
     evaluate (HeapSample (gcdetails_live_bytes (gc stats)) (allocated_bytes stats) (max_live_bytes stats))
