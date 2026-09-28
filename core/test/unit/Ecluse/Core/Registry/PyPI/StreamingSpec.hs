@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), pypiF
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
-import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
+import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, releaseFacts, rendered)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
@@ -55,7 +55,7 @@ corpusRead =
         { crProject = \package -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits package
         , crUpstream = pypiCaptureUpstream
         , crMetadata = adapterMetadata pypiAdapter
-        , crVersionReads = \package raw _ key -> [("selected", rendered (projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]
+        , crVersionReads = \package raw _ key -> [("selected", rendered (fmap releaseFacts <$> projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]
         , crDocumentReads = \_ _ -> []
         }
 

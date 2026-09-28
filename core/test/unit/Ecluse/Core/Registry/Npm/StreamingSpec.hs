@@ -35,7 +35,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataB
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream)
-import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered)
+import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey, sharesString)
@@ -483,7 +483,7 @@ corpusRead bytes =
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \package raw document key ->
             let version = mkVersion Npm key
-             in [("selected", rendered (projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
+             in [("selected", rendered (selectedFacts <$> projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
         , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionList (RegistryResponse 200 (BS.length raw) raw)))]
         }
   where
