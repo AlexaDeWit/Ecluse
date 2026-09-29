@@ -5,7 +5,7 @@
 -- | Allocation criteria, the captures run's verdicts and exit decision, and the live run's.
 module Ecluse.AcceptanceSpec (spec) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Key, Value, encode, object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -18,7 +18,7 @@ import Ecluse.Acceptance (
     CapturesSection (..),
     Criteria (..),
     Fetched (Fetched, Refused, Unreachable),
-    Leg (FullDocument, SingleVersion),
+    Leg (FullAllAdvisoryRules, FullDocument, FullShippedAdvisories, SingleVersion),
     Measurement (Measurement),
     OperatingPoint (OperatingPoint),
     PackageOutcome (Failed, Measured, Unavailable),
@@ -50,6 +50,14 @@ spec = do
         it "decodes the calibration and each package's figure per leg" $
             decodeCriteria (document (calibrationJson "abc123" ["https://example.test/runs/1"] 10) [("npm", lodashFigures)])
                 `shouldBe` Right (Criteria calibration (Map.fromList [(Npm, Map.fromList [("lodash", Map.fromList [(FullDocument, 1000), (SingleVersion, 100)])])]))
+        it "decodes the advisory legs' keys for npm and PyPI" $
+            (critAllocatedBytes <$> decodeCriteria (document validCalibration [("npm", advisoryFigures "react"), ("pypi", advisoryFigures "numpy")]))
+                `shouldBe` Right
+                    ( Map.fromList
+                        [ (Npm, Map.fromList [("react", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])])
+                        , (PyPI, Map.fromList [("numpy", Map.fromList [(FullShippedAdvisories, 3), (FullAllAdvisoryRules, 4)])])
+                        ]
+                    )
         it "rejects an unknown leg" $
             decodeCriteria (document validCalibration [("npm", object ["lodash" .= object ["partial" .= (1 :: Int)]])]) `shouldSatisfy` isLeft
         it "rejects an unknown ecosystem" $
@@ -234,6 +242,9 @@ elsewhere = criteriaFixture{critCalibration = calibration{calArch = "not-" <> ho
 
 operatingPoint :: OperatingPoint
 operatingPoint = OperatingPoint 5 4 (64 * 1024 * 1024)
+
+advisoryFigures :: Key -> Value
+advisoryFigures package = object [package .= object ["fullShippedAdvisories" .= (3 :: Int), "fullAllAdvisoryRules" .= (4 :: Int)]]
 
 lodashFigures :: Value
 lodashFigures = object ["lodash" .= object ["full" .= (1000 :: Int), "singleVersion" .= (100 :: Int)]]

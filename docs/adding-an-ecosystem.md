@@ -280,6 +280,15 @@ ecosystem joins the gate through its registered `EcosystemBench` corpus, because
 every capture there and fails on one with no calibrated figure. To calibrate the new ecosystem,
 open the pull request that adds its captures, and follow the recalibration steps in that section.
 
+Two of the gate's legs repeat the full read with the corpus advisories served: one under the
+shipped policy, and one under the shipped policy with both advisory denies.
+[Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating) describes them and
+their setup checks, and [OSV advisory fixtures](testing.md#osv-advisory-fixtures) names the fixture
+and its readers. `Ecluse.Test.Corpus.Advisories` in `ecluse-test-support` holds the fixture's
+compile step, the two policies, and the served-rows check. `Ecluse.Test.OsvDb` serves the compiled
+artifact through a slot. Setup fails when the records name none of an ecosystem's captures, so a new
+ecosystem adds records for at least one of its captures and pins them with the rest.
+
 ## Reuse before you write
 
 npm and PyPI already share many definitions that a new ecosystem needs. Before you write a helper,

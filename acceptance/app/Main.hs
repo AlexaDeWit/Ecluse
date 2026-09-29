@@ -21,10 +21,11 @@ import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getAllocationCounter)
 import Network.HTTP.Client (Manager, Request, newManager, responseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.IO.Temp (withSystemTempDirectory)
 
 import Ecluse.Acceptance (
     Fetched (Fetched, Refused, Unreachable),
-    Leg (FullDocument, SingleVersion),
+    Leg (FullAllAdvisoryRules, FullDocument, FullShippedAdvisories, SingleVersion),
     Measurement (Measurement),
     OperatingPoint (OperatingPoint),
     PackageOutcome (Failed, Measured, Unavailable),
@@ -45,14 +46,18 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
-import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
+import Ecluse.Core.Rules (RuleDeps)
+import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
-import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
+import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
-import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSize)
+import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSizeUnder)
 import Ecluse.Test.Snapshot (digestOf)
 
 main :: IO ()
@@ -67,12 +72,12 @@ captures :: IO ()
 captures = do
     criteria <- loadCriteria
     benches <- ecosystemBenches
-    runs <- forM benches $ \bench -> do
+    runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories -> do
         records <- readCaptureRecords (ebEcosystem bench) >>= either fail pure
         outcomes <- forM (ebCorpus bench) $ \(package, raw, _, _) ->
             case crCapturedAt <$> Map.lookup (cpName package) records of
                 Nothing -> pure (Failed (cpName package) "bench/corpus/pins.json records no capture time")
-                Just clock -> outcomeFrom (cpName package) Nothing <$> measureDocument bench (EvalContext clock Nothing) (cpPackage package) raw
+                Just clock -> outcomeFrom (cpName package) Nothing <$> measureDocument bench advisories (EvalContext clock Nothing) (cpPackage package) raw
         pure (ebEcosystem bench, outcomes)
     let report = assessCaptures criteria runs
     op <- operatingPoint
@@ -86,22 +91,33 @@ live = do
     benches <- ecosystemBenches
     manager <- newManager tlsManagerSettings
     now <- getCurrentTime
-    runs <- forM benches $ \bench ->
-        (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager (EvalContext now Nothing) bench package) (ebCorpus bench)
+    runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
+        (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
     publish (renderLiveReport op runs)
     traverse_ putTextLn (liveAnnotations runs)
     exitWith (liveExitCode runs)
 
-measureLive :: Manager -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
-measureLive manager ctx bench package = do
+-- Serve the ecosystem's corpus advisories to the advisory legs while the action runs, once every covered capture reaches its rows.
+withCorpusAdvisories :: EcosystemBench -> (RuleDeps -> IO a) -> IO a
+withCorpusAdvisories bench use =
+    withSystemTempDirectory "ecluse-acceptance-advisories" $ \dir -> do
+        artifact <- compileCorpusAdvisories eco dir
+        withServedArtifact eco artifact $ \deps _ -> do
+            checkCapturesServed deps [cpPackage package | (package, _, _, _) <- ebCorpus bench] >>= either (fail . toString) pure
+            use deps
+  where
+    eco = ebEcosystem bench
+
+measureLive :: Manager -> RuleDeps -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
+measureLive manager advisories ctx bench package = do
     t0 <- getMonotonicTime
     fetched <- fetchDocument manager (ebEcosystem bench) pkg
     t1 <- getMonotonicTime
     case fetched of
         Unreachable reason -> pure (Unavailable name reason)
         Refused reason -> pure (Failed name reason)
-        Fetched raw -> outcomeFrom name (Just ((t1 - t0) * 1000)) <$> measureDocument bench ctx pkg raw
+        Fetched raw -> outcomeFrom name (Just ((t1 - t0) * 1000)) <$> measureDocument bench advisories ctx pkg raw
   where
     pkg = cpPackage package
     name = cpName package
@@ -124,9 +140,11 @@ outcomeFrom name upstreamMs = \case
     Left reason -> Failed name reason
     Right (versions, legs) -> Measured (Sample name versions upstreamMs legs)
 
--- | Measure every leg over one document: its version count and each leg's figures, or why it could not.
-measureDocument :: EcosystemBench -> EvalContext -> PackageName -> ByteString -> IO (Either Text (Int, [(Leg, Measurement)]))
-measureDocument bench ctx pkg raw =
+{- | Measure every leg over one document, the advisory legs reading the served advisories: the
+version count and each leg's figures, or why the document could not be measured.
+-}
+measureDocument :: EcosystemBench -> RuleDeps -> EvalContext -> PackageName -> ByteString -> IO (Either Text (Int, [(Leg, Measurement)]))
+measureDocument bench advisories ctx pkg raw =
     case ebDecode bench pkg raw >>= maybe (Left "the document lists no versions") Right . nonEmpty of
         Left reason -> pure (Left reason)
         Right versions -> do
@@ -138,8 +156,11 @@ measureDocument bench ctx pkg raw =
                 failed -> Left ("these legs did not decode or project: " <> unwords (map legKey failed))
   where
     operation digest target = \case
-        FullDocument -> runFull ctx bench pkg digest
+        FullDocument -> full inertRuleDeps permissiveAgeRules digest
         SingleVersion -> runSelective bench pkg target
+        FullShippedAdvisories -> full advisories shippedPolicy digest
+        FullAllAdvisoryRules -> full advisories allAdvisoryRules digest
+    full deps policy = runFull deps policy ctx bench pkg
 
 -- Each pass reads its own copy, allocated before the pass, so no pass reuses another's evaluated input.
 measurePasses :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe Measurement)
@@ -162,11 +183,11 @@ measurePass operation copy = do
     after <- getAllocationCounter
     pure (if done then Just (before - after, (t1 - t0) * 1000) else Nothing)
 
-runFull :: EvalContext -> EcosystemBench -> PackageName -> ContentDigest -> ByteString -> IO Bool
-runFull ctx bench pkg digest raw = case ebProject bench pkg raw of
+runFull :: RuleDeps -> [PrecededRule] -> EvalContext -> EcosystemBench -> PackageName -> ContentDigest -> ByteString -> IO Bool
+runFull deps policy ctx bench pkg digest raw = case ebProject bench pkg raw of
     Left _ -> pure False
     Right (info, document) -> do
-        size <- serveDocumentSize (ebMetadata bench) ctx (Snapshot digest document, info)
+        size <- serveDocumentSizeUnder deps policy (ebMetadata bench) ctx (Snapshot digest document, info)
         Exception.evaluate (size > 0)
 
 runSelective :: EcosystemBench -> PackageName -> Version -> ByteString -> IO Bool

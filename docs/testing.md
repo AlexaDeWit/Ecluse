@@ -418,24 +418,36 @@ allocates nothing leaves the figure unchanged, and shows only in the reports' ti
 carry no budget.
 
 The legs project each capture through the test-support adapter projection, so they cover the
-token walk and field policy, the finishing projection, the rules, the merge, assembly, and
-serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
+token walk and field policy, the finishing projection, the rules, the advisory reads, the merge,
+assembly, and serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
 artifact-location check (`enforceArtifactLocations`), `digestingRead`, or `chargedRead`.
 
-Each package has two legs:
+Each package has four legs:
 
 | Leg | Work measured |
 |---|---|
-| `full` | Decode, projection, rules, assembly, and serialisation of the whole document |
+| `full` | Decode, projection, rules, assembly, and serialisation of the whole document, under a one-day minimum age and no advisory database |
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
+| `fullShippedAdvisories` | `full` under the shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
+| `fullAllAdvisoryRules` | `full` under the shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
+
+The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
+[advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
+`Ecluse.Core.Osv.Compile`, and a slot serves the artifact, as a synced mount reads it. A rule that
+finds no row abstains, which would pass for a speed-up. So setup fails when the artifact holds no
+range, when it names none of the captures, and when a capture it names yields no row through the
+rules' own read, under the key the rules look it up by.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
-GHC's per-thread allocation counter. For one build over one input, that figure moves by a few bytes
-at most between runs. Wall-clock time appears in the report for information only. The age rules evaluate at each capture's `capturedAt` time in
-`bench/corpus/pins.json`, so they admit the same versions on every run. The harness links the
-shipped server's RTS options (the `shipped-rts` stanza in `ecluse.cabal`), and the report prints
-the capabilities and allocation area it read from the running RTS.
+GHC's per-thread allocation counter. For one build over one input, a no-database leg's median moves
+by a few dozen bytes at most between runs, and an advisory leg's by up to about 150 bytes, far inside
+the margin. The passes within one run spread further, up to tens of kilobytes on an advisory leg,
+and the median absorbs that spread. Wall-clock time appears in the report for information only. The age rules
+evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they admit the same
+versions on every run. The harness links the shipped server's RTS options (the `shipped-rts`
+stanza in `ecluse.cabal`), and the report prints the capabilities and allocation area it read from
+the running RTS.
 
 [acceptance/criteria.json](../acceptance/criteria.json) holds each leg's calibrated figure in
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
@@ -445,6 +457,8 @@ from. The job fails closed. It fails when:
 - a leg allocates more than its budget,
 - a measured leg has no calibrated figure,
 - a capture is missing or does not project, or a leg does not complete,
+- an advisory fixture file differs from its pin in `bench/corpus/pins.json`, or the advisory setup
+  above fails,
 - the criteria calibrate a package that the run did not measure.
 
 A red result needs a human decision: fix the regression, or recalibrate. A leg that allocates more
@@ -860,7 +874,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `readPeakEnvelopePermille` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each read-peak limit below its full-read charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords` | Five of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The read-peak check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without a read-peak limit skips the [listing checks](#listing-peaks), and one without retained-heap limits takes the generic ones. `readLegacySource` reads an ecosystem it does not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
-| Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes. |
+| Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
 | Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
 
 The shared residency gate remains in
@@ -874,8 +888,11 @@ Smoke coverage never replaces a gating case.
 
 Advisory-shaped test data comes from committed OSV JSON, apart from the benchmarks' generated
 worst case. The suites read `test/fixtures/osv/`
-(`v1/`, plus the `v2/` delta), and the benchmarks read `bench/corpus/advisories/`
-([Advisory rule rows](#advisory-rule-rows)). A suite derives everything it consumes from those files at test time.
+(`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
+[allocation gate](#allocation-budgets-perf-allocation-gating) and the live performance-acceptance
+run, the load harness's advisory scenarios, and `ecluse-unit` (`Ecluse.Test.Corpus.AdvisoriesSpec`)
+read `bench/corpus/advisories/`. A suite derives everything it consumes from those files at test
+time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline

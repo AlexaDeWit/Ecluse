@@ -67,6 +67,10 @@ data Leg
       FullDocument
     | -- | Selective projection of one version, forcing its artifact digests.
       SingleVersion
+    | -- | The full leg under the shipped policy, with the corpus advisories served.
+      FullShippedAdvisories
+    | -- | The full leg under the shipped policy and both advisory denies, with the corpus advisories served.
+      FullAllAdvisoryRules
     deriving stock (Eq, Ord, Show, Generic)
 
 instance Universe Leg where universe = universeGeneric
@@ -76,6 +80,8 @@ legKey :: Leg -> Text
 legKey = \case
     FullDocument -> "full"
     SingleVersion -> "singleVersion"
+    FullShippedAdvisories -> "fullShippedAdvisories"
+    FullAllAdvisoryRules -> "fullAllAdvisoryRules"
 
 parseLeg :: Text -> Maybe Leg
 parseLeg key = find ((== key) . legKey) universe
@@ -484,6 +490,7 @@ operatingLines op =
     , "- Time: wall-clock, for information only."
     , "- RTS: -N" <> show (opCapabilities op) <> " -A" <> show (opAllocationAreaBytes op `div` (1024 * 1024)) <> "m, read from the running RTS."
     , "- Legs: `full` decodes, projects, applies the rules, assembles, and serialises the whole document. `singleVersion` projects one version selectively and forces its artifact digests."
+    , "- Advisory legs: `fullShippedAdvisories` and `fullAllAdvisoryRules` repeat `full` with the corpus advisories in bench/corpus/advisories served, under the shipped policy and under the shipped policy with both advisory denies."
     ]
 
 cells :: [Text] -> Text

@@ -11,7 +11,6 @@ module Ecluse.BenchLoad.Advisories (
     shippedAdvisories,
     allRulesAdvisories,
     advisoryDenyRules,
-    compileCorpusAdvisories,
     advisoryStoreReply,
 ) where
 
@@ -26,10 +25,9 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkAdvisories), Scenario (..))
 import Ecluse.BenchLoad.ProxyProcess (AdvisoryFeed (AdvisoryFeed), advisoryBucket)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired), osvDbFileName)
+import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision))
-import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), corpusAdvisories, suggestedDenyIfCve, suggestedDenyIfEpss)
-import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
+import Ecluse.Test.Corpus.Advisories (compileCorpusAdvisories, suggestedDenyIfCve, suggestedDenyIfEpss)
 import Ecluse.Test.Package (hexSha1OfLazy)
 import Ecluse.Test.Stub (Captured (capPath), Stub (stubPort), withRoutedStub)
 
@@ -101,17 +99,6 @@ withAdvisoryStore ecosystem use =
         artifact <- readFileLBS =<< compileCorpusAdvisories ecosystem dir
         publishedAt <- getCurrentTime
         withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (use . stubPort)
-
-{- | Compile the ecosystem's pinned corpus advisories into the directory, returning the artifact's
-path. An artifact with no range would leave every advisory rule abstaining, so it fails the harness.
--}
-compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
-compileCorpusAdvisories ecosystem dir = do
-    inputs <- corpusAdvisories ecosystem
-    compiled <- compileOsvZipDbWithFeedTo ecosystem EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
-    ranges <- scoresOf compiled
-    when (null ranges) (benchFail ("bench-load: the " <> ecosystemName ecosystem <> " corpus advisories compiled to no range"))
-    pure compiled
 
 {- | Answer the ecosystem's artifact key in 'advisoryBucket' as S3 answers a path-style HEAD or
 GET, with an ETag and the publication time, and every other path with 404.
