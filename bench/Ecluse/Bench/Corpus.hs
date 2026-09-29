@@ -10,7 +10,7 @@ module Ecluse.Bench.Corpus (
     entryInfo,
     entryName,
     HeldTree,
-    heldTree,
+    unHeldTree,
     forcedTree,
     syntheticInput,
     syntheticPackageInfo,
@@ -22,6 +22,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay, secondsToDiffTime)
 import UnliftIO.Exception (evaluate, throwIO)
 
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageInfo, mkScope)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
@@ -49,18 +50,20 @@ entryName (package, _, _, _) = toString (cpName package) <> " (" <> tierName (cp
 -- | A document held as aeson's tree and forced when prepared. Only 'forcedTree' builds one.
 newtype HeldTree = HeldTree CachedDoc
 
--- 'forcedTree' has already forced the whole tree, so a benchmark's 'env' needs only the constructor.
-instance NFData HeldTree where
-    rnf (HeldTree tree) = tree `seq` ()
-
 -- | The document a 'HeldTree' holds.
-heldTree :: HeldTree -> CachedDoc
-heldTree (HeldTree tree) = tree
+unHeldTree :: HeldTree -> CachedDoc
+unHeldTree (HeldTree tree) = tree
+
+-- A document that neither npm's nor PyPI's projection turns into aeson's tree.
+newtype TreeUnavailable = TreeUnavailable Ecosystem
+    deriving stock (Show)
+
+instance Exception TreeUnavailable
 
 -- | A document as aeson's tree, forced by rendering it, so no timed operation decodes a packed read.
 forcedTree :: EcosystemBench -> CachedDoc -> IO HeldTree
 forcedTree ecosystem document = do
-    let tree = fromMaybe document ((fst npmCached <$> snd npmCached document) <|> (fst pypiSimpleCached <$> snd pypiSimpleCached document))
+    tree <- maybe (throwIO (TreeUnavailable (ebEcosystem ecosystem))) pure ((fst npmCached <$> snd npmCached document) <|> (fst pypiSimpleCached <$> snd pypiSimpleCached document))
     _ <- either throwIO (evaluate . BSL.length) (metadataSerialise (ebMetadata ecosystem) tree)
     pure (HeldTree tree)
 
