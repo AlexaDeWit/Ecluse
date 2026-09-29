@@ -426,9 +426,10 @@ a changed figure comes from a changed build. The budgets cover allocation only. 
 allocates nothing leaves the figure unchanged, and shows only in the reports' time columns, which
 carry no budget.
 
-The legs project each capture through the test-support adapter projection, so they cover the
-token walk and field policy, the finishing projection, the rules, the advisory reads, the merge,
-assembly, and serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
+The legs project each capture through the test-support projection over its held bytes, so they
+cover the token walk and field policy (for npm, the production full-read walk, which packs each
+kept release), the finishing projection, the rules, the advisory reads, the merge, assembly, and
+serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
 artifact-location check (`enforceArtifactLocations`), `digestingRead`, or `chargedRead`.
 
 Each package has four legs:
