@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The private and public documents of a two-source listing, drawn from one corpus capture in a
-chosen shape, for the residency probe and the load harness.
+chosen shape, for the residency probe.
 -}
 module Ecluse.Test.Corpus.Merge (
     MergeShape (..),
