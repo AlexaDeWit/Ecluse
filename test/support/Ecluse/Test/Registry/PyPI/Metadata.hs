@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (heldChunks, testTable, walkJsonChunks)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
@@ -38,11 +38,8 @@ projectPyPIIndex limits name body = projectPyPIChunks limits name FullRead [body
 -- | The production full read of held bytes through the reader a fetch runs, fed from memory.
 readPyPIHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
 readPyPIHeld limits name body = do
-    remaining <- newIORef [body]
-    let next = atomicModifyIORef' remaining $ \case
-            [] -> ([], BS.empty)
-            chunk : rest -> (rest, chunk)
-        held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
+    next <- heldChunks [body]
+    let held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
     streamed <- readPyPIIndex held name FullRead next
     pure (first MetadataBoundExceeded streamed >>= fmap (second (fst pypiSimpleCached)) . projectPyPIStream held name)
 

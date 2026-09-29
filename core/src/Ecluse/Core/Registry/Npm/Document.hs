@@ -10,9 +10,11 @@ module Ecluse.Core.Registry.Npm.Document (
     packumentValue,
     packumentResident,
     tarballHole,
+    tarballUrl,
+    withTarball,
 ) where
 
-import Data.Aeson (Value (Object))
+import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -44,3 +46,22 @@ packumentResident packument =
 -- | The member path of the string a served release rebases.
 tarballHole :: [Text]
 tarballHole = ["dist", "tarball"]
+
+-- | The string at 'tarballHole' in a release, when it holds one there.
+tarballUrl :: Value -> Maybe Text
+tarballUrl = go tarballHole
+  where
+    go path value = case (path, value) of
+        ([], String url) -> Just url
+        (name : rest, Object fields) -> KeyMap.lookup (Key.fromText name) fields >>= go rest
+        _ -> Nothing
+
+-- | The release with the string at 'tarballHole' replaced, when it holds one there.
+withTarball :: Text -> Value -> Value
+withTarball url = go tarballHole
+  where
+    go path value = case (path, value) of
+        ([], String _) -> String url
+        (name : rest, Object fields)
+            | Just member <- KeyMap.lookup (Key.fromText name) fields -> Object (KeyMap.insert (Key.fromText name) (go rest member) fields)
+        _ -> value

@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * The cached-document boundary
     assembleAcross,
     serialiseAcross,
+    RenderRefused (..),
 
     -- * Replaying a merge plan
     overlaySurvivors,
@@ -65,6 +66,14 @@ assembleAcross (inject, project) assemble mountBase bySource plan base =
 -- | Encode a served document to its compact wire bytes, an empty object for a foreign one.
 serialiseAcross :: (CachedDoc -> Maybe Encoding) -> CachedDoc -> LByteString
 serialiseAcross project = encodingToLazyByteString . fromMaybe emptyObject_ . project
+
+{- | A served document whose render refused its plan, one that names a table or string it lacks. The
+pipeline answers it as a render fault instead of serving a short or empty body.
+-}
+data RenderRefused = RenderRefused
+    deriving stock (Eq, Show)
+
+instance Exception RenderRefused
 
 {- | Select exact admitted entries from the winning source snapshot, preserving each source's order.
 Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.

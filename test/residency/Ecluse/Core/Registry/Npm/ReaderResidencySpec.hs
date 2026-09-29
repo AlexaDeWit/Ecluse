@@ -11,33 +11,41 @@ module Ecluse.Core.Registry.Npm.ReaderResidencySpec (spec) where
 import Data.ByteString.Builder qualified as Builder
 import Test.Hspec
 
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Json.Shape (Trees (..))
 import Ecluse.Core.Registry.Json.Walk (pureStep)
-import Ecluse.Core.Registry.Json.WalkProbe (allowance, heldDuring)
+import Ecluse.Core.Registry.Json.WalkProbe (allowance, heldDuring, heldWritingDuring)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, keepsTreeRelease, treeStep)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonStream (testTable)
+import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk)
 
 -- | Eight times more dropped releases may not raise the bytes a read holds.
 spec :: Spec
 spec = describe "npmWalk live bytes" $ do
-    forM_ [("a selected read", OneRelease "1.0.0"), ("a full read", WholePackument)] $ \(label, mode) -> do
+    forM_ [("a selected read", selectedRead), ("a full read", fullRead)] $ \(label, heldBy) -> do
         it (label <> " holds the same bytes however often a release's key repeats") $
-            heldFor mode repeatedKeys >>= (`shouldSatisfy` level)
+            heldFor heldBy repeatedKeys >>= (`shouldSatisfy` level)
         it (label <> " holds the same bytes however often a kept release repeats a member") $
-            heldFor mode repeatedMember >>= (`shouldSatisfy` level)
+            heldFor heldBy repeatedMember >>= (`shouldSatisfy` level)
         it (label <> " holds the same bytes however often a kept release's dependencies repeat a name") $
-            heldFor mode repeatedDependency >>= (`shouldSatisfy` level)
+            heldFor heldBy repeatedDependency >>= (`shouldSatisfy` level)
     it "a selected read holds the same bytes however many versions objects repeat the release" $
-        heldFor (OneRelease "1.0.0") repeatedContainers >>= (`shouldSatisfy` level)
+        heldFor selectedRead repeatedContainers >>= (`shouldSatisfy` level)
 
 -- The bytes held with 2,000 and with 16,000 repeats.
-heldFor :: PackumentRead -> (Int -> ByteString) -> IO (Integer, Integer)
-heldFor mode body = (,) <$> held 2000 <*> held 16000
-  where
-    held count = heldDuring (npmWalk Trees 64 mode (pureStep (treeStep defaultLimits (unscopedNpm "thing"))) keepsTreeRelease (testTable releaseUniqueFields) emptyTreeRead) (body count)
+heldFor :: (ByteString -> IO Integer) -> (Int -> ByteString) -> IO (Integer, Integer)
+heldFor heldBy body = (,) <$> heldBy (body 2000) <*> heldBy (body 16000)
+
+-- A selected read builds aeson's tree, and a full read packs each release as production does.
+selectedRead, fullRead :: ByteString -> IO Integer
+selectedRead = heldDuring (npmWalk Trees 64 (OneRelease "1.0.0") (pureStep (treeStep defaultLimits thing)) keepsTreeRelease (testTable releaseUniqueFields) emptyTreeRead)
+fullRead = heldWritingDuring (npmFullTestWalk defaultLimits thing "https://registry.npmjs.org")
+
+thing :: PackageName
+thing = unscopedNpm "thing"
 
 level :: (Integer, Integer) -> Bool
 level (few, repeated) = repeated - few < allowance

@@ -62,8 +62,9 @@ spec = do
                     listingSourceBytes peaks `shouldBe` size
                     let ecosystem = pkgEcosystem (cpPackage package)
                     for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) (uncurry (checkListing peaks))
-                    -- An npm listing's held entry stays smaller than the source it was read from.
-                    when (ecosystem == Npm) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
+                    when (entryBelowSource ecosystem) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
+                    -- A document's weight, as a cache expands it, covers the heap the document holds.
+                    rise listingEntryLive listingTypedLive peaks `shouldSatisfy` (<= toInteger (listingDocumentCharge peaks))
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -106,6 +107,14 @@ readPeakEnvelopePermille = \case
     PyPI -> Just 3750
     RubyGems -> Nothing
 
+{- Whether a listing's held entry stays smaller than the source it was read from. A PyPI entry holds each
+file as aeson's tree beside its typed view, which outgrows the file. -}
+entryBelowSource :: Ecosystem -> Bool
+entryBelowSource = \case
+    Npm -> True
+    PyPI -> False
+    RubyGems -> False
+
 {- A read pays whole meter steps from its entry step on, and a render pays on top. From one step of
 source up, the read's peak stays under its limit and the render's working set under its charge. -}
 checkListing :: ListingPeaks -> ChargeFactors -> Integer -> Expectation
@@ -134,6 +143,8 @@ reportListing package peaks =
             , "entry_per_source_byte" .= perSourceByte (rise listingEntryLive listingBaseline peaks)
             , "peak_above_entry_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
             , "served_per_source_byte" .= perSourceByte (toInteger (listingServedBytes peaks))
+            , "document_per_source_byte" .= perSourceByte (rise listingEntryLive listingTypedLive peaks)
+            , "document_charge_per_source_byte" .= perSourceByte (toInteger (listingDocumentCharge peaks))
             , "peaks" .= peaks
             ]
   where

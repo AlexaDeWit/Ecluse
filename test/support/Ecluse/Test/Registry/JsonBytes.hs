@@ -66,9 +66,11 @@ genServablePackumentBytes = do
     members <- Gen.shuffle ([(quoted "name", quoted "thing"), (quoted "versions", versions), (quoted "time", time), (quoted "dist-tags", tags)] <> others)
     render <$> objectOf (pure members)
   where
-    versionKey = quoted . Builder.byteString <$> Gen.element releaseKeys
+    -- Wider than 'releaseKeys', so a second source serves releases the first lacks.
+    keys = releaseKeys <> ["4.0.0", "0.1.0", "5.0.0-next.3", "1.2.3"]
+    versionKey = quoted . Builder.byteString <$> Gen.element keys
     release = do
-        key <- Gen.element releaseKeys
+        key <- Gen.element keys
         file <- Gen.frequency [(4, pure ("thing-" <> Builder.byteString key <> ".tgz")), (3, mconcat <$> Gen.list (Range.linear 1 4) (Gen.element filePieces))]
         extraDist <- Gen.list (Range.linear 0 2) ((,) <$> genKey ["signatures", "fileCount", "unpackedSize"] <*> genValue [] 2)
         dist <- objectOf (Gen.shuffle ([(quoted "tarball", quoted ("https://registry.npmjs.org/thing/-/" <> file)), (quoted "integrity", quoted (Builder.byteString (encodeUtf8 validSha512Sri))), (quoted "shasum", quoted (Builder.byteString (encodeUtf8 validSha1)))] <> extraDist))

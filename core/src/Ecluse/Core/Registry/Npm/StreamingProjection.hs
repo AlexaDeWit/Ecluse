@@ -44,11 +44,11 @@ import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, replacedMember, sealValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
-import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.Wire (distFields)
-import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl, stringField)
+import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
@@ -252,11 +252,9 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
 
--- Whether today's rebase rule rewrites the release's tarball URL, so a render may rebase its hole.
+-- Whether the rebase rule rewrites the release's tarball URL, so a render may rebase its hole.
 rebases :: Value -> Bool
-rebases = \case
-    Object release | Just (Object dist) <- KeyMap.lookup "dist" release, Just url <- stringField "tarball" dist -> isJust (rebaseArtifactUrl Just url)
-    _ -> False
+rebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 
 -- The members a release's typed facts read: the version list's fields, and of @dist@ what 'Dist' reads.
 typedMembers :: Pick

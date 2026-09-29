@@ -52,7 +52,7 @@ flowchart TD
     digest --> steps["readSteps: feed the walk within the body limit"]
     steps --> walk["The ecosystem's walk over the lexer's tokens"]
     walk --> shape["readShape: build each kept value once, through the read's intern table"]
-    shape --> collect["collectField: decode typed values as each release or file completes"]
+    shape --> collect["the read's step: decode typed values as each release or file completes"]
     collect --> finish["finish: check the name and limits, keep the served document"]
     finish --> enforce["enforceArtifactLocations"]
     enforce --> manifest["Manifest, for the cache and the rules"]
@@ -193,8 +193,9 @@ release would cost it a full read.
 The cache keeps a typed view, `PackageDetails`, for every version. So every cached version pays for
 every field of that view, including a field that nothing reads.
 
-- Decode typed values in the consumer's step (`collectField`) as each release or file completes,
-  so the read never holds the source document.
+- Decode typed values in the consumer's step as each release or file completes, so the read never
+  holds the source document. npm's `packedStep` calls `projectRelease`, and PyPI's step is
+  `collectField`.
 - Add a field to `PackageDetails` only when a rule, the merge, admission, serving or the mirror
   worker reads it.
   [The internal domain model](architecture/registry-model.md#the-internal-domain-model) sets out
@@ -238,8 +239,8 @@ that a render copies.
   [`Ecluse.Core.Registry.Json.Packed`](../core/src/Ecluse/Core/Registry/Json/Packed.hs) holds the
   format, and the table that the read seals when it finishes (`DocTable`).
 - Decode the typed facts from the packed release, and decode only the members they read
-  (`decodePicked`). The read then never holds the release as a tree.
-- A packed release holds one hole: the string that an assembly rebases for each request. npm's hole
+  (`decodePicked`). The read decodes a release whole only to record why it dropped an invalid one.
+- A packed release holds at most one hole: the string that an assembly rebases for each request. npm's hole
   is the tarball URL (`tarballHole`). The read keeps the hole only when today's rebase rule rewrites
   that URL.
 - Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the

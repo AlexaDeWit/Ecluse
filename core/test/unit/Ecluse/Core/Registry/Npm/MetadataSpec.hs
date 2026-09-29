@@ -5,15 +5,14 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Control.Monad.ST (ST)
-import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict, encode, object, toJSON, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), decode, eitherDecodeStrict, encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
-import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
-import Hedgehog (cover, forAll, (===))
+import Data.Text qualified as T
+import Hedgehog (MonadTest, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -26,18 +25,19 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
+import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
-import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
+import Ecluse.Core.Registry.Npm.Document (tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), releaseUniqueFields)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
     LimitError (TooDeeplyNested, TooManyVersions),
@@ -51,7 +51,7 @@ import Ecluse.Test.Json (isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
 import Ecluse.Test.Support (expectRight)
 
@@ -73,16 +73,17 @@ packedReadSpec = describe "packed full read" $ do
                 body <- forAll (Gen.choice [genPackumentBytes, genServablePackumentBytes] >>= damaged)
                 chunks <- forAll (genChunks body)
                 let (tree, packed) = bothFullReads chunks
-                cover 10 "listing rendered" (isJust (mergedListing [tree]))
+                coverListing (mergedListing [tree])
                 fmap (second (snd npmCached)) tree === fmap (second (snd npmCached)) packed
-                mergedListing [tree] === mergedListing [packed]
+                served [tree] === served [packed]
 
         it "renders a listing merged from two sources, each packed over its own table, as the tree reads do" $
             hedgehog $ do
                 sources <- forAll (Gen.list (Range.singleton 2) genServablePackumentBytes)
                 let fullReads = map (bothFullReads . one) sources
-                cover 30 "listing rendered" (isJust (mergedListing (map fst fullReads)))
-                mergedListing (map fst fullReads) === mergedListing (map snd fullReads)
+                coverListing (mergedListing (map fst fullReads))
+                cover 20 "a survivor from the second source" (maybe False (elem 1 . mpSurvivors . fst) (mergedListing (map fst fullReads)))
+                served (map fst fullReads) === served (map snd fullReads)
 
     forM_ corpusPackages $ \package ->
         it ("packs, decodes and renders every release of the capture " <> cpPath package) $ do
@@ -90,13 +91,13 @@ packedReadSpec = describe "packed full read" $ do
             let (tree, packed) = bothFullReads [bytes]
             isRight tree `shouldBe` True
             fmap (second (snd npmCached)) tree `shouldBe` fmap (second (snd npmCached)) packed
-            mergedListing [tree] `shouldBe` mergedListing [packed]
+            served [tree] `shouldBe` served [packed]
 
 -- Both full reads of the same chunks through the production projection, each as the document it serves.
 bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, CachedDoc), Either MetadataError (PackageInfo, CachedDoc))
 bothFullReads chunks =
     ( second (fst npmCached) <$> (first MetadataBoundExceeded (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name registry)
-    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound packedWalk chunks) >>= projectNpmPacked limits name registry)
+    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound (npmFullTestWalk limits name registry) chunks) >>= projectNpmPacked limits name registry)
     )
   where
     total = sum (map BS.length chunks)
@@ -104,8 +105,6 @@ bothFullReads chunks =
     limits = defaultLimits{maxMetadataBytes = max 1 total}
     name = packageNameOf chunks
     registry = "https://registry.npmjs.org"
-    packedWalk :: ST st (TokenResult -> ST st (Steps (ST st) NpmFullRead))
-    packedWalk = npmFullTable registry name (testTable releaseUniqueFields) <&> \(table, writer) -> npmFullWalk writer limits name table
 
 -- The capture's own package, or @thing@ for a generated body.
 packageNameOf :: [ByteString] -> PackageName
@@ -113,15 +112,31 @@ packageNameOf chunks = case eitherDecodeStrict (mconcat chunks) of
     Right (Object fields) | Just (String reported) <- KeyMap.lookup "name" fields, Right parsed <- projectName reported -> parsed
     _ -> unscopedNpm "thing"
 
+-- The listing served from the sources' reads, as 'mergedListing' renders it.
+served :: [Either MetadataError (PackageInfo, CachedDoc)] -> Maybe (Either RenderRefused LByteString)
+served = fmap snd . mergedListing
+
+-- Label a rendered listing by whether it rebased a tarball URL and whether it served one as read.
+coverListing :: (MonadTest m) => Maybe (MergePlan, Either RenderRefused LByteString) -> m ()
+coverListing listing = do
+    cover 10 "listing rendered" (isJust listing)
+    cover 5 "a tarball rebased" (any rebased tarballs)
+    cover 5 "a tarball served as read" (not (all rebased tarballs))
+  where
+    rebased = T.isPrefixOf "https://proxy.example/npm/"
+    tarballs = case listing >>= rightToMaybe . snd >>= decode of
+        Just (Object document) | Just (Object versions) <- KeyMap.lookup "versions" document -> mapMaybe tarballUrl (KeyMap.elems versions)
+        _ -> []
+
 {- The listing served from the sources' reads, the first trusted and the rest gated, with the first as
-the base, or nothing when a read fails or no version is admitted. -}
-mergedListing :: [Either MetadataError (PackageInfo, CachedDoc)] -> Maybe LByteString
+the base, and its plan, or nothing when a read fails or no version is admitted. -}
+mergedListing :: [Either MetadataError (PackageInfo, CachedDoc)] -> Maybe (MergePlan, Either RenderRefused LByteString)
 mergedListing results = do
     sources <- traverse rightToMaybe results
     (_, base) <- listToMaybe sources
     let snapshots = [(index, Snapshot (digestOf (show index)) doc, Snapshot (digestOf (show index)) info) | (index, (info, doc)) <- zip [0 ..] sources]
     plan <- mergePackuments [(if index == 0 then TrustedSource else GatedSource, info) | (index, _, info) <- snapshots]
-    pure (serialiseMergedDocument (assembleMergedDocument "https://proxy.example/npm/" (Map.fromList [(index, doc) | (index, doc, _) <- snapshots]) plan (Just base)))
+    pure (plan, serialiseMergedDocument (assembleMergedDocument "https://proxy.example/npm/" (Map.fromList [(index, doc) | (index, doc, _) <- snapshots]) plan (Just base)))
 
 projectNpmManifestSpec :: Spec
 projectNpmManifestSpec = describe "projectNpmManifest" $ do

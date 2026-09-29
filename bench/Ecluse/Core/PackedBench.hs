@@ -10,7 +10,7 @@ module Ecluse.Core.PackedBench (benchmarks) where
 
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import UnliftIO.Exception (evaluate)
+import UnliftIO.Exception (evaluate, throwIO)
 
 import Ecluse.Bench.Corpus (benchEvalContext, entryName)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
@@ -53,6 +53,6 @@ benchmarks ecosystem = do
     -- The document as aeson's tree, forced before any measurement.
     asTree document = do
         let tree = fromMaybe document ((fst npmCached <$> snd npmCached document) <|> (fst pypiSimpleCached <$> snd pypiSimpleCached document))
-        _ <- evaluate (BSL.length (metadataSerialise (ebMetadata ecosystem) tree))
+        _ <- either throwIO (evaluate . BSL.length) (metadataSerialise (ebMetadata ecosystem) tree)
         pure tree
     versionCount = either (const (-1)) (Map.size . infoVersions . fst)

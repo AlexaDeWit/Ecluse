@@ -27,11 +27,11 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, npmRendered)
 import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..), renderPlan, urlPrefix)
-import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballUrl, withTarball)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.ServedDocument (
-    adjustField,
+    RenderRefused (RenderRefused),
     assembleAcross,
     documentObject,
     objectField,
@@ -40,7 +40,6 @@ import Ecluse.Core.Registry.ServedDocument (
     rebaseArtifactUrl,
     safeDocumentName,
     serialiseAcross,
-    stringField,
  )
 import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
@@ -54,18 +53,7 @@ npmDocumentName = safeDocumentName (rightToMaybe . projectName)
 Build the renderer only from a document name that 'npmDocumentName' admits.
 -}
 rewriteVersion :: (Text -> Maybe Text) -> Value -> Value
-rewriteVersion servedUrl = \case
-    Object vo -> Object (adjustField "dist" (rewriteDist servedUrl) vo)
-    other -> other
-
--- A @dist@ with no readable file name is left unchanged.
-rewriteDist :: (Text -> Maybe Text) -> Value -> Value
-rewriteDist servedUrl = \case
-    Object dist
-        | Just url <- stringField "tarball" dist
-        , Just rebased <- rebaseArtifactUrl servedUrl url ->
-            Object (KeyMap.insert "tarball" (String rebased) dist)
-    other -> other
+rewriteVersion servedUrl release = maybe release (`withTarball` release) (tarballUrl release >>= rebaseArtifactUrl servedUrl)
 
 -- | The plan supplies versions, tags and timestamps. Other top-level fields come from the base.
 assembleMergedPackument :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
@@ -151,8 +139,10 @@ assembleMergedDocument mountBase bySource plan base =
         _ -> assembleAcross npmCached assembleMergedPackument mountBase bySource plan base
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'. Another ecosystem's document serialises as @{}@.
-serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument doc = maybe (serialiseAcross (fmap toEncoding . snd npmCached) doc) fromStrict (snd npmRendered doc >>= renderPlan)
+serialiseMergedDocument :: CachedDoc -> Either RenderRefused LByteString
+serialiseMergedDocument doc = case snd npmRendered doc of
+    Just plan -> maybe (Left RenderRefused) (Right . fromStrict) (renderPlan plan)
+    Nothing -> Right (serialiseAcross (fmap toEncoding . snd npmCached) doc)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject
