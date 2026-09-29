@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PEP 691 index, wheel relay, cache, and advisory database load scenarios over local upstreams.
-PyPI worker-mirroring remains a named gap until #765 supplies the async mirror worker.
+{- | PEP 691 index, private copy, wheel relay, cache, and advisory database load scenarios over
+local upstreams. PyPI worker-mirroring remains a named gap until #765 supplies the async mirror
+worker.
 -}
 module Ecluse.BenchLoad.PyPI (
     pypiFixture,
@@ -16,6 +17,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (dropWhileEnd)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Ratio ((%))
 import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
@@ -23,14 +25,15 @@ import Network.Wai (Application, Request, pathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
+import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, loadCorpusCuts, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, Target, UpstreamFixture (..), proxied, scenario)
 import Ecluse.BenchLoad.PatternScenario (patternScenarios)
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Test.Corpus (CorpusPackage (cpWeight), cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus.Subset (newestPyPIShare)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
@@ -44,6 +47,9 @@ pypiFixture =
             [ indexColdScenario
             , shippedAdvisories PyPI indexColdScenario
             , allRulesAdvisories PyPI indexColdScenario
+            , privateShareScenario 5
+            , privateShareScenario 25
+            , heavyPrivateScenario
             , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
             , revalidateScenario
             , shippedAdvisories PyPI revalidateScenario
@@ -85,6 +91,41 @@ indexColdScenario =
 indexScenario :: Text -> Text -> Int -> Scenario
 indexScenario name description ttl =
     scenario name description (\knobs k -> withIndexProxy knobs ttl Nothing pypiCorpusPackages cpWeight (httpTarget k))
+
+heavyPrivateScenario :: Scenario
+heavyPrivateScenario =
+    scenario
+        "heavy-private"
+        "GET the weighted Simple-index corpus with public cache TTL 0, while the private upstream returns the complete public capture, as a private index that proxies PyPI does. Each request decodes its own private copy, which single-flight cannot share across callers."
+        (withPrivateCopy loadCorpusBodies)
+
+privateShareScenario :: Integer -> Scenario
+privateShareScenario percent =
+    scenario
+        ("heavy-private-" <> show percent <> "pct")
+        ("GET the weighted Simple-index corpus with public cache TTL 0, while the private upstream returns each capture cut to its newest " <> show percent <> "% of versions by upload time, at least one, as a mirror target that has mirrored those versions does. The private copy stays fixed for the run. Each request decodes its own private copy, which single-flight cannot share across callers.")
+        (withPrivateCopy (loadCorpusCuts (newestPyPIShare (percent % 100))))
+
+-- The private upstream serves the corpus as the loader reads it, and the public upstream serves it whole.
+withPrivateCopy :: ([CorpusPackage] -> IO (Map Text LByteString)) -> LoadKnobs -> (Target -> IO a) -> IO a
+withPrivateCopy loadPrivate knobs k = do
+    captures <- loadCorpusBodies pypiCorpusPackages
+    private <- loadPrivate pypiCorpusPackages
+    privateRewritten <- newIORef mempty
+    publicRewritten <- newIORef mempty
+    let latency = lkUpstreamLatencyMicros knobs
+    withProxyOverStubs
+        PyPI
+        knobs
+        0
+        Nothing
+        (indexStub privateRewritten latency private)
+        (indexStub publicRewritten latency captures)
+        (indexMix pypiCorpusPackages cpWeight)
+        ( \proxy urls -> do
+            for_ (ordNub urls) (void . checkedIndex)
+            httpTarget k proxy urls
+        )
 
 revalidateScenario :: Scenario
 revalidateScenario =
@@ -152,7 +193,6 @@ withIndexProxy knobs ttl entries packages weight body = do
     captures <- loadCorpusBodies packages
     rewritten <- newIORef mempty
     let latency = lkUpstreamLatencyMicros knobs
-        mix port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
     withProxyOverStubs
         PyPI
         knobs
@@ -160,7 +200,7 @@ withIndexProxy knobs ttl entries packages weight body = do
         entries
         (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
         (indexStub rewritten latency captures)
-        mix
+        (indexMix packages weight)
         ( \proxy urls -> do
             for_ (ordNub urls) $ \url -> do
                 index <- checkedIndex url
@@ -175,6 +215,9 @@ pypiMountBase = "https://bench.proxy/pypi"
 
 indexUrl :: Int -> Text -> Text
 indexUrl port name = localhost port <> "/pypi/simple/" <> name
+
+indexMix :: [CorpusPackage] -> (CorpusPackage -> Int) -> Int -> [Text]
+indexMix packages weight port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
 
 wheelMix :: Int -> [Text]
 wheelMix port = [indexUrl port (cpName package) <> "/" <> wheelFilename (cpName package) | package <- pypiCorpusPackages]

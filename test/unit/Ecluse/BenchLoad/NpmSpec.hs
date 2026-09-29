@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The npm stubs' artifact paths, the advisory variants' order, and the pattern knobs refused before any proxy boots.
+-- | The npm stubs' artifact paths, the scenario order, and the pattern knobs refused before any proxy boots.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
 import Data.Aeson ((.=))
@@ -24,10 +24,14 @@ spec :: Spec
 spec = do
     describe "npm advisory variants" $
         it "run right after their no-database counterparts" $ do
-            let names = map scenarioName (fixtureScenarios npmFixture)
             names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules"]
             names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
+    describe "npm private copies" $
+        it "run from the smallest share to the complete capture" $
+            names `shouldSatisfy` isInfixOf ["heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
     fixturePathSpec
+  where
+    names = map scenarioName (fixtureScenarios npmFixture)
 
 fixturePathSpec :: Spec
 fixturePathSpec = describe "npm artifact fixture paths" $ do

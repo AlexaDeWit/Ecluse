@@ -556,13 +556,31 @@ failure is a task limit reached outside the harness, which sets none. The harnes
 failure with the process limits, the task counts, and the failed attempt's cgroup as it read them,
 and the report counts the boot attempts. Any other boot failure fails the scenario.
 
-Four scenarios stress admission under memory pressure. `npm/heavy-private` has the private stub
-return the complete public capture, so every request decodes its own private copy.
-`npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
-`npm/warm-under-cold` measures assembled hits and retained selected reads while a second generator
-drives heavy-tier listings that never reuse an assembled response. `npm/ramp` steps from 10 to
-400 connections, one configured duration per step, and reports each step. None of the four joins
-the concurrency-one pass.
+Three scenarios stress admission under memory pressure. `npm/herd` sends 100 simultaneous cold
+`typescript` listings to an idle proxy. `npm/warm-under-cold` measures assembled hits and retained
+selected reads while a second generator drives heavy-tier listings that never reuse an assembled
+response. `npm/ramp` steps from 10 to 400 connections, one configured duration per step, and
+reports each step. None of the three joins the concurrency-one pass.
+
+The private-copy scenarios model a mirror target that is also the private upstream. Its document
+for a package holds the versions the deployment has mirrored. Every listing decodes its own private
+copy, because a private read passes the caller's credentials through and cannot share work with
+other callers. The private stub returns each capture cut to its newest versions by publish time
+(upload time on PyPI), up to a fixed share of the total and at least one version. Installs resolve
+to recent releases, so a mirror fills from the newest end first. `Ecluse.Test.Corpus.Subset` makes
+the cut, as it does for the publish-order merge shape in [Listing peaks](#listing-peaks). The
+public stub returns the complete capture, and the public cache TTL is 0. The private copy stays
+fixed for the run, so each scenario measures one point:
+
+| Scenario | Private copy of each capture |
+|---|---|
+| `npm/merge-cold`, `pypi/index-cold` | A small overlay of versions the public document does not hold: three for npm, one wheel for PyPI |
+| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct` | The newest 5% of the versions |
+| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
+| `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
+
+Each ecosystem's report lists the last three rows in that order, after the cold listing and its
+advisory variants. All four rows join the concurrency-one pass.
 
 Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
 shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
@@ -613,7 +631,7 @@ The harness separately validates each capture through the production adapter bef
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
 | `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
-| Load metadata and cache scenarios | Fixture upstreams retain all captured metadata and rewrite artifact authorities for the local harness. These are derived bodies, not byte-identity measurements. |
+| Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. A private-copy scenario's private upstream serves each capture cut to its newest share of versions. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
 The projection groups measure decoding from held bytes, including the structural guards.
@@ -848,7 +866,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Performance acceptance budgets | Ecosystem budgets in `acceptance/criteria.json`, consumed by `acceptance/app/Main.hs` using the benchmark corpus | The [driver](../acceptance/app/Main.hs) measures live npm packuments and PyPI PEP 691 Simple JSON documents for the shared corpus identities. Each ecosystem has its own report section. [Criteria](../acceptance/criteria.json) record the budgets and calibration evidence. Frozen capture bytes are not acceptance measurements. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. The private-copy scenarios cut each capture with the ecosystem's cut in `Ecluse.Test.Corpus.Subset`. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).

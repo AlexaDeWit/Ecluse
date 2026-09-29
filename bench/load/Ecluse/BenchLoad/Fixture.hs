@@ -13,12 +13,14 @@ module Ecluse.BenchLoad.Fixture (
     longCacheTtl,
     artifactBytes,
     loadCorpusBodies,
+    loadCorpusCuts,
     selfHosted,
     primeETag,
     fetchChecked,
     benchNow,
 ) where
 
+import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -34,7 +36,8 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
+import Ecluse.Core.Package (PackageName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Wai (rebaseAuthority)
 
 {- | Boot a proxy in front of the private and public stubs with this cache TTL in seconds and an
@@ -75,12 +78,22 @@ artifactBytes size = LBS.replicate (fromIntegral (max 1 size)) 0x61
 
 -- | Read the selected corpus, refusing empty captures before starting load.
 loadCorpusBodies :: [CorpusPackage] -> IO (Map Text LByteString)
-loadCorpusBodies packages = Map.fromList <$> traverse load packages
+loadCorpusBodies packages = Map.fromList <$> traverse (\cp -> (cpName cp,) <$> readCapture cp) packages
+
+-- | 'loadCorpusBodies' with each capture cut to part of its versions, refusing a capture the cut rejects.
+loadCorpusCuts :: (PackageName -> ByteString -> Either String Value) -> [CorpusPackage] -> IO (Map Text LByteString)
+loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
   where
     load cp = do
-        bytes <- readFileLBS (cpPath cp)
-        when (LBS.null bytes) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpPath cp)))
-        pure (cpName cp, bytes)
+        bytes <- readCapture cp
+        document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
+        pure (cpName cp, encode document)
+
+readCapture :: CorpusPackage -> IO LByteString
+readCapture cp = do
+    bytes <- readFileLBS (cpPath cp)
+    when (LBS.null bytes) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpPath cp)))
+    pure bytes
 
 -- | Rebase captured artifact URLs once per stub, outside repeated metadata responses.
 selfHosted :: Text -> IORef (Map Text LByteString) -> Text -> Map Text LByteString -> IO (Map Text LByteString)
