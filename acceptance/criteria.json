@@ -3,18 +3,18 @@
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-24.04-arm",
-    "commit": "5119b40b77d697662b45fe2e83918b9c9d8f7b2d",
+    "commit": "09452bb6b10aaa27915a423ef6d18b46017a5e4c",
     "runs": [
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36490249761/job/109156922518"
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36507288722/job/109211637622"
     ],
     "marginPercent": 10
   },
   "allocatedBytes": {
     "npm": {
       "lodash": {
-        "full": 13464520,
+        "full": 13464488,
         "singleVersion": 6880704,
-        "fullShippedAdvisories": 13686848,
+        "fullShippedAdvisories": 13686832,
         "fullAllAdvisoryRules": 10431600
       },
       "request": {
@@ -27,7 +27,7 @@
         "full": 401248448,
         "singleVersion": 164937792,
         "fullShippedAdvisories": 402744456,
-        "fullAllAdvisoryRules": 404879648
+        "fullAllAdvisoryRules": 404879656
       },
       "@babel/core": {
         "full": 41899320,
@@ -70,14 +70,14 @@
       "requests": {
         "full": 10307008,
         "singleVersion": 5759472,
-        "fullShippedAdvisories": 21066264,
-        "fullAllAdvisoryRules": 18507184
+        "fullShippedAdvisories": 21066272,
+        "fullAllAdvisoryRules": 18507048
       },
       "numpy": {
         "full": 158702816,
         "singleVersion": 109454536,
-        "fullShippedAdvisories": 163889336,
-        "fullAllAdvisoryRules": 151099144
+        "fullShippedAdvisories": 163889424,
+        "fullAllAdvisoryRules": 151099232
       },
       "boto3": {
         "full": 178413240,
