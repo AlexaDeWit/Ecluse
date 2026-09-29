@@ -173,9 +173,12 @@ Documents that overlap, such as a package mirrored into a private upstream, rend
 document and pay for about one. The output working set is the larger of the listing's peak above
 the documents it holds and twice the served body, for the encoding with its strict copy. The
 response charge is 1.25 times the highest working set per basis byte that the residency tier
-measures for one ecosystem, over single documents and every merge shape it renders, from one step
-of basis up, rounded up to a tenth. npm's charge is 2.1 (@aws-sdk/client-s3 under a heavy base, at
-1.67) and PyPI's is 1.9 (boto3 under a heavy base, at 1.49).
+measures for one ecosystem, from one step of basis up, rounded up to a tenth. It takes the
+realistic shapes: a single document, and merges whose documents are identical, overlap, share no
+version, or put the newest quarter of the versions in the private copy, as a registry that holds
+the versions a deployment consumed does. npm's charge is 2.0 (@aws-sdk/client-s3 at 1.52) and
+PyPI's is 1.6 (boto3 at 1.24). The tier also renders heavy bases, private documents that render
+far more than their version count suggests, and holds each of them within the output charge.
 
 The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's reads
 or render outgrow what the meter holds for them, so a representation change cannot silently
@@ -183,8 +186,8 @@ outgrow a charge. From one step up, it fails once a read's peak or an output wor
 regression limit. The read limits are 2.0 per source byte for npm and 3.75 for PyPI, 0.1 and 0.45
 under their charges. Each was set as the smallest quarter step at least 8% above the measured
 maximum, which for the read maxima above gives 1.0 for npm and 3.5 for PyPI. The output limits,
-set by the same rule, are 2.0 per basis byte for npm and 1.75 for PyPI, 0.1 and 0.15 under their
-charges.
+set by the same rule over the realistic shapes, are 1.75 per basis byte for npm and 1.5 for PyPI,
+0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder

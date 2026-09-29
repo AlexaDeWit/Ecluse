@@ -273,9 +273,10 @@ The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, a
 - `cfOutputPermille` is what a listing's response pays per byte of its output basis before it
   renders. The serving path charges a merged listing on what it renders, by the larger of two
   anchored estimates that Runtime sizing sets out beside the rule that derives this charge. The
-  merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over single documents and
-  every merge shape, from one meter step of basis up. It must cover the listing's peak above the
-  documents it holds, and twice the served body. The retained-heap gate checks every capture,
+  merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over a single document and
+  the realistic merge shapes, from one meter step of basis up, and hold the heavy-base shapes
+  within it. It must cover the listing's peak above the documents it holds, and twice the served
+  body. The retained-heap gate checks every capture,
   whatever its size: twice the shared entry's encoded size must fit within the output charge.
 
 To calibrate them:

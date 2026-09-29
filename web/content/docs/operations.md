@@ -454,7 +454,7 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
 | A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 2.1 bytes for npm, 4.2 bytes for PyPI |
-| A listing's response | Per byte of its output basis, before assembly: 2.1 bytes for npm, 1.9 bytes for PyPI |
+| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.6 bytes for PyPI |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
