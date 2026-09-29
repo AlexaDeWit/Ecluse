@@ -2,8 +2,7 @@
 
 Read this before you bring a new package ecosystem, such as Rust crates, into Écluse. Every
 ecosystem adopts the reader and measurement pattern that npm and PyPI follow. npm is the model,
-because it carries the most complete form of that pattern. This guide sets out the techniques of
-that pattern, the reason for each one, and the order to apply them in.
+because it carries the most complete form of that pattern.
 
 The rest of the pattern has its own homes. The adapter boundary is in
 [Registry model, Registry abstraction](architecture/registry-model.md#registry-abstraction). The
@@ -41,8 +40,8 @@ for the new ecosystem before you call its reads done.
 ## The read, end to end
 
 A full read streams the response body through a chain of small steps, and each step owns one
-concern. Keep that shape in a new ecosystem. Add a concern as its own step on the chunk source,
-never as a flag or a mode inside the walk.
+concern. Keep that shape in a new ecosystem. Add a concern over the body's bytes, such as a charge
+or a digest, as its own step on the chunk source. Never add it as a flag inside the walk.
 [Incremental npm extraction](architecture/registry-model.md#incremental-npm-extraction) describes
 the chunking, the source digest and the body limit.
 
@@ -85,9 +84,10 @@ new line is a change of behaviour, not of performance.
 
 ### 2. Walk the lexer's tokens
 
-A reader that builds the whole document tree, or runs json-stream's parser combinators, allocates
-for fields that Écluse then drops. It also rebuilds maps as it goes. A walk over the lexer's tokens
-builds only what the read keeps, and builds it once.
+A reader that builds the whole document tree allocates for fields that Écluse then drops.
+json-stream's parser combinators skip unknown fields too, but the combinator layer allocates on
+every value it reads. A walk over the lexer's tokens builds only what the read keeps, and builds it
+once.
 
 - [`Ecluse.Core.Registry.Json.Walk`](../core/src/Ecluse/Core/Registry/Json/Walk.hs) holds the
   primitives. `withElement` reads the next token, `eachMember` and `eachItem` visit containers,
@@ -120,9 +120,6 @@ builds each kept value straight from its members.
 - Let the first member under a repeated key win, as json-stream does. The walk reads a repeat where
   json-stream reads it, then drops it.
 
-`namedMembers` and `knownMembers` also make one key for each listed name, which every object read
-with those members can hold. So a document with thousands of releases holds each fixed name once.
-
 ### 4. Intern keys and strings for each read
 
 Releases repeat the same keys, dependency names and ranges thousands of times. A table that belongs
@@ -134,8 +131,8 @@ the table and the key it draws for each read.
   table. Create one for each read with `newInternTable <$> newTableKey <*> pure uniqueFields`, as
   `readNpmPackument` does, and let it go when the read ends.
 - Read each kept release in `Share` mode. `readShape` then finds each key and string in the table
-  by the bytes the lexer read, before it builds any text. It takes every key from the table,
-  including names that no member list names.
+  by the bytes the lexer read, before it builds any text. It takes every key from the table, so a
+  document with thousands of releases holds each field name once.
 - List the fields whose values differ in every release, such as artifact URLs and digests, as the
   unique fields (`releaseUniqueFields`, `fileUniqueFields`). The table keeps their values as read,
   so they never grow it.
@@ -199,12 +196,13 @@ every field of that view, including a field that nothing reads.
 - Decode typed values in the consumer's step (`collectField`) as each release or file completes,
   so the read never holds the source document.
 - Add a field to `PackageDetails` only when a rule, the merge, admission, serving or the mirror
-  worker reads it. [The internal domain model](architecture/registry-model.md#the-internal-domain-model)
-  sets out what the view holds and why. Removing a field never means defaulting a signal: a signal
+  worker reads it.
+  [The internal domain model](architecture/registry-model.md#the-internal-domain-model) sets out
+  what the view holds and why. Removing a field never means defaulting a signal: a signal
   the rules read stays explicitly unknown when the reader cannot determine it.
 - Take typed text from the kept value's own strings, not a fresh copy, so the typed view and the
-  served document share one text. npm's integrity string in the typed view is the
-  served document's own text.
+  served document share one text. A lone npm integrity component in the typed view is the served
+  document's own text.
 - Keep that text as `Text`, although [the style guide, 6.5](style.md#6-naming-and-domain-types)
   stores bulk identifiers as `ShortText`. A conversion copies the text, so the view would hold a
   second copy of what the served document holds. On the corpus, `ShortText` made the cache entry no
@@ -241,7 +239,8 @@ The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, a
 - `cfOutputPermille` is what a listing's response pays per source byte before it renders. The
   listing check sets its floor from one meter step of source up
   ([Listing peaks](testing.md#listing-peaks)). It must cover the listing's peak above its held
-  entry, and twice the served body.
+  entry, and twice the served body. The retained-heap gate checks every capture, whatever its size:
+  twice the shared entry's encoded size must fit within the output charge.
 
 To calibrate them:
 
@@ -249,7 +248,7 @@ To calibrate them:
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap
   and read-peak limits.
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
-  read peak, the peak above the entry and the served body, each per source byte.
+  read peak, the held entry, the peak above the entry and the served body, each per source byte.
 - Derive the read-peak limit by the rule in [Listing peaks](testing.md#listing-peaks), and add the
   captures to that section's table.
 
@@ -268,8 +267,8 @@ indicative only.
 measures, and the [residency gate](testing.md#residency-gate-ecluse-residency-gating) describes the
 memory probes. To look at one read in isolation, run the residency executable's
 [source probes](testing.md#streaming-source-probes), which report one read's allocation and live
-bytes for a capture. Every new test, benchmark row and load scenario also gets a counterpart in
-every ecosystem ([One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem)).
+bytes for a capture. For counterparts in other ecosystems, see
+[One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem).
 
 ## Reuse before you write
 
