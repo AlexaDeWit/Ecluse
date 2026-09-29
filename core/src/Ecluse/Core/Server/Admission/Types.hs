@@ -24,7 +24,9 @@ module Ecluse.Core.Server.Admission.Types (
 -- | Live heap bytes charged per source byte, in thousandths, for one ecosystem's metadata.
 data ChargeFactors = ChargeFactors
     { cfFullReadPermille :: Int
-    -- ^ Per decompressed byte of a full read: the typed projection plus the raw document it keeps.
+    {- ^ Per decompressed byte of a full read: 1.25 times the largest read peak per source byte on a
+    residency capture of at least one meter step, rounded up to a tenth.
+    -}
     , cfOutputPermille :: Int
     -- ^ Per source byte a listing merges and encodes into its response.
     }
