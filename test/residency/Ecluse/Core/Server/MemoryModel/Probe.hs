@@ -232,7 +232,10 @@ probeListing package = do
         bracket (prepareListingRender (pkgEcosystem (cpPackage package)) entry) freeStablePtr $ \servedRoot -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
-            pure (entryBodyBytes entry, BS.length served, held, rendered)
+            -- Evaluated here, so nothing sampled later holds the entry or the served body.
+            let !sourceBytes = entryBodyBytes entry
+                !servedBytes = BS.length served
+            pure (sourceBytes, servedBytes, held, rendered)
     (typed, charged) <- typedOnly package
     pure
         ListingPeaks
