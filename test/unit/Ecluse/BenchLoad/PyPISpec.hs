@@ -18,7 +18,7 @@ spec = do
             names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules"]
             names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
     describe "PyPI private copies" $
-        it "run from the smallest share to the complete capture" $
-            names `shouldSatisfy` isInfixOf ["heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
+        it "run after the cold listing and its advisory variants, from the smallest share to the complete capture" $
+            names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules", "heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
   where
     names = map scenarioName (fixtureScenarios pypiFixture)

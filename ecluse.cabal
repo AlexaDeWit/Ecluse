@@ -1052,6 +1052,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.FixtureSpec
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PrivateCopy
+    Ecluse.BenchLoad.PrivateCopySpec
     Ecluse.BenchLoad.PyPI
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
@@ -1544,6 +1546,7 @@ executable bench-load
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
     , ecluse

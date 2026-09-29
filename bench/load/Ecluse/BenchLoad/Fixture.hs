@@ -31,6 +31,7 @@ import Network.HTTP.Types (Header, Status, status200, status304)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application)
 import Network.Wai.Handler.Warp (testWithApplication)
+import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, proxied, urlLoad)
@@ -80,14 +81,15 @@ artifactBytes size = LBS.replicate (fromIntegral (max 1 size)) 0x61
 loadCorpusBodies :: [CorpusPackage] -> IO (Map Text LByteString)
 loadCorpusBodies packages = Map.fromList <$> traverse (\cp -> (cpName cp,) <$> readCapture cp) packages
 
--- | 'loadCorpusBodies' with each capture cut to part of its versions, refusing a capture the cut rejects.
+-- | 'loadCorpusBodies' with each capture cut and encoded before load, refusing a capture the cut rejects.
 loadCorpusCuts :: (PackageName -> ByteString -> Either String Value) -> [CorpusPackage] -> IO (Map Text LByteString)
 loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
   where
     load cp = do
         bytes <- readCapture cp
         document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
-        pure (cpName cp, encode document)
+        body <- evaluate (toStrict (encode document))
+        pure (cpName cp, toLazy body)
 
 readCapture :: CorpusPackage -> IO LByteString
 readCapture cp = do

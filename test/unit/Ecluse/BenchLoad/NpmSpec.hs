@@ -27,8 +27,8 @@ spec = do
             names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules"]
             names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
     describe "npm private copies" $
-        it "run from the smallest share to the complete capture" $
-            names `shouldSatisfy` isInfixOf ["heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
+        it "run after the cold listing and its advisory variants, from the smallest share to the complete capture" $
+            names `shouldSatisfy` isInfixOf ["merge-cold", "merge-cold-advisories", "merge-cold-all-advisory-rules", "heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
     fixturePathSpec
   where
     names = map scenarioName (fixtureScenarios npmFixture)

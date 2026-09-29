@@ -565,16 +565,16 @@ reports each step. None of the three joins the concurrency-one pass.
 The private-copy scenarios model a mirror target that is also the private upstream. Its document
 for a package holds the versions the deployment has mirrored. Every listing decodes its own private
 copy, because a private read passes the caller's credentials through and cannot share work with
-other callers. The private stub returns each capture cut to its newest versions by publish time
-(upload time on PyPI), up to a fixed share of the total and at least one version. Installs resolve
-to recent releases, so a mirror fills from the newest end first. `Ecluse.Test.Corpus.Subset` makes
-the cut, as it does for the publish-order merge shape in [Listing peaks](#listing-peaks). The
-public stub returns the complete capture, and the public cache TTL is 0. The private copy stays
-fixed for the run, so each scenario measures one point:
+other callers. The private stub returns each capture cut to the newest share of its versions by
+publish time (upload time on PyPI), rounded up to a whole version, and at least one. Installs
+resolve to recent releases, so a mirror fills from the newest end first.
+`Ecluse.Test.Corpus.Subset` makes the cut, as it does for the publish-order merge shape in
+[Listing peaks](#listing-peaks). The public stub returns the complete capture, and the public cache
+TTL is 0. The private copy stays fixed for the run, so each scenario measures one point:
 
 | Scenario | Private copy of each capture |
 |---|---|
-| `npm/merge-cold`, `pypi/index-cold` | A small overlay of versions the public document does not hold: three for npm, one wheel for PyPI |
+| `npm/merge-cold`, `pypi/index-cold` | The comparison point, not a cut: a synthetic overlay of versions the public document does not hold, three for npm and one wheel for PyPI |
 | `npm/heavy-private-5pct`, `pypi/heavy-private-5pct` | The newest 5% of the versions |
 | `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
 | `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
@@ -631,7 +631,7 @@ The harness separately validates each capture through the production adapter bef
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
 | `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
-| Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. A private-copy scenario's private upstream serves each capture cut to its newest share of versions. These are derived bodies, not byte-identity measurements. |
+| Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
 The projection groups measure decoding from held bytes, including the structural guards.
@@ -866,7 +866,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Performance acceptance budgets | Ecosystem budgets in `acceptance/criteria.json`, consumed by `acceptance/app/Main.hs` using the benchmark corpus | The [driver](../acceptance/app/Main.hs) measures live npm packuments and PyPI PEP 691 Simple JSON documents for the shared corpus identities. Each ecosystem has its own report section. [Criteria](../acceptance/criteria.json) record the budgets and calibration evidence. Frozen capture bytes are not acceptance measurements. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. The private-copy scenarios cut each capture with the ecosystem's cut in `Ecluse.Test.Corpus.Subset`. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing mix and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).
