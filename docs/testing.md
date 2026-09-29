@@ -769,6 +769,7 @@ An ecosystem counts as onboarded when it supplies each item below for its suppor
 Register new modules in [ecluse.cabal](../ecluse.cabal) and the applicable harness entry point.
 `<Ecosystem>` denotes the module component, such as `Npm` or `PyPI`, and `<ecosystem>` denotes the corpus directory name.
 The pending links identify work needed to bring existing ecosystems up to this bar.
+[Adding an ecosystem](adding-an-ecosystem.md) sets out the performance techniques its reads use, and the order to apply them in.
 
 | Obligation | Expected file or module pattern | Worked examples and current gaps |
 |---|---|---|
