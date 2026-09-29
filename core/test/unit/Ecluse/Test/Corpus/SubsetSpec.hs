@@ -38,7 +38,7 @@ spec = do
 
         it "keeps the oldest share of a Simple index by upload time" $
             (sort . toList . oldestVersions (1 % 2) . fst <$> projectPyPIIndex defaultLimits (unscopedPyPI "thing") pypiCapture)
-                `shouldBe` Right ["1.0", "3.0"]
+                `shouldBe` Right ["1", "3"]
 
     describe "newestPyPIShare" $ do
         it "keeps the files and listed versions of the newest share by upload time" $ do
