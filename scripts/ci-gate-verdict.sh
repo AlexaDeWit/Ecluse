@@ -34,6 +34,7 @@ require() {
 require changes "${CHANGES:-missing}"
 require static-checks "${STATIC_CHECKS:-missing}"
 require build "${BUILD:-missing}" docs
+require allocation "${ALLOCATION:-missing}" docs
 require coverage "${COVERAGE:-missing}" docs
 
 # codecov-notify posts the Codecov statuses once every coverage leg has uploaded, so it

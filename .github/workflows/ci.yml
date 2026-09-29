@@ -102,6 +102,47 @@ jobs:
           path: dist-newstyle
           key: dist-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
+  allocation:
+    name: Allocation budgets (committed captures)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      # The harness links the shipped RTS options, so every run measures under the same
+      # runtime. pipefail keeps the harness exit code through tee.
+      - name: Hold each leg's allocation to its budget
+        run: |
+          set -eo pipefail
+          nix develop .#ci --command task perf-allocation 2>&1 | tee perf-allocation-report.md
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-allocation-report-${{ runner.arch }}-${{ github.sha }}
+          path: perf-allocation-report.md
+          if-no-files-found: warn
+
   coverage:
     name: Coverage (${{ matrix.suite }})
     needs: changes
@@ -591,6 +632,7 @@ jobs:
     needs:
       - changes
       - build
+      - allocation
       - coverage
       - codecov-notify
       - static-checks
@@ -619,6 +661,7 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           STATIC_CHECKS: ${{ needs.static-checks.result }}
           BUILD: ${{ needs.build.result }}
+          ALLOCATION: ${{ needs.allocation.result }}
           COVERAGE: ${{ needs.coverage.result }}
           CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}
           DOCS: ${{ needs.docs.result }}

@@ -2,361 +2,496 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Budgets and reports for live registry performance acceptance.
-Each ecosystem keeps its own package budgets, while either processing leg can fail the run.
-Budgets hold only on the CPU architecture they were calibrated on.
+{- | Allocation budgets and reports for performance acceptance.
+The captures run holds each leg over the committed captures to its calibrated allocation. The live
+run reports the same legs over live registry documents, with no budget.
 -}
 module Ecluse.Acceptance (
-    -- * Acceptance criteria
+    -- * Legs and criteria
+    Leg (..),
+    legKey,
+    Calibration (..),
     Criteria (..),
-    CriteriaCatalogue (..),
     criteriaPath,
     loadCriteria,
     decodeCriteria,
-    budgetFor,
-    singleVersionBudgetFor,
+    budgetBytes,
     hostArch,
 
-    -- * Measurements and verdicts
+    -- * Measurements
+    Measurement (..),
     Sample (..),
-    Verdict (..),
-    Assessment (..),
     PackageOutcome (..),
-    Report (..),
-    evaluate,
-    reportBreached,
-    reportExitCode,
-
-    -- * Rendering
     OperatingPoint (..),
-    headroom,
-    watchFraction,
-    renderReport,
+
+    -- * The captures run
+    Verdict (..),
+    AssessedLeg (..),
+    Row (..),
+    CapturesSection (..),
+    CapturesReport (..),
+    assessCaptures,
+    capturesProblems,
+    capturesExitCode,
+    capturesAnnotations,
+    renderCapturesReport,
+
+    -- * The live run
+    Fetched (..),
+    classifyFetch,
+    liveExitCode,
+    liveAnnotations,
+    renderLiveReport,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
+-- relude's prelude exports a Bounded/Enum-based `universe`. The Generic-derived one is used here.
+import Prelude hiding (universe)
+
+import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName, parseEcosystem)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Universe.Class (Universe (universe))
+import Data.Universe.Generic (universeGeneric)
+import Numeric (showFFloat)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Info qualified as Info
 
-import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import Numeric (showFFloat)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
+import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (..), isAuthorisationFailure, isSuccessStatus)
 
--- | Positive overhead budgets in milliseconds, scoped to one ecosystem.
+-- | One measured operation over a package's document.
+data Leg
+    = -- | Decode, projection, rules, assembly, and serialisation of the whole document.
+      FullDocument
+    | -- | Selective projection of one version, forcing its artifact digests.
+      SingleVersion
+    | -- | The full leg under the shipped policy, with the corpus advisories served.
+      FullShippedAdvisories
+    | -- | The full leg under the shipped policy and both advisory denies, with the corpus advisories served.
+      FullAllAdvisoryRules
+    deriving stock (Eq, Ord, Show, Generic)
+
+instance Universe Leg where universe = universeGeneric
+
+-- | The leg's key in the criteria file and its name in the reports.
+legKey :: Leg -> Text
+legKey = \case
+    FullDocument -> "full"
+    SingleVersion -> "singleVersion"
+    FullShippedAdvisories -> "fullShippedAdvisories"
+    FullAllAdvisoryRules -> "fullAllAdvisoryRules"
+
+parseLeg :: Text -> Maybe Leg
+parseLeg key = find ((== key) . legKey) universe
+
+-- | Where the calibrated figures were measured, and the margin a budget adds to them.
+data Calibration = Calibration
+    { calArch :: Text
+    -- ^ The CPU architecture, as 'Info.arch' names it.
+    , calRunner :: Text
+    , calCommit :: Text
+    , calRuns :: NonEmpty Text
+    , calMarginPercent :: Int64
+    -- ^ How far past its calibrated figure a leg may allocate, in percent.
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON Calibration where
+    parseJSON = withObject "Calibration" $ \o -> do
+        calibration <- Calibration <$> o .: "arch" <*> o .: "runner" <*> o .: "commit" <*> o .: "runs" <*> o .: "marginPercent"
+        when (any T.null [calArch calibration, calRunner calibration, calCommit calibration]) $
+            fail "the calibration must name its architecture, runner, and commit"
+        when (calMarginPercent calibration < 0) $
+            fail "the calibration margin must not be negative"
+        pure calibration
+
+-- | The calibration, and each package's calibrated allocation in bytes per leg, by ecosystem.
 data Criteria = Criteria
-    { critDefaultBudgetMs :: Double
-    -- ^ The full-document overhead budget applied to any package without an override.
-    , critPerPackageBudgetMs :: Map Text Double
-    -- ^ Per-package full-document budget overrides, keyed by the package name.
-    , critDefaultSingleVersionBudgetMs :: Double
-    -- ^ The single-version overhead budget applied to any package without an override.
-    , critPerPackageSingleVersionBudgetMs :: Map Text Double
-    -- ^ Per-package single-version budget overrides, keyed by the package name.
-    , critCalibrationArch :: Text
-    -- ^ The CPU architecture the budgets were measured on, as 'Info.arch' names it.
+    { critCalibration :: Calibration
+    , critAllocatedBytes :: Map Ecosystem (Map Text (Map Leg Int64))
     }
     deriving stock (Eq, Show)
 
 instance FromJSON Criteria where
     parseJSON = withObject "Criteria" $ \o -> do
-        crit <-
-            Criteria
-                <$> o .: "defaultBudgetMs"
-                <*> o .:? "perPackageBudgetMs" .!= mempty
-                <*> o .: "defaultSingleVersionBudgetMs"
-                <*> o .:? "perPackageSingleVersionBudgetMs" .!= mempty
-                <*> o .: "arch"
-        when (T.null (critCalibrationArch crit)) $
-            fail "acceptance criteria must name their calibration architecture"
-        let budgets =
-                [critDefaultBudgetMs crit, critDefaultSingleVersionBudgetMs crit]
-                    <> Map.elems (critPerPackageBudgetMs crit)
-                    <> Map.elems (critPerPackageSingleVersionBudgetMs crit)
-        unless (all (\n -> n > 0 && not (isInfinite n || isNaN n)) budgets) $
-            fail "acceptance budgets must be finite and positive"
-        pure crit
-
--- | Explicit, required budget sections for each supported ecosystem.
-newtype CriteriaCatalogue = CriteriaCatalogue
-    { catalogueCriteria :: Map Ecosystem Criteria
-    }
-    deriving stock (Eq, Show)
-
-instance FromJSON CriteriaCatalogue where
-    parseJSON = withObject "CriteriaCatalogue" $ \o -> do
-        raw <- o .: "ecosystems"
-        entries <- traverse parseEntry (Map.toList raw)
-        let sections = Map.fromList entries
-        unless (all (`Map.member` sections) [Npm, PyPI]) $
-            fail "acceptance criteria require npm and pypi sections"
-        pure (CriteriaCatalogue sections)
+        calibration <- o .: "calibration"
+        sections <- o .: "allocatedBytes"
+        Criteria calibration . Map.fromList <$> traverse parseSection (Map.toList sections)
       where
-        parseEntry :: (Text, Criteria) -> Parser (Ecosystem, Criteria)
-        parseEntry (name, crit) = case parseEcosystem name of
-            Nothing -> fail ("unknown acceptance ecosystem: " <> toString name)
-            Just eco -> pure (eco, crit)
+        parseSection :: (Text, Map Text (Map Text Int64)) -> Parser (Ecosystem, Map Text (Map Leg Int64))
+        parseSection (name, packages) = case parseEcosystem name of
+            Nothing -> fail ("unknown ecosystem in the criteria: " <> toString name)
+            Just eco -> (eco,) <$> traverse parseLegs packages
+        parseLegs :: Map Text Int64 -> Parser (Map Leg Int64)
+        parseLegs legs = Map.fromList <$> traverse parseFigure (Map.toList legs)
+        parseFigure :: (Text, Int64) -> Parser (Leg, Int64)
+        parseFigure (key, bytes) = case parseLeg key of
+            Nothing -> fail ("unknown leg in the criteria: " <> toString key)
+            Just leg
+                | bytes > 0 -> pure (leg, bytes)
+                | otherwise -> fail ("a calibrated allocation must be positive: " <> toString key)
 
 -- | The committed criteria's path, relative to the package root the harness runs from.
 criteriaPath :: FilePath
 criteriaPath = "acceptance/criteria.json"
 
 -- | Decode 'Criteria' from raw JSON bytes.
-decodeCriteria :: LByteString -> Either String CriteriaCatalogue
+decodeCriteria :: LByteString -> Either String Criteria
 decodeCriteria = eitherDecode
 
 -- | Read and decode the committed criteria from 'criteriaPath'.
-loadCriteria :: IO CriteriaCatalogue
+loadCriteria :: IO Criteria
 loadCriteria = do
     raw <- readFileLBS criteriaPath
     either (\e -> fail (criteriaPath <> " did not decode: " <> e)) pure (decodeCriteria raw)
 
--- | The full-document overhead budget for a package: its override, or the default.
-budgetFor :: Criteria -> Text -> Double
-budgetFor crit name =
-    Map.findWithDefault (critDefaultBudgetMs crit) name (critPerPackageBudgetMs crit)
+-- | The most a leg may allocate: its calibrated figure plus the margin, rounded up to a byte.
+budgetBytes :: Calibration -> Int64 -> Int64
+budgetBytes calibration calibrated = calibrated + (calibrated * calMarginPercent calibration + 99) `div` 100
 
--- | The single-version overhead budget for a package: its override, or the default.
-singleVersionBudgetFor :: Criteria -> Text -> Double
-singleVersionBudgetFor crit name =
-    Map.findWithDefault (critDefaultSingleVersionBudgetMs crit) name (critPerPackageSingleVersionBudgetMs crit)
-
--- | The CPU architecture this process runs on, named as 'critCalibrationArch' names it.
+-- | The CPU architecture this process runs on, named as 'calArch' names it.
 hostArch :: Text
 hostArch = toText Info.arch
 
-calibratedHere :: Text -> Bool
-calibratedHere = (== hostArch)
+-- | One leg's figures over its passes: the median allocation, with its spread, and the median time.
+data Measurement = Measurement
+    { measuredBytes :: Int64
+    -- ^ Bytes the measuring thread allocated.
+    , measuredMinBytes :: Int64
+    , measuredMaxBytes :: Int64
+    , measuredMs :: Double
+    -- ^ Wall-clock time, which no budget applies to.
+    }
+    deriving stock (Eq, Show)
 
--- | One package's live measurements, with each duration in milliseconds.
+-- | One package's measured legs.
 data Sample = Sample
     { sampleName :: Text
     , sampleVersions :: Int
-    -- ^ The number of published versions in the fetched document.
-    , sampleUpstreamMs :: Double
-    -- ^ Fetch time, separate from both processing legs.
-    , sampleFullOverheadMs :: Double
-    , sampleSingleVersionOverheadMs :: Double
+    , sampleUpstreamMs :: Maybe Double
+    -- ^ The fetch time of a live document. A committed capture has none.
+    , sampleLegs :: [(Leg, Measurement)]
     }
     deriving stock (Eq, Show)
 
-{- | The verdict for a measured leg: within its budget, over it by a margin (in milliseconds),
-or not assessed because the budget was calibrated on another architecture.
--}
-data Verdict
-    = Within
-    | Breached Double
-    | Uncalibrated
-    deriving stock (Eq, Show)
-
--- | One measured leg assessed against its budget: the budget it was held to and the verdict.
-data Assessment = Assessment
-    { assessBudgetMs :: Double
-    , assessVerdict :: Verdict
-    }
-    deriving stock (Eq, Show)
-
--- | A package's outcome in a run: measured, or not assessable.
+-- | A package's result in a run.
 data PackageOutcome
-    = -- | A measured package: its sample, the full-document assessment, then the single-version assessment.
-      Measured Sample Assessment Assessment
-    | -- | A package that could not be assessed: its name and the reason.
+    = -- | Every leg ran.
+      Measured Sample
+    | -- | The proxy's code or limits refused the document: the package name and the reason.
+      Failed Text Text
+    | -- | The registry did not deliver the document: the package name and the reason.
       Unavailable Text Text
     deriving stock (Eq, Show)
 
--- | One ecosystem's outcomes, in catalogue order.
-data Report = Report
-    { reportEcosystem :: Ecosystem
-    , reportCalibrationArch :: Text
-    -- ^ The architecture the ecosystem's budgets were calibrated on.
-    , reportOutcomes :: [PackageOutcome]
+-- | How a run measured: passes per leg, and the RTS options it ran under.
+data OperatingPoint = OperatingPoint
+    { opPasses :: Int
+    , opCapabilities :: Int
+    , opAllocationAreaBytes :: Int
     }
     deriving stock (Eq, Show)
 
-{- | Evaluate each package's raw input against the criteria. On an architecture other than
-the criteria's calibration architecture, every measured leg is 'Uncalibrated'.
+-- | A leg's standing against its budget.
+data Verdict
+    = -- | At or under the budget.
+      Within
+    | -- | Over the budget by this many bytes.
+      Breached Int64
+    | -- | The criteria hold no calibrated figure for the leg.
+      NoBudget
+    deriving stock (Eq, Show)
+
+-- | One measured leg of a captures run, with its calibrated figure and verdict.
+data AssessedLeg = AssessedLeg
+    { alPackage :: Text
+    , alVersions :: Int
+    , alLeg :: Leg
+    , alMeasurement :: Measurement
+    , alCalibrated :: Maybe Int64
+    , alVerdict :: Verdict
+    }
+    deriving stock (Eq, Show)
+
+-- | One row of a captures report: an assessed leg, or a package whose legs did not run.
+data Row
+    = Assessed AssessedLeg
+    | FailedPackage Text Text
+    deriving stock (Eq, Show)
+
+-- | One ecosystem's rows, in catalogue order.
+data CapturesSection = CapturesSection
+    { sectionEcosystem :: Ecosystem
+    , sectionRows :: [Row]
+    }
+    deriving stock (Eq, Show)
+
+-- | A captures run held to the criteria.
+data CapturesReport = CapturesReport
+    { reportCalibration :: Calibration
+    , reportSections :: [CapturesSection]
+    , reportUnmeasured :: [(Ecosystem, Text)]
+    -- ^ Packages the criteria calibrate that the run did not measure.
+    }
+    deriving stock (Eq, Show)
+
+-- | Hold each measured leg to its budget. A captures run never fetches, so an unavailable package fails.
+assessCaptures :: Criteria -> [(Ecosystem, [PackageOutcome])] -> CapturesReport
+assessCaptures criteria runs =
+    CapturesReport
+        { reportCalibration = calibration
+        , reportSections = [CapturesSection eco (concatMap (rows eco) outcomes) | (eco, outcomes) <- runs]
+        , reportUnmeasured =
+            [ (eco, name)
+            | (eco, packages) <- Map.toList (critAllocatedBytes criteria)
+            , name <- Map.keys packages
+            , name `notElem` [outcomeName outcome | (measured, outcomes) <- runs, measured == eco, outcome <- outcomes]
+            ]
+        }
+  where
+    calibration = critCalibration criteria
+    rows eco = \case
+        Measured sample -> [Assessed (assessLeg eco sample leg measurement) | (leg, measurement) <- sampleLegs sample]
+        Failed name reason -> [FailedPackage name reason]
+        Unavailable name reason -> [FailedPackage name ("unavailable: " <> reason)]
+    assessLeg eco sample leg measurement =
+        let calibrated = Map.lookup eco (critAllocatedBytes criteria) >>= Map.lookup (sampleName sample) >>= Map.lookup leg
+         in AssessedLeg (sampleName sample) (sampleVersions sample) leg measurement calibrated (verdict calibrated (measuredBytes measurement))
+    verdict calibrated bytes = case calibrated of
+        Nothing -> NoBudget
+        Just figure
+            | bytes > budgetBytes calibration figure -> Breached (bytes - budgetBytes calibration figure)
+            | otherwise -> Within
+
+outcomeName :: PackageOutcome -> Text
+outcomeName = \case
+    Measured sample -> sampleName sample
+    Failed name _ -> name
+    Unavailable name _ -> name
+
+-- | Why a captures run fails. The run passes only when this is empty.
+capturesProblems :: CapturesReport -> [Text]
+capturesProblems report =
+    ["no package was measured" | null rows]
+        <> countOf "leg(s) over budget" [() | Assessed leg <- rows, Breached _ <- [alVerdict leg]]
+        <> countOf "leg(s) without a budget" [() | Assessed leg <- rows, NoBudget <- [alVerdict leg]]
+        <> countOf "package(s) failed" [() | FailedPackage _ _ <- rows]
+        <> countOf "calibrated package(s) not measured" (reportUnmeasured report)
+  where
+    rows = concatMap sectionRows (reportSections report)
+    countOf label items = [show (length items) <> " " <> label | not (null items)]
+
+-- | Whether a leg allocates more than the margin below its calibrated figure, so its budget no longer holds the gain.
+belowMargin :: Calibration -> Int64 -> Int64 -> Bool
+belowMargin calibration calibrated bytes = bytes * 100 < calibrated * (100 - calMarginPercent calibration)
+
+{- | GitHub warnings for a run on another architecture than the calibration's, and for each leg that
+allocates more than the margin below its calibrated figure. Neither fails the run.
 -}
-evaluate :: Ecosystem -> Criteria -> [Either (Text, Text) Sample] -> Report
-evaluate eco crit = Report eco (critCalibrationArch crit) . map outcome
-  where
-    assessLeg
-        | calibratedHere (critCalibrationArch crit) = assess
-        | otherwise = \budget _ -> Assessment budget Uncalibrated
-    outcome (Left (name, reason)) = Unavailable name reason
-    outcome (Right sample) =
-        Measured
-            sample
-            (assessLeg (budgetFor crit (sampleName sample)) (sampleFullOverheadMs sample))
-            (assessLeg (singleVersionBudgetFor crit (sampleName sample)) (sampleSingleVersionOverheadMs sample))
+capturesAnnotations :: CapturesReport -> [Text]
+capturesAnnotations report =
+    [ "::warning title=Allocation budgets calibrated elsewhere::The budgets were calibrated on "
+        <> calArch (reportCalibration report)
+        <> " and this run is on "
+        <> hostArch
+        <> ", so a leg close to its budget can read differently."
+    | calArch (reportCalibration report) /= hostArch
+    ]
+        <> [ "::warning title=Allocation below its calibration::"
+                <> ecosystemName (sectionEcosystem section)
+                <> " "
+                <> alPackage leg
+                <> " "
+                <> legKey (alLeg leg)
+                <> " allocated "
+                <> show (measuredBytes (alMeasurement leg))
+                <> " bytes against a calibrated "
+                <> show calibrated
+                <> ", more than the margin below it. Recalibrate acceptance/criteria.json."
+           | section <- reportSections report
+           , Assessed leg <- sectionRows section
+           , Just calibrated <- [alCalibrated leg]
+           , belowMargin (reportCalibration report) calibrated (measuredBytes (alMeasurement leg))
+           ]
 
-assess :: Double -> Double -> Assessment
-assess budget overheadMs =
-    let margin = overheadMs - budget
-     in Assessment budget (if margin > 0 then Breached margin else Within)
+-- | Exit 0 only when 'capturesProblems' finds nothing.
+capturesExitCode :: CapturesReport -> ExitCode
+capturesExitCode report
+    | null (capturesProblems report) = ExitSuccess
+    | otherwise = ExitFailure 1
 
--- | Whether any measured leg breached its budget: the run's red condition. An uncalibrated leg never does.
-reportBreached :: Report -> Bool
-reportBreached = any isBreach . reportOutcomes
-  where
-    isBreach (Measured _ full single) = breached full || breached single
-    isBreach _ = False
-
--- | Either ecosystem's measured breach fails the process. Unavailable packages do not.
-reportExitCode :: [Report] -> ExitCode
-reportExitCode reports
-    | any reportBreached reports = ExitFailure 1
+-- | The live run fails when the proxy refused a document. An unavailable registry leaves it incomplete.
+liveExitCode :: [(Ecosystem, [PackageOutcome])] -> ExitCode
+liveExitCode runs
+    | any (any isFailed . snd) runs = ExitFailure 1
     | otherwise = ExitSuccess
 
-breached :: Assessment -> Bool
-breached (Assessment _ (Breached _)) = True
-breached _ = False
+isFailed :: PackageOutcome -> Bool
+isFailed = \case
+    Failed _ _ -> True
+    _ -> False
 
--- | Timed passes per leg and the total catalogue size.
-data OperatingPoint = OperatingPoint
-    { opPassesPerLeg :: Int
-    -- ^ Timed passes per leg. The reported figure is their median.
-    , opCatalogueSize :: Int
-    -- ^ Packages in the curated catalogue this run set out to measure.
-    }
+-- | A GitHub warning when a registry did not deliver a document, so the live run is incomplete.
+liveAnnotations :: [(Ecosystem, [PackageOutcome])] -> [Text]
+liveAnnotations runs =
+    ["::warning title=Live performance acceptance incomplete::" <> show unavailable <> " package(s) unavailable. The report names each one." | unavailable > 0]
+  where
+    unavailable = length [() | (_, outcomes) <- runs, Unavailable _ _ <- outcomes]
+
+-- | A live fetch: the document, a refusal by the proxy's own code or limits, or a registry that did not deliver it.
+data Fetched
+    = Fetched ByteString
+    | Refused Text
+    | Unreachable Text
     deriving stock (Eq, Show)
 
--- | Budget divided by overhead. Non-positive observations have no meaningful ratio.
-headroom :: Double -> Double -> Maybe Double
-headroom budget observed
-    | observed <= 0 = Nothing
-    | otherwise = Just (budget / observed)
+{- | A transport fault, over the harness's own HTTP manager, or a 408, 429, 5xx, 401, or 403, is unreachable.
+A 2xx is the document, and every other fault or status counts against the proxy.
+-}
+classifyFetch :: Either FetchFault RegistryResponse -> Fetched
+classifyFetch = \case
+    Left fault@(FetchTransport _) -> Unreachable (show fault)
+    Left fault -> Refused (show fault)
+    Right response
+        | isSuccessStatus code -> Fetched (responseBody response)
+        | isRetryableStatusCode code || isAuthorisationFailure code -> Unreachable ("registry HTTP " <> show code)
+        | otherwise -> Refused ("registry HTTP " <> show code)
+      where
+        code = responseStatusCode response
 
--- | Mark a leg for attention when it consumes 70% of its budget.
-watchFraction :: Double
-watchFraction = 0.7
-
-watching :: Assessment -> Double -> Bool
-watching a observed = case assessVerdict a of
-    Within -> assessBudgetMs a > 0 && observed / assessBudgetMs a >= watchFraction
-    Breached _ -> False
-    Uncalibrated -> False
-
--- | Render one table per ecosystem, separating upstream latency from processing overhead.
-renderReport :: OperatingPoint -> [Report] -> Text
-renderReport op reports =
-    T.unlines
-        [ "## Live performance-acceptance (Context B)"
+-- | Render the captures run: the result, how it measured, and one table per ecosystem.
+renderCapturesReport :: OperatingPoint -> CapturesReport -> Text
+renderCapturesReport op report =
+    T.unlines $
+        [ "## Performance acceptance: allocation over the committed captures"
         , ""
-        , "Catalogue: " <> show (opCatalogueSize op) <> " packages (bench/corpus/pins.json)."
-        , "Full overhead: decode, projection, rules, assembly, and serialisation."
-        , "Single-version overhead: selective projection and forcing artifact digests."
-        , "Input copies, target selection, and snapshot digests are prepared outside processing timers."
+        , "Result: " <> result
         , ""
         ]
-        <> foldMap (renderSection op) reports
-
-renderSection :: OperatingPoint -> Report -> Text
-renderSection op report =
-    T.unlines (headerLines <> operatingLines <> tableLines <> footerLines)
+            <> operatingLines op
+            <> [ "- Architecture: the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ". Allocation can differ between architectures, so a leg close to its budget can read differently here."
+               | calArch calibration /= hostArch
+               ]
+            <> [ "- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."
+               , "- Budgets: acceptance/criteria.json. Each budget is the figure measured on "
+                    <> calRunner calibration
+                    <> " ("
+                    <> calArch calibration
+                    <> ") at "
+                    <> calCommit calibration
+                    <> ", plus "
+                    <> show (calMarginPercent calibration)
+                    <> "%. Runs: "
+                    <> T.intercalate ", " (toList (calRuns calibration))
+                    <> "."
+               , ""
+               ]
+            <> concatMap (capturesSection calibration) (reportSections report)
+            <> unmeasuredLines
   where
-    outcomes = reportOutcomes report
-    breaches = length [() | Measured _ full single <- outcomes, breached full || breached single]
-    unavailable = length [() | Unavailable _ _ <- outcomes]
-    watched =
-        length
-            [ ()
-            | Measured s full single <- outcomes
-            , (a, observed) <- [(full, sampleFullOverheadMs s), (single, sampleSingleVersionOverheadMs s)]
-            , watching a observed
-            ]
+    calibration = reportCalibration report
+    result = case capturesProblems report of
+        [] -> "PASS: every leg is within its allocation budget"
+        problems -> "FAIL: " <> T.intercalate ", " problems
+    unmeasuredLines = case reportUnmeasured report of
+        [] -> []
+        unmeasured -> ["Calibrated packages this run did not measure: " <> T.intercalate ", " [ecosystemName eco <> " " <> name | (eco, name) <- unmeasured] <> ".", ""]
 
-    headerLines =
-        [ "### " <> ecosystemName (reportEcosystem report)
-        , ""
-        , overall
-        , ""
-        ]
-    overall
-        | breaches > 0 =
-            "Result: BREACH: " <> show breaches <> " package(s) over budget" <> incompleteSuffix
-        | not (calibratedHere (reportCalibrationArch report)) =
-            "Result: uncalibrated: the budgets were calibrated on "
-                <> reportCalibrationArch report
-                <> ", and this run is on "
-                <> hostArch
-                <> ", so no leg is assessed"
-                <> incompleteSuffix
-        | otherwise =
-            "Result: within budget" <> incompleteSuffix
-    incompleteSuffix
-        | unavailable > 0 = " (" <> show unavailable <> " package(s) unavailable, not assessed)"
+capturesSection :: Calibration -> CapturesSection -> [Text]
+capturesSection calibration section =
+    [ "### " <> ecosystemName (sectionEcosystem section)
+    , ""
+    , "| Package | Versions | Leg | Allocated (bytes) | Min / max (bytes) | Calibrated (bytes) | Change | Budget (bytes) | Time (ms) | Verdict |"
+    , "|---|--:|---|--:|--:|--:|--:|--:|--:|---|"
+    ]
+        <> map row (sectionRows section)
+        <> [""]
+  where
+    row = \case
+        Assessed leg ->
+            let bytes = measuredBytes (alMeasurement leg)
+             in cells
+                    [ alPackage leg
+                    , show (alVersions leg)
+                    , legKey (alLeg leg)
+                    , show bytes
+                    , spread (alMeasurement leg)
+                    , maybe "--" show (alCalibrated leg)
+                    , maybe "--" (change bytes) (alCalibrated leg)
+                    , maybe "--" (show . budgetBytes calibration) (alCalibrated leg)
+                    , fmt 3 (measuredMs (alMeasurement leg))
+                    , renderVerdict (alVerdict leg) <> maybe "" (recalibrate bytes) (alCalibrated leg)
+                    ]
+        FailedPackage name reason -> cells [name, "--", "--", "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]
+    change bytes calibrated =
+        let percent = (fromIntegral bytes / fromIntegral calibrated - 1) * 100 :: Double
+            shown = fmt 1 (abs percent)
+         in if shown == fmt 1 0 then shown <> "%" else (if percent > 0 then "+" else "-") <> shown <> "%"
+    recalibrate bytes calibrated
+        | belowMargin calibration calibrated bytes = ", recalibrate"
         | otherwise = ""
 
-    operatingLines =
-        [ "**Operating point**"
+renderVerdict :: Verdict -> Text
+renderVerdict = \case
+    Within -> "within"
+    Breached over -> "OVER by " <> show over <> " bytes"
+    NoBudget -> "NO BUDGET"
+
+spread :: Measurement -> Text
+spread measurement = show (measuredMinBytes measurement) <> " / " <> show (measuredMaxBytes measurement)
+
+-- | Render the live run: the result, how it measured, and one table per ecosystem.
+renderLiveReport :: OperatingPoint -> [(Ecosystem, [PackageOutcome])] -> Text
+renderLiveReport op runs =
+    T.unlines $
+        [ "## Performance acceptance: live registry documents"
         , ""
-        , "| knob | value |"
-        , "| --- | --- |"
-        , cells ["catalogue", show (length outcomes) <> " packages (bench/corpus/pins.json)"]
-        , cells ["timing", "median of " <> show (opPassesPerLeg op) <> " timed passes per leg"]
-        , cells ["budgets", "acceptance/criteria.json (version-controlled. Budget changes require review)"]
+        , "Result: " <> result
         , ""
         ]
-
-    tableLines =
-        [ "| Package | Versions | Upstream (ms) | Full overhead (ms) | Single-version (ms) | Budget full/1-ver (ms) | Headroom full/1-ver | Verdict |"
-        , "|---|--:|--:|--:|--:|--:|--:|---|"
-        ]
-            <> map row outcomes
-
-    row (Measured s full single) =
-        cells $
-            sampleCells s
-                <> [ fmt 1 (assessBudgetMs full) <> " / " <> fmt 1 (assessBudgetMs single)
-                   , headroomCell full (sampleFullOverheadMs s)
-                        <> " / "
-                        <> headroomCell single (sampleSingleVersionOverheadMs s)
-                   , renderVerdicts s full single
-                   ]
-    row (Unavailable name reason) =
-        cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]
-
-    headroomCell a observed = maybe "n/a" (\h -> fmt 1 h <> "x") (headroom (assessBudgetMs a) observed)
-
-    footerLines = unavailableNote <> watchNote
-    unavailableNote
-        | unavailable > 0 =
-            ["", "_" <> show unavailable <> " package(s) could not be fetched or decoded. Registry failure is not a breach._"]
-        | otherwise = []
-    watchNote
-        | watched > 0 =
-            [ ""
-            , "_watch marks a leg at or above "
-                <> fmt 0 (watchFraction * 100)
-                <> "% of its budget. A watch does not fail the run._"
-            ]
-        | otherwise = []
-
-sampleCells :: Sample -> [Text]
-sampleCells s =
-    [ sampleName s
-    , show (sampleVersions s)
-    , fmt 3 (sampleUpstreamMs s)
-    , fmt 3 (sampleFullOverheadMs s)
-    , fmt 3 (sampleSingleVersionOverheadMs s)
-    ]
-
-renderVerdicts :: Sample -> Assessment -> Assessment -> Text
-renderVerdicts s full single
-    | any ((== Uncalibrated) . assessVerdict) [full, single] = "uncalibrated"
-    | otherwise =
-        case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of
-            [] -> "within"
-            marks -> T.intercalate ", " marks
+            <> operatingLines op
+            <> [ "- Budgets: none. A refusal by the proxy's own code or limits fails the run, as does a status that says the proxy asked wrongly. A transport fault, or a registry that times out, throttles, fails, or refuses access, leaves the run incomplete."
+               , ""
+               ]
+            <> concatMap liveSection runs
   where
-    tag label a observed = case assessVerdict a of
-        Breached margin -> Just ("BREACH " <> label <> " +" <> fmt 1 margin <> " ms")
-        Uncalibrated -> Nothing
-        Within
-            | watching a observed ->
-                Just ("watch: " <> label <> " at " <> fmt 0 (observed / assessBudgetMs a * 100) <> "% of budget")
-            | otherwise -> Nothing
+    outcomes = concatMap snd runs
+    failed = length (filter isFailed outcomes)
+    unavailable = length [() | Unavailable _ _ <- outcomes]
+    result
+        | failed > 0 = "FAILED: the proxy refused or could not process " <> show failed <> " package(s)"
+        | unavailable > 0 = "incomplete: " <> show unavailable <> " package(s) unavailable"
+        | otherwise = "complete"
+
+liveSection :: (Ecosystem, [PackageOutcome]) -> [Text]
+liveSection (eco, outcomes) =
+    [ "### " <> ecosystemName eco
+    , ""
+    , "| Package | Versions | Upstream (ms) | Leg | Allocated (bytes) | Min / max (bytes) | Time (ms) | Result |"
+    , "|---|--:|--:|---|--:|--:|--:|---|"
+    ]
+        <> concatMap rows outcomes
+        <> [""]
+  where
+    rows = \case
+        Measured sample ->
+            [ cells [sampleName sample, show (sampleVersions sample), maybe "--" (fmt 3) (sampleUpstreamMs sample), legKey leg, show (measuredBytes measurement), spread measurement, fmt 3 (measuredMs measurement), "measured"]
+            | (leg, measurement) <- sampleLegs sample
+            ]
+        Failed name reason -> [cells [name, "--", "--", "--", "--", "--", "--", "FAILED: " <> reason]]
+        Unavailable name reason -> [cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]]
+
+operatingLines :: OperatingPoint -> [Text]
+operatingLines op =
+    [ "- Figures: the median of " <> show (opPasses op) <> " passes per leg, with the smallest and largest allocation beside it."
+    , "- Allocation: the bytes the measuring thread allocated, read from GHC's per-thread allocation counter."
+    , "- Time: wall-clock, for information only."
+    , "- RTS: -N" <> show (opCapabilities op) <> " -A" <> show (opAllocationAreaBytes op `div` (1024 * 1024)) <> "m, read from the running RTS."
+    , "- Legs: `full` reads the whole document through the production reader over its held bytes, applies the rules, assembles, and serialises it. `singleVersion` projects one version selectively and forces its artifact digests."
+    , "- Advisory legs: `fullShippedAdvisories` and `fullAllAdvisoryRules` repeat `full` with the corpus advisories in bench/corpus/advisories served, under the shipped policy and under the shipped policy with both advisory denies."
+    ]
 
 cells :: [Text] -> Text
 cells xs = "| " <> T.intercalate " | " xs <> " |"

@@ -336,6 +336,7 @@ job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they ma
 | Gating CI job | Display name (`gh pr checks`) | Local command |
 | --- | --- | --- |
 | `build` | Build & compile checks (all targets, residency, doctest) | `task build test-residency doctest cabal-check` |
+| `allocation` | Allocation budgets (committed captures) | `task perf-allocation` |
 | `coverage` | Coverage (`<suite>`), one leg per suite | `task coverage-unit SUITE=<suite>`; `task coverage-integration` (Docker) |
 | `codecov-notify` | Codecov statuses | none, it only releases the Codecov statuses |
 | `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | included in `task check` |

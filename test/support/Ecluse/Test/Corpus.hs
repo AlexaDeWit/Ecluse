@@ -15,15 +15,17 @@ module Ecluse.Test.Corpus (
     npmCaptureUpstream,
     pypiCaptureUpstream,
     readCorpusPins,
+    CaptureRecord (..),
+    readCaptureRecords,
     syntheticProxyBase,
     permissiveAgeRules,
 ) where
 
-import Data.Aeson (Object, eitherDecode, withObject)
+import Data.Aeson (Object, eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
-import Data.Time (nominalDay)
+import Data.Time (UTCTime, nominalDay)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
@@ -105,6 +107,20 @@ readCorpusPins parser = do
     pure (first ((pinsPath <> ": ") <>) (eitherDecode raw >>= parseEither (withObject "corpus pins" parser)))
   where
     pinsPath = "bench/corpus/pins.json"
+
+-- | A committed capture's recorded byte count, SHA-256 digest, and capture time.
+data CaptureRecord = CaptureRecord
+    { crBytes :: Int64
+    , crSha256 :: Text
+    , crCapturedAt :: UTCTime
+    }
+
+-- | The capture records @bench/corpus/pins.json@ keeps for the ecosystem, by package name.
+readCaptureRecords :: Ecosystem -> IO (Either String (Map Text CaptureRecord))
+readCaptureRecords eco = readCorpusPins $ \pins -> do
+    recorded <- pins .: "captures"
+    entries <- recorded .: fromString (toString (ecosystemName eco))
+    traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "sha256" <*> capture .: "capturedAt")) entries
 
 -- | The placeholder proxy origin the serve-time rewrite puts tarball URLs under.
 syntheticProxyBase :: Text

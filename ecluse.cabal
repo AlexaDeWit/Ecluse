@@ -86,7 +86,8 @@ common shared
 -- The shipped server's RTS options. The OpenTelemetry batch processor requires the threaded RTS.
 -- -T feeds the memory sampler, and the eager memory return keeps the cgroup's view of the heap
 -- current. The boot derives -A and -M from the pod. The load harness links them too, so the proxy
--- it measures boots with the posture a pod gets before its cgroup reshapes it. Tuning and
+-- it measures boots with the posture a pod gets before its cgroup reshapes it. The acceptance
+-- harness links them so its allocation budgets hold under the shipped runtime. Tuning and
 -- overrides: https://ecluse-proxy.com/docs/operations/.
 common shipped-rts
   ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m -T --disable-delayed-os-memory-return"
@@ -784,6 +785,7 @@ library ecluse-test-support
     , wai-extra         ^>=3.1
     , warp              ^>=3.4
     , zip-stream        ^>=0.2
+    , text-short        ^>=0.1.6
     -- The advisory fixtures serve their EPSS feeds gzipped, as the publisher does.
     , zlib              ^>=0.7
 
@@ -1128,6 +1130,7 @@ test-suite ecluse-unit
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
+    Ecluse.Test.Corpus.AdvisoriesSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 
@@ -1644,23 +1647,23 @@ library ecluse-acceptance
   exposed-modules: Ecluse.Acceptance
   build-depends:
     , ecluse:ecluse-core
-    , aeson       >=2.2 && <2.4
-    , bytestring  ^>=0.12
-    , containers  ^>=0.7
-    , text        ^>=2.1
+    , aeson          >=2.2 && <2.4
+    , bytestring     ^>=0.12
+    , containers     ^>=0.7
+    , text           ^>=2.1
+    , universe-base  ^>=1.1
 
--- The live performance-acceptance harness: a separate EXECUTABLE. It fetches LIVE
--- packuments for the curated catalogue set (Ecluse.Test.RegistryCapture), times
--- Écluse's work-per-request over each, and evaluates the overhead against the
--- version-controlled budget (ecluse-acceptance). It runs on demand, on a schedule, and
--- per PR, and it NEVER gates a PR. A budget breach reds the non-required check to
--- inform a human decision, and never blocks the merge. Kept out of the shipped library
--- closure.
+-- The performance-acceptance harness, kept out of the shipped library closure. `captures`
+-- holds each leg's allocation over the committed captures to the budgets in
+-- acceptance/criteria.json, and gates CI. `live` reports the same legs over live registry
+-- documents and never gates. The shipped RTS options fix the runtime the figures come from.
 executable perf-acceptance
   import:         shared
+  import:         shipped-rts
   main-is:        Main.hs
   hs-source-dirs: acceptance/app
   build-depends:
+    , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
@@ -1669,5 +1672,7 @@ executable perf-acceptance
     , containers       ^>=0.7
     , http-client      ^>=0.7
     , http-client-tls  >=0.3.6 && <0.5
+    , temporary        ^>=1.3
     , text             ^>=2.1
     , time             ^>=1.12
+    , universe-base    ^>=1.1
