@@ -9,6 +9,7 @@ import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Number), encode)
 import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Encoding qualified as Encoding
+import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -17,14 +18,16 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Packed (encodeString)
-import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putDecimal, putEncodedText, rewindTo, scratchCursor)
+import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putDecimal, putEncodedText, putVarint, rewindTo, scratchCursor)
 
 spec :: Spec
 spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do
-    it "writes each string as aeson writes it, growing from a small buffer" $
+    it "writes each string as aeson writes it, after its header's varint, growing from a small buffer" $
         hedgehog $ do
             texts <- forAll (Gen.list (Range.linear 0 8) (Gen.text (Range.linear 0 40) (Gen.frequency [(3, Gen.unicode), (2, Gen.element hostile)])))
-            written (\scratch -> traverse_ (putEncodedText scratch) texts) === foldMap (toStrict . encodingToLazyByteString . Encoding.text) texts
+            let aeson = toStrict . encodingToLazyByteString . Encoding.text
+                headed text = written (`putVarint` (3 * BS.length (aeson text))) <> aeson text
+            written (\scratch -> traverse_ (putEncodedText scratch (3 *)) texts) === foldMap headed texts
 
     it "writes each integer as aeson writes it, and counts its digits" $
         hedgehog $ do
@@ -36,12 +39,12 @@ spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do
         hedgehog $ do
             (kept, dropped, later) <- forAll ((,,) <$> Gen.text (Range.linear 0 300) Gen.unicode <*> Gen.text (Range.linear 0 300) Gen.unicode <*> Gen.text (Range.linear 0 300) Gen.unicode)
             let rewound scratch = do
-                    putEncodedText scratch kept
+                    putEncodedText scratch (const 0) kept
                     mark <- scratchCursor scratch
-                    putEncodedText scratch dropped
+                    putEncodedText scratch (const 0) dropped
                     rewindTo scratch mark
-                    putEncodedText scratch later
-            written rewound === encodeString kept <> encodeString later
+                    putEncodedText scratch (const 0) later
+            written rewound === "\0" <> encodeString kept <> "\0" <> encodeString later
   where
     hostile = ['\0' .. '\x1f'] <> "\"\\\x7f\x2028\x1F600"
 

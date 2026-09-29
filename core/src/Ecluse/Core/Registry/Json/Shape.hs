@@ -29,7 +29,7 @@ import Data.JsonStream.CLexer (unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry (entryKeeps, entryString, entryText), InternTable, Interned (..), Name (Plain), decodedName, internName, nameBytes, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with

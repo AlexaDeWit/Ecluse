@@ -44,9 +44,9 @@ spec = modifyMaxSuccess (const 2000) $ do
             hedgehog $ do
                 value <- forAll (genHostile 5)
                 (table, form) <- packedOf (packValue (Generic limit) [] value)
-                packedValue table form === value
+                packedValue table form === Just value
                 renderAlone table Nothing form === Just (toStrict (encode (treeValue [toStrict (encode value) <> " "])))
-                Just (toStrict (encode (packedValue table form))) === renderAlone table Nothing form
+                fmap (toStrict . encode) (packedValue table form) === renderAlone table Nothing form
 
         it "packs a value nested to the reader's limit, and fails a deeper one as the tree read does" $
             hedgehog $ do
@@ -79,12 +79,17 @@ spec = modifyMaxSuccess (const 2000) $ do
                 (table, form) <- packedOf (packValue (Generic limit) ["url"] value)
                 renderAlone table (Just (urlPrefix "https://mirror/")) form === Just (toStrict (encode value))
 
-        it "refuses a value that names a string its table lacks, rather than render it short" $
+        it "refuses a value that names a string its table lacks, rather than render or decode it short" $
             hedgehog $ do
                 value <- forAll (genHostile 3)
-                (_, form) <- packedOf (packValue (Generic limit) [] (Object (KeyMap.singleton "name" value)))
+                url <- forAll genUrl
+                (_, form) <- packedOf (packValue (Generic limit) ["url"] (Object (KeyMap.fromList [("name", value), ("url", String url)])))
+                let lacking prefix = RenderPlan{planMembers = mempty, planSlot = "k", planTables = fromList [docTable mempty], planPieces = ArrayPieces [Piece 0 form], planPrefix = prefix}
                 renderAlone (docTable mempty) Nothing form === Nothing
                 renderAlone (docTable mempty) (Just (urlPrefix "https://mirror/")) form === Nothing
+                packedValue (docTable mempty) form === Nothing
+                planValue (lacking Nothing) === Nothing
+                planValue (lacking (Just (urlPrefix "https://mirror/"))) === Nothing
 
     describe "renderPlan" $ do
         it "renders a document whose pieces come from several tables as aeson encodes it, holes rebased" $
@@ -135,7 +140,7 @@ spec = modifyMaxSuccess (const 2000) $ do
                 case packBytes (Generic limit) [] [number <> " "] of
                     Right (StreamResult (Right (table, form)) _) -> do
                         renderAlone table Nothing form `shouldBe` Just (toStrict (encode (treeValue [number <> " "])))
-                        Just (toStrict (encode (packedValue table form))) `shouldBe` renderAlone table Nothing form
+                        fmap (toStrict . encode) (packedValue table form) `shouldBe` renderAlone table Nothing form
                     _ -> expectationFailure ("did not pack " <> decodeUtf8 number)
 
 -- The structural budget every property reads with.

@@ -21,7 +21,11 @@ module Ecluse.Core.Registry.Json.Intern (
     SipKey (..),
     newTableKey,
     newInternTable,
-    Entry (entryText, entryString, entryKeeps, entryIndex),
+    Entry,
+    entryText,
+    entryString,
+    entryKeeps,
+    entryIndex,
     Interned (..),
     internName,
     tableTexts,
@@ -78,12 +82,23 @@ newTableKey = do
 {- | One table entry: the shared text, its shared string value, whether a member's value is kept as
 read, and its index. Only a table makes one, so every index lies within its table.
 -}
-data Entry = Entry
-    { entryText :: !Text
-    , entryString :: !Value
-    , entryKeeps :: !Bool
-    , entryIndex :: !Int
-    }
+data Entry = Entry !Text !Value !Bool !Int
+
+-- | The entry's shared text.
+entryText :: Entry -> Text
+entryText (Entry text _ _ _) = text
+
+-- | The entry's text as its shared string value.
+entryString :: Entry -> Value
+entryString (Entry _ string _ _) = string
+
+-- | Whether a member of this name keeps its value as read.
+entryKeeps :: Entry -> Bool
+entryKeeps (Entry _ _ keeps _) = keeps
+
+-- | The entry's index, which lies within the table that made it.
+entryIndex :: Entry -> Int
+entryIndex (Entry _ _ _ index) = index
 
 -- | The table's entry for a name, with the table that holds it.
 data Interned = Interned !Entry !InternTable
