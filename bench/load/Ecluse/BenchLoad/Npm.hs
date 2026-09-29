@@ -33,7 +33,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath, saUpstreamUrl))
 import Ecluse.BenchLoad.PatternScenario (loadPins, patternScenarios, selectArtifacts)
@@ -136,7 +136,7 @@ npmPrivateCopy =
         , pcStub = \latency bodies -> do
             rewritten <- newIORef mempty
             pure (corpusPublicStub rewritten latency bodies Map.empty)
-        , pcMix = serveMix
+        , pcUrl = packageUrl
         , pcPreflight = const pass
         }
 
@@ -266,7 +266,7 @@ warmUnderCold knobs k = do
         (const [])
         $ \proxy _ -> do
             let port = proxyPort proxy
-                listings = concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp)))
+                listings pkgs = weightedMix cpWeight packageUrl pkgs port
                 warmUrls = listings warmPackages <> [packageUrl port (saProxyPath artifact) | artifact <- Map.elems selected]
             -- Prime the assembled and selected-version stores, and prove every warm path serves.
             for_ (ordNub warmUrls) (void . fetchChecked status200 [])
@@ -309,8 +309,7 @@ packageUrl :: Int -> Text -> Text
 packageUrl port name = localhost port <> "/npm/" <> name
 
 serveMix :: Int -> [Text]
-serveMix port =
-    concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp))) corpusPackages
+serveMix = weightedMix cpWeight packageUrl corpusPackages
 
 uniformMix :: [CorpusPackage] -> Int -> [Text]
 uniformMix pkgs port = map (packageUrl port . cpName) pkgs

@@ -10,6 +10,7 @@ private copy, because a private read passes the caller's credentials through.
 module Ecluse.BenchLoad.PrivateCopy (
     PrivateCopy (..),
     privateCopyScenarios,
+    CopyStubs (..),
     shareStubs,
 ) where
 
@@ -17,11 +18,11 @@ import Data.Aeson (Value)
 import Data.Ratio ((%))
 import Network.Wai (Application)
 
-import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, loadCorpusCuts, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (httpTarget, loadCorpusBodies, loadCorpusCuts, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), Scenario, Target, scenario)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Test.Corpus (CorpusPackage)
+import Ecluse.Test.Corpus (CorpusPackage (cpWeight))
 
 -- | One ecosystem's parts of the private-copy scenarios.
 data PrivateCopy = PrivateCopy
@@ -35,8 +36,8 @@ data PrivateCopy = PrivateCopy
     -- ^ The newest share of a capture's versions, from "Ecluse.Test.Corpus.Subset".
     , pcStub :: Int -> Map Text LByteString -> IO Application
     -- ^ An upstream serving these bodies after this latency in microseconds.
-    , pcMix :: Int -> [Text]
-    -- ^ The weighted listing URLs for the proxy's port.
+    , pcUrl :: Int -> Text -> Text
+    -- ^ A package's listing URL on the proxy's port.
     , pcPreflight :: [Text] -> IO ()
     -- ^ Checks the listings before load, failing the scenario on a wrong response.
     }
@@ -62,19 +63,25 @@ shareScenario copy percent =
 ownCopy :: Text
 ownCopy = "Each request decodes its own private copy, which single-flight cannot share across callers."
 
+-- | The two upstreams of a private-copy scenario.
+data CopyStubs = CopyStubs
+    { csPrivate :: Application
+    , csPublic :: Application
+    }
+
 -- | The private upstream over the newest share of each capture, and the public one over each capture whole.
-shareStubs :: PrivateCopy -> Rational -> Int -> IO (Application, Application)
+shareStubs :: PrivateCopy -> Rational -> Int -> IO CopyStubs
 shareStubs copy share = copyStubs copy (loadCorpusCuts (pcCut copy share))
 
-copyStubs :: PrivateCopy -> ([CorpusPackage] -> IO (Map Text LByteString)) -> Int -> IO (Application, Application)
+copyStubs :: PrivateCopy -> ([CorpusPackage] -> IO (Map Text LByteString)) -> Int -> IO CopyStubs
 copyStubs copy loadPrivate latency = do
     public <- pcStub copy latency =<< loadCorpusBodies (pcPackages copy)
     private <- pcStub copy latency =<< loadPrivate (pcPackages copy)
-    pure (private, public)
+    pure CopyStubs{csPrivate = private, csPublic = public}
 
-withStubs :: PrivateCopy -> (Int -> IO (Application, Application)) -> LoadKnobs -> (Target -> IO a) -> IO a
-withStubs copy stubs knobs k = do
-    (private, public) <- stubs (lkUpstreamLatencyMicros knobs)
-    withProxyOverStubs (pcEcosystem copy) knobs 0 Nothing private public (pcMix copy) $ \proxy urls -> do
+withStubs :: PrivateCopy -> (Int -> IO CopyStubs) -> LoadKnobs -> (Target -> IO a) -> IO a
+withStubs copy makeStubs knobs k = do
+    stubs <- makeStubs (lkUpstreamLatencyMicros knobs)
+    withProxyOverStubs (pcEcosystem copy) knobs 0 Nothing (csPrivate stubs) (csPublic stubs) (weightedMix cpWeight (pcUrl copy) (pcPackages copy)) $ \proxy urls -> do
         pcPreflight copy urls
         httpTarget k proxy urls

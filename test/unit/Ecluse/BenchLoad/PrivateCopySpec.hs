@@ -14,7 +14,7 @@ import Test.Hspec
 
 import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Npm (npmPrivateCopy)
-import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (pcPackages), shareStubs)
+import Ecluse.BenchLoad.PrivateCopy (CopyStubs (..), PrivateCopy (pcPackages), shareStubs)
 import Ecluse.BenchLoad.PyPI (pypiPrivateCopy)
 import Ecluse.Test.Corpus (cpName)
 import Ecluse.Test.Wai (localhost)
@@ -30,9 +30,9 @@ spec = describe "shareStubs" $ do
 -- Another ecosystem's cut refuses the capture, and swapped stubs serve the larger document privately.
 servesCutPrivately :: PrivateCopy -> Text -> Text -> Expectation
 servesCutPrivately copy name path = do
-    (private, public) <- shareStubs copy{pcPackages = filter ((== name) . cpName) (pcPackages copy)} (5 % 100) 0
-    privateBody <- served private
-    publicBody <- served public
+    stubs <- shareStubs copy{pcPackages = filter ((== name) . cpName) (pcPackages copy)} (5 % 100) 0
+    privateBody <- served (csPrivate stubs)
+    publicBody <- served (csPublic stubs)
     LBS.length privateBody `shouldSatisfy` (< LBS.length publicBody)
   where
     served app = testWithApplication (pure app) $ \port -> HTTP.responseBody <$> fetchChecked status200 [] (localhost port <> path)

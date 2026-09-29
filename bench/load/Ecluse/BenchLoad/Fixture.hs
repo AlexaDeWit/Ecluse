@@ -14,6 +14,7 @@ module Ecluse.BenchLoad.Fixture (
     artifactBytes,
     loadCorpusBodies,
     loadCorpusCuts,
+    weightedMix,
     selfHosted,
     primeETag,
     fetchChecked,
@@ -90,6 +91,10 @@ loadCorpusCuts cut packages = Map.fromList <$> traverse load packages
         document <- either (\reason -> benchFail ("bench-load: cannot cut " <> toText (cpPath cp) <> ": " <> toText reason)) pure (cut (cpPackage cp) (toStrict bytes))
         body <- evaluate (toStrict (encode document))
         pure (cpName cp, toLazy body)
+
+-- | Each package's URL on the proxy's port, repeated by its weight.
+weightedMix :: (CorpusPackage -> Int) -> (Int -> Text -> Text) -> [CorpusPackage] -> Int -> [Text]
+weightedMix weight url packages port = concatMap (\cp -> replicate (weight cp) (url port (cpName cp))) packages
 
 readCapture :: CorpusPackage -> IO LByteString
 readCapture cp = do

@@ -25,7 +25,7 @@ import Network.Wai (Application, Request, pathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
 import Ecluse.BenchLoad.PatternScenario (patternScenarios)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
@@ -104,7 +104,7 @@ pypiPrivateCopy =
         , pcStub = \latency bodies -> do
             rewritten <- newIORef mempty
             pure (indexStub rewritten latency bodies)
-        , pcMix = indexMix pypiCorpusPackages cpWeight
+        , pcUrl = indexUrl
         , pcPreflight = traverse_ (void . checkedIndex) . ordNub
         }
 
@@ -181,7 +181,7 @@ withIndexProxy knobs ttl entries packages weight body = do
         entries
         (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
         (indexStub rewritten latency captures)
-        (indexMix packages weight)
+        (weightedMix weight indexUrl packages)
         ( \proxy urls -> do
             for_ (ordNub urls) $ \url -> do
                 index <- checkedIndex url
@@ -196,9 +196,6 @@ pypiMountBase = "https://bench.proxy/pypi"
 
 indexUrl :: Int -> Text -> Text
 indexUrl port name = localhost port <> "/pypi/simple/" <> name
-
-indexMix :: [CorpusPackage] -> (CorpusPackage -> Int) -> Int -> [Text]
-indexMix packages weight port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
 
 wheelMix :: Int -> [Text]
 wheelMix port = [indexUrl port (cpName package) <> "/" <> wheelFilename (cpName package) | package <- pypiCorpusPackages]
