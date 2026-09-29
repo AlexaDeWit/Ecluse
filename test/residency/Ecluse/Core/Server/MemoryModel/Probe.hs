@@ -138,8 +138,8 @@ data ListingPeaks = ListingPeaks
     -- ^ Live bytes holding the read's cache entry.
     , listingPeak :: Word64
     -- ^ The high-water through the read and the render of the served body.
-    , listingTypedLive :: Word64
-    -- ^ Live bytes holding only the entry's typed view, without its served document.
+    , listingDroppedLive :: Word64
+    -- ^ Live bytes holding the same entry's other fields once its served document is dropped.
     , listingDocumentCharge :: Int
     -- ^ The heap bytes the served document's weight stands for, as a cache expands it.
     }
@@ -226,17 +226,20 @@ probeListing package = do
     -- A first read settles the read's one-off state, so the baseline holds it.
     bracket (prepareListingRead package) freeStablePtr (void . deRefStablePtr)
     before <- sample
-    (sourceBytes, servedBytes, held, rendered) <- bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
+    (sourceBytes, servedBytes, held, rendered, charged, others) <- bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
         held <- sample
         entry <- deRefStablePtr entryRoot
+        charged <- evaluate (expandWireBytes (fromIntegral (weighCachedDoc (entryRaw entry))))
         bracket (prepareListingRender (pkgEcosystem (cpPackage package)) entry) freeStablePtr $ \servedRoot -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
-            -- Evaluated here, so nothing sampled later holds the entry or the served body.
+            -- Evaluated here, so nothing sampled later holds the served document or the served body.
             let !sourceBytes = entryBodyBytes entry
                 !servedBytes = BS.length served
-            pure (sourceBytes, servedBytes, held, rendered)
-    (typed, charged) <- typedOnly package
+                !info = entryInfo entry
+                !digest = entryDigest entry
+            pure (sourceBytes, servedBytes, held, rendered, charged, (info, digest))
+    dropped <- bracket (newStablePtr others) freeStablePtr (const sample)
     pure
         ListingPeaks
             { listingSourceBytes = sourceBytes
@@ -245,19 +248,9 @@ probeListing package = do
             , listingReadPeak = samplePeakLive held
             , listingEntryLive = live held
             , listingPeak = samplePeakLive rendered
-            , listingTypedLive = live typed
+            , listingDroppedLive = live dropped
             , listingDocumentCharge = charged
             }
-
--- Read the capture again and hold only its typed view, with what the dropped document's weight charges.
-typedOnly :: CorpusPackage -> IO (HeapSample, Int)
-typedOnly package = do
-    root <- prepareListingRead package
-    entry <- deRefStablePtr root
-    info <- evaluate (entryInfo entry)
-    charged <- evaluate (expandWireBytes (fromIntegral (weighCachedDoc (entryRaw entry))))
-    freeStablePtr root
-    bracket (newStablePtr info) freeStablePtr (const ((,charged) <$> sample))
 
 -- The production full read in 32 KiB chunks, with artifact locations enforced and the entry forced.
 {-# NOINLINE prepareListingRead #-}

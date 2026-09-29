@@ -165,11 +165,11 @@ capture, a fresh child process:
    enforces artifact locations against the capture's registry, and holds the cache entry
 2. renders the served body of a single-source listing in which every version survives, as the
    strict bytes a response sends
-3. reads the capture again and holds only the entry's typed view
+3. drops the served document from the held entry and holds its other fields
 
 It reads and releases the capture once first, so the baseline holds the read's one-off state.
 It samples live bytes before the measured read, holding the entry, holding the served body, and
-holding the typed view alone. The runtime's high-water after each phase gives that phase's peak.
+holding the entry's other fields. The runtime's high-water after each phase gives that phase's peak.
 After the read phase it is an upper bound, since the warm-up read can set the high-water first. The
 child runs with
 `+RTS -F1 -A128k`: the old generation may not grow past its live data, so nearly every collection
@@ -200,7 +200,7 @@ The checks compare bytes with each ecosystem's charges:
   names the ecosystems this check covers. PyPI's entry holds each file as aeson's tree beside its
   typed view, which outgrows the file.
 - The served document's weight, expanded as a cache expands it, covers the live bytes the entry
-  holds above its typed view.
+  frees when it drops that document.
 
 The following figures come from the arm64 Build job of
 [CI run 36523941759](https://github.com/AlexaDeWit/Ecluse/actions/runs/36523941759/job/109262795931),

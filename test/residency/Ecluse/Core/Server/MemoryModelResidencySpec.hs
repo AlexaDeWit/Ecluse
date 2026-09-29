@@ -64,7 +64,7 @@ spec = do
                     for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) (uncurry (checkListing peaks))
                     when (entryBelowSource ecosystem) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
                     -- A document's weight, as a cache expands it, covers the heap the document holds.
-                    rise listingEntryLive listingTypedLive peaks `shouldSatisfy` (<= toInteger (listingDocumentCharge peaks))
+                    rise listingEntryLive listingDroppedLive peaks `shouldSatisfy` (<= toInteger (listingDocumentCharge peaks))
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
@@ -143,7 +143,7 @@ reportListing package peaks =
             , "entry_per_source_byte" .= perSourceByte (rise listingEntryLive listingBaseline peaks)
             , "peak_above_entry_per_source_byte" .= perSourceByte (rise listingPeak listingEntryLive peaks)
             , "served_per_source_byte" .= perSourceByte (toInteger (listingServedBytes peaks))
-            , "document_per_source_byte" .= perSourceByte (rise listingEntryLive listingTypedLive peaks)
+            , "document_per_source_byte" .= perSourceByte (rise listingEntryLive listingDroppedLive peaks)
             , "document_charge_per_source_byte" .= perSourceByte (toInteger (listingDocumentCharge peaks))
             , "peaks" .= peaks
             ]
