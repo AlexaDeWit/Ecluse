@@ -1,6 +1,7 @@
-# actionlint 1.7.12, the latest release, predates the GitHub-hosted Ubuntu 26.04 images
-# and reports their labels as unknown. scripts/ci-runner-policy.sh pins each job to one
-# of these exact labels. Remove this file once actionlint lists them.
+# actionlint 1.7.12, pinned by the flake, has no 26.04 labels (rhysd/actionlint#682).
+# scripts/ci-runner-policy.sh pins each job to one of these exact labels. actionlint reads
+# its built-in label table first, so this file goes silently dead once the pinned
+# actionlint knows both labels. Delete it then.
 self-hosted-runner:
   labels:
     - ubuntu-26.04

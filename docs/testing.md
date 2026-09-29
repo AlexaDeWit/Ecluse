@@ -890,7 +890,7 @@ hold their own runner. `codecov-notify` follows the coverage legs and releases t
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
 image on the `ubuntu-26.04` runner, and no test tier runs on amd64. Every job names its Ubuntu
-release, never `ubuntu-latest`, so a move to a new runner image is a reviewed change.
+release, never `ubuntu-latest`, so a move to a new Ubuntu release is a reviewed change.
 `scripts/ci-runner-policy.sh` (in `task lint-workflows`) fails a job on any other runner unless its
 allow-list names the job with a reason.
 
