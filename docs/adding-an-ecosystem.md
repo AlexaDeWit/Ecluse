@@ -36,6 +36,7 @@ for the new ecosystem before you call its reads done.
 | Retained heap per source byte stays within its regression limit | The retained-heap gate of the [residency tier](testing.md#residency-gate-ecluse-residency-gating) |
 | A read's peak and a listing's render fit what the memory gate charges | [Listing peaks](testing.md#listing-peaks) |
 | Time and allocation per request show on every pull request | The work-per-request benchmarks ([Benchmarks](testing.md#benchmarks-non-gating)) |
+| Each capture's full and single-version reads stay within their allocation budgets | The [allocation gate](testing.md#allocation-budgets-perf-allocation-gating) |
 
 ## The read, end to end
 
@@ -269,6 +270,21 @@ memory probes. To look at one read in isolation, run the residency executable's
 [source probes](testing.md#streaming-source-probes), which report one read's allocation and live
 bytes for a capture. For counterparts in other ecosystems, see
 [One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem).
+
+### The allocation gate
+
+The `allocation` CI job holds the full and single-version reads of every committed capture to an
+allocation budget, and it gates the merge.
+[Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating) describes the legs, the
+margin, and what fails the job. A new ecosystem joins the gate through its registered
+`EcosystemBench` corpus, because the gate measures every capture there and fails on one with no
+calibrated figure.
+
+To calibrate the new ecosystem, add its captures and open the pull request. The job's report on
+the arm64 run prints every leg's figure. Copy all of them from that one run into
+`acceptance/criteria.json`, the new ecosystem's section and the existing ones alike, and record the
+run and the commit it checked out as the calibration. From then on, a change to the new
+ecosystem's reads that allocates more than the margin above its figure fails the gate.
 
 ## Reuse before you write
 
