@@ -18,6 +18,10 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
     -- * The derived validator (exported for its unit spec)
     packumentETag,
+
+    -- * The served body and its output charge basis (exported for the residency probe and a unit spec)
+    assembleServedBody,
+    outputBasisBytes,
 ) where
 
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
@@ -410,20 +414,49 @@ servedBytes serving sources plan etag =
     deps = psvDeps serving
     key = renderETag etag
     flight = FlightKey ("assembled " <> key)
-    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (sum (map srcBodyBytes sources))
+    outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (outputBasisBytes plan sources)
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
+{- | The source bytes a listing's output charge scales: the larger of two estimates, anchored on the
+largest source and on the base document, each adding the others' bytes pro rata for versions it lacks.
+-}
+outputBasisBytes :: MergePlan -> [Contribution] -> Int
+outputBasisBytes plan sources = foldl' max 0 (map anchoredOn anchors)
+  where
+    indexed = zip [0 :: Int ..] sources
+    anchors = maybeToList (listToMaybe (sortOn (Down . srcBodyBytes . snd) indexed)) <> maybeToList (baseSource indexed)
+    anchoredOn (position, anchor) =
+        srcBodyBytes anchor + sum [addedShare (Map.size (mpSurvivors plan) - versionCount anchor) other | (at, other) <- indexed, at /= position]
+
+-- A source's bytes pro rata for the survivors outside the anchor, rounded up.
+addedShare :: Int -> Contribution -> Int
+addedShare outside source
+    | count <= 0 = srcBodyBytes source
+    | otherwise = (srcBodyBytes source * min count (max 0 outside) + count - 1) `div` count
+  where
+    count = versionCount source
+
+versionCount :: Contribution -> Int
+versionCount = Map.size . infoVersions . srcInfo
+
 renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> CachedDoc
-renderServedBody deps sources plan =
-    metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources)
+renderServedBody deps = assembleServedBody (pdMetadata deps) (pdMountBaseUrl deps)
+
+-- | The served document of a merge whose plan names the sources by their position.
+assembleServedBody :: AdapterMetadata -> Text -> [Contribution] -> MergePlan -> CachedDoc
+assembleServedBody metadata mountBase sources plan =
+    metadataAssemble metadata mountBase bySource plan (baseDocument sources)
   where
     bySource :: Map SourceId (Snapshot CachedDoc)
     bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])
 
 baseDocument :: [Contribution] -> Maybe CachedDoc
-baseDocument sources =
-    srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
+baseDocument = fmap (srcValue . snd) . baseSource . zip [0 :: Int ..]
+
+-- The source whose top-level fields the served document keeps: the trusted one, else the first.
+baseSource :: [(Int, Contribution)] -> Maybe (Int, Contribution)
+baseSource indexed = find ((== TrustedSource) . srcProvenance . snd) indexed <|> listToMaybe indexed
 
 packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
 packumentResponse replies mode etag bytes = case mode of

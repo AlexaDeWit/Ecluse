@@ -2,12 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Local npm load scenarios for metadata, artifacts, caches, advisory databases, admission under
-memory pressure, and the mirror worker. Private reads stay live. Public requests can share one
-in-flight fetch even at zero cache TTL.
+{- | Local npm load scenarios for metadata, private copies of public versions, artifacts, caches,
+advisory databases, admission under memory pressure, and the mirror worker. Private reads stay
+live. Public requests can share one in-flight fetch even at zero cache TTL.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
+    npmPrivateCopy,
     corpusPublicStub,
     privateOverlayStub,
     privateOverlayStubWith,
@@ -32,10 +33,11 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath, saUpstreamUrl))
 import Ecluse.BenchLoad.PatternScenario (loadPins, patternScenarios, selectArtifacts)
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, proxyPort)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
@@ -72,6 +74,7 @@ import Ecluse.Core.Worker (
     runWorkerM,
  )
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier, cpWeight), CorpusTier (Heavy), corpusPackages, cpName)
+import Ecluse.Test.Corpus.Subset (newestNpmShare)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
@@ -88,20 +91,21 @@ npmFixture =
             [ mergeScenario
             , shippedAdvisories Npm mergeScenario
             , allRulesAdvisories Npm mergeScenario
-            , heavyPrivateScenario
-            , assembledHitScenario
-            , revalidateScenario
-            , shippedAdvisories Npm revalidateScenario
-            , cacheFitsScenario
-            , cacheEvictsScenario
-            , tarballScenario
-            , tarballOnboardingScenario
-            , tarballCeilingScenario
-            , herdScenario
-            , warmUnderColdScenario
-            , rampScenario
-            , workerScenario
             ]
+                <> privateCopyScenarios npmPrivateCopy
+                <> [ assembledHitScenario
+                   , revalidateScenario
+                   , shippedAdvisories Npm revalidateScenario
+                   , cacheFitsScenario
+                   , cacheEvictsScenario
+                   , tarballScenario
+                   , tarballOnboardingScenario
+                   , tarballCeilingScenario
+                   , herdScenario
+                   , warmUnderColdScenario
+                   , rampScenario
+                   , workerScenario
+                   ]
                 <> patternScenarios
                     Npm
                     corpusPackages
@@ -120,26 +124,21 @@ mergeScenario =
         "GET /npm/{pkg} over the weighted corpus with public cache TTL 0. Concurrent public misses share one fetch and decode. Every request reads private metadata, merges, filters, rewrites URLs, and serialises."
         (\knobs k -> withNpmProxy knobs 0 Nothing serveMix (httpTarget k))
 
-heavyPrivateScenario :: Scenario
-heavyPrivateScenario =
-    scenario
-        "heavy-private"
-        "GET /npm/{pkg} over the weighted corpus with public cache TTL 0, while the private upstream returns the complete public capture, as a private registry that proxies npmjs does. Each request decodes its own private copy, which single-flight cannot share across callers."
-        ( \knobs k -> do
-            bodies <- loadCorpusBodies corpusPackages
-            privateRewritten <- newIORef mempty
-            publicRewritten <- newIORef mempty
-            let latency = lkUpstreamLatencyMicros knobs
-            withProxyOverStubs
-                Npm
-                knobs
-                0
-                Nothing
-                (corpusPublicStub privateRewritten latency bodies Map.empty)
-                (corpusPublicStub publicRewritten latency bodies Map.empty)
-                serveMix
-                (httpTarget k)
-        )
+-- | The npm parts of the private-copy scenarios.
+npmPrivateCopy :: PrivateCopy
+npmPrivateCopy =
+    PrivateCopy
+        { pcEcosystem = Npm
+        , pcListing = "GET /npm/{pkg} over the weighted corpus"
+        , pcRegistry = "a private registry that proxies npmjs"
+        , pcPackages = corpusPackages
+        , pcCut = newestNpmShare
+        , pcStub = \latency bodies -> do
+            rewritten <- newIORef mempty
+            pure (corpusPublicStub rewritten latency bodies Map.empty)
+        , pcUrl = packageUrl
+        , pcPreflight = const pass
+        }
 
 assembledHitScenario :: Scenario
 assembledHitScenario =
@@ -267,7 +266,7 @@ warmUnderCold knobs k = do
         (const [])
         $ \proxy _ -> do
             let port = proxyPort proxy
-                listings = concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp)))
+                listings pkgs = weightedMix cpWeight packageUrl pkgs port
                 warmUrls = listings warmPackages <> [packageUrl port (saProxyPath artifact) | artifact <- Map.elems selected]
             -- Prime the assembled and selected-version stores, and prove every warm path serves.
             for_ (ordNub warmUrls) (void . fetchChecked status200 [])
@@ -310,8 +309,7 @@ packageUrl :: Int -> Text -> Text
 packageUrl port name = localhost port <> "/npm/" <> name
 
 serveMix :: Int -> [Text]
-serveMix port =
-    concatMap (\cp -> replicate (cpWeight cp) (packageUrl port (cpName cp))) corpusPackages
+serveMix = weightedMix cpWeight packageUrl corpusPackages
 
 uniformMix :: [CorpusPackage] -> Int -> [Text]
 uniformMix pkgs port = map (packageUrl port . cpName) pkgs

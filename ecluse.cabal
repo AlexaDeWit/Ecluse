@@ -692,9 +692,11 @@ library ecluse-test-support
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
     Ecluse.Test.Corpus.Advisories
+    Ecluse.Test.Corpus.Merge
     Ecluse.Test.Corpus.Npm
     Ecluse.Test.Corpus.Outputs
     Ecluse.Test.Corpus.PyPI
+    Ecluse.Test.Corpus.Subset
     Ecluse.Test.Credential
     Ecluse.Test.Cve
     Ecluse.Test.EcosystemBench
@@ -978,6 +980,7 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Support
     Ecluse.Security.Support
     Ecluse.Test.Container.ImageSpec
+    Ecluse.Test.Corpus.SubsetSpec
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
@@ -1058,8 +1061,11 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.NpmArtifactSpec
     Ecluse.BenchLoad.NpmSpec
     Ecluse.BenchLoad.Fixture
+    Ecluse.BenchLoad.FixtureSpec
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PrivateCopy
+    Ecluse.BenchLoad.PrivateCopySpec
     Ecluse.BenchLoad.PyPI
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
@@ -1553,6 +1559,7 @@ executable bench-load
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
     Ecluse.BenchLoad.PatternScenario
+    Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
     , ecluse

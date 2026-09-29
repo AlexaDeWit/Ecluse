@@ -263,28 +263,36 @@ The memory gate admits work by what each request pays, not by what it holds. A c
 read's real peak lets the heap overflow. A charge far above it holds budget that live data never
 fills, which costs throughput.
 [Runtime sizing](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) explains the
-gate and owns the rule that derives the full-read charge.
+gate and owns the rules that derive the full-read and output charges.
 
 The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, as
 `npmChargeFactors` shows:
 
 - `cfFullReadPermille` is what a full read pays per source byte as it reads. Derive it from the
   largest read peak by the rule in Runtime sizing.
-- `cfOutputPermille` is what a listing's response pays per source byte before it renders. The
-  listing check sets its floor from one meter step of source up
-  ([Listing peaks](testing.md#listing-peaks)). It must cover the listing's peak above its held
-  entry, and twice the served body. The retained-heap gate checks every capture, whatever its size:
-  twice the shared entry's encoded size must fit within the output charge.
+- `cfOutputPermille` is what a listing's response pays per byte of its output basis before it
+  renders. The serving path charges a merged listing on what it renders, by the larger of two
+  anchored estimates that Runtime sizing sets out beside the rule that derives this charge. The
+  merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over a single document and
+  the realistic merge shapes, from one meter step of basis up, and hold the heavy-base shapes
+  within it. It must cover the listing's peak above the documents it holds, and twice the served
+  body. The retained-heap gate checks every capture, whatever its size: twice the shared entry's
+  encoded size must fit within the output charge.
 
 To calibrate them:
 
 - Add the ecosystem to the residency tier as the metadata residency row of
-  [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap
-  and read-peak limits.
+  [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap,
+  read-peak and output limits.
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
-- Derive the read-peak limit by the rule in [Listing peaks](testing.md#listing-peaks), and add the
-  captures to that section's table.
+- Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
+  the basis and the output working set per basis byte. Give `Ecluse.Test.Corpus.Subset` a cut for
+  the ecosystem's document, as npm and PyPI have, so the probes can shape its captures. Give
+  `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text, and an arm in its `keepVersions`,
+  which cuts an ecosystem it does not name as npm.
+- Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
+  and add the captures to that section's tables.
 
 The existing figures come from CI's arm64 Build job. Calibrate a new ecosystem there too, so its
 figures compare with theirs. From then on, the residency tier fails when a change to the

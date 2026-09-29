@@ -132,7 +132,7 @@ gate keeps its default.
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
 same test also checks that it stays within the memory gate's full-read charge, read from each
 ecosystem's adapter. The same test checks the listing output charge: twice a shared entry's encoded
-size, for the lazy encoding and its strict copy, must stay within the 1.6 output charge. The
+size, for the lazy encoding and its strict copy, must stay within the output charge. The
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
@@ -179,28 +179,63 @@ default flags, the typescript read's high-water equalled what it keeps, because 
 fell inside its transient. A 1 MiB nursery misses the peaks of captures under 1 MiB, which finish
 within a few collections.
 
+A merged listing gets the same measurement in six shapes per capture. The child reads a trusted
+private document and a gated public one the same way, holds both, and renders their merge through
+the serving path's assembly. It reports the output basis the serving path computes. The shapes are:
+
+- identical: both documents are the capture, as a private mirror of the whole package holds
+- overlapping: each holds two thirds of the capture's versions, one third of them in both
+- disjoint: each holds half, none in both
+- publish order: the private copy holds the newest quarter of the versions by publish time, the
+  model the `heavy-private-25pct` load scenarios serve, and the public one is the capture
+- heavy base: the private copy holds every tenth version by publish time, with text half the
+  capture's size that the response renders, and the public one is the capture. npm's served
+  document takes only its name, an author pointer, and the `created` and `modified` time stamps
+  from the base, so npm's text is in each release's deprecation notice. PyPI's is the project
+  status reason.
+- oldest heavy base: as the heavy base, with the oldest tenth of the versions, whose releases are
+  the smallest
+
+The single-source listing and the first four shapes are realistic: they model private copies
+that deployments serve, and they set the output charge and its regression limit. The heavy bases
+stress the basis instead, and the output charge must hold them.
+
+`Ecluse.Test.Corpus.Merge` writes each shaped document from the capture, and
+`Ecluse.Test.Corpus.Subset` cuts it to its versions. A cut document stays consistent: an npm cut
+keeps the times and dist-tags of its versions. Each merge child is its own process on one
+capability, so the spec runs one child per processor at a time.
+
 The checks compare bytes with each ecosystem's charges:
 
-- The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
-  the entry step. A capture under one step can peak above its per-byte charge, and this check shows
-  that what the meter holds still covers one such read. It does not check two at once. A listing
-  that reads a private and a public document of under one step on one ticket can exceed what the
-  meter holds by a fraction of a step, which the sampler's measurement of live data outside the
-  charges absorbs.
-- The peak through the read and the render fits what the meter holds after both charges, counted
-  the same way.
-- From one step of source up, the larger of the listing's peak above the held entry and twice the
-  served body fits the output charge. No collection observes the instant the lazy encoding and its
-  strict copy are both live, so the check counts both.
-- From one step of source up, the tier fails once a read's peak passes a regression limit per
-  ecosystem: 2.0 per source byte for npm, 0.1 under its charge, and 3.75 for PyPI, 0.45 under its
-  charge. The rule for a limit is the smallest quarter step at least 8% above the maximum. From the
-  table below it gives 1.0 for npm (react, 0.888) and 3.5 for PyPI (boto3, 3.070).
-- Every npm listing's held entry stays smaller than the source it was read from. `entryBelowSource`
-  names the ecosystems this check covers. PyPI's entry holds each file as aeson's tree beside its
-  typed view, which outgrows the file.
-- The entry frees live bytes when it drops its served document, and the document's weight, expanded
-  as a cache expands it, covers them.
+- The reads' peak fits what the meter holds after the full-read charges: whole 1 MiB steps, at
+  least the entry step. A capture under one step can peak above its per-byte charge, and this check
+  shows that what the meter holds still covers one such read. It does not check two sub-step reads
+  at once. A listing that reads a private and a public document of under one step on one ticket
+  can exceed what the meter holds by a fraction of a step, which the sampler's measurement of live
+  data outside the charges absorbs.
+- The peak through the reads and the render fits what the meter holds after the full-read and
+  output charges, counted the same way. Every listing's output working set, a heavy base's or a
+  capture's under one step included, fits the whole steps its output charge alone buys.
+- From one step of basis up, every listing's output working set, a heavy base's included, fits the
+  output charge on the basis. The working set is the larger of the listing's peak above the
+  documents it holds and twice the served body. No collection observes the instant the lazy
+  encoding and its strict copy are both live, so the check counts both.
+- The basis of an identical merge is one document and that of a disjoint merge is both. That of an
+  overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
+  the capture and less than both.
+- From one step up, the tier fails once a single read's peak or a realistic listing's output
+  working set passes a regression limit per ecosystem. The read limits are 2.0 per source byte for
+  npm, 0.1 under its charge, and 3.75 for PyPI, 0.45 under its charge. The rule for a limit is the
+  smallest quarter step at least 8% above the maximum. From the first table below it gives 1.0 for
+  npm (react, 0.888) and 3.5 for PyPI (boto3, 3.070). The output limits, set by that rule from the
+  realistic shapes in the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3,
+  1.524, 14.8% margin), 0.25 under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1
+  under its charge. One example checks that each limit sits below its charge.
+- Every single-source npm listing's held entry stays smaller than the source it was read from.
+  `entryBelowSource` names the ecosystems this check covers. PyPI's entry holds each file as
+  aeson's tree beside its typed view, which outgrows the file.
+- A single-source listing's entry frees live bytes when it drops its served document, and the
+  document's weight, expanded as a cache expands it, covers them.
 
 The following figures come from the arm64 Build job of
 [CI run 36537317917](https://github.com/AlexaDeWit/Ecluse/actions/runs/36537317917/job/109304478187),
@@ -224,11 +259,34 @@ read.
 | PyPI | boto3 | 2.10 | 3.070 | 2.855 | 1.012 | 0.621 |
 | PyPI | requests | 0.12 | 4.005 | 3.096 | 0.909 | 0.657 |
 
-The rules for the full-read charges and the read-peak limits take the read peaks of captures of at
-least one step, as [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling)
-sets out.
-From one step of source up, each listing's peak above its entry stays below twice its served body,
-and the output charge covers both.
+The arm64 Build job of
+[CI run 36562979100](https://github.com/AlexaDeWit/Ecluse/actions/runs/36562979100/job/109388236444)
+gives each listing's output working set per byte of its basis, for a single document and for each
+merge shape.
+
+| Ecosystem | Package | Single | Identical | Overlapping | Disjoint | Publish order | Heavy base | Oldest heavy base |
+|---|---|--:|--:|--:|--:|--:|--:|--:|
+| npm | typescript | 1.319 | 1.319 | 1.318 | 1.318 | 1.319 | 1.546 | 1.598 |
+| npm | @types/node | 0.350 | 0.350 | 0.350 | 0.350 | 0.350 | 0.900 | 0.942 |
+| npm | react | 0.990 | 0.990 | 0.987 | 0.988 | 0.990 | 1.325 | 1.329 |
+| npm | webpack | 1.423 | 1.423 | 1.411 | 1.402 | 1.178 | 1.602 | 1.679 |
+| npm | @aws-sdk/client-s3 | 1.524 | 1.524 | 1.513 | 1.502 | 1.524 | 1.667 | 1.665 |
+| npm | express | 1.151 | 1.151 | 1.122 | 1.091 | 1.017 | 1.388 | 1.427 |
+| npm | @babel/core | 1.149 | 1.149 | 1.148 | 1.148 | 1.149 | 1.431 | 1.461 |
+| npm | request | 1.058 | 1.058 | 0.943 | 0.854 | 0.839 | 1.201 | 1.223 |
+| npm | lodash | 1.034 | 0.944 | 0.807 | 0.774 | 0.911 | 1.077 | 1.092 |
+| PyPI | numpy | 1.193 | 1.193 | 1.195 | 1.199 | 0.956 | 1.467 | 1.541 |
+| PyPI | boto3 | 1.242 | 1.242 | 1.242 | 1.242 | 1.242 | 1.495 | 1.496 |
+| PyPI | requests | 1.315 | 1.315 | 1.323 | 1.318 | 1.185 | 1.544 | 1.588 |
+
+Under the output charges, npm 2.0 and PyPI 1.6 per basis byte, the heavy bases hold at most 0.963
+of their charge from one step of basis up (numpy, oldest heavy base) and 0.992 below it (requests,
+oldest heavy base).
+
+The rules for the charges and the limits take the captures of at least one step, as
+[configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
+From one step up, each listing's peak above the documents it holds stays below twice its served
+body, so twice the served body sets the output working set.
 
 ### Read evaluation
 
@@ -521,13 +579,31 @@ failure is a task limit reached outside the harness, which sets none. The harnes
 failure with the process limits, the task counts, and the failed attempt's cgroup as it read them,
 and the report counts the boot attempts. Any other boot failure fails the scenario.
 
-Four scenarios stress admission under memory pressure. `npm/heavy-private` has the private stub
-return the complete public capture, so every request decodes its own private copy.
-`npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
-`npm/warm-under-cold` measures assembled hits and retained selected reads while a second generator
-drives heavy-tier listings that never reuse an assembled response. `npm/ramp` steps from 10 to
-400 connections, one configured duration per step, and reports each step. None of the four joins
-the concurrency-one pass.
+Three scenarios stress admission under memory pressure. `npm/herd` sends 100 simultaneous cold
+`typescript` listings to an idle proxy. `npm/warm-under-cold` measures assembled hits and retained
+selected reads while a second generator drives heavy-tier listings that never reuse an assembled
+response. `npm/ramp` steps from 10 to 400 connections, one configured duration per step, and
+reports each step. None of the three joins the concurrency-one pass.
+
+The private-copy scenarios model a mirror target that is also the private upstream. Its document
+for a package holds the versions the deployment has mirrored. Every listing decodes its own private
+copy, because a private read passes the caller's credentials through and cannot share work with
+other callers. The private stub returns each capture cut to the newest share of its versions by
+publish time (upload time on PyPI), rounded up to a whole version, and at least one. Installs
+resolve to recent releases, so a mirror fills from the newest end first.
+`Ecluse.Test.Corpus.Subset` makes the cut, as it does for the publish-order merge shape in
+[Listing peaks](#listing-peaks). The public stub returns the complete capture, and the public cache
+TTL is 0. The private copy stays fixed for the run, so each scenario measures one point:
+
+| Scenario | Private copy of each capture |
+|---|---|
+| `npm/merge-cold`, `pypi/index-cold` | The comparison point, not a cut: a synthetic overlay of versions the public document does not hold, three for npm and one wheel for PyPI |
+| `npm/heavy-private-5pct`, `pypi/heavy-private-5pct` | The newest 5% of the versions |
+| `npm/heavy-private-25pct`, `pypi/heavy-private-25pct` | The newest 25% of the versions |
+| `npm/heavy-private`, `pypi/heavy-private` | The complete capture, as a private registry that proxies the public one returns |
+
+Each ecosystem's report lists the last three rows in that order, after the cold listing and its
+advisory variants. All four rows join the concurrency-one pass.
 
 Three npm and three PyPI scenarios load an advisory database, so the per-version advisory cost
 shows in the load report. Before the proxy boots, the scenario compiles the captured advisories
@@ -578,7 +654,7 @@ The harness separately validates each capture through the production adapter bef
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
 | `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
-| Load metadata and cache scenarios | Fixture upstreams retain all captured metadata and rewrite artifact authorities for the local harness. These are derived bodies, not byte-identity measurements. |
+| Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
 The projection groups measure decoding from held bytes, including the structural guards.
@@ -809,11 +885,11 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
-| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `capture`, `envelopePermille`, `readPeakEnvelopePermille`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each read-peak limit below its full-read charge | Six of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The read-peak check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without a read-peak limit skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads an ecosystem it does not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `capture`, `envelopePermille`, `peakLimits`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each regression limit below its charge. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | Seven of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The limit check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without peak limits skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads, and `Ecluse.Test.Corpus.Merge` cuts, an ecosystem they do not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Performance acceptance budgets | Ecosystem budgets in `acceptance/criteria.json`, consumed by `acceptance/app/Main.hs` using the benchmark corpus | The [driver](../acceptance/app/Main.hs) measures live npm packuments and PyPI PEP 691 Simple JSON documents for the shared corpus identities. Each ecosystem has its own report section. [Criteria](../acceptance/criteria.json) record the budgets and calibration evidence. Frozen capture bytes are not acceptance measurements. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).
