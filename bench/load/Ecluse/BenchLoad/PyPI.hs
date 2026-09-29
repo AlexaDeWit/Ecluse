@@ -2,11 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PEP 691 index, wheel relay, cache, and advisory database load scenarios over local upstreams.
-PyPI worker-mirroring remains a named gap until #765 supplies the async mirror worker.
+{- | PEP 691 index, private copy, wheel relay, cache, and advisory database load scenarios over
+local upstreams. PyPI worker-mirroring remains a named gap until #765 supplies the async mirror
+worker.
 -}
 module Ecluse.BenchLoad.PyPI (
     pypiFixture,
+    pypiPrivateCopy,
     pypiLoadNotes,
 ) where
 
@@ -23,14 +25,16 @@ import Network.Wai (Application, Request, pathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
 import Ecluse.BenchLoad.PatternScenario (patternScenarios)
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Test.Corpus (CorpusPackage (cpWeight), cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus.Subset (newestPyPIShare)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
@@ -44,14 +48,16 @@ pypiFixture =
             [ indexColdScenario
             , shippedAdvisories PyPI indexColdScenario
             , allRulesAdvisories PyPI indexColdScenario
-            , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
-            , revalidateScenario
-            , shippedAdvisories PyPI revalidateScenario
-            , cacheFitsScenario
-            , cacheEvictsScenario
-            , wheelScenario PrivateWheel
-            , wheelScenario PublicOnboarding
             ]
+                <> privateCopyScenarios pypiPrivateCopy
+                <> [ indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
+                   , revalidateScenario
+                   , shippedAdvisories PyPI revalidateScenario
+                   , cacheFitsScenario
+                   , cacheEvictsScenario
+                   , wheelScenario PrivateWheel
+                   , wheelScenario PublicOnboarding
+                   ]
                 <> patternScenarios
                     PyPI
                     pypiCorpusPackages
@@ -85,6 +91,22 @@ indexColdScenario =
 indexScenario :: Text -> Text -> Int -> Scenario
 indexScenario name description ttl =
     scenario name description (\knobs k -> withIndexProxy knobs ttl Nothing pypiCorpusPackages cpWeight (httpTarget k))
+
+-- | The PyPI parts of the private-copy scenarios.
+pypiPrivateCopy :: PrivateCopy
+pypiPrivateCopy =
+    PrivateCopy
+        { pcEcosystem = PyPI
+        , pcListing = "GET the weighted Simple-index corpus"
+        , pcRegistry = "a private index that proxies PyPI"
+        , pcPackages = pypiCorpusPackages
+        , pcCut = newestPyPIShare
+        , pcStub = \latency bodies -> do
+            rewritten <- newIORef mempty
+            pure (indexStub rewritten latency bodies)
+        , pcUrl = indexUrl
+        , pcPreflight = traverse_ (void . checkedIndex) . ordNub
+        }
 
 revalidateScenario :: Scenario
 revalidateScenario =
@@ -152,7 +174,6 @@ withIndexProxy knobs ttl entries packages weight body = do
     captures <- loadCorpusBodies packages
     rewritten <- newIORef mempty
     let latency = lkUpstreamLatencyMicros knobs
-        mix port = concatMap (\package -> replicate (weight package) (indexUrl port (cpName package))) packages
     withProxyOverStubs
         PyPI
         knobs
@@ -160,7 +181,7 @@ withIndexProxy knobs ttl entries packages weight body = do
         entries
         (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
         (indexStub rewritten latency captures)
-        mix
+        (weightedMix weight indexUrl packages)
         ( \proxy urls -> do
             for_ (ordNub urls) $ \url -> do
                 index <- checkedIndex url
