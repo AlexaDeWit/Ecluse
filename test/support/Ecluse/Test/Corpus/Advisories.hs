@@ -30,6 +30,7 @@ import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Short qualified as TS
 import Data.Time (nominalDay)
 import Network.HTTP.Types (status200)
 import System.FilePath (takeFileName, (</>))
@@ -38,7 +39,7 @@ import Ecluse.Core.Cve (AdvisoryRange, CveLookup (cveAdvisoriesFor, cveCoveredNa
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
-import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, pkgCanonical, renderPackageName)
 import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), readAdvisories, withCveLookup)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
@@ -82,11 +83,19 @@ compileCorpusAdvisories eco dir = do
 compileAdvisoryInputs :: Ecosystem -> FilePath -> AdvisoryInputs -> IO FilePath
 compileAdvisoryInputs eco dir inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
 
-{- | Check that the served generation names at least one capture, and that every capture it names
-yields rows through 'readAdvisories', under the key the rules look it up by.
+{- | Check that each capture's display name is its lookup key, that the served generation names at
+least one capture, and that every capture it names yields rows through 'readAdvisories'.
 -}
 checkCapturesServed :: RuleDeps -> [PackageName] -> IO (Either Text ())
-checkCapturesServed deps packages =
+checkCapturesServed deps packages = case filter (\package -> renderPackageName package /= lookupKey package) packages of
+    package : _ -> pure (Left ("the capture " <> renderPackageName package <> " differs from its lookup key " <> lookupKey package))
+    [] -> checkCoveredCaptures deps packages
+  where
+    lookupKey = TS.toText . pkgCanonical
+
+-- Covered captures are matched by display name, which 'checkCapturesServed' holds equal to the lookup key.
+checkCoveredCaptures :: RuleDeps -> [PackageName] -> IO (Either Text ())
+checkCoveredCaptures deps packages =
     withCveLookup deps (traverse (cveCoveredNames . snd)) >>= \case
         Nothing -> pure (Left "no advisory generation is serving")
         Just covered -> case filter ((`elem` covered) . renderPackageName) packages of

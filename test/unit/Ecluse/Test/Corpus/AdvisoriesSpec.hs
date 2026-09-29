@@ -10,9 +10,10 @@ import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Config (RulePolicy (policyRules), defaultPolicy)
-import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
@@ -27,9 +28,10 @@ spec = do
                 withSystemTempDirectory "ecluse-corpus-advisories" $ \dir -> do
                     compiled <- compileCorpusAdvisories eco dir
                     withServedArtifact eco compiled $ \deps db -> do
+                        -- A pass also holds each capture's display name equal to its lookup key, which the filter below relies on.
+                        checkCapturesServed deps (map cpPackage captures) `shouldReturn` Right ()
                         covered <- cveCoveredNames (cveDbLookup db)
                         sort (filter (`elem` covered) (map cpName captures)) `shouldBe` advised
-                        checkCapturesServed deps (map cpPackage captures) `shouldReturn` Right ()
                         checkCapturesServed deps [mkPackageName eco Nothing "ecluse-not-advised"] `shouldReturn` Left "the served advisories cover none of the captures"
 
     describe "checkCapturesServed" $ do
@@ -39,6 +41,12 @@ spec = do
                 `shouldReturn` Left "the served advisories return no row for react"
         it "fails when no generation is serving" $
             checkCapturesServed inertRuleDeps [react] `shouldReturn` Left "no advisory generation is serving"
+        it "fails a capture whose display name differs from its lookup key, which a display-name match would drop" $ do
+            let row = AdvisoryRange "CVE-2099-1" Nothing Nothing Unbounded Nothing
+                keys = ["requests", "typing-extensions"]
+                canonicalOnly = CveLookup (\name -> pure [row | name `elem` keys]) (pure keys)
+            checkCapturesServed (servingRuleDeps (DbEtag "t") canonicalOnly) [mkPackageName PyPI Nothing "requests", mkPackageName PyPI Nothing "typing_extensions"]
+                `shouldReturn` Left "the capture typing_extensions differs from its lookup key typing-extensions"
 
     describe "shippedPolicy" $
         it "is the policy config/default.yaml ships" $
