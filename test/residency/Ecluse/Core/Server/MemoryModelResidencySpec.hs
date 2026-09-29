@@ -11,7 +11,10 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Pair, Parser)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
+import GHC.Conc (getNumProcessors)
 import Test.Hspec
+import UnliftIO.Async (pooledMapConcurrentlyN)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
@@ -67,20 +70,32 @@ spec = do
                         checkPaid factors peaks
                         checkReadPeak limits peaks
                         checkOutput factors limits peaks
-    describe "merged listing peak heap" $ forM_ packages $ \package ->
-        forM_ [minBound .. maxBound] $ \shape ->
-            it (toString (cpName package) <> "/" <> show shape) $ do
-                (size, _) <- authenticate package
-                withSystemTempDirectory "ecluse-merge" $ \directory -> do
-                    (private, public) <- writeMergeDocuments shape directory package
-                    measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package >>= \case
-                        Left failure -> expectationFailure failure
-                        Right peaks -> do
-                            reportListing "metadata-merge" ["shape" .= (show shape :: Text)] package peaks
-                            checkBasis shape size peaks
-                            for_ (listingBounds package) $ \(factors, limits) -> do
-                                checkPaid factors peaks
-                                checkOutput factors limits peaks
+    describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
+        it (toString (cpName package) <> "/" <> show shape) $ \measured -> do
+            (size, _) <- authenticate package
+            case Map.lookup (cpPath package, shape) measured of
+                Nothing -> expectationFailure "the merge probe did not run"
+                Just (Left failure) -> expectationFailure failure
+                Just (Right peaks) -> do
+                    reportListing "metadata-merge" ["shape" .= (show shape :: Text)] package peaks
+                    checkBasis shape size peaks
+                    for_ (listingBounds package) $ \(factors, limits) -> do
+                        checkPaid factors peaks
+                        checkOutput factors limits peaks
+
+merges :: [(CorpusPackage, MergeShape)]
+merges = [(package, shape) | package <- packages, shape <- [minBound .. maxBound]]
+
+{- Each merge child is its own process on one capability, and its collections follow its own
+allocation, so the children run side by side, one per processor. -}
+measureMerges :: IO (Map (FilePath, MergeShape) (Either String ListingPeaks))
+measureMerges = do
+    jobs <- getNumProcessors
+    Map.fromList <$> pooledMapConcurrentlyN jobs measure merges
+  where
+    measure (package, shape) = fmap ((cpPath package, shape),) $ withSystemTempDirectory "ecluse-merge" $ \directory -> do
+        (private, public) <- writeMergeDocuments shape directory package
+        measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
