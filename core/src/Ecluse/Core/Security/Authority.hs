@@ -30,7 +30,7 @@ module Ecluse.Core.Security.Authority (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Text (afterFirst, readDecimalText)
+import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText)
 
 {- | The authority an outbound fetch dials: a bare host with its effective port. The gate
 authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
@@ -86,7 +86,7 @@ authorityLabel = authorityLabelWithDefault 443
 dialledAuthorityLabel :: Text -> Text
 dialledAuthorityLabel raw = authorityLabelWithDefault portless raw
   where
-    portless = if T.toLower (T.take 7 raw) == "http://" then 80 else 443
+    portless = if isPrefixOfLowered httpPrefix raw then 80 else 443
 
 authorityLabelWithDefault :: Word16 -> Text -> Text
 authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . hostPortAddressWithDefault portless
