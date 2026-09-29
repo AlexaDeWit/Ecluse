@@ -12,10 +12,12 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.JsonStream (StreamResult)
+import Ecluse.Core.Registry.Json.Shape (Trees (..))
+import Ecluse.Core.Registry.Json.Walk (Walked (..), pureStep)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (TreeRead, emptyTreeRead, keepsTreeFile, treeStep)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes, releaseKeys)
@@ -38,15 +40,19 @@ spec = describe "pypiWalk" $
                 production <- forAll Gen.bool
                 let mode = maybe FullRead (SelectedRead (unscopedPyPI "thing")) selected
                     bound = MetadataBodyLimit (BS.length body)
-                    start = (emptyProjection (unscopedPyPI "thing"), [])
-                    keeps (projection, _) = not production || keepsFile projection
+                    start = (emptyTreeRead (unscopedPyPI "thing"), [])
+                    keeps (projection, _) = not production || keepsTreeFile projection
                     step (projection, events) field = do
-                        projected <- collectField defaultLimits mode projection field
+                        projected <- treeStep defaultLimits mode projection field
                         case cap of
                             Just most | length events >= most -> Left (TooManyVersions (length events) most)
                             _ -> Right (projected, field : events)
                 emitted (parseJsonChunks bound (pypiFields depth mode) step start chunks)
-                    === emitted (walkJsonChunks bound (pypiWalk depth mode step keeps (testTable fileUniqueFields) start) chunks)
+                    === emitted (unwalked <$> walkJsonChunks bound (pypiWalk Trees depth mode (pureStep step) keeps (testTable fileUniqueFields) start) chunks)
 
-emitted :: Either LimitError (StreamResult (PyPIProjection, [PyPIField])) -> Either LimitError (Int, Either Bool [PyPIField])
+emitted :: Either LimitError (StreamResult (TreeRead, [PyPIField])) -> Either LimitError (Int, Either Bool [PyPIField])
 emitted = fmap (second (fmap snd)) . readOutcome
+
+-- The consumer's state a walk finished with, without the read's table.
+unwalked :: StreamResult (Walked s) -> StreamResult s
+unwalked result = result{streamValue = (\(Walked _ held) -> held) <$> streamValue result}

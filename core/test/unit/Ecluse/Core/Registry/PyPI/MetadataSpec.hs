@@ -5,11 +5,16 @@
 -- | PyPI protocol, artifact identity and release-age projection parity.
 module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
+import Control.Monad.ST (ST)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Hedgehog (forAll, (===))
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package (
     Artifact (artEntryKey, artFilename),
@@ -19,21 +24,37 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, AdmissionDenied), admitArtifact)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.Json.Walk (Steps)
+import Ecluse.Core.Registry.Json.Writer (newWriter)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
+import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
+import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIPacked, projectPyPIStream, pypiFullWalk, pypiIndexWalk)
+import Ecluse.Core.Registry.PyPI.Project (projectName)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (FullRead))
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
+    BodyLimit (MetadataBodyLimit),
     LimitError (TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxVersionCount),
+    Limits (maxArtifactCount, maxMetadataBytes, maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
-import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
+import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename, unscopedPyPI)
+import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -43,6 +64,56 @@ spec = do
     paritySpec
     protocolSpec
     releaseAgeSpec
+    packedReadSpec
+
+{- | The packed full read against the tree read: the same typed view and outcome, a document that
+decodes to the tree the tree read holds, and an assembled index that renders to the same bytes.
+-}
+packedReadSpec :: Spec
+packedReadSpec = describe "packedWalk" $ do
+    modifyMaxSuccess (const 1000) $
+        it "reads what the tree read reads, for generated indexes, chunkings and damage" $
+            hedgehog $ do
+                body <- forAll (genSimpleIndexBytes >>= damaged)
+                chunks <- forAll (genChunks body)
+                let (tree, packed) = bothFullReads chunks
+                tree === fmap (second (snd pypiSimpleCached)) packed
+                sameIndex tree packed === True
+
+    forM_ pypiCorpusPackages $ \package ->
+        it ("packs, decodes and renders every file of the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            let (tree, packed) = bothFullReads [bytes]
+            isRight tree `shouldBe` True
+            tree `shouldBe` fmap (second (snd pypiSimpleCached)) packed
+            sameIndex tree packed `shouldBe` True
+
+-- Both full reads of the same chunks through the production projection, for the project the body names.
+bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, Maybe SimpleDocument), Either MetadataError (PackageInfo, CachedDoc))
+bothFullReads chunks =
+    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (pypiIndexWalk limits name FullRead (testTable fileUniqueFields)) chunks) >>= projectPyPIStream limits name)
+    , second (fst pypiPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound packedWalk chunks) >>= projectPyPIPacked limits name)
+    )
+  where
+    total = sum (map BS.length chunks)
+    bound = MetadataBodyLimit total
+    limits = defaultLimits{maxMetadataBytes = max 1 total}
+    packedWalk :: ST st (TokenResult -> ST st (Steps (ST st) PyPIFullRead))
+    packedWalk = newWriter Nothing <&> \writer -> pypiFullWalk writer limits name (testTable fileUniqueFields)
+    name = case eitherDecodeStrict (mconcat chunks) of
+        Right (Object fields) | Just (String reported) <- KeyMap.lookup "name" fields, Right parsed <- projectName reported -> parsed
+        _ -> unscopedPyPI "thing"
+
+-- Every version admitted from one source, rendered from the tree read and from the packed read.
+sameIndex :: Either MetadataError (PackageInfo, Maybe SimpleDocument) -> Either MetadataError (PackageInfo, CachedDoc) -> Bool
+sameIndex tree packed = case (tree, packed) of
+    (Right (info, Just document), Right (_, doc)) -> case mergePackuments [(GatedSource, Snapshot digest info)] of
+        Just plan -> render plan (fst pypiSimpleCached document) == render plan doc
+        Nothing -> True
+    _ -> True
+  where
+    digest = digestOf "index"
+    render plan doc = serialiseSimpleDocument (assembleSimpleDocument "https://proxy.example/pypi" (Map.singleton 0 (Snapshot digest doc)) plan (Just doc))
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do

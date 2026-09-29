@@ -17,6 +17,7 @@ module Ecluse.Core.Registry.Npm.Wire (
 
     -- * The @dist@ object
     Dist (..),
+    distFields,
 
     -- * Per-version manifest
     VersionManifest (..),
@@ -87,6 +88,10 @@ data Dist = Dist
     -}
     }
     deriving stock (Eq, Ord, Show)
+
+-- | The @dist@ members the 'Dist' parser reads.
+distFields :: [Text]
+distFields = ["tarball", "shasum", "integrity", "unpackedSize"]
 
 instance FromJSON Dist where
     parseJSON = withObject "Dist" $ \o ->

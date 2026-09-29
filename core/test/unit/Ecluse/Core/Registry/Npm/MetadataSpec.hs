@@ -5,13 +5,19 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), encode, object, toJSON, (.=))
+import Control.Monad.ST (ST)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict, encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -20,23 +26,33 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
+import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
+import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), releaseUniqueFields)
 import Ecluse.Core.Security (
+    BodyLimit (MetadataBodyLimit),
     LimitError (TooDeeplyNested, TooManyVersions),
-    Limits (maxNestingDepth, maxVersionCount),
+    Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Json (isObject, withKeys)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages)
+import Ecluse.Test.Json (encodeStrict, genJsonText, genValue, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
+import Ecluse.Test.Registry.JsonBytes (damaged, genChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
-import Ecluse.Test.Snapshot (readDetails)
+import Ecluse.Test.Snapshot (digestOf, readDetails)
 import Ecluse.Test.Support (expectRight)
 
 -- | Metadata projection outcomes, including duplicate-key and optional-container parity.
@@ -44,6 +60,73 @@ spec :: Spec
 spec = do
     projectNpmManifestSpec
     projectNpmVersionSpec
+    packedReadSpec
+
+{- | The packed full read against the tree read: the same typed view and outcome, a document that
+decodes to the tree the tree read holds, and an assembled listing that renders to the same bytes.
+-}
+packedReadSpec :: Spec
+packedReadSpec = describe "packedWalk" $ do
+    modifyMaxSuccess (const 1000) $
+        it "reads what the tree read reads, for generated listings, chunkings and damage" $
+            hedgehog $ do
+                body <- forAll (genListing >>= damaged)
+                chunks <- forAll (genChunks body)
+                let (tree, packed) = bothFullReads chunks
+                tree === fmap (second (snd npmCached)) packed
+                sameListing tree packed === True
+
+    forM_ corpusPackages $ \package ->
+        it ("packs, decodes and renders every release of the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            let (tree, packed) = bothFullReads [bytes]
+            isRight tree `shouldBe` True
+            tree `shouldBe` fmap (second (snd npmCached)) packed
+            sameListing tree packed `shouldBe` True
+
+-- Both full reads of the same chunks through the production projection, for the package @thing@.
+bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, Maybe Value), Either MetadataError (PackageInfo, CachedDoc))
+bothFullReads chunks =
+    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name registry)
+    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound packedWalk chunks) >>= projectNpmPacked limits name registry)
+    )
+  where
+    total = sum (map BS.length chunks)
+    bound = MetadataBodyLimit total
+    limits = defaultLimits{maxMetadataBytes = max 1 total}
+    name = packageNameOf chunks
+    registry = "https://registry.npmjs.org"
+    packedWalk :: ST st (TokenResult -> ST st (Steps (ST st) NpmFullRead))
+    packedWalk = npmFullTable registry name (testTable releaseUniqueFields) <&> \(table, writer) -> npmFullWalk writer limits name table
+
+-- The capture's own package, or @thing@ for a generated body.
+packageNameOf :: [ByteString] -> PackageName
+packageNameOf chunks = case eitherDecodeStrict (mconcat chunks) of
+    Right (Object fields) | Just (String reported) <- KeyMap.lookup "name" fields, Right parsed <- projectName reported -> parsed
+    _ -> unscopedNpm "thing"
+
+-- Every version admitted from one source, rendered from the tree read and from the packed read.
+sameListing :: Either MetadataError (PackageInfo, Maybe Value) -> Either MetadataError (PackageInfo, CachedDoc) -> Bool
+sameListing tree packed = case (tree, packed) of
+    (Right (info, Just value), Right (_, doc)) -> case mergePackuments [(GatedSource, Snapshot digest info)] of
+        Just plan -> render plan (fst npmCached value) == render plan doc
+        Nothing -> True
+    _ -> True
+  where
+    digest = digestOf "listing"
+    render plan doc = serialiseMergedDocument (assembleMergedDocument "https://proxy.example/npm" (Map.singleton 0 (Snapshot digest doc)) plan (Just doc))
+
+-- A listing for @thing@ whose releases carry arbitrary members, repeated keys and every string escape.
+genListing :: Gen ByteString
+genListing = do
+    releases <- Gen.list (Range.linear 0 6) ((,) <$> Gen.element ["1.0.0", "2.0.0", "3.0.0-rc.1"] <*> Gen.frequency [(6, release), (1, genValue ["dist", "name"])])
+    pure ("{\"name\":\"thing\",\"versions\":{" <> BS.intercalate "," [encodeStrict (String key) <> ":" <> encodeStrict value | (key, value) <- releases] <> "}}")
+  where
+    release = do
+        version <- Gen.element ["1.0.0", "2.0.0"]
+        tarball <- Gen.frequency [(4, pure (String ("https://registry.npmjs.org/thing/-/thing-" <> version <> ".tgz"))), (1, String <$> genJsonText), (1, genValue ["url"])]
+        extra <- Gen.list (Range.linear 0 5) ((,) <$> Gen.element ["dependencies", "scripts", "deprecated", "license", "_npmUser", "bin", "engines", "description"] <*> genValue ["dep", "install", "name", "tarball"])
+        pure (object (["name" .= ("thing" :: Text), "version" .= version, "dist" .= object ["tarball" .= tarball, "integrity" .= validSha512Sri, "shasum" .= validSha1]] <> [(key, value) | (key, value) <- extra]))
 
 projectNpmManifestSpec :: Spec
 projectNpmManifestSpec = describe "projectNpmManifest" $ do
