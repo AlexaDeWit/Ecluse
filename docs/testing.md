@@ -165,13 +165,13 @@ capture, a fresh child process:
    enforces artifact locations against the capture's registry, and holds the cache entry
 2. renders the served body of a single-source listing in which every version survives, as the
    strict bytes a response sends
-3. drops the served document from the held entry and holds its other fields
+3. reads the capture again, and holds that entry with and then without its served document
 
 It reads and releases the capture once first, so the baseline holds the read's one-off state.
-It samples live bytes before the measured read, holding the entry, holding the served body, and
-holding the entry's other fields. The runtime's high-water after each phase gives that phase's peak.
-After the read phase it is an upper bound, since the warm-up read can set the high-water first. The
-child runs with
+It samples live bytes before the measured read, holding the entry, and holding the served body. The
+runtime's high-water after each phase gives that phase's peak. After the read phase it is an upper
+bound, since the warm-up read can set the high-water first. A sample also counts what the code still
+to run references, so step 3 takes both of its samples in one function. The child runs with
 `+RTS -F1 -A128k`: the old generation may not grow past its live data, so nearly every collection
 is major, and the high-water samples live data at least once per 128 KiB allocated. Under the
 default flags, the typescript read's high-water equalled what it keeps, because no major collection
@@ -199,8 +199,8 @@ The checks compare bytes with each ecosystem's charges:
 - Every npm listing's held entry stays smaller than the source it was read from. `entryBelowSource`
   names the ecosystems this check covers. PyPI's entry holds each file as aeson's tree beside its
   typed view, which outgrows the file.
-- The served document's weight, expanded as a cache expands it, covers the live bytes the entry
-  frees when it drops that document.
+- The entry frees live bytes when it drops its served document, and the document's weight, expanded
+  as a cache expands it, covers them.
 
 The following figures come from the arm64 Build job of
 [CI run 36523941759](https://github.com/AlexaDeWit/Ecluse/actions/runs/36523941759/job/109262795931),
