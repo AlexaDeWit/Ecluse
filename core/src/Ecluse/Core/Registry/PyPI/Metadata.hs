@@ -51,10 +51,10 @@ newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
 {- | PyPI's memory charges, above the largest read peak per source byte (3.29, boto3) and output
-working set per basis byte (1.24, boto3) from one meter step up.
+working set per basis byte (1.49, boto3 under a heavy base) from one meter step up.
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4200, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4200, cfOutputPermille = 1900}
 
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

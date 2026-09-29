@@ -54,10 +54,11 @@ spec = do
                             report package digest shape result
                             checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
     describe "listing peak heap" $ do
-        it "keeps each read-peak limit below its full-read charge" $
+        it "keeps each regression limit below its charge" $
             for_ [Npm, PyPI] $ \ecosystem ->
-                for_ ((,) <$> chargeFactors ecosystem <*> peakLimits ecosystem) $ \(factors, limits) ->
+                for_ ((,) <$> chargeFactors ecosystem <*> peakLimits ecosystem) $ \(factors, limits) -> do
                     readPeakLimit limits `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
+                    outputLimit limits `shouldSatisfy` (< toInteger (cfOutputPermille factors))
         forM_ packages $ \package -> it (toString (cpName package)) $ do
             (size, _) <- authenticate package
             measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
@@ -141,8 +142,8 @@ data PeakLimits = PeakLimits
 these limits, the smallest quarter step at least 8% above their measured maxima. -}
 peakLimits :: Ecosystem -> Maybe PeakLimits
 peakLimits = \case
-    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 1750}
-    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1500}
+    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 2000}
+    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1750}
     RubyGems -> Nothing
 
 listingBounds :: CorpusPackage -> Maybe (ChargeFactors, PeakLimits)

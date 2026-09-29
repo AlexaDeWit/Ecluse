@@ -161,15 +161,27 @@ can peak above its per-byte charge, up to 2.36 for npm (request). What the meter
 read, whole steps and at least the 1 MiB entry step, covers it. A request for a name that is not
 first-party reads its private and public documents at once on one ticket, so two such reads can
 exceed what the meter holds by a fraction of a step. The sampler's measurement of live data outside
-the charges absorbs that excess. A listing's response pays 1.6 per source byte. From one step of
-source up, that covers the encoding with its strict copy, which exceeds the listing's measured peak
-above the entry it holds.
+the charges absorbs that excess.
 
-The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's read
-or render outgrows what the meter holds for it, so a representation change cannot silently outgrow
-a charge. From one step of source up, it fails once a read's peak passes a regression limit, the
-smallest quarter step at least 8% above the measured maximum: 2.0 per source byte for npm and 3.75
-for PyPI, 0.1 and 0.45 under their charges.
+A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
+one anchored on the largest document the listing merges and one on the base document, whose
+top-level fields the response keeps. Each adds the other document's bytes in proportion to the
+versions the anchor does not hold. That share assumes the other document's versions are of like
+size, and the base anchor covers a base that renders more than its version count suggests.
+Documents that overlap, such as a package mirrored into a private upstream, render about one
+document and pay for about one. The output working set is the larger of the listing's peak above
+the documents it holds and twice the served body, for the encoding with its strict copy. The
+response charge is 1.25 times the highest working set per basis byte that the residency tier
+measures for one ecosystem, over single documents and every merge shape it renders, from one step
+of basis up, rounded up to a tenth. npm's charge is 2.1 (@aws-sdk/client-s3 under a heavy base, at
+1.67) and PyPI's is 1.9 (boto3 under a heavy base, at 1.49).
+
+The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's reads
+or render outgrow what the meter holds for them, so a representation change cannot silently
+outgrow a charge. From one step up, it fails once a read's peak or an output working set passes a
+regression limit, the smallest quarter step at least 8% above the measured maximum. For npm the
+limits are 2.0 per source byte for a read and 2.0 per basis byte for a response, 0.1 under each
+charge. For PyPI they are 3.75 and 1.75, 0.45 and 0.15 under the charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder
