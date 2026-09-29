@@ -241,8 +241,8 @@ The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, a
   anchored estimates that Runtime sizing sets out beside the rule that derives this charge. The
   merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over single documents and
   every merge shape, from one meter step of basis up. It must cover the listing's peak above the
-  documents it holds, and twice the served body. The retained-heap gate checks every capture, whatever its
-  size: twice the shared entry's encoded size must fit within the output charge.
+  documents it holds, and twice the served body. The retained-heap gate checks every capture,
+  whatever its size: twice the shared entry's encoded size must fit within the output charge.
 
 To calibrate them:
 
@@ -253,7 +253,9 @@ To calibrate them:
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
 - Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
   the basis and the output working set per basis byte. Give `Ecluse.Test.Corpus.Subset` a cut for
-  the ecosystem's document, as npm and PyPI have, so the probes can shape its captures.
+  the ecosystem's document, as npm and PyPI have, so the probes can shape its captures. Give
+  `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text, and an arm in its `keepVersions`,
+  which cuts an ecosystem it does not name as npm.
 - Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
   and add the captures to that section's tables.
 

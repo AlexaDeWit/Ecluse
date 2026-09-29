@@ -187,13 +187,14 @@ the serving path's assembly. It reports the output basis the serving path comput
   public one is the capture
 - heavy base: the private copy holds every tenth version by publish time, with text half the
   capture's size that the response renders, and the public one is the capture. npm's served
-  document keeps no top-level field past its name, so npm's text is in each release's deprecation
-  notice. PyPI's is the project status reason.
+  document takes only its name, an author pointer, and the `created` and `modified` time stamps
+  from the base, so npm's text is in each release's deprecation notice. PyPI's is the project
+  status reason.
 
-The spec writes each shaped document from the capture through `Ecluse.Test.Corpus.Subset`, which
-keeps a cut document consistent: an npm cut keeps the times and dist-tags of its versions. Each
-merge child is its own process on one capability, so the spec runs one child per processor at a
-time.
+`Ecluse.Test.Corpus.Merge` writes each shaped document from the capture, and
+`Ecluse.Test.Corpus.Subset` cuts it to its versions. A cut document stays consistent: an npm cut
+keeps the times and dist-tags of its versions. Each merge child is its own process on one
+capability, so the spec runs one child per processor at a time.
 
 The checks compare bytes with each ecosystem's charges:
 

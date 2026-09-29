@@ -81,8 +81,8 @@ keepVersions info = case pkgEcosystem (infoName info) of
     PyPI -> keepPyPIVersions info
     _ -> keepNpmVersions
 
-{- Add rendered text of about the given size. npm's served document keeps no top-level field past its
-name, so npm carries the text in each release's deprecation notice, and PyPI in the project status. -}
+{- Add rendered text of about the given size. npm takes only its name, author and two time stamps
+from the base, so its text goes in each release's deprecation notice, and PyPI's in its status. -}
 weighDown :: PackageInfo -> Int -> Value -> Value
 weighDown info size = \case
     Object fields -> Object $ case pkgEcosystem (infoName info) of

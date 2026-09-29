@@ -15,6 +15,7 @@ import Data.Map.Strict qualified as Map
 import GHC.Conc (getNumProcessors)
 import Test.Hspec
 import UnliftIO.Async (pooledMapConcurrentlyN)
+import UnliftIO.Exception (tryAny)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
@@ -94,7 +95,9 @@ measureMerges = do
     jobs <- getNumProcessors
     Map.fromList <$> pooledMapConcurrentlyN jobs measure merges
   where
-    measure (package, shape) = fmap ((cpPath package, shape),) $ withSystemTempDirectory "ecluse-merge" $ \directory -> do
+    -- A merge whose documents fail to write fails its own example, not the rest.
+    measure (package, shape) = ((cpPath package, shape),) . either (Left . show) id <$> tryAny (measureMerge package shape)
+    measureMerge package shape = withSystemTempDirectory "ecluse-merge" $ \directory -> do
         (private, public) <- writeMergeDocuments shape directory package
         measureInChild (["--metadata-merge-probe", private, public] <> majorSampling) package
 
