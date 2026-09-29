@@ -2,7 +2,7 @@
   "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds, per ecosystem, package and leg, the bytes the leg allocated over its committed capture on the calibration run. A leg's budget is that figure plus marginPercent, rounded up to a whole byte. Wall-clock time has no budget. Recalibrate every figure from one arm64 CI run of the captures run, and record that run's runner and URL in calibration. calibration.commit is the commit the run checked out: a pull request run checks out the merge of its head into the base, which the log of its checkout step names.",
   "calibration": {
     "arch": "aarch64",
-    "runner": "ubuntu-24.04-arm",
+    "runner": "ubuntu-26.04-arm",
     "commit": "09452bb6b10aaa27915a423ef6d18b46017a5e4c",
     "runs": [
       "https://github.com/AlexaDeWit/Ecluse/actions/runs/36507288722/job/109211637622"

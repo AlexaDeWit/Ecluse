@@ -8,6 +8,7 @@ does not bound active input, parser, policy, merge, or output memory.
 -}
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
+    chargeForResident,
     mirrorJobEstimatedBytes,
 ) where
 
@@ -16,6 +17,10 @@ This factor is independent of source-byte regression envelopes and active-work a
 -}
 expandWireBytes :: Int -> Int
 expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
+
+-- | The smallest compact charge that 'expandWireBytes' expands to at least the given heap bytes.
+chargeForResident :: Int -> Int
+chargeForResident resident = (resident * residentRatioDenominator + residentRatioNumerator - 1) `div` residentRatioNumerator
 
 residentRatioNumerator :: Int
 residentRatioNumerator = 15

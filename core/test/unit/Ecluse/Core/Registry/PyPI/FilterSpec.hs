@@ -275,7 +275,7 @@ sidecarSpec = describe "the PEP 658 sidecar keys" $ do
 serialiseSpec :: Spec
 serialiseSpec = describe "the served bytes" $ do
     it "encodes another ecosystem's document as an empty object" $
-        Filter.serialiseSimpleDocument (fst npmCached (object ["name" .= ("requests" :: Text)])) `shouldBe` "{}"
+        Filter.serialiseSimpleDocument (fst npmCached (object ["name" .= ("requests" :: Text)])) `shouldBe` Right "{}"
 
     for_ pypiCorpusPackages $ \package ->
         it ("encodes the full and single-release listings of " <> cpPath package <> " as the rendered JSON object") $ do
@@ -289,7 +289,7 @@ serialiseSpec = describe "the served bytes" $ do
                 let served = Filter.assembleSimpleDocument mountBase (Map.singleton 0 source) plan (Just (snapshotValue source))
                 assembled <- expectRight (maybeToRight ("expected a PyPI document" :: Text) (snd pypiSimpleCached served))
                 simpleFiles assembled `shouldSatisfy` (not . null)
-                fingerprint (Filter.serialiseSimpleDocument served) `shouldBe` fingerprint (encode (simpleValue assembled))
+                fingerprint <$> Filter.serialiseSimpleDocument served `shouldBe` Right (fingerprint (encode (simpleValue assembled)))
 
 -- A digest keeps a multi-megabyte mismatch report readable.
 fingerprint :: LByteString -> (Int64, ContentDigest)

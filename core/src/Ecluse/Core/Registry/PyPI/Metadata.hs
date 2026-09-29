@@ -1,6 +1,9 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+-- The reads specialise here. Full laziness would float each member's rarely taken continuation out
+-- of the element's continuation, and every member of a read would allocate it.
+{-# OPTIONS_GHC -fno-full-laziness #-}
 
 -- | Full and selected Simple-index reads share incremental extraction. Only full reads hash the source.
 module Ecluse.Core.Registry.PyPI.Metadata (

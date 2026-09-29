@@ -19,6 +19,7 @@ import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
@@ -39,7 +40,7 @@ import Ecluse.Test.Snapshot (readDetails)
 
 -- | Measure the npm transform against the original fetch snapshot, excluding its digest cost.
 serveTransformSize :: EvalContext -> (Snapshot Value, PackageInfo) -> IO Int
-serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody inertRuleDeps permissiveAgeRules assemble ctx input
+serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody inertRuleDeps permissiveAgeRules BSL.empty assemble ctx input
   where
     assemble sources plan base = encode (assembleMergedPackument syntheticProxyBase sources plan base)
 
@@ -56,19 +57,19 @@ serveDocumentSizeUnder :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalC
 serveDocumentSizeUnder deps policy adapter ctx input = fromIntegral . BSL.length <$> serveDocumentBody deps policy adapter ctx input
 
 serveDocumentBody :: RuleDeps -> [PrecededRule] -> AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
-serveDocumentBody deps policy adapter = transformBody deps policy assemble
+serveDocumentBody deps policy adapter ctx input = transformBody deps policy (Right BSL.empty) assemble ctx input >>= either throwIO pure
   where
     assemble sources plan base =
         metadataSerialise adapter (metadataAssemble adapter syntheticProxyBase sources plan (Just base))
 
-transformBody :: RuleDeps -> [PrecededRule] -> (Map SourceId (Snapshot raw) -> MergePlan -> raw -> LByteString) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO LByteString
-transformBody deps policy assemble ctx (source, info) = do
+transformBody :: RuleDeps -> [PrecededRule] -> body -> (Map SourceId (Snapshot raw) -> MergePlan -> raw -> body) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO body
+transformBody deps policy unserved assemble ctx (source, info) = do
     plan <- filterPlan deps ctx policy info
     pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info <$ source)] of
         Just merged
             | not (Map.null (mpSurvivors merged)) ->
                 assemble (Map.singleton 0 source) merged (snapshotValue source)
-        _ -> BSL.empty
+        _ -> unserved
 
 -- | Distinguish a measured read from a missing version or failed projection.
 data SelectedDepth

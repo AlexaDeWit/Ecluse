@@ -27,7 +27,7 @@ import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyBoo
 import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
@@ -35,7 +35,7 @@ import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
 import Ecluse.Test.Corpus (CaptureRecord (crBytes, crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf)
@@ -214,7 +214,7 @@ accountedFullBytes ecosystem upstreamBase package bytes = do
     (info, document) <-
         first show $
             if ecosystem == Npm
-                then second (fst npmCached) <$> projectNpmManifest defaultLimits (cpPackage package) raw
+                then projectNpmFull defaultLimits (cpPackage package) raw
                 else second (fst pypiSimpleCached) <$> projectPyPIIndex defaultLimits (cpPackage package) raw
     let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
         located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info

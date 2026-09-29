@@ -19,7 +19,7 @@ import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField, NpmFieldOf (..))
 import Ecluse.Core.Registry.Npm.StreamingProjection
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (..))
@@ -31,7 +31,7 @@ import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
-spec = describe "finishProjection" $ do
+spec = describe "finishTree" $ do
     it "joins release timestamps and tags independently of source map order" $ hedgehog $ do
         ordered <- forAll (Gen.shuffle sourceFields)
         project (concat ordered) === project (concat sourceFields)
@@ -95,8 +95,8 @@ sourceFields =
 
 project :: [NpmField] -> Either Text (PackageInfo, Value)
 project fields = do
-    collected <- first show (foldM (collectField defaultLimits name) emptyProjection fields)
-    first show (finishProjection defaultLimits name "See source" collected)
+    collected <- first show (foldM (treeStep defaultLimits name) emptyTreeRead fields)
+    first show (finishTree defaultLimits name "See source" collected)
   where
     name = unscopedNpm "thing"
 

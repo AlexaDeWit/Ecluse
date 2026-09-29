@@ -25,7 +25,7 @@ permissions:
 jobs:
   changes:
     name: Classify the change
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:
       contents: read
@@ -56,7 +56,7 @@ jobs:
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     # Builds the widest cabal plan, so it is the sole writer of the cabal store and of
     # dist-newstyle, which every other Haskell job restores.
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
@@ -106,7 +106,7 @@ jobs:
     name: Allocation budgets (committed captures)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
@@ -147,7 +147,7 @@ jobs:
     name: Coverage (${{ matrix.suite }})
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
@@ -237,7 +237,7 @@ jobs:
     # Without `always()`, a failed or skipped coverage leg skips this job, so Codecov
     # posts nothing rather than a number computed from a partial report.
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -262,7 +262,7 @@ jobs:
     name: Smoke tests (live registries, non-gating)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     # Catches protocol drift when the live registries change their wire behaviour. Not a
     # `gate` dependency, so a transient blip shows red on the PR but blocks no merge.
@@ -292,7 +292,7 @@ jobs:
     name: End-to-end tests (whole-system, real npm)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     permissions:
       contents: read
@@ -333,7 +333,7 @@ jobs:
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     # Sub-minute checks batched so the toolchain setup is paid once. `task static-checks`
     # also assembles the site, so a dangling link fails here, not on the Pages deploy.
@@ -367,7 +367,7 @@ jobs:
     name: Haddock builds
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     # Sized for a cold run: any flake.lock change misses the Nix-store cache and
     # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
     timeout-minutes: 160
@@ -412,7 +412,7 @@ jobs:
     name: Dead-code check (weeder)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     # Reports library code unreachable from `Ecluse.run`, and any finding fails the gate.
     # Its own job because the -fwrite-ide-info build is heavy.
@@ -459,7 +459,7 @@ jobs:
     name: Haskell static analysis (stan)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     # HIE-based partial-function analysis at the .stan.toml floor, which Semgrep (no
     # Haskell) and hlint (no type info) cannot see. A finding above the floor fails the gate.
@@ -516,7 +516,7 @@ jobs:
   release-dry-run-assemble:
     name: Release dry-run (multi-arch index)
     needs: release-dry-run
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -554,9 +554,9 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -583,7 +583,7 @@ jobs:
     name: Vulnerability scan (grype, report-only)
     needs: release-dry-run
     if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -644,7 +644,7 @@ jobs:
       - release-dry-run-assemble
       - release-dry-run-boot
     if: always()
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     steps:
       # The script accepts a skip only from the classifier's two filters (documentation

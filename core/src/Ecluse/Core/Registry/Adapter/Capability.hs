@@ -43,6 +43,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 import Ecluse.Core.Server.Metadata (MetadataReads)
 import Ecluse.Core.Snapshot (Snapshot)
@@ -71,8 +72,8 @@ data AdapterMetadata = AdapterMetadata
     -- ^ Bind one origin's metadata reads to their observers, carrying its posture.
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
-    , metadataSerialise :: CachedDoc -> LByteString
-    -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
+    , metadataSerialise :: CachedDoc -> Either RenderRefused LByteString
+    -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes, or refuse a damaged render.
     , metadataFetchManifest :: ManifestFetch
     -- ^ The raw read under 'metadataNewReads', without its caching and metrics, for a store sweep.
     , metadataChargeFactors :: ChargeFactors

@@ -36,14 +36,14 @@ check() {
 check "a job on the arm64 runner passes" 0 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm # the policy runner
+    runs-on: ubuntu-26.04-arm # the policy runner
     steps: []
 YAML
 
 check "a quoted arm64 runner passes" 0 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: "ubuntu-24.04-arm"
+    runs-on: "ubuntu-26.04-arm"
 YAML
 
 check "a job on ubuntu-latest outside the allow-list fails" 1 ci.yml <<'YAML'
@@ -55,23 +55,23 @@ YAML
 check "a pinned amd64 runner outside the allow-list fails" 1 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 YAML
 
 check "one bad job among good ones fails" 1 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
   docs:
     runs-on: ubuntu-latest
   gate:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 YAML
 
 check "an allow-listed job passes" 0 scorecard.yml <<'YAML'
 jobs:
   analysis:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 YAML
 
 check "an allow-listed job on another runner fails" 1 scorecard.yml <<'YAML'
@@ -80,10 +80,22 @@ jobs:
     runs-on: windows-latest
 YAML
 
-check "an allow-listed job id in another workflow fails" 1 ci.yml <<'YAML'
+check "an allow-listed job on ubuntu-latest fails" 1 scorecard.yml <<'YAML'
 jobs:
   analysis:
     runs-on: ubuntu-latest
+YAML
+
+check "a job on an earlier arm64 image fails" 1 ci.yml <<'YAML'
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+YAML
+
+check "an allow-listed job id in another workflow fails" 1 ci.yml <<'YAML'
+jobs:
+  analysis:
+    runs-on: ubuntu-26.04
 YAML
 
 check "a matrix runner with an allow-listed amd64 leg passes" 0 release-build.yml <<'YAML'
@@ -94,9 +106,9 @@ jobs:
       matrix:
         platform:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     runs-on: ${{ matrix.platform.runner }}
 YAML
 
@@ -107,8 +119,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-24.04-arm
-          - runner: ubuntu-latest
+          - runner: ubuntu-26.04-arm
+          - runner: ubuntu-26.04
 YAML
 
 check "a matrix runner with no value for its key fails" 1 ci.yml <<'YAML'
@@ -117,7 +129,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        os: [ubuntu-24.04-arm]
+        os: [ubuntu-26.04-arm]
 YAML
 
 check "a runner expression outside the matrix fails" 1 ci.yml <<'YAML'
@@ -142,7 +154,7 @@ YAML
 fixture release-build.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 YAML
 check "a call to a local workflow this run checks passes" 0 ci.yml <<'YAML'
 jobs:
@@ -157,7 +169,7 @@ on:
   push:
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - name: Echo
         run: |
@@ -169,13 +181,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
   arm: # the next runs-on belongs to this job, not to build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 YAML
 
 check "a commented job id on the arm64 runner passes" 0 ci.yml <<'YAML'
 jobs: # every job
   arm: # a note
-    runs-on: ubuntu-24.04-arm # the policy runner
+    runs-on: ubuntu-26.04-arm # the policy runner
 YAML
 
 check "a flow-mapping job is checked like any other" 1 ci.yml <<'YAML'
@@ -203,7 +215,7 @@ jobs:
         platform:
           - host: ubuntu-latest
         include:
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
 YAML
 
 check "a matrix item without the path's key fails" 1 ci.yml <<'YAML'
@@ -213,7 +225,7 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
           - arch: amd64
 YAML
 
@@ -224,7 +236,7 @@ jobs:
     strategy:
       matrix:
         runner:
-          - ubuntu-24.04-arm
+          - ubuntu-26.04-arm
         include: ${{ fromJSON(inputs.extra) }}
 YAML
 
@@ -243,7 +255,7 @@ jobs:
     strategy:
       matrix:
         runner:
-          - ubuntu-24.04-arm
+          - ubuntu-26.04-arm
 YAML
 
 check "a flow matrix list with an unlisted runner fails" 1 ci.yml <<'YAML'
@@ -252,7 +264,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: [ubuntu-24.04-arm, ubuntu-latest]
+        runner: [ubuntu-26.04-arm, ubuntu-latest]
 YAML
 
 check "an include entry that adds an unlisted runner fails" 1 ci.yml <<'YAML'
@@ -264,7 +276,7 @@ jobs:
         runner:
         - ubuntu-latest
         include:
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
 YAML
 
 check "a flow-mapping include entry with an unlisted runner fails" 1 ci.yml <<'YAML'
@@ -273,7 +285,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: [ubuntu-24.04-arm]
+        runner: [ubuntu-26.04-arm]
         include:
           - {runner: ubuntu-latest}
 YAML
@@ -285,7 +297,7 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
         include:
           - platform:
               runner: ubuntu-latest
@@ -301,7 +313,7 @@ jobs:
         - arch: amd64
           runner: ubuntu-latest
           meta:
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
 YAML
 
 check "a call to a remote reusable workflow fails" 1 ci.yml <<'YAML'
@@ -313,13 +325,13 @@ YAML
 check "a runs-on list with an unlisted label fails" 1 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: [ubuntu-24.04-arm, ubuntu-latest]
+    runs-on: [ubuntu-26.04-arm, ubuntu-latest]
 YAML
 
 check "a runs-on list of the arm64 runner passes" 0 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: [ubuntu-24.04-arm]
+    runs-on: [ubuntu-26.04-arm]
 YAML
 
 check "a runner group fails" 1 ci.yml <<'YAML'
@@ -327,7 +339,7 @@ jobs:
   build:
     runs-on:
       group: arm-runners
-      labels: [ubuntu-24.04-arm]
+      labels: [ubuntu-26.04-arm]
 YAML
 
 check "a labels mapping with an unlisted label fails" 1 ci.yml <<'YAML'
@@ -347,14 +359,14 @@ YAML
 check "an anchored arm64 runner resolves through its alias" 0 ci.yml <<'YAML'
 jobs:
   first:
-    runs-on: &runner ubuntu-24.04-arm
+    runs-on: &runner ubuntu-26.04-arm
   second:
     runs-on: *runner
 YAML
 
 check "a YAML merge key fails by name" 1 ci.yml "uses a YAML merge key" <<'YAML'
 x-base: &base
-  runs-on: ubuntu-24.04-arm
+  runs-on: ubuntu-26.04-arm
 jobs:
   build:
     <<: *base
@@ -367,7 +379,7 @@ jobs:
 YAML
 check "a merge-key file does not stop the files after it" 1 ci.yml "FAILED  z.yml build" <<'YAML'
 x-base: &base
-  runs-on: ubuntu-24.04-arm
+  runs-on: ubuntu-26.04-arm
 jobs:
   build:
     <<: *base
@@ -405,7 +417,7 @@ YAML
 fixture callee.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 YAML
 check "a local call into a subdirectory fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
 jobs:
@@ -416,7 +428,7 @@ YAML
 fixture callee.YML <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 YAML
 check "a local call whose name differs in case from the file fails" 1 ci.yml "which is not a workflow file this run reads" <<'YAML'
 jobs:
@@ -427,7 +439,7 @@ YAML
 check "a literal arm64 runner passes beside a matrix expression" 0 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     strategy:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 YAML
@@ -448,13 +460,13 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
 YAML
 
 check "a workflow yq cannot parse fails" 1 ci.yml <<'YAML'
 jobs:
   build:
-    runs-on: [ubuntu-24.04-arm
+    runs-on: [ubuntu-26.04-arm
 YAML
 
 check "an empty workflow file fails" 1 ci.yml < /dev/null

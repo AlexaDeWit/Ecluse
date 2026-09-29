@@ -39,7 +39,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.IO (withBinaryFile)
 import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
-import UnliftIO.Exception (bracket, evaluate)
+import UnliftIO.Exception (bracket, evaluate, throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
@@ -47,15 +47,14 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, npmPacked, pypiSimpleCached, weighCachedDoc)
 
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
-import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmStream, readNpmPackument, selectNpmRead)
+import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, projectNpmPacked, projectNpmStream, readNpmFull, readNpmPackument, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..))
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, readPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Streaming qualified as PyPIStream
 import Ecluse.Core.Registry.PyPI.StreamingProjection qualified as PyPIProjection
@@ -63,12 +62,13 @@ import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, f
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (walkWritingChunks)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmFull)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
@@ -138,6 +138,10 @@ data ListingPeaks = ListingPeaks
     -- ^ Live bytes holding the read's cache entry.
     , listingPeak :: Word64
     -- ^ The high-water through the read and the render of the served body.
+    , listingDocumentLive :: Integer
+    -- ^ The live bytes another read's entry frees when it drops its served document.
+    , listingDocumentCharge :: Int
+    -- ^ The heap bytes the served document's weight stands for, as a cache expands it.
     }
     deriving stock (Show, Generic)
 
@@ -222,21 +226,45 @@ probeListing package = do
     -- A first read settles the read's one-off state, so the baseline holds it.
     bracket (prepareListingRead package) freeStablePtr (void . deRefStablePtr)
     before <- sample
-    bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
+    (sourceBytes, servedBytes, held, rendered) <- bracket (prepareListingRead package) freeStablePtr $ \entryRoot -> do
         held <- sample
         entry <- deRefStablePtr entryRoot
         bracket (prepareListingRender (pkgEcosystem (cpPackage package)) entry) freeStablePtr $ \servedRoot -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
-            pure
-                ListingPeaks
-                    { listingSourceBytes = entryBodyBytes entry
-                    , listingServedBytes = BS.length served
-                    , listingBaseline = live before
-                    , listingReadPeak = samplePeakLive held
-                    , listingEntryLive = live held
-                    , listingPeak = samplePeakLive rendered
-                    }
+            -- Evaluated here, so nothing sampled later holds the entry or the served body.
+            let !sourceBytes = entryBodyBytes entry
+                !servedBytes = BS.length served
+            pure (sourceBytes, servedBytes, held, rendered)
+    (document, charged) <- documentLive package
+    pure
+        ListingPeaks
+            { listingSourceBytes = sourceBytes
+            , listingServedBytes = servedBytes
+            , listingBaseline = live before
+            , listingReadPeak = samplePeakLive held
+            , listingEntryLive = live held
+            , listingPeak = samplePeakLive rendered
+            , listingDocumentLive = document
+            , listingDocumentCharge = charged
+            }
+
+{- | Read the capture again, and sample its entry before and after it drops the served document. A
+sample counts what the code still to run references, so both samples fall inside this function.
+-}
+{-# NOINLINE documentLive #-}
+documentLive :: CorpusPackage -> IO (Integer, Int)
+documentLive package = do
+    (whole, others, charged) <- bracket (prepareListingRead package) freeStablePtr $ \root -> do
+        whole <- sample
+        entry <- deRefStablePtr root
+        charged <- evaluate (expandWireBytes (fromIntegral (weighCachedDoc (entryRaw entry))))
+        -- Evaluated here, so the fields kept do not hold the entry.
+        let !info = entryInfo entry
+            !digest = entryDigest entry
+        pure (whole, (info, digest), charged)
+    dropped <- bracket (newStablePtr others) freeStablePtr (const sample)
+    pure (toInteger (live whole) - toInteger (live dropped), charged)
 
 -- The production full read in 32 KiB chunks, with artifact locations enforced and the entry forced.
 {-# NOINLINE prepareListingRead #-}
@@ -258,7 +286,7 @@ prepareListingRender ecosystem entry = do
     plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(GatedSource, Snapshot (entryDigest entry) (entryInfo entry))])
     let document = entryRaw entry
         sources = Map.singleton 0 (Snapshot (entryDigest entry) document)
-    evaluate (LBS.toStrict (metadataSerialise metadata (metadataAssemble metadata syntheticProxyBase sources plan (Just document)))) >>= newStablePtr
+    either throwIO (evaluate . LBS.toStrict) (metadataSerialise metadata (metadataAssemble metadata syntheticProxyBase sources plan (Just document))) >>= newStablePtr
 
 -- | Use matched selected-value and discard controls to resolve retention above harness overhead.
 probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
@@ -359,7 +387,7 @@ project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
 project package bytes = do
     upstream <- captureUpstream (pkgEcosystem name)
     case pkgEcosystem name of
-        Npm -> settled upstream (fst npmCached) (projectNpmManifest defaultLimits name bytes)
+        Npm -> settled upstream id (projectNpmFull defaultLimits name bytes)
         PyPI -> settled upstream (fst pypiSimpleCached) (projectPyPIIndex defaultLimits name bytes)
         RubyGems -> noRubyGemsCorpus
   where
@@ -460,7 +488,7 @@ readNpmSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString
 readNpmSource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
     BufferedCompact -> buffered $ \_ body ->
-        first show (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
+        first show (walkWritingChunks bound (npmFullTestWalk limits name (upstreamOrigin npmCaptureUpstream)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
     StreamedFull -> fmap heldEntry <$> streamFull limits name next
     StreamedSelected -> digested (readNpmPackument limits name (OneRelease (renderVersion version))) selectedResult
     StreamedVersions -> digested (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList) versionsResult
@@ -494,14 +522,14 @@ readPyPISource mode limits name version next = case mode of
 -- | Stream a full read through the production walk and projection, digesting the source as it goes.
 streamFull :: Limits -> PackageName -> IO ByteString -> IO (Either Text CacheEntry)
 streamFull limits name next = case pkgEcosystem name of
-    Npm -> digestingRead (readNpmPackument limits name WholePackument) next <&> (first show >=> npmEntry limits name)
+    Npm -> digestingRead (readNpmFull limits name (upstreamOrigin npmCaptureUpstream)) next <&> (first show >=> npmEntry limits name)
     PyPI -> digestingRead (readPyPIIndex limits name PyPIStream.FullRead) next <&> (first show >=> pypiEntry limits name)
     RubyGems -> pure (Left "no RubyGems source-read measurement")
 
-npmEntry :: Limits -> PackageName -> (StreamResult NpmProjection, ContentDigest) -> Either Text CacheEntry
+npmEntry :: Limits -> PackageName -> (StreamResult NpmFullRead, ContentDigest) -> Either Text CacheEntry
 npmEntry limits name (streamed, digest) = do
-    (info, raw) <- first show (projectNpmStream limits name (upstreamOrigin npmCaptureUpstream) streamed)
-    pure (CacheEntry info (fst npmCached raw) (streamBytes streamed) digest)
+    (info, packed) <- first show (projectNpmPacked limits name (upstreamOrigin npmCaptureUpstream) streamed)
+    pure (CacheEntry info (fst npmPacked packed) (streamBytes streamed) digest)
 
 pypiEntry :: Limits -> PackageName -> (StreamResult PyPIProjection.PyPIProjection, ContentDigest) -> Either Text CacheEntry
 pypiEntry limits name (streamed, digest) = do

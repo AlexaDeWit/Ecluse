@@ -20,7 +20,7 @@ import Ecluse.Core.Package.Merge (MergePlan (mpName, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
-import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused, overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath)
 
@@ -61,5 +61,5 @@ assembleSimpleDocument mountBase bySource plan base =
         )
 
 -- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
-serialiseSimpleDocument :: CachedDoc -> LByteString
-serialiseSimpleDocument = serialiseAcross (fmap simpleEncoding . snd pypiSimpleCached)
+serialiseSimpleDocument :: CachedDoc -> Either RenderRefused LByteString
+serialiseSimpleDocument = Right . serialiseAcross (fmap simpleEncoding . snd pypiSimpleCached)

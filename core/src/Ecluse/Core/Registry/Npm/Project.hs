@@ -41,7 +41,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmField (BeginContainer, InvalidContainer, VersionField), NpmRead (VersionListRead), npmFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmFieldOf (BeginContainer, InvalidContainer, VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     VersionManifest (..),

@@ -9,10 +9,12 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * The cached-document boundary
     assembleAcross,
     serialiseAcross,
+    RenderRefused (..),
 
     -- * Replaying a merge plan
     overlaySurvivors,
     overlayObjectSurvivors,
+    overlayObjectSources,
 
     -- * The interpolated-name gate
     safeDocumentName,
@@ -65,6 +67,14 @@ assembleAcross (inject, project) assemble mountBase bySource plan base =
 serialiseAcross :: (CachedDoc -> Maybe Encoding) -> CachedDoc -> LByteString
 serialiseAcross project = encodingToLazyByteString . fromMaybe emptyObject_ . project
 
+{- | A served document whose render refused its plan, because the plan names a table or string it
+lacks or the render does not fill its buffer exactly. The pipeline answers it as a render fault.
+-}
+data RenderRefused = RenderRefused
+    deriving stock (Eq, Show)
+
+instance Exception RenderRefused
+
 {- | Select exact admitted entries from the winning source snapshot, preserving each source's order.
 Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
@@ -86,8 +96,12 @@ overlaySurvivors entriesOf bySource plan =
 Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
 overlayObjectSurvivors :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
-overlayObjectSurvivors entriesOf bySource plan =
-    [ (version, entry)
+overlayObjectSurvivors entriesOf bySource plan = [(version, entry) | (version, _, entry) <- overlayObjectSources entriesOf bySource plan]
+
+-- | 'overlayObjectSurvivors' with the source each entry came from.
+overlayObjectSources :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, SourceId, entry)]
+overlayObjectSources entriesOf bySource plan =
+    [ (version, sid, entry)
     | ((sid, digest, ObjectEntry key), (version, kept)) <- Map.toAscList (admittedIndex plan)
     , usableEntry kept
     , Just source <- [Map.lookup sid bySource]
