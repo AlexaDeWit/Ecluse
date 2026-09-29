@@ -58,7 +58,6 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Info qualified as Info
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
-import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (..), isAuthorisationFailure, isSuccessStatus)
 
@@ -282,27 +281,34 @@ capturesProblems report =
 belowMargin :: Calibration -> Int64 -> Int64 -> Bool
 belowMargin calibration calibrated bytes = bytes * 100 < calibrated * (100 - calMarginPercent calibration)
 
-{- | A GitHub warning for each leg that allocates more than the margin below its calibrated figure.
-The run still passes, and the warning asks for a recalibration.
+{- | GitHub warnings for a run on another architecture than the calibration's, and for each leg that
+allocates more than the margin below its calibrated figure. Neither fails the run.
 -}
 capturesAnnotations :: CapturesReport -> [Text]
 capturesAnnotations report =
-    [ "::warning title=Allocation below its calibration::"
-        <> ecosystemName (sectionEcosystem section)
-        <> " "
-        <> alPackage leg
-        <> " "
-        <> legKey (alLeg leg)
-        <> " allocated "
-        <> show (measuredBytes (alMeasurement leg))
-        <> " bytes against a calibrated "
-        <> show calibrated
-        <> ", more than the margin below it. Recalibrate acceptance/criteria.json."
-    | section <- reportSections report
-    , Assessed leg <- sectionRows section
-    , Just calibrated <- [alCalibrated leg]
-    , belowMargin (reportCalibration report) calibrated (measuredBytes (alMeasurement leg))
+    [ "::warning title=Allocation budgets calibrated elsewhere::The budgets were calibrated on "
+        <> calArch (reportCalibration report)
+        <> " and this run is on "
+        <> hostArch
+        <> ", so a leg close to its budget can read differently."
+    | calArch (reportCalibration report) /= hostArch
     ]
+        <> [ "::warning title=Allocation below its calibration::"
+                <> ecosystemName (sectionEcosystem section)
+                <> " "
+                <> alPackage leg
+                <> " "
+                <> legKey (alLeg leg)
+                <> " allocated "
+                <> show (measuredBytes (alMeasurement leg))
+                <> " bytes against a calibrated "
+                <> show calibrated
+                <> ", more than the margin below it. Recalibrate acceptance/criteria.json."
+           | section <- reportSections report
+           , Assessed leg <- sectionRows section
+           , Just calibrated <- [alCalibrated leg]
+           , belowMargin (reportCalibration report) calibrated (measuredBytes (alMeasurement leg))
+           ]
 
 -- | Exit 0 only when 'capturesProblems' finds nothing.
 capturesExitCode :: CapturesReport -> ExitCode
@@ -328,20 +334,19 @@ liveAnnotations runs =
   where
     unavailable = length [() | (_, outcomes) <- runs, Unavailable _ _ <- outcomes]
 
--- | A live fetch: the document, a refusal by the proxy's own code or limits, or an upstream that did not deliver.
+-- | A live fetch: the document, a refusal by the proxy's own code or limits, or a registry that did not deliver it.
 data Fetched
     = Fetched ByteString
     | Refused Text
     | Unreachable Text
     deriving stock (Eq, Show)
 
-{- | A retryable transport fault, a timeout, throttling, a server error, or an access refusal leaves
-the registry unreachable. Every other outcome counts against the proxy.
+{- | A transport fault from the harness's stock client, or a 408, 429, 5xx, 401, or 403, is unreachable.
+A 2xx is the document, and every other fault or status counts against the proxy.
 -}
 classifyFetch :: Either FetchFault RegistryResponse -> Fetched
 classifyFetch = \case
-    Left fault@(FetchTransport transport)
-        | transportRetryable (tfCause transport) -> Unreachable (show fault)
+    Left fault@(FetchTransport _) -> Unreachable (show fault)
     Left fault -> Refused (show fault)
     Right response
         | isSuccessStatus code -> Fetched (responseBody response)
@@ -360,7 +365,7 @@ renderCapturesReport op report =
         , ""
         ]
             <> operatingLines op
-            <> [ "- Architecture: the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ". Allocation usually agrees across the two within about 1%, so a leg near its budget can read differently here."
+            <> [ "- Architecture: the budgets were calibrated on " <> calArch calibration <> " and this run is on " <> hostArch <> ". Allocation can differ between architectures, so a leg close to its budget can read differently here."
                | calArch calibration /= hostArch
                ]
             <> [ "- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."
@@ -441,7 +446,7 @@ renderLiveReport op runs =
         , ""
         ]
             <> operatingLines op
-            <> [ "- Budgets: none. A refusal by the proxy's own code or limits fails the run, as does a status that says the proxy asked wrongly. A registry that times out, throttles, fails, or refuses access leaves the run incomplete."
+            <> [ "- Budgets: none. A refusal by the proxy's own code or limits fails the run, as does a status that says the proxy asked wrongly. A transport fault, or a registry that times out, throttles, fails, or refuses access, leaves the run incomplete."
                , ""
                ]
             <> concatMap liveSection runs

@@ -108,9 +108,10 @@ readCorpusPins parser = do
   where
     pinsPath = "bench/corpus/pins.json"
 
--- | A committed capture's recorded byte count and capture time.
+-- | A committed capture's recorded byte count, SHA-256 digest, and capture time.
 data CaptureRecord = CaptureRecord
     { crBytes :: Int64
+    , crSha256 :: Text
     , crCapturedAt :: UTCTime
     }
 
@@ -119,7 +120,7 @@ readCaptureRecords :: Ecosystem -> IO (Either String (Map Text CaptureRecord))
 readCaptureRecords eco = readCorpusPins $ \pins -> do
     recorded <- pins .: "captures"
     entries <- recorded .: fromString (toString (ecosystemName eco))
-    traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "capturedAt")) entries
+    traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "sha256" <*> capture .: "capturedAt")) entries
 
 -- | The placeholder proxy origin the serve-time rewrite puts tarball URLs under.
 syntheticProxyBase :: Text
