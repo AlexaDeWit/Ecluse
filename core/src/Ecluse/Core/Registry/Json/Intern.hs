@@ -21,7 +21,7 @@ module Ecluse.Core.Registry.Json.Intern (
     SipKey (..),
     newTableKey,
     newInternTable,
-    Entry (..),
+    Entry (entryText, entryString, entryKeeps, entryIndex),
     Interned (..),
     internName,
     tableTexts,
@@ -75,7 +75,9 @@ newTableKey = do
         (first8, last8) = BS.splitAt 8 bytes
     pure (SipKey (word first8) (word last8))
 
--- | One table entry: the shared text, its shared string value, whether a member's value is kept as read, and its index.
+{- | One table entry: the shared text, its shared string value, whether a member's value is kept as
+read, and its index. Only a table makes one, so every index lies within its table.
+-}
 data Entry = Entry
     { entryText :: !Text
     , entryString :: !Value

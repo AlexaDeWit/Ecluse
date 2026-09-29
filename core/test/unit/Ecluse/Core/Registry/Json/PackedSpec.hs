@@ -15,13 +15,13 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Scientific (Scientific, scientific)
 import Data.Vector qualified as V
-import Hedgehog (Gen, PropertyT, annotateShow, failure, forAll, (===))
+import Hedgehog (Gen, PropertyT, annotateShow, diff, failure, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), encodeString, encodedLength, packedValue, planValue, renderPlan, urlPrefix, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedResident, packedValue, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
@@ -39,14 +39,14 @@ spec = modifyMaxSuccess (const 2000) $ do
                 encodeString text === toStrict (encodingToLazyByteString (Encoding.text text))
                 encodedLength text === BS.length (encodeString text)
 
-    describe "renderAlone" $ do
+    describe "renderPlan, one value" $ do
         it "renders a hostile value as aeson encodes the tree its read builds, and decodes to that value" $
             hedgehog $ do
                 value <- forAll (genHostile 5)
                 (table, form) <- packedOf (packValue (Generic limit) [] value)
                 packedValue table form === value
-                renderAlone table Nothing form === toStrict (encode (treeValue [toStrict (encode value) <> " "]))
-                toStrict (encode (packedValue table form)) === renderAlone table Nothing form
+                renderAlone table Nothing form === Just (toStrict (encode (treeValue [toStrict (encode value) <> " "])))
+                Just (toStrict (encode (packedValue table form))) === renderAlone table Nothing form
 
         it "packs a value nested to the reader's limit, and fails a deeper one as the tree read does" $
             hedgehog $ do
@@ -56,7 +56,7 @@ spec = modifyMaxSuccess (const 2000) $ do
                 let nested = foldr (\isObject inner -> if isObject then Object (KeyMap.singleton "k" inner) else Array (V.singleton inner)) leaf keyed
                     chunks = [toStrict (encode nested) <> " "]
                 fmap (second (fmap rendered)) (readOutcome (packBytes (Generic limit) [] chunks))
-                    === fmap (second (fmap (toStrict . encode))) (readOutcome (treeRead chunks))
+                    === fmap (second (fmap (Just . toStrict . encode))) (readOutcome (treeRead chunks))
 
         it "rebases the hole's URL onto a prefix, keeping the URL's file name" $
             hedgehog $ do
@@ -68,18 +68,25 @@ spec = modifyMaxSuccess (const 2000) $ do
                     value = at path (String url) others
                     expected = toStrict (encode (at path (String (prefix <> urlFilenameComponent url)) others))
                 (table, form) <- packedOf (packValue (Generic limit) path value)
-                renderAlone table (Just (urlPrefix prefix)) form === expected
-                renderAlone table Nothing form === toStrict (encode value)
-                renderAlone table (Just (urlPrefix prefix)) (withoutHole form) === toStrict (encode value)
+                renderAlone table (Just (urlPrefix prefix)) form === Just expected
+                renderAlone table Nothing form === Just (toStrict (encode value))
+                renderAlone table (Just (urlPrefix prefix)) (withoutHole form) === Just (toStrict (encode value))
 
         it "writes a value whose path holds no string as read" $
             hedgehog $ do
                 member <- forAll (Gen.element [Null, Number 7, Bool True, Object (KeyMap.singleton "url" "x"), Array (V.singleton "x")])
                 let value = Object (KeyMap.fromList [("url", member), ("name", "y")])
                 (table, form) <- packedOf (packValue (Generic limit) ["url"] value)
-                renderAlone table (Just (urlPrefix "https://mirror/")) form === toStrict (encode value)
+                renderAlone table (Just (urlPrefix "https://mirror/")) form === Just (toStrict (encode value))
 
-    describe "renderPlan" $
+        it "refuses a value that names a string its table lacks, rather than render it short" $
+            hedgehog $ do
+                value <- forAll (genHostile 3)
+                (_, form) <- packedOf (packValue (Generic limit) [] (Object (KeyMap.singleton "name" value)))
+                renderAlone (docTable mempty) Nothing form === Nothing
+                renderAlone (docTable mempty) (Just (urlPrefix "https://mirror/")) form === Nothing
+
+    describe "renderPlan" $ do
         it "renders a document whose pieces come from several tables as aeson encodes it, holes rebased" $
             hedgehog $ do
                 members <- forAll (Gen.list (Range.linear 0 3) ((,) <$> genHostileText <*> genHostile 2))
@@ -103,23 +110,39 @@ spec = modifyMaxSuccess (const 2000) $ do
                         | asObject = Object (KeyMap.fromList (zip (map Key.fromText keyed) (map served items)))
                         | otherwise = Array (V.fromList (map served items))
                     expected = toStrict (encode (Object (KeyMap.insert (Key.fromText slot) slotValue (KeyMap.fromList [(Key.fromText key, value) | (key, value) <- members]))))
-                renderPlan plan === expected
-                toStrict (encode (planValue plan)) === expected
+                renderPlan plan === Just expected
+                fmap (toStrict . encode) (planValue plan) === Just expected
+                diff (planResident plan) (>=) (sum (map (tableResident . fst) packedItems) + sum (map (packedResident . snd) packedItems))
+
+        it "refuses a piece that names a table the plan lacks" $
+            hedgehog $ do
+                value <- forAll (genHostile 3)
+                (table, form) <- packedOf (packValue (Generic limit) [] value)
+                let plan = RenderPlan{planMembers = mempty, planSlot = "k", planTables = fromList [table], planPieces = ArrayPieces [Piece 0 form, Piece 1 form], planPrefix = Nothing}
+                renderPlan plan === Nothing
+                planValue plan === Nothing
+
+    describe "resident bytes" $
+        it "counts each array with its header, in whole words, and each record" $ do
+            tableResident (docTable (fromList ["ab"])) `shouldBe` 24 + (16 + 8) + (16 + 16)
+            case packValue (Generic limit) [] (String "abcdefghij") of
+                Right (StreamResult (Right (_, form)) _) -> packedResident form `shouldBe` 24 + 16 + 8
+                _ -> expectationFailure "did not pack a string"
 
     describe "decodeScalar" $
         it "reads each number back in the form aeson writes it, past the exponents aeson writes whole" $
             forM_ ["5e1025", "5.0e1025", "12e1030", "1e-400", "-0", "0.000", "1E+2", "-1.5e-7", "123456789012345678901234567890", "-9223372036854775809", "9223372036854775807", "1.5e308", "1e1024"] $ \number ->
                 case packBytes (Generic limit) [] [number <> " "] of
                     Right (StreamResult (Right (table, form)) _) -> do
-                        renderAlone table Nothing form `shouldBe` toStrict (encode (treeValue [number <> " "]))
-                        toStrict (encode (packedValue table form)) `shouldBe` renderAlone table Nothing form
+                        renderAlone table Nothing form `shouldBe` Just (toStrict (encode (treeValue [number <> " "])))
+                        Just (toStrict (encode (packedValue table form))) `shouldBe` renderAlone table Nothing form
                     _ -> expectationFailure ("did not pack " <> decodeUtf8 number)
 
 -- The structural budget every property reads with.
 limit :: Int
 limit = 64
 
-rendered :: (DocTable, Packed) -> ByteString
+rendered :: (DocTable, Packed) -> Maybe ByteString
 rendered (table, form) = renderAlone table Nothing form
 
 -- The packed value of a read that succeeds, failing the property otherwise.

@@ -25,16 +25,13 @@ module Ecluse.Core.Registry.Json.Scratch (
 ) where
 
 import Control.Monad.ST (ST)
-import Data.Bits (shiftR, (.&.))
 import Data.ByteString qualified as BS
 import Data.ByteString.Unsafe qualified as BSU
-import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyByteArray, copyMutableByteArray, getSizeofMutableByteArray, newByteArray, unsafeFreezeByteArray, writeByteArray)
+import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyMutableByteArray, getSizeofMutableByteArray, newByteArray, unsafeFreezeByteArray, writeByteArray)
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
-import Data.Text.Array qualified as TA
-import Data.Text.Internal qualified as TI
 
-import Ecluse.Core.Registry.Json.Packed (encodedLength, plain, varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (encodedLength, quote, varintSize, writeEncoded, writeVarint)
 
 -- | The buffer and the offset of its next byte.
 data Scratch st = Scratch !(MutVar st (MutableByteArray st)) !(PrimVar st Int)
@@ -78,6 +75,7 @@ putAt :: Scratch st -> Int -> (MutableByteArray st -> Int -> ST st Int) -> ST st
 putAt scratch@(Scratch _ cursor) count write = reserve scratch count (\buffer at -> write buffer at >>= writePrimVar cursor)
 {-# INLINE putAt #-}
 
+-- | Write one byte.
 putByte :: Scratch st -> Word8 -> ST st ()
 putByte scratch byte = putAt scratch 1 (\buffer at -> writeByteArray buffer at byte >> pure (at + 1))
 {-# INLINE putByte #-}
@@ -89,49 +87,7 @@ putVarint scratch n = putAt scratch (varintSize n) (writeVarint n)
 
 -- | Write the bytes aeson writes for a string, quotes included.
 putEncodedText :: Scratch st -> Text -> ST st ()
-putEncodedText scratch text@(TI.Text array offset len)
-    | plain text = putAt scratch (len + 2) $ \buffer at -> do
-        writeByteArray buffer at quote
-        copyByteArray buffer (at + 1) array offset len
-        writeByteArray buffer (at + len + 1) quote
-        pure (at + len + 2)
-    | otherwise = putAt scratch (encodedLength text) $ \buffer at -> do
-        writeByteArray buffer at quote
-        end <- escapeFrom array offset (offset + len) buffer (at + 1)
-        writeByteArray buffer end quote
-        pure (end + 1)
-
--- aeson's escapes: a backslash, a quote, a newline, a return and a tab by name, any other byte below a
--- space as a lower-case hexadecimal code, and every other byte as it is.
-escapeFrom :: TA.Array -> Int -> Int -> MutableByteArray st -> Int -> ST st Int
-escapeFrom array !from !to buffer !at
-    | from >= to = pure at
-    | otherwise = case TA.unsafeIndex array from of
-        0x5c -> pair 0x5c
-        0x22 -> pair 0x22
-        byte
-            | byte >= 0x20 -> writeByteArray buffer at byte >> escapeFrom array (from + 1) to buffer (at + 1)
-            | byte == 0x0a -> pair 0x6e
-            | byte == 0x0d -> pair 0x72
-            | byte == 0x09 -> pair 0x74
-            | otherwise -> do
-                writeByteArray buffer at (0x5c :: Word8)
-                writeByteArray buffer (at + 1) (0x75 :: Word8)
-                writeByteArray buffer (at + 2) (0x30 :: Word8)
-                writeByteArray buffer (at + 3) (0x30 :: Word8)
-                writeByteArray buffer (at + 4) (hexDigit (byte `shiftR` 4))
-                writeByteArray buffer (at + 5) (hexDigit (byte .&. 0x0f))
-                escapeFrom array (from + 1) to buffer (at + 6)
-  where
-    pair escaped = do
-        writeByteArray buffer at (0x5c :: Word8)
-        writeByteArray buffer (at + 1) (escaped :: Word8)
-        escapeFrom array (from + 1) to buffer (at + 2)
-
-hexDigit :: Word8 -> Word8
-hexDigit digit
-    | digit < 10 = 0x30 + digit
-    | otherwise = 0x57 + digit
+putEncodedText scratch text = putAt scratch (encodedLength text) (writeEncoded text)
 
 -- | Write a string whose bytes need no escape, between quotes.
 putPlainBytes :: Scratch st -> ByteString -> ST st ()
@@ -187,6 +143,3 @@ copyOut scratch from to = do
     target <- newByteArray (to - from)
     copyMutableByteArray target 0 buffer from (to - from)
     unsafeFreezeByteArray target
-
-quote :: Word8
-quote = 0x22

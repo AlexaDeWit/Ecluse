@@ -29,7 +29,7 @@ import Data.JsonStream.CLexer (unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry (..), InternTable, Interned (..), Name (Plain), decodedName, internName, nameBytes, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry (entryKeeps, entryString, entryText), InternTable, Interned (..), Name (Plain), decodedName, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
@@ -107,20 +107,25 @@ class (Walk r) => Build b r where
     -- | The empty array a scalar shape keeps for a container it skips.
     emptyContainer :: b -> (Built b -> r) -> r
 
+    -- | An object begins.
     openObject :: b -> (Fields b -> r) -> r
 
     -- | A member under the key begins, and whether the object already holds the key.
     beginMember :: b -> MemberKey -> Fields b -> (Bool -> r) -> r
 
+    -- | The member begun last ends with its value.
     addMember :: b -> MemberKey -> Built b -> Fields b -> (Fields b -> r) -> r
 
     -- | Forget the member begun last, whose key the object already holds.
     dropValue :: b -> Built b -> r -> r
 
+    -- | Finish an object.
     closeObject :: b -> Fields b -> (Built b -> r) -> r
 
+    -- | An array begins.
     openArray :: b -> (Items b -> r) -> r
 
+    -- | An item of the array ends.
     addItem :: b -> Built b -> Items b -> (Items b -> r) -> r
 
     -- | Finish an array of the given item count.

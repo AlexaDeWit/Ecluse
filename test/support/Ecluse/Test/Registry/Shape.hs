@@ -11,7 +11,9 @@ module Ecluse.Test.Registry.Shape (
     toShape,
 ) where
 
-import Data.Aeson (Value (Null, Number, String))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Vector qualified as V
 import Hedgehog (Gen)
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -49,12 +51,13 @@ genShape depth =
                     [ (2, TestObjectWith <$> budget <*> genMembers <*> genShape (depth - 1))
                     , (2, TestArrayWith <$> budget <*> genShape (depth - 1) <*> genShape (depth - 1))
                     , (1, TestStringOr <$> budget <*> genShape (depth - 1))
-                    , (2, TestObjectOr <$> Gen.element [Null, Number 0, String "fallback"] <*> genMembers)
+                    , (2, TestObjectOr <$> Gen.element fallbacks <*> genMembers)
                     , (1, TestChecked <$> budget <*> genShape (depth - 1))
                     ]
                ]
         )
   where
+    fallbacks = [Null, Number 0, Number 1.5e-7, String "fallback", Object (KeyMap.fromList [("a", Number 2), ("\"", String "x\n")]), Array (V.fromList [Null, Bool True])]
     budget = Gen.frequency [(4, Gen.int (Range.linear 1 6)), (1, Gen.int (Range.linear (-1) 0))]
     genMembers =
         Gen.choice

@@ -53,10 +53,19 @@ nestingLimit = "retained JSON nesting limit"
 
 -- | What a walk's continuations return: a read that needs input, has failed or been refused, or is done.
 class Walk r where
+    -- | What a finished walk returns.
     type Result r
+
+    -- | Suspend until the next chunk of input.
     needData :: (ByteString -> r) -> r
+
+    -- | Stop on a parse error.
     failWith :: Text -> r
+
+    -- | Stop on a refused field.
     refuse :: LimitError -> r
+
+    -- | Finish with the walk's result.
     finish :: Result r -> r
 
 instance Walk (Steps Identity s) where
