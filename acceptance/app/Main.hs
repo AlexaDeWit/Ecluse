@@ -184,11 +184,12 @@ measurePass operation copy = do
     pure (if done then Just (before - after, (t1 - t0) * 1000) else Nothing)
 
 runFull :: RuleDeps -> [PrecededRule] -> EvalContext -> EcosystemBench -> PackageName -> ContentDigest -> ByteString -> IO Bool
-runFull deps policy ctx bench pkg digest raw = case ebProject bench pkg raw of
-    Left _ -> pure False
-    Right (info, document) -> do
-        size <- serveDocumentSizeUnder deps policy (ebMetadata bench) ctx (Snapshot digest document, info)
-        Exception.evaluate (size > 0)
+runFull deps policy ctx bench pkg digest raw =
+    ebRead bench pkg raw >>= \case
+        Left _ -> pure False
+        Right (info, document) -> do
+            size <- serveDocumentSizeUnder deps policy (ebMetadata bench) ctx (Snapshot digest document, info)
+            Exception.evaluate (size > 0)
 
 runSelective :: EcosystemBench -> PackageName -> Version -> ByteString -> IO Bool
 runSelective bench pkg version raw = Exception.evaluate $

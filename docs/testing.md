@@ -426,11 +426,12 @@ a changed figure comes from a changed build. The budgets cover allocation only. 
 allocates nothing leaves the figure unchanged, and shows only in the reports' time columns, which
 carry no budget.
 
-The legs project each capture through the test-support projection over its held bytes, so they
-cover the token walk and field policy (for npm, the production full-read walk, which packs each
-kept release), the finishing projection, the rules, the advisory reads, the merge, assembly, and
-serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
-artifact-location check (`enforceArtifactLocations`), `digestingRead`, or `chargedRead`.
+The full legs read each capture through the production reader a fetch runs (`readNpmFull` or
+`readPyPIIndex` with its finishing projection, over a table keyed afresh for the read), fed the
+held bytes as one chunk, then run the rules, the advisory reads, the merge, assembly, and
+serialisation. The fetch wraps that reader in `digestingRead` and `chargedRead` and applies
+`enforceArtifactLocations` to its result, and none of the three runs in the gate. The
+single-version leg projects through the test-support tree walk over a fixed table key.
 
 Each package has four legs:
 
@@ -450,14 +451,14 @@ rules' own read, under the key the rules look it up by.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
-GHC's per-thread allocation counter. For one build over one input, a no-database leg's median moves
-by a few dozen bytes at most between runs, and an advisory leg's by up to about 150 bytes, far inside
-the margin. The passes within one run spread further, up to tens of kilobytes on an advisory leg,
-and the median absorbs that spread. Wall-clock time appears in the report for information only. The age rules
-evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they admit the same
-versions on every run. The harness links the shipped server's RTS options (the `shipped-rts`
-stanza in `ecluse.cabal`), and the report prints the capabilities and allocation area it read from
-the running RTS.
+GHC's per-thread allocation counter. For one build over one input, a full leg's figure moves by a
+few hundredths of a percent between passes and runs, because the reader draws a fresh table key for
+each read, and a single-version leg's by a few dozen bytes. Both stay far inside the margin, and the
+median absorbs the spread within a run. Wall-clock time appears in the report for information only.
+The age rules evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they
+admit the same versions on every run. The harness links the shipped server's RTS options (the
+`shipped-rts` stanza in `ecluse.cabal`), and the report prints the capabilities and allocation area
+it read from the running RTS.
 
 [acceptance/criteria.json](../acceptance/criteria.json) holds each leg's calibrated figure in
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
