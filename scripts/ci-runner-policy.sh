@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check every workflow job's runner, for `task lint-workflows`. CI builds and tests on
-# arm64, so a job runs on ubuntu-24.04-arm unless the allow-list below names its
+# arm64, so a job runs on ubuntu-26.04-arm unless the allow-list below names its
 # workflow, job, and runner with a reason. A `runs-on: ${{ matrix.<a>[.<b>] }}` job is
 # checked against every value its matrix and its include entries give that path.
 # Anything the script cannot resolve fails. A local reusable-workflow call must name a
@@ -12,15 +12,15 @@
 set -euo pipefail
 
 dir="${1:-.github/workflows}"
-policy_runner="ubuntu-24.04-arm"
+policy_runner="ubuntu-26.04-arm"
 
 # <workflow file>:<job id>:<runner or remote workflow>|<reason>
 allowed=(
-  "scorecard.yml:analysis:ubuntu-latest|ossf/scorecard-action ships only a linux/amd64 image."
-  "release-build.yml:build:ubuntu-latest|The amd64 release image builds natively on amd64."
-  "ci.yml:release-dry-run-boot:ubuntu-latest|The amd64 release image starts on its own architecture."
-  "release.yml:verify-version:ubuntu-latest|Builds and tests no code, and only a publishing run can prove a runner change."
-  "release.yml:publish:ubuntu-latest|Builds and tests no code, and only a publishing run can prove a runner change."
+  "scorecard.yml:analysis:ubuntu-26.04|ossf/scorecard-action ships only a linux/amd64 image."
+  "release-build.yml:build:ubuntu-26.04|The amd64 release image builds natively on amd64."
+  "ci.yml:release-dry-run-boot:ubuntu-26.04|The amd64 release image starts on its own architecture."
+  "release.yml:verify-version:ubuntu-26.04|Builds and tests no code, and only a publishing run can prove an architecture change."
+  "release.yml:publish:ubuntu-26.04|Builds and tests no code, and only a publishing run can prove an architecture change."
 )
 
 # Emits one "<job>\t<kind>\t<value>" row per runner a job can take ("runner"), per local

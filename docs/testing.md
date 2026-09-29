@@ -53,7 +53,7 @@ lightweight LocalStack alternative, with `amazonka` pointed at `http://<containe
 throwaway credentials. The telemetry specs run a real OTLP **Collector** container the same way. Both
 are hermetic: no real cloud account, no real credentials.
 
-The tier needs a running Docker daemon. CI's `ubuntu-24.04-arm` runner provides one. Locally,
+The tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides one. Locally,
 install Docker: Nix ships the toolchain, not the daemon. Run: `cabal test ecluse-integration` (or
 `task test-integration`).
 
@@ -888,10 +888,11 @@ with one runner per instrumented suite. `docs`, `e2e`, `weeder`, `stan`, and `st
 hold their own runner. `codecov-notify` follows the coverage legs and releases the Codecov statuses.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
-`ubuntu-24.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
-image on an amd64 runner, and no test tier runs on amd64. `scripts/ci-runner-policy.sh` (in
-`task lint-workflows`) fails a job on any other runner unless its allow-list names the job with a
-reason.
+`ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
+image on the `ubuntu-26.04` runner, and no test tier runs on amd64. Every job names its Ubuntu
+release, never `ubuntu-latest`, so a move to a new runner image is a reviewed change.
+`scripts/ci-runner-policy.sh` (in `task lint-workflows`) fails a job on any other runner unless its
+allow-list names the job with a reason.
 
 The release dry-run also gates. It runs `release-build.yml`, the reusable workflow that
 `release.yml` builds its images with, so both architectures build natively and without a cache, as

@@ -1,0 +1,7 @@
+# actionlint 1.7.12, the latest release, predates the GitHub-hosted Ubuntu 26.04 images
+# and reports their labels as unknown. scripts/ci-runner-policy.sh pins each job to one
+# of these exact labels. Remove this file once actionlint lists them.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

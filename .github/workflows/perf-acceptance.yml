@@ -23,7 +23,7 @@ permissions:
 jobs:
   perf-acceptance:
     name: Performance acceptance (live, non-blocking)
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     # Observed ~13 min mean, 21 min worst. Sized to clear a cold-cache run.
     timeout-minutes: 45
     env:

@@ -1,11 +1,9 @@
 name: Scorecard
 
-# OpenSSF Scorecard: automated supply-chain posture scoring. For a project whose
-# thesis *is* supply-chain resilience, this is dogfooding. Scorecard grades branch
-# protection, pinned dependencies, signed and attested releases, SAST, token
-# permissions, and dangerous workflow patterns, then publishes a public score and
-# README badge. Report-only: it never gates a PR. Findings surface in the Security
-# tab (code scanning) and at scorecard.dev.
+# OpenSSF Scorecard grades branch protection, pinned dependencies, signed and attested
+# releases, SAST, token permissions, and dangerous workflow patterns, and publishes the
+# score behind the README badge. Report-only: it never gates a PR. Findings surface in
+# the Security tab (code scanning) and at scorecard.dev.
 on:
   # Re-evaluate when a branch-protection rule or a ruleset changes (a Scorecard input).
   branch_protection_rule:
@@ -22,7 +20,7 @@ permissions: read-all
 jobs:
   analysis:
     name: Scorecard analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       security-events: write # upload the SARIF to code scanning (Security tab)
