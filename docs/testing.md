@@ -109,10 +109,11 @@ peak or a bound on transient buffers. The [listing probe](#listing-peaks) measur
 probes use production projection functions with the default structural limits. They do not execute
 the HTTP bounded read or prove that shipping response limits admit each capture.
 
-The retained-byte gate uses the following corpus envelopes. The calibration used all nine npm and
+The retained-byte gate uses the following corpus envelopes. The figures come from all nine npm and
 three PyPI captures in the arm64 Build job of
-[CI run 36393895834](https://github.com/AlexaDeWit/Ecluse/actions/runs/36393895834/job/108835849423),
-with GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process.
+[CI run 36545262450](https://github.com/AlexaDeWit/Ecluse/actions/runs/36545262450/job/109330092515),
+with GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process. npm's shared cache entry is its
+packed full read.
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 A calibrated gate is the smallest quarter step at least 8% above its measured maximum. The PyPI raw
 gate keeps its default.
@@ -121,12 +122,12 @@ gate keeps its default.
 |---|---|---:|---|---:|---:|
 | npm | Wire bytes | 0.999938894 | typescript | 1.25 | 25.0% |
 | npm | Raw `Value` | 6.477760939 | express | 7 | 8.1% |
-| npm | Typed projection | 0.444088549 | react | 0.5 | 12.6% |
-| npm | Shared cache entry | 1.567175752 | typescript | 1.75 | 11.7% |
+| npm | Typed projection | 0.443638073 | react | 0.5 | 12.7% |
+| npm | Shared cache entry | 0.693002413 | react | 0.75 | 8.2% |
 | PyPI | Wire bytes | 0.999638868 | numpy | 1.25 | 25.0% |
 | PyPI | Raw `Value` | 4.120186179 | boto3 | 7 | 69.9% |
-| PyPI | Typed projection | 1.588120613 | requests | 1.75 | 10.2% |
-| PyPI | Shared cache entry | 3.130036392 | requests | 3.5 | 11.8% |
+| PyPI | Typed projection | 1.593904341 | requests | 1.75 | 9.8% |
+| PyPI | Shared cache entry | 3.041720821 | requests | 3.5 | 15.1% |
 
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
 same test also checks that it stays within the memory gate's full-read charge, read from each
@@ -135,18 +136,18 @@ size, for the lazy encoding and its strict copy, must stay within the 1.6 output
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
-For example, the TypeScript shared shape retains 24,595,192 heap bytes from 15,693,959 source bytes.
+For example, the TypeScript shared shape retains 7,284,096 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
 `compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
 
-The 48 calibration rows left -14,152 to -1,000 bytes above their warmed baselines after release.
+The 48 rows left -17,224 to -1,000 bytes above their warmed baselines after release.
 The 16 KiB release tolerance leaves 17,384 bytes above the observed maximum.
 The second release condition requires at least 90% of each held growth to disappear.
 Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
 
 The compact denominator gives a different accounting ratio. Requests' shared retained bytes
-divided by its compact encoding equal 3.989150240, the maximum across both ecosystems. The 7.5
-factor leaves 88.0% margin above it. It is not an active-work bound.
+divided by its compact encoding equal 3.876594335, the maximum across both ecosystems. The 7.5
+factor leaves 93.5% margin above it. It is not an active-work bound.
 The local provider retains selected releases and assembled bytes, so full shared shapes do not
 size its entry-count control. An assembled-output mean cannot size a shared count of both forms.
 These residency measurements do not determine the shared entry-count allowance.

@@ -86,7 +86,7 @@ checkMeasurement ecosystem shape size result = do
 within the memory gate's full-read charge, so a representation cannot outgrow what admission charges. -}
 envelopePermille :: Ecosystem -> Shape -> Integer
 envelopePermille Npm Typed = 500
-envelopePermille Npm Shared = 1750
+envelopePermille Npm Shared = 750
 envelopePermille PyPI Typed = 1750
 envelopePermille PyPI Shared = 3500
 envelopePermille _ shape = case shape of
