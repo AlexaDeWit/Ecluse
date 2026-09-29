@@ -8,14 +8,11 @@ of the same bytes is the wire bench's full metadata projection.
 -}
 module Ecluse.Core.PackedBench (benchmarks) where
 
-import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import UnliftIO.Exception (evaluate, throwIO)
 
-import Ecluse.Bench.Corpus (benchEvalContext, entryName)
+import Ecluse.Bench.Corpus (benchEvalContext, entryName, forcedTree, heldTree)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo, PackageName, infoVersions)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable))
 import Ecluse.Core.Security (defaultLimits)
@@ -37,7 +34,7 @@ benchmarks ecosystem = do
     serve = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
     captureGroup entry@(package, bytes, info, document) = do
         let digest = digestOf bytes
-        tree <- asTree document
+        tree <- heldTree <$> forcedTree ecosystem document
         pure $
             bgroup
                 (entryName entry)
@@ -50,9 +47,4 @@ benchmarks ecosystem = do
         Npm -> fmap (second (fst npmCached)) . projectNpmManifest defaultLimits name
         PyPI -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         RubyGems -> const (Left MetadataUndecodable)
-    -- The document as aeson's tree, forced before any measurement.
-    asTree document = do
-        let tree = fromMaybe document ((fst npmCached <$> snd npmCached document) <|> (fst pypiSimpleCached <$> snd pypiSimpleCached document))
-        _ <- either throwIO (evaluate . BSL.length) (metadataSerialise (ebMetadata ecosystem) tree)
-        pure tree
     versionCount = either (const (-1)) (Map.size . infoVersions . fst)

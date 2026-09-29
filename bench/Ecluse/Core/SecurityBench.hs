@@ -10,7 +10,7 @@ module Ecluse.Core.SecurityBench (benchmarks) where
 import Ecluse.Test.Security.Limits (checkVersionCount)
 
 import Data.ByteString qualified as BS
-import Ecluse.Bench.Corpus (entryInfo, entryName, syntheticPackageInfo)
+import Ecluse.Bench.Corpus (entryInfo, entryName, forcedTree, heldTree, syntheticPackageInfo)
 import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
@@ -23,7 +23,7 @@ benchmarks ecosystem =
         [env (pure bodyChunks) $ \chunks -> bench "boundedRead (8 MiB body, 64 KiB chunks)" (whnfIO (boundedReadDepth chunks))]
             <> [ bgroup
                     (entryName entry)
-                    [ bench "checkNestingDepth" (whnf (ebNestingDepth ecosystem) document)
+                    [ env (forcedTree ecosystem document) $ \held -> bench "checkNestingDepth" (whnf (ebNestingDepth ecosystem) (heldTree held))
                     , bench "checkVersionCount" (whnf versionCountDepth (entryInfo entry))
                     ]
                | entry@(_, _, _, document) <- ebCorpus ecosystem
