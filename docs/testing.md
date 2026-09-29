@@ -409,13 +409,18 @@ install, so the harness passes `--only-binary=:all:` and installs a wheel alone,
 
 ## Allocation budgets: `perf-allocation` (gating)
 
-The `allocation` job in `ci.yml` holds the bytes that the metadata work behind each request
-allocates to reviewed budgets, and the `CI gate` requires it. It runs `task perf-allocation`, the
-`captures` mode of the performance-acceptance harness in `acceptance/`, over the committed captures
-in `bench/corpus/`: nine npm packuments and three PyPI Simple JSON documents. The input never
-changes between runs, so a changed figure comes from a changed build. The budgets cover allocation
-only. CPU work that allocates nothing leaves the figure unchanged, and shows only in the reports'
-time columns, which carry no budget.
+The `allocation` job in `ci.yml` holds the bytes each measured leg allocates to reviewed budgets,
+and the `CI gate` requires it. It runs `task perf-allocation`, the `captures` mode of the
+performance-acceptance harness in `acceptance/`, over the committed captures in `bench/corpus/`:
+nine npm packuments and three PyPI Simple JSON documents. The input never changes between runs, so
+a changed figure comes from a changed build. The budgets cover allocation only. CPU work that
+allocates nothing leaves the figure unchanged, and shows only in the reports' time columns, which
+carry no budget.
+
+The legs project each capture through the test-support adapter projection, so they cover the
+token walk and field policy, the finishing projection, the rules, the merge, assembly, and
+serialisation, and not the production reader's chunked IO walk with its per-read intern key, its
+artifact-location check (`enforceArtifactLocations`), `digestingRead`, or `chargedRead`.
 
 Each package has two legs:
 
@@ -475,11 +480,11 @@ Read a red result according to its measurement:
 - Work-per-request benchmarks fail on build errors, harness crashes, failed complexity assertions, or an advisory row that leaves a version undecidable. They do not compare performance against regression thresholds.
 - Performance acceptance runs `task perf-acceptance`, the harness's `live` mode. It fails when the proxy's own code or limits
   refuse a document, for example a body over the metadata size limit or a request it cannot form, and when a document does
-  not decode. It also fails on a status that says the proxy asked wrongly, such as a 404 for a pinned package. The harness
-  fetches through a stock HTTP client, so a transport fault tests none of the proxy's code. A transport fault, a 408, a
-  429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report then marks the run incomplete, and the job
-  raises a warning. Live documents grow as packages publish, so no budget
-  applies to them. Its report separates upstream time from the legs.
+  not decode. It also fails on a status that says the proxy asked wrongly, such as a 404 for a pinned package. The
+  harness's HTTP manager is not the proxy's egress, so a TLS or protocol fault says nothing about the proxy. A transport
+  fault, a 408, a 429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report then marks the run
+  incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget applies to them. Its
+  report separates upstream time from the legs.
 - Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
   when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other way than the clean
   shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot boot, when `oha`
@@ -852,7 +857,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
-| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `capture`, `envelopePermille`, `readPeakEnvelopePermille` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each read-peak limit below its full-read charge | Five of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The read-peak check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without a read-peak limit skips the [listing checks](#listing-peaks), and one without retained-heap limits takes the generic ones. `readLegacySource` reads an ecosystem it does not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `readPeakEnvelopePermille` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each read-peak limit below its full-read charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords` | Five of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The read-peak check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without a read-peak limit skips the [listing checks](#listing-peaks), and one without retained-heap limits takes the generic ones. `readLegacySource` reads an ecosystem it does not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes. |

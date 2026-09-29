@@ -341,7 +341,7 @@ data Fetched
     | Unreachable Text
     deriving stock (Eq, Show)
 
-{- | A transport fault from the harness's stock client, or a 408, 429, 5xx, 401, or 403, is unreachable.
+{- | A transport fault, over the harness's own HTTP manager, or a 408, 429, 5xx, 401, or 403, is unreachable.
 A 2xx is the document, and every other fault or status counts against the proxy.
 -}
 classifyFetch :: Either FetchFault RegistryResponse -> Fetched
