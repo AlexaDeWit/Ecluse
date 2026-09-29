@@ -5,32 +5,60 @@
 -- | PyPI fixtures pass through the production extraction and projection, and documents convert to and from JSON.
 module Ecluse.Test.Registry.PyPI.Metadata (
     projectPyPIIndex,
+    projectPyPIFull,
+    readPyPIHeld,
     projectPyPIVersion,
     projectPyPIChunks,
     documentFromValue,
     simpleValue,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value (Array, Object))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked)
+import Ecluse.Core.Registry.Json.Walk (Steps, Walked)
+import Ecluse.Core.Registry.Json.Writer (newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiIndexWalk)
+import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIPacked, projectPyPIStream, pypiFullWalk, pypiIndexWalk, readPyPIFull)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (TreeRead)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
 projectPyPIIndex limits name body = projectPyPIChunks limits name FullRead [body] >>= projectPyPIStream limits name
+
+-- | The production full read of held bytes: every kept file packed against the read's table.
+projectPyPIFull :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+projectPyPIFull limits name body = do
+    streamed <- first MetadataBoundExceeded (walkWritingChunks (MetadataBodyLimit (maxMetadataBytes limits)) walk [body])
+    second (fst pypiPacked) <$> projectPyPIPacked limits name streamed
+  where
+    walk :: ST st (TokenResult -> ST st (Steps (ST st) PyPIFullRead))
+    walk = newWriter Nothing <&> \writer -> pypiFullWalk writer limits name (testTable fileUniqueFields)
+
+-- | The production full read of held bytes through the reader a fetch runs, fed from memory.
+readPyPIHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
+readPyPIHeld limits name body = do
+    remaining <- newIORef [body]
+    let next = atomicModifyIORef' remaining $ \case
+            [] -> ([], BS.empty)
+            chunk : rest -> (rest, chunk)
+        held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
+    streamed <- readPyPIFull held name next
+    pure (first MetadataBoundExceeded streamed >>= fmap (second (fst pypiPacked)) . projectPyPIPacked held name)
 
 -- | Select one release without retaining its siblings, using original file positions.
 projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
@@ -40,7 +68,7 @@ projectPyPIVersion limits name version body = do
     pure (Map.lookup (renderVersion version) (infoVersions info))
 
 -- | Exercise explicit chunk boundaries with the production byte counter.
-projectPyPIChunks :: Limits -> PackageName -> PyPIRead -> [ByteString] -> Either MetadataError (StreamResult PyPIProjection)
+projectPyPIChunks :: Limits -> PackageName -> PyPIRead -> [ByteString] -> Either MetadataError (StreamResult (Walked TreeRead))
 projectPyPIChunks limits name mode =
     first MetadataBoundExceeded
         . walkJsonChunks

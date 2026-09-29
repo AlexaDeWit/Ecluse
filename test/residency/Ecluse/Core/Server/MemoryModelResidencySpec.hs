@@ -62,6 +62,8 @@ spec = do
                     listingSourceBytes peaks `shouldBe` size
                     let ecosystem = pkgEcosystem (cpPackage package)
                     for_ ((,) <$> chargeFactors ecosystem <*> readPeakEnvelopePermille ecosystem) (uncurry (checkListing peaks))
+                    -- An npm listing's held entry stays smaller than the source it was read from.
+                    when (ecosystem == Npm) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do

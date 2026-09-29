@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TypeFamilies #-}
 
 {- | The Simple-index walk for full and selected reads. It emits the fields that
 "Ecluse.Core.Registry.PyPI.Streaming" emits for the same mode, in the same order, and builds each
@@ -16,27 +17,28 @@ import Data.Aeson.Key qualified as Key
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), knownMembers, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Shape (Build (..), Mode (..), Shape (..), Trees (..), knownMembers, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
-import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIFieldOf (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 
 -- | Members whose values differ in every file, so the table keeps them as read.
 fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
-{- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
-full read keeps enters the table, and only the first of each member it repeats.
+{- | Walk one project's Simple index into the builder, passing each field to the step as it completes.
+Only a file a full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
-pypiWalk depth mode step keeps table0 initial tokens
-    | depth <= 0 = withElement tokens tooDeep
-    | otherwise = withElement tokens $ \element rest -> case element of
-        ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-        _ -> skipFrom element rest (const (Finished initial))
+pypiWalk :: (Build b r, Result r ~ Walked s) => b -> Int -> PyPIRead -> FieldStep s (PyPIFieldOf (Built b)) r -> (s -> Bool) -> InternTable -> s -> TokenResult -> r
+{-# INLINE pypiWalk #-}
+pypiWalk build depth mode step keeps table0 initial = start
   where
+    start tokens
+        | depth <= 0 = withElement tokens tooDeep
+        | otherwise = withElement tokens $ \element rest -> case element of
+            ObjectBegin -> eachMember topField (\walked _ -> finish walked) (Walked table0 initial) rest
+            _ -> skipFrom element rest (const (finish (Walked table0 initial)))
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
@@ -51,7 +53,7 @@ pypiWalk depth mode step keeps table0 initial tokens
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
       where
         envelope key shape = withElement after $ \element afterKey ->
-            readShape shape Keep table element afterKey $ \value _ afterValue ->
+            readShape Trees shape Keep table element afterKey $ \value _ afterValue ->
                 emit acc (EnvelopeField key value) (\acc' -> continue (Walked table acc') afterValue)
 
     -- The first array claims the key and its end yields an ignored field. Null claims it empty.
@@ -64,13 +66,14 @@ pypiWalk depth mode step keeps table0 initial tokens
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
         | otherwise = case mode of
-            FullRead -> readShape (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained Just)
-            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained id)
+            FullRead -> readShape build (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained . Just)
+            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest $ \payload table' afterValue ->
+                maybe (retained Nothing table' afterValue) (\value -> whole build value (\built -> retained (Just built) table' afterValue)) payload
       where
-        retained wrap payload table' afterValue = emit acc (FileField position (wrap payload)) (\acc' -> continue (Walked table' acc') afterValue)
+        retained payload table' afterValue = emit acc (FileField position payload) (\acc' -> continue (Walked table' acc') afterValue)
 
     version (Walked table acc) position element rest continue =
-        readShape (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->
+        readShape Trees (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->
             let field = case value of
                     String _ -> IgnoredField
                     _ -> InvalidVersionField position value
@@ -84,7 +87,8 @@ data Selecting = Selecting !InternTable SelectedFile
 
 -- json-stream's selected-file fold: every member event reaches the fold, even after the name rejects
 -- the file. The file's texts keep their own copies, so a rejected file never enters the table.
-selectedFile :: Int -> FileProject -> Text -> InternTable -> Element -> TokenResult -> (Maybe Value -> InternTable -> TokenResult -> Step s) -> Step s
+selectedFile :: (Walk r) => Int -> FileProject -> Text -> InternTable -> Element -> TokenResult -> (Maybe Value -> InternTable -> TokenResult -> r) -> r
+{-# INLINEABLE selectedFile #-}
 selectedFile budget project wanted table0 element rest next = case element of
     ObjectBegin -> eachMember visit (\(Selecting table selected) after -> next (finishSelected selected) table after) (Selecting table0 (CandidateFile False [] Nothing False)) rest
     _ -> skipFrom element rest (next Nothing table0)
@@ -99,13 +103,13 @@ selectedFile budget project wanted table0 element rest next = case element of
                     (\(Selecting table' hashed) afterObject -> continue (Selecting table' (collect hashed HashesEnd)) afterObject)
                     (Selecting table (collect selected HashesStart))
                     afterKey
-            | otherwise -> readShape (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
+            | otherwise -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
                 continue (Selecting table' (collect selected (HashesValue scalar))) afterValue
         bytes
-            | bytes `elem` scalarNames -> readShape (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
+            | bytes `elem` scalarNames -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
                 continue (Selecting table' (collect selected (FileScalar (Key.fromText (nameText name)) scalar))) afterValue
             | otherwise -> skipFrom value afterKey (continue (Selecting table selected))
     hashField (Selecting table selected) name after continue = withElement after $ \value afterKey ->
-        readShape (Scalar (budget - 1)) Keep table value afterKey $ \scalar table' afterValue ->
+        readShape Trees (Scalar (budget - 1)) Keep table value afterKey $ \scalar table' afterValue ->
             continue (Selecting table' (collect selected (HashField (Key.fromText (nameText name)) scalar))) afterValue
     scalarNames = map encodeUtf8 fileScalars

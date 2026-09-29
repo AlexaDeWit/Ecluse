@@ -3,26 +3,55 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Caller-owned npm bytes projected through the production incremental parser.
-module Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion, fetchMetadataFormBounded) where
+module Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmFull, readNpmHeld, projectNpmVersion, fetchMetadataFormBounded) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value)
 import Data.ByteString qualified as BS
+import Data.JsonStream.TokenParser (TokenResult)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
+import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), VersionRead)
-import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmStream, selectNpmRead)
+import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, readNpmFull, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 
 -- | Feed held bytes in bounded pieces without adding a second transport body ceiling.
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectNpmManifest limits name body = snd <$> projectBytes limits name WholePackument body
+
+-- | The production full read of held bytes: every kept release packed against the read's table.
+projectNpmFull :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+projectNpmFull limits name body = do
+    streamed <- first MetadataBoundExceeded (walkWritingChunks (MetadataBodyLimit (BS.length body)) walk [body])
+    second (fst npmPacked) <$> projectNpmPacked limits name registry streamed
+  where
+    registry = "https://registry.npmjs.org"
+    walk :: ST st (TokenResult -> ST st (Steps (ST st) NpmFullRead))
+    walk = do
+        (table, writer) <- npmFullTable registry name (testTable releaseUniqueFields)
+        pure (npmFullWalk writer limits name table)
+
+-- | The production full read of held bytes through the reader a fetch runs, fed from memory.
+readNpmHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
+readNpmHeld limits name body = do
+    remaining <- newIORef [body]
+    let next = atomicModifyIORef' remaining $ \case
+            [] -> ([], BS.empty)
+            chunk : rest -> (rest, chunk)
+        held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
+    streamed <- readNpmFull held name registry next
+    pure (first MetadataBoundExceeded streamed >>= fmap (second (fst npmPacked)) . projectNpmPacked held name registry)
+  where
+    registry = "https://registry.npmjs.org"
 
 -- | Select one release using the production field policy and timestamp join.
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError VersionRead

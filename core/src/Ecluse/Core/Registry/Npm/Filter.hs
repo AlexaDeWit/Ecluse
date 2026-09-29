@@ -21,10 +21,13 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
+import Data.Primitive.SmallArray (smallArrayFromList)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, npmRendered)
+import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..), renderPlan, urlPrefix)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.ServedDocument (
@@ -32,13 +35,14 @@ import Ecluse.Core.Registry.ServedDocument (
     assembleAcross,
     documentObject,
     objectField,
+    overlayObjectSources,
     overlayObjectSurvivors,
     rebaseArtifactUrl,
     safeDocumentName,
     serialiseAcross,
     stringField,
  )
-import Ecluse.Core.Snapshot (Snapshot)
+import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
 import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
@@ -66,15 +70,8 @@ rewriteDist servedUrl = \case
 -- | The plan supplies versions, tags and timestamps. Other top-level fields come from the base.
 assembleMergedPackument :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
-    Object rebuilt
+    Object (KeyMap.insert "versions" (Object survivingVersions) (servedMembers plan baseObject))
   where
-    rebuilt :: KeyMap Value
-    rebuilt =
-        baseObject
-            & KeyMap.insert "versions" (Object survivingVersions)
-            & KeyMap.insert "dist-tags" (Object distTags)
-            & KeyMap.insert "time" (Object reconciledTime)
-
     baseObject :: KeyMap Value
     baseObject = documentObject base
 
@@ -90,6 +87,13 @@ assembleMergedPackument mountBase bySource plan base =
             | (version, object) <- overlayObjectSurvivors versionEntries bySource plan
             ]
 
+-- The base's top-level members with the plan's tags and times, before the served versions go in.
+servedMembers :: MergePlan -> KeyMap Value -> KeyMap Value
+servedMembers plan baseObject =
+    baseObject
+        & KeyMap.insert "dist-tags" (Object distTags)
+        & KeyMap.insert "time" (Object reconciledTime)
+  where
     distTags :: KeyMap Value
     distTags =
         KeyMap.fromList
@@ -116,13 +120,39 @@ assembleMergedPackument mountBase bySource plan base =
                 ]
         _ -> mempty
 
--- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
-assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
+{- | 'assembleMergedPackument' over packed full reads: the survivors render from their own sources'
+tables, and each release's tarball URL rebases onto the mount's prefix for the package.
+-}
+assemblePackedPackument :: Text -> Map SourceId (Snapshot PackedPackument) -> MergePlan -> Maybe PackedPackument -> RenderPlan
+assemblePackedPackument mountBase bySource plan base =
+    RenderPlan
+        { planMembers = servedMembers plan baseObject
+        , planSlot = "versions"
+        , planTables = smallArrayFromList (map (packumentTable . snapshotValue) (Map.elems bySource))
+        , planPieces = ObjectPieces [(Key.toText version, piece) | (version, piece) <- KeyMap.toAscList survivors]
+        , planPrefix = urlPrefix <$> (npmDocumentName baseObject >>= servedTarballPrefix mountBase)
+        }
+  where
+    baseObject = maybe mempty packumentTop base
+    survivors =
+        KeyMap.fromList
+            [ (Key.fromText version, Piece index packed)
+            | (version, sid, packed) <- overlayObjectSources packumentVersions bySource plan
+            , Just index <- [Map.lookupIndex sid bySource]
+            ]
 
--- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'.
+{- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
+Packed sources and base render from their tables. Any other document goes through aeson's trees.
+-}
+assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
+assembleMergedDocument mountBase bySource plan base =
+    case (traverse (traverse (snd npmPacked)) bySource, traverse (snd npmPacked) base) of
+        (Just packed, Just packedBase) -> fst npmRendered (assemblePackedPackument mountBase packed plan packedBase)
+        _ -> assembleAcross npmCached assembleMergedPackument mountBase bySource plan base
+
+-- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'. Another ecosystem's document serialises as @{}@.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = serialiseAcross (fmap toEncoding . snd npmCached)
+serialiseMergedDocument doc = maybe (serialiseAcross (fmap toEncoding . snd npmCached) doc) (fromStrict . renderPlan) (snd npmRendered doc)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject
@@ -132,3 +162,7 @@ timeBookkeepingKeys = ["created", "modified"]
 
 servedTarballUrl :: Text -> PackageName -> Text -> Maybe Text
 servedTarballUrl mountBase name file = joinUrlPath mountBase <$> tarballPath name file
+
+-- | The served tarball URL before its file name, so the prefix and a file name give 'servedTarballUrl'.
+servedTarballPrefix :: Text -> PackageName -> Maybe Text
+servedTarballPrefix mountBase name = servedTarballUrl mountBase name ""

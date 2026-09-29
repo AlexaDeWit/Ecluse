@@ -14,12 +14,11 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashValue)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIFieldOf (..), PyPIRead (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPath, pypiCaptureUpstream, pypiCorpusPackages)
@@ -28,7 +27,7 @@ import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (requestsName, validSha256)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIFull, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
 import Ecluse.Test.Support (expectRight)
 
@@ -53,7 +52,7 @@ corpusSpec = describe "the corpus captures" $
 corpusRead :: CorpusRead
 corpusRead =
     CorpusRead
-        { crProject = \package -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits package
+        { crProject = projectPyPIFull defaultLimits
         , crUpstream = pypiCaptureUpstream
         , crMetadata = adapterMetadata pypiAdapter
         , crVersionReads = \package raw _ key -> [("selected", rendered (fmap releaseFacts <$> projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]

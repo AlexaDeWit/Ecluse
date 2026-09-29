@@ -485,7 +485,8 @@ result records). Its key accumulator stops at about 64 KiB and its number accumu
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
 read, in a table keyed by SipHash-1-3 under a key drawn for that read, and drops the table when the
-read ends.
+read ends. A full read keeps each served release or file packed against that table, as the bytes
+a listing copies when it renders, so it holds no tree of it.
 Parser continuations advance before the next chunk, so successful reads do not retain a complete
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and

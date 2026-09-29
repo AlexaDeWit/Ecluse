@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Measure each adapter's wire decoding and full metadata projection.
-Both operations receive the original bytes on every iteration.
+{- | Measure each adapter's wire decoding, and its full metadata projection through the reader a fetch
+runs. Both operations receive the original bytes on every iteration.
 -}
 module Ecluse.Core.WireBench (benchmarks) where
 
@@ -13,7 +13,7 @@ import Ecluse.Bench.Corpus (entryName)
 import Ecluse.Core.Package (PackageInfo, artHashes, infoVersions, pkgArtifacts)
 import Ecluse.Test.Corpus (cpPackage)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
+import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
 -- | Decode and project each captured document through its registered adapter.
 benchmarks :: EcosystemBench -> Benchmark
@@ -23,7 +23,7 @@ benchmarks ecosystem =
         [ bgroup
             (entryName entry)
             [ bench "version identifiers" (whnf (either (const (-1)) length . ebDecode ecosystem (cpPackage package)) raw)
-            , bench "full metadata projection" (whnf (either (const (-1)) (infoDepth . fst) . ebProject ecosystem (cpPackage package)) raw)
+            , bench "full metadata projection" (whnfAppIO (fmap (either (const (-1)) (infoDepth . fst)) . ebRead ecosystem (cpPackage package)) raw)
             ]
         | entry@(package, raw, _, _) <- ebCorpus ecosystem
         ]

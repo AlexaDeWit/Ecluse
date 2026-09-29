@@ -10,10 +10,12 @@ module Ecluse.Core.Registry.PyPI.ReaderResidencySpec (spec) where
 import Data.ByteString.Builder qualified as Builder
 import Test.Hspec
 
+import Ecluse.Core.Registry.Json.Shape (Trees (..))
+import Ecluse.Core.Registry.Json.Walk (pureStep)
 import Ecluse.Core.Registry.Json.WalkProbe (allowance, heldDuring)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (emptyTreeRead, keepsTreeFile, treeStep)
 import Ecluse.Core.Security (Limits (maxArtifactCount), defaultLimits)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonStream (testTable)
@@ -36,7 +38,7 @@ spec = describe "pypiWalk live bytes" $ do
 heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> IO (Integer, Integer)
 heldFor mode limits body = (,) <$> held 2000 <*> held 16000
   where
-    held count = heldDuring (pypiWalk 64 mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection (unscopedPyPI "thing"))) (body count)
+    held count = heldDuring (pypiWalk Trees 64 mode (pureStep (treeStep limits mode)) keepsTreeFile (testTable fileUniqueFields) (emptyTreeRead (unscopedPyPI "thing"))) (body count)
 
 level :: (Integer, Integer) -> Bool
 level (few, repeated) = repeated - few < allowance
