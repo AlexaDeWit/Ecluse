@@ -13,14 +13,12 @@ module Ecluse.BenchLoad.Fixture (
     longCacheTtl,
     artifactBytes,
     loadCorpusBodies,
-    loadMergePrivates,
     selfHosted,
     primeETag,
     fetchChecked,
     benchNow,
 ) where
 
-import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -37,7 +35,6 @@ import Ecluse.BenchLoad.Harness (Driver (DriveHttp), LoadKnobs (..), Target, pro
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyPort, proxySettings, withProxyProcess)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
-import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Wai (rebaseAuthority)
 
 {- | Boot a proxy in front of the private and public stubs with this cache TTL in seconds and an
@@ -84,17 +81,6 @@ loadCorpusBodies packages = Map.fromList <$> traverse load packages
         bytes <- readFileLBS (cpPath cp)
         when (LBS.null bytes) (benchFail ("bench-load: corpus capture is empty: " <> toText (cpPath cp)))
         pure (cpName cp, bytes)
-
--- | Each capture's private document in a two-source merge of the shape, keyed as 'loadCorpusBodies' keys.
-loadMergePrivates :: MergeShape -> [CorpusPackage] -> IO (Map Text LByteString)
-loadMergePrivates shape packages = Map.fromList <$> traverse load packages
-  where
-    load cp = do
-        bytes <- readFileBS (cpPath cp)
-        (private, _) <- either (benchFail . toText) pure (captureDocuments shape cp bytes)
-        pure $ (cpName cp,) $ case private of
-            Captured -> toLazy bytes
-            Rewritten document -> encode document
 
 -- | Rebase captured artifact URLs once per stub, outside repeated metadata responses.
 selfHosted :: Text -> IORef (Map Text LByteString) -> Text -> Map Text LByteString -> IO (Map Text LByteString)

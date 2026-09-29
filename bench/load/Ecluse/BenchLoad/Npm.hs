@@ -32,7 +32,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, loadMergePrivates, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath, saUpstreamUrl))
 import Ecluse.BenchLoad.PatternScenario (loadPins, patternScenarios, selectArtifacts)
@@ -72,7 +72,6 @@ import Ecluse.Core.Worker (
     runWorkerM,
  )
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier, cpWeight), CorpusTier (Heavy), corpusPackages, cpName)
-import Ecluse.Test.Corpus.Merge (MergeShape (HeavyBase, PublishOrder))
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
@@ -90,14 +89,6 @@ npmFixture =
             , shippedAdvisories Npm mergeScenario
             , allRulesAdvisories Npm mergeScenario
             , heavyPrivateScenario
-            , skewedMergeScenario
-                PublishOrder
-                "merge-publish-order"
-                "GET /npm/{pkg} over the weighted corpus with public cache TTL 0, while the private upstream returns the newest third of the public capture's versions by publish time, as a private registry that holds recently consumed versions does."
-            , skewedMergeScenario
-                HeavyBase
-                "merge-heavy-base"
-                "GET /npm/{pkg} over the weighted corpus with public cache TTL 0, while the private upstream returns every tenth version of the public capture by publish time, each with a deprecation notice, so the private copy renders text half the capture's size. The private copy is the base document."
             , assembledHitScenario
             , revalidateScenario
             , shippedAdvisories Npm revalidateScenario
@@ -134,31 +125,21 @@ heavyPrivateScenario =
     scenario
         "heavy-private"
         "GET /npm/{pkg} over the weighted corpus with public cache TTL 0, while the private upstream returns the complete public capture, as a private registry that proxies npmjs does. Each request decodes its own private copy, which single-flight cannot share across callers."
-        (\knobs k -> loadCorpusBodies corpusPackages >>= \bodies -> withMergedStubs knobs bodies k)
-
--- A merge whose private document is a skewed part of the public capture. Only memory is judged.
-skewedMergeScenario :: MergeShape -> Text -> Text -> Scenario
-skewedMergeScenario shape name description =
-    (scenario name description (\knobs k -> loadMergePrivates shape corpusPackages >>= \privates -> withMergedStubs knobs privates k))
-        { scenarioServiceTime = False
-        }
-
--- Boot a proxy whose private upstream serves these documents and whose public upstream the captures.
-withMergedStubs :: LoadKnobs -> Map Text LByteString -> (Target -> IO a) -> IO a
-withMergedStubs knobs privates k = do
-    bodies <- loadCorpusBodies corpusPackages
-    privateRewritten <- newIORef mempty
-    publicRewritten <- newIORef mempty
-    let latency = lkUpstreamLatencyMicros knobs
-    withProxyOverStubs
-        Npm
-        knobs
-        0
-        Nothing
-        (corpusPublicStub privateRewritten latency privates Map.empty)
-        (corpusPublicStub publicRewritten latency bodies Map.empty)
-        serveMix
-        (httpTarget k)
+        ( \knobs k -> do
+            bodies <- loadCorpusBodies corpusPackages
+            privateRewritten <- newIORef mempty
+            publicRewritten <- newIORef mempty
+            let latency = lkUpstreamLatencyMicros knobs
+            withProxyOverStubs
+                Npm
+                knobs
+                0
+                Nothing
+                (corpusPublicStub privateRewritten latency bodies Map.empty)
+                (corpusPublicStub publicRewritten latency bodies Map.empty)
+                serveMix
+                (httpTarget k)
+        )
 
 assembledHitScenario :: Scenario
 assembledHitScenario =
