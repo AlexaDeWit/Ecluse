@@ -9,6 +9,7 @@ module Ecluse.Test.Corpus.Subset (
     -- * Choosing versions
     byPublishTime,
     newestVersions,
+    oldestVersions,
 
     -- * Cutting documents
     keepNpmVersions,
@@ -37,11 +38,20 @@ byPublishTime info = map fst (sortOn (\(key, details) -> (pkgPublishedAt details
 
 -- | The newest share of a projection's versions by publish time, rounded up to at least one version.
 newestVersions :: Rational -> PackageInfo -> Set Text
-newestVersions share info = Set.fromList (drop (count - kept) published)
+newestVersions share info = Set.fromList (drop (length published - shareOf share published) published)
   where
     published = byPublishTime info
-    count = length published
-    kept = max 1 (min count (ceiling (share * fromIntegral count)))
+
+-- | The oldest share of a projection's versions by publish time, at least one version.
+oldestVersions :: Rational -> PackageInfo -> Set Text
+oldestVersions share info = Set.fromList (take (shareOf share published) published)
+  where
+    published = byPublishTime info
+
+shareOf :: Rational -> [a] -> Int
+shareOf share items = max 1 (min count (ceiling (share * fromIntegral count)))
+  where
+    count = length items
 
 {- | An npm packument cut to the given versions: those versions, their times beside @created@ and
 @modified@, and the dist-tags that point at a kept version.

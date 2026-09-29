@@ -11,10 +11,13 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Ratio ((%))
 import Test.Hspec
 
-import Ecluse.Test.Corpus.Subset (newestNpmShare, newestPyPIShare)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Corpus.Subset (newestNpmShare, newestPyPIShare, oldestVersions)
 import Ecluse.Test.Package (unscopedNpm, unscopedPyPI, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity, vsShasum), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
 spec :: Spec
 spec = do
@@ -27,6 +30,15 @@ spec = do
 
         it "keeps at least the newest version" $
             keysOf "versions" <$> newestNpmShare 0 (unscopedNpm "thing") npmCapture `shouldBe` Right ["4.0.0"]
+
+    describe "oldestVersions" $ do
+        it "keeps the oldest share of an npm packument by publish time" $
+            (sort . toList . oldestVersions (1 % 2) . fst <$> projectNpmManifest defaultLimits (unscopedNpm "thing") npmCapture)
+                `shouldBe` Right ["1.0.0", "3.0.0"]
+
+        it "keeps the oldest share of a Simple index by upload time" $
+            (sort . toList . oldestVersions (1 % 2) . fst <$> projectPyPIIndex defaultLimits (unscopedPyPI "thing") pypiCapture)
+                `shouldBe` Right ["1.0", "3.0"]
 
     describe "newestPyPIShare" $ do
         it "keeps the files and listed versions of the newest share by upload time" $ do

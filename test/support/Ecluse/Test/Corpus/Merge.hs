@@ -7,6 +7,7 @@ chosen shape, for the residency probe.
 -}
 module Ecluse.Test.Corpus.Merge (
     MergeShape (..),
+    realisticShape,
     MergeDocument (..),
     captureDocuments,
     mergeDocuments,
@@ -25,7 +26,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageInfo (infoName, infoVersions), pkgEcosystem)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
-import Ecluse.Test.Corpus.Subset (byPublishTime, keepNpmVersions, keepPyPIVersions, newestVersions)
+import Ecluse.Test.Corpus.Subset (byPublishTime, keepNpmVersions, keepPyPIVersions, newestVersions, oldestVersions)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
@@ -37,13 +38,24 @@ data MergeShape
       Overlapping
     | -- | Each holds half of the versions, none of them in both.
       Disjoint
-    | -- | The private copy holds the newest third by publish time, and the public one every version.
+    | {- | The private copy holds the newest quarter by publish time, as a private registry that
+      holds the versions a deployment consumed does, and the public one every version.
+      -}
       PublishOrder
     | {- | The private copy holds every tenth version by publish time and rendered text half the
       capture's size, and the public one every version.
       -}
       HeavyBase
+    | -- | 'HeavyBase' with the oldest tenth of the versions, whose releases are the smallest.
+      HeavyOldBase
     deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | Whether the shape models a private copy a deployment serves, not a stress on the basis.
+realisticShape :: MergeShape -> Bool
+realisticShape = \case
+    HeavyBase -> False
+    HeavyOldBase -> False
+    _ -> True
 
 -- | One side of a merge: the capture as captured, or a document rewritten from it.
 data MergeDocument = Captured | Rewritten Value
@@ -67,8 +79,9 @@ mergeDocuments shape info bytes = case shape of
     Identical -> Right (Captured, Captured)
     Overlapping -> both (byKey (\position -> position `mod` 3 /= 2)) (byKey (\position -> position `mod` 3 /= 0))
     Disjoint -> both (byKey even) (byKey odd)
-    PublishOrder -> privateOnly (keepVersions info (newestVersions (1 % 3) info))
+    PublishOrder -> privateOnly (keepVersions info (newestVersions (1 % 4) info))
     HeavyBase -> privateOnly (weighDown info (BS.length bytes `div` 2) . keepVersions info (everyTenth (byPublishTime info)))
+    HeavyOldBase -> privateOnly (weighDown info (BS.length bytes `div` 2) . keepVersions info (oldestVersions (1 % 10) info))
   where
     rewrite keep = Rewritten . keep <$> eitherDecodeStrict bytes
     both private public = (,) <$> rewrite (keepVersions info private) <*> rewrite (keepVersions info public)

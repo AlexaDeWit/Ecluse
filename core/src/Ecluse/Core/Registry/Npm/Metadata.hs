@@ -80,11 +80,11 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
-{- | npm's memory charges, above the largest packed read peak per source byte (0.89, react) and output
-working set per basis byte (1.67, @aws-sdk/client-s3 under a heavy base) from one meter step up.
+{- | npm's memory charges, above the largest packed read peak per source byte (0.89, react) and the
+largest output working set per basis byte of a realistic merge (1.52, @aws-sdk/client-s3).
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 2100, cfOutputPermille = 2100}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 2100, cfOutputPermille = 2000}
 
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

@@ -34,7 +34,7 @@ import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
-import Ecluse.Test.Corpus.Merge (MergeShape (..))
+import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 
 {- | Reject unauthenticated captures, roots that do not survive or release across collections, and
 listings, of one source or two, whose reads or render outgrow what the memory gate charges.
@@ -79,7 +79,8 @@ spec = do
                     for_ (listingBounds package) $ \(factors, limits) -> do
                         checkPaid factors peaks
                         checkReadPeak limits peaks
-                        checkOutput factors limits peaks
+                        checkOutputCharge factors peaks
+                        checkOutputLimit limits peaks
                     when (entryBelowSource (pkgEcosystem (cpPackage package))) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
                     -- A document holds heap, and its weight, as a cache expands it, covers that heap.
                     singleDocumentLive single `shouldSatisfy` (> 0)
@@ -95,7 +96,9 @@ spec = do
                     checkBasis shape size peaks
                     for_ (listingBounds package) $ \(factors, limits) -> do
                         checkPaid factors peaks
-                        checkOutput factors limits peaks
+                        checkOutputCharge factors peaks
+                        -- A heavy base must fit the charge the realistic shapes set.
+                        when (realisticShape shape) (checkOutputLimit limits peaks)
 
 merges :: [(CorpusPackage, MergeShape)]
 merges = [(package, shape) | package <- packages, shape <- [minBound .. maxBound]]
@@ -153,12 +156,12 @@ data PeakLimits = PeakLimits
     -- ^ Per byte of the output basis.
     }
 
-{- From one meter step up, a read's peak and a listing's output working set each fail the tier past
-these limits, the smallest quarter step at least 8% above their measured maxima. -}
+{- From one meter step up, a read's peak and a realistic listing's output working set fail the tier
+past these limits. An output limit is the smallest quarter step 8% above those shapes' maximum. -}
 peakLimits :: Ecosystem -> Maybe PeakLimits
 peakLimits = \case
-    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 2000}
-    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1750}
+    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 1750}
+    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1500}
     RubyGems -> Nothing
 
 {- Whether a listing's held entry stays smaller than the source it was read from. A PyPI entry holds each
@@ -191,11 +194,15 @@ checkReadPeak limits peaks = when (size >= meterStepBytes) $ do
   where
     size = listingSourceBytes peaks
 
--- From one step of basis up, the output working set fits the output charge and stays under its limit.
-checkOutput :: ChargeFactors -> PeakLimits -> ListingPeaks -> Expectation
-checkOutput factors limits peaks = when (basis >= meterStepBytes) $ do
-    outputWorkingSet peaks `shouldSatisfy` (<= toInteger (scaleCharge (cfOutputPermille factors) basis))
-    (1000 * outputWorkingSet peaks) `shouldSatisfy` (<= outputLimit limits * toInteger basis)
+-- From one step of basis up, the output working set fits the output charge.
+checkOutputCharge :: ChargeFactors -> ListingPeaks -> Expectation
+checkOutputCharge factors peaks = when (basis >= meterStepBytes) $ outputWorkingSet peaks `shouldSatisfy` (<= toInteger (scaleCharge (cfOutputPermille factors) basis))
+  where
+    basis = listingBasisBytes peaks
+
+-- From one step of basis up, a realistic listing's output working set stays under its limit.
+checkOutputLimit :: PeakLimits -> ListingPeaks -> Expectation
+checkOutputLimit limits peaks = when (basis >= meterStepBytes) $ (1000 * outputWorkingSet peaks) `shouldSatisfy` (<= outputLimit limits * toInteger basis)
   where
     basis = listingBasisBytes peaks
 
@@ -212,7 +219,10 @@ checkBasis shape size peaks = case shape of
     Overlapping -> listingBasisBytes peaks `shouldSatisfy` (< listingSourceBytes peaks)
     Disjoint -> listingBasisBytes peaks `shouldBe` listingSourceBytes peaks
     PublishOrder -> listingBasisBytes peaks `shouldSatisfy` (\basis -> basis >= size && basis < listingSourceBytes peaks)
-    HeavyBase -> listingBasisBytes peaks `shouldSatisfy` (\basis -> basis > size && basis < listingSourceBytes peaks)
+    HeavyBase -> heavier
+    HeavyOldBase -> heavier
+  where
+    heavier = listingBasisBytes peaks `shouldSatisfy` (\basis -> basis > size && basis < listingSourceBytes peaks)
 
 rise :: (ListingPeaks -> Word64) -> (ListingPeaks -> Word64) -> ListingPeaks -> Integer
 rise high low peaks = toInteger (high peaks) - toInteger (low peaks)
