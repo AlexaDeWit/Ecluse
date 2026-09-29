@@ -9,7 +9,8 @@ See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de
 module Ecluse.Core.Registry.JsonStream (
     -- * Bounded reads
     StreamResult (..),
-    Step (..),
+    Steps (..),
+    Step,
     readSteps,
     readJsonStream,
 
@@ -43,18 +44,23 @@ data StreamResult a = StreamResult
     }
     deriving stock (Eq, Show)
 
--- | A read in progress: it needs input, stops on a parse error or a refused value, or has finished.
-data Step s
-    = NeedData (ByteString -> Step s)
+{- | A read in progress: it needs input, stops on a parse error or a refused value, or has finished.
+A read that writes as it goes resumes in its own effect.
+-}
+data Steps m s
+    = NeedData (ByteString -> m (Steps m s))
     | Failed Text
     | Refused LimitError
     | Finished s
 
+-- | A read with no effect of its own.
+type Step = Steps Identity
+
 {- | Feed a read in pieces of at most 32 KiB, within the body ceiling, and drain the body after the
-read finishes. An empty chunk ends the body.
+read finishes. An empty chunk ends the body. The read resumes in its effect, run in the reader's.
 -}
-readSteps :: (Monad m) => BodyLimit -> Step s -> m ByteString -> m (Either LimitError (StreamResult s))
-readSteps bound start readChunk = go 0 start
+readSteps :: (Monad n) => (forall a. m a -> n a) -> BodyLimit -> Steps m s -> n ByteString -> n (Either LimitError (StreamResult s))
+readSteps run bound start readChunk = go 0 start
   where
     go !seen step = case step of
         Refused fault -> pure (Left fault)
@@ -69,9 +75,10 @@ readSteps bound start readChunk = go 0 start
                         else feed (seen + BS.length chunk) step chunk
     feed seen step chunk = case step of
         NeedData next
-            | not (BS.null chunk) ->
+            | not (BS.null chunk) -> do
                 let (piece, remaining) = BS.splitAt 32768 chunk
-                 in feed seen (next piece) remaining
+                resumed <- run (next piece)
+                feed seen resumed remaining
         _ -> go seen step
     finish = \case
         Finished result -> Right result
@@ -79,11 +86,11 @@ readSteps bound start readChunk = go 0 start
 
 -- | Fold each value the parser yields through the step, as 'readSteps' feeds it.
 readJsonStream :: (Monad m) => BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonStream bound parser step initial = readSteps bound (parserSteps initial (J.runParser parser))
+readJsonStream bound parser step initial = readSteps (pure . runIdentity) bound (parserSteps initial (J.runParser parser))
   where
     parserSteps !acc = \case
         J.ParseYield value next -> either Refused (`parserSteps` next) (step acc value)
-        J.ParseNeedData next -> NeedData (parserSteps acc . next)
+        J.ParseNeedData next -> NeedData (Identity . parserSteps acc . next)
         J.ParseFailed err -> Failed (toText err)
         J.ParseDone _ -> Finished acc
 

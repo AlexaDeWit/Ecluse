@@ -10,6 +10,7 @@ separators json-stream's lexer skips, and truncation or stray bytes.
 module Ecluse.Test.Registry.JsonBytes (
     genJsonBytes,
     genPackumentBytes,
+    genServablePackumentBytes,
     genSimpleIndexBytes,
     damaged,
     genChunks,
@@ -21,6 +22,8 @@ import Data.ByteString.Builder qualified as Builder
 import Hedgehog (Gen)
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+
+import Ecluse.Test.Package (validSha1, validSha512Sri)
 
 -- | Any JSON value, with member names drawn from the given pool as often as not.
 genJsonBytes :: [ByteString] -> Gen ByteString
@@ -50,6 +53,31 @@ genPackumentBytes = render <$> objectOf (Gen.list (Range.linear 0 7) member)
         _ -> genValue releaseFields 3
     timestamp = Gen.frequency [(4, pure "\"2026-05-14T19:25:26.000Z\""), (1, genScalar)]
     versionKey = Gen.frequency [(4, quoted . Builder.byteString <$> Gen.element releaseKeys), (1, genKey ["created", "modified"]), (1, genString)]
+
+{- | An npm packument for @thing@ whose releases carry what installation reads among hostile members,
+tarball URLs with escapes, queries and fragments, and times and tags, so a listing from it serves.
+-}
+genServablePackumentBytes :: Gen ByteString
+genServablePackumentBytes = do
+    versions <- objectOf (Gen.list (Range.linear 1 6) release)
+    time <- objectOf (Gen.list (Range.linear 0 4) ((,) <$> versionKey <*> Gen.frequency [(4, pure "\"2026-05-14T19:25:26.000Z\""), (1, genScalar)]))
+    tags <- objectOf (Gen.list (Range.linear 0 2) ((,) <$> genKey ["latest", "next"] <*> versionKey))
+    others <- Gen.list (Range.linear 0 3) ((,) <$> genKey ["description", "readme", "users", "author"] <*> genValue releaseFields 3)
+    members <- Gen.shuffle ([(quoted "name", quoted "thing"), (quoted "versions", versions), (quoted "time", time), (quoted "dist-tags", tags)] <> others)
+    render <$> objectOf (pure members)
+  where
+    -- Wider than 'releaseKeys', so a second source serves releases the first lacks.
+    keys = releaseKeys <> ["4.0.0", "0.1.0", "5.0.0-next.3", "1.2.3"]
+    versionKey = quoted . Builder.byteString <$> Gen.element keys
+    release = do
+        key <- Gen.element keys
+        file <- Gen.frequency [(4, pure ("thing-" <> Builder.byteString key <> ".tgz")), (3, mconcat <$> Gen.list (Range.linear 1 4) (Gen.element filePieces))]
+        extraDist <- Gen.list (Range.linear 0 2) ((,) <$> genKey ["signatures", "fileCount", "unpackedSize"] <*> genValue [] 2)
+        dist <- objectOf (Gen.shuffle ([(quoted "tarball", quoted ("https://registry.npmjs.org/thing/-/" <> file)), (quoted "integrity", quoted (Builder.byteString (encodeUtf8 validSha512Sri))), (quoted "shasum", quoted (Builder.byteString (encodeUtf8 validSha1)))] <> extraDist))
+        extra <- Gen.list (Range.linear 0 4) ((,) <$> genKey ["description", "author", "dependencies", "gitHead", "readme", "deprecated", "bin", "dist"] <*> genValue releaseFields 3)
+        fields <- Gen.shuffle ([(quoted "name", quoted "thing"), (quoted "version", quoted (Builder.byteString key)), (quoted "dist", dist)] <> extra)
+        (,) (quoted (Builder.byteString key)) <$> objectOf (pure fields)
+    filePieces = ["thing-1.0.0.tgz", "\\u0041", "%2F", "?q=1", "#frag", "\\/", "\\u002f", "\\n", "\\\"", "\xe9", "..", "\\u00e9"]
 
 -- | A PyPI Simple index for the project @thing@, with files for several releases and other members.
 genSimpleIndexBytes :: Gen ByteString
@@ -104,6 +132,7 @@ releaseFields =
     , "os"
     , "gitHead"
     , "description"
+    , "author"
     , "url"
     , "tarball"
     ]

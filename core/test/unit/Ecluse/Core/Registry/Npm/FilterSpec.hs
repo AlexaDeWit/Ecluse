@@ -27,11 +27,17 @@ import Ecluse.Core.Package (PackageInfo, mkPackageName)
 import Ecluse.Core.Package.Entry (AdmittedEntry (admittedFilename, admittedKey), EntryKey (..))
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (npmRendered)
+import Ecluse.Core.Registry.Json.Packed (Piece (..), Pieces (ObjectPieces), RenderPlan (..))
+import Ecluse.Core.Registry.Json.Shape (Shape (Generic))
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Npm.Filter (
     assembleMergedPackument,
     npmDocumentName,
     rewriteVersion,
+    serialiseMergedDocument,
  )
+import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
@@ -47,6 +53,7 @@ import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Json (asObject, fieldAt, mapAt, objectAt, textAt)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Test.Registry.Packed (packValue)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
@@ -60,6 +67,17 @@ spec = do
     entryIdentitySpec
     coherenceSpec
     propertiesSpec
+    refusedRenderSpec
+
+refusedRenderSpec :: Spec
+refusedRenderSpec = describe "serialiseMergedDocument" $
+    it "refuses a listing whose render names a table it lacks, instead of serving it short" $
+        case packValue (Generic 64) [] (Aeson.object ["name" Aeson..= ("thing" :: Text)]) of
+            Right (StreamResult (Right (table, release)) _) -> do
+                let plan tables = RenderPlan{planMembers = mempty, planSlot = "versions", planTables = fromList tables, planPieces = ObjectPieces [("1.0.0", Piece 0 release)], planPrefix = Nothing}
+                serialiseMergedDocument (fst npmRendered (plan [])) `shouldBe` Left RenderRefused
+                serialiseMergedDocument (fst npmRendered (plan [table])) `shouldBe` Right "{\"versions\":{\"1.0.0\":{\"name\":\"thing\"}}}"
+            _ -> expectationFailure "did not pack the release"
 
 entryIdentitySpec :: Spec
 entryIdentitySpec = describe "npm artifact-entry admission" $ do

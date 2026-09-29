@@ -40,6 +40,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
+import Ecluse.Core.Registry.Npm.Document (tarballUrl)
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Full),
@@ -51,7 +52,7 @@ import Ecluse.Core.Registry.Npm.Request (
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, parseRequestEither)
-import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
+import Ecluse.Core.Registry.ServedDocument (adjustField)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -226,10 +227,3 @@ tarballFilename name version manifest =
 
 distTarballSegment :: Value -> Maybe Text
 distTarballSegment manifest = urlFilenameComponent <$> tarballUrl manifest
-
-tarballUrl :: Value -> Maybe Text
-tarballUrl = \case
-    Object manifest
-        | Just (Object dist) <- KeyMap.lookup "dist" manifest ->
-            stringField "tarball" dist
-    _ -> Nothing

@@ -408,8 +408,7 @@ servedBytes serving sources plan etag =
     awaitingFlight (psvTicket serving) flight . resolveAssembled (srMetrics rt) (srMetadataCache rt) key $ do
         charge (servingFlight flight (psvTicket serving)) outputCharge
         markRenderEscape $
-            pure $!
-                LBS.toStrict (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
+            either throwIO (\body -> pure $! LBS.toStrict body) (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
   where
     rt = psvRuntime serving
     deps = psvDeps serving

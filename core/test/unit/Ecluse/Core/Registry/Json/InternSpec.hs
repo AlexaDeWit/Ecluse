@@ -36,7 +36,21 @@ spec = do
             let Interned entry _ = internName (Plain (BS.take 5 (BS.drop 1 "xvaluex"))) (newInternTable key [])
             textStorageBytes (entryText entry) `shouldBe` 5
 
-        describe "properties" $
+        it "seeds a repeated member name once, so each index names one entry" $ do
+            let Interned entry held = internName (Plain "dep") (newInternTable key ["url", "url", "tarball"])
+            (entryIndex entry, toList (tableTexts held)) `shouldBe` (2, ["url", "tarball", "dep"])
+
+        describe "properties" $ do
+            it "lays out every name once, at its entry's index, in first-read order" $
+                hedgehog $ do
+                    seeds <- forAll (Gen.list (Range.linear 0 4) (Gen.element pool))
+                    names <- forAll (Gen.list (Range.linear 0 60) (Gen.element pool))
+                    let step table name = let Interned entry held = internName (plain name) table in (held, (entryIndex entry, entryText entry))
+                        (final, entries) = mapAccumL step (newInternTable (SipKey 1 2) (map decodeUtf8 seeds)) names
+                        texts = toList (tableTexts final)
+                    texts === ordNub (map decodeUtf8 (seeds <> names))
+                    [(index, text) | (index, text) <- entries, Just text /= (texts !!? index)] === []
+
             it "gives each name its own text, and keeps only the named members, under any key" $
                 hedgehog $ do
                     (k0, k1) <- forAll ((,) <$> Gen.word64 Range.linearBounded <*> Gen.word64 Range.linearBounded)

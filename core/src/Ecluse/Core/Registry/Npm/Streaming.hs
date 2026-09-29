@@ -5,7 +5,8 @@
 -- | Select npm installation and policy fields before constructing decoded values.
 module Ecluse.Core.Registry.Npm.Streaming (
     NpmRead (..),
-    NpmField (..),
+    NpmFieldOf (..),
+    NpmField,
     NpmContainer (..),
     npmFields,
     versionFields,
@@ -26,15 +27,18 @@ data NpmContainer = VersionsContainer | TimeContainer | TagsContainer
     deriving stock (Eq, Ord, Show)
 
 -- | Each field retains its source coordinate. Skipped releases still count towards the version cap.
-data NpmField
+data NpmFieldOf release
     = IgnoredField
     | BeginContainer NpmContainer
     | InvalidContainer NpmContainer
     | NameField Value
-    | VersionField Text (Maybe Value)
+    | VersionField Text (Maybe release)
     | TimeField Text Value
     | TagField Text Value
     deriving stock (Eq, Show)
+
+-- | A field whose release is aeson's tree.
+type NpmField = NpmFieldOf Value
 
 -- | Extract independent maps without assuming their ordering in the source.
 npmFields :: Int -> NpmRead -> J.Parser NpmField

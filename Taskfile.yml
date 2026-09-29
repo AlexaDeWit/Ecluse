@@ -307,6 +307,8 @@ tasks:
       - '.github/workflows/*.yaml'
       - '.github/workflows/.*.yml'
       - '.github/workflows/.*.yaml'
+      - '.github/actionlint.yaml'
+      - '.github/zizmor.yml'
       - 'scripts/ci-runner-policy.sh'
       - 'flake.lock'
     cmds:

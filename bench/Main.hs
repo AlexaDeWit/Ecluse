@@ -16,6 +16,7 @@ import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
+import Ecluse.Core.PackedBench qualified as PackedBench
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
@@ -37,12 +38,13 @@ main :: IO ()
 main = do
     ecosystems <- ecosystemBenches
     cacheBenchmarks <- CacheBench.benchmarks
+    packed <- traverse PackedBench.benchmarks ecosystems
     ColdReadBench.withBenchmarks ecosystems $ \coldReads ->
         AdvisoryRulesBench.withBenchmarks ecosystems $ \advisoryRules ->
             defaultMain
                 [ bgroup
                     "ecluse-core (work-per-request)"
-                    (map ecosystemGroup ecosystems <> coldReads <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
+                    (map ecosystemGroup ecosystems <> coldReads <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
                 , testGroup "synthetic generators" (map generatorTests ecosystems)
                 ]
 

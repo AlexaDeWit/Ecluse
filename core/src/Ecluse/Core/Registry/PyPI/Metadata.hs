@@ -1,6 +1,9 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+-- The reads specialise here. Full laziness would float each member's rarely taken continuation out
+-- of the element's continuation, and every member of a read would allocate it.
+{-# OPTIONS_GHC -fno-full-laziness #-}
 
 -- | Full and selected Simple-index reads share incremental extraction. Only full reads hash the source.
 module Ecluse.Core.Registry.PyPI.Metadata (
@@ -50,7 +53,7 @@ newPyPIMetadataReads ::
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
-{- | PyPI's memory charges, above the largest read peak per source byte (3.29, boto3) and output
+{- | PyPI's memory charges, above the largest read peak per source byte (3.07, boto3) and output
 working set per basis byte (1.49, boto3 under a heavy base) from one meter step up.
 -}
 pypiChargeFactors :: ChargeFactors

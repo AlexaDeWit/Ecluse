@@ -12,10 +12,12 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.JsonStream (StreamResult)
+import Ecluse.Core.Registry.Json.Shape (Trees (..))
+import Ecluse.Core.Registry.Json.Walk (Walked (..), pureStep)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmRead (..), npmFields)
-import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, keepsRelease)
+import Ecluse.Core.Registry.Npm.StreamingProjection (TreeRead, emptyTreeRead, keepsTreeRelease, treeStep)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions), defaultLimits)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, releaseKeys)
@@ -57,16 +59,20 @@ kept, compared by the fields each emits.
 bothReads :: Bool -> Int -> Maybe Text -> Maybe Int -> [ByteString] -> (Either LimitError (Int, Either Bool [NpmField]), Either LimitError (Int, Either Bool [NpmField]))
 bothReads production depth selected cap chunks =
     ( emitted (parseJsonChunks bound (npmFields depth (maybe FullRead SelectedRead selected)) step start chunks)
-    , emitted (walkJsonChunks bound (npmWalk depth (maybe WholePackument OneRelease selected) step keeps (testTable releaseUniqueFields) start) chunks)
+    , emitted (unwalked <$> walkJsonChunks bound (npmWalk Trees depth (maybe WholePackument OneRelease selected) (pureStep step) keeps (testTable releaseUniqueFields) start) chunks)
     )
   where
     bound = MetadataBodyLimit (sum (map BS.length chunks))
-    start = (emptyProjection, [])
-    keeps (projection, _) key = not production || keepsRelease projection key
-    emitted :: Either LimitError (StreamResult (NpmProjection, [NpmField])) -> Either LimitError (Int, Either Bool [NpmField])
+    start = (emptyTreeRead, [])
+    keeps (projection, _) key = not production || keepsTreeRelease projection key
+    emitted :: Either LimitError (StreamResult (TreeRead, [NpmField])) -> Either LimitError (Int, Either Bool [NpmField])
     emitted = fmap (second (fmap snd)) . readOutcome
     step (projection, events) field = do
-        projected <- collectField defaultLimits (unscopedNpm "thing") projection field
+        projected <- treeStep defaultLimits (unscopedNpm "thing") projection field
         case cap of
             Just most | length events >= most -> Left (TooManyVersions (length events) most)
             _ -> Right (projected, field : events)
+
+-- The consumer's state a walk finished with, without the read's table.
+unwalked :: StreamResult (Walked s) -> StreamResult s
+unwalked result = result{streamValue = (\(Walked _ held) -> held) <$> streamValue result}

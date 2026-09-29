@@ -6,7 +6,7 @@
 #
 # Daemonless and rootless: skopeo writes each archive into a layout of plain files, and
 # regctl builds the index from those entries. No container engine and no user namespace,
-# which ubuntu-24.04's AppArmor blocks for /nix/store binaries.
+# which Ubuntu's AppArmor policy blocks for /nix/store binaries.
 #
 # All output goes to stderr. Needs skopeo, regctl, and jq (the `.#ci` shell).
 #

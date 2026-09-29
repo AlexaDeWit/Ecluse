@@ -30,7 +30,7 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), measureInChild, packages, probeSelected, probeSource, writeMergeDocuments)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, writeMergeDocuments)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
@@ -64,14 +64,26 @@ spec = do
             (size, _) <- authenticate package
             measureInChild ("--metadata-listing-probe" : majorSampling) package >>= \case
                 Left failure -> expectationFailure failure
-                Right peaks -> do
-                    reportListing "metadata-listing" [] package peaks
+                Right single -> do
+                    let peaks = singlePeaks single
+                        perSource bytes = fromInteger bytes / fromIntegral size :: Double
+                    reportListing
+                        "metadata-listing"
+                        [ "document_per_source_byte" .= perSource (singleDocumentLive single)
+                        , "document_charge_per_source_byte" .= perSource (toInteger (singleDocumentCharge single))
+                        ]
+                        package
+                        peaks
                     listingSourceBytes peaks `shouldBe` size
                     listingBasisBytes peaks `shouldBe` size
                     for_ (listingBounds package) $ \(factors, limits) -> do
                         checkPaid factors peaks
                         checkReadPeak limits peaks
                         checkOutput factors limits peaks
+                    when (entryBelowSource (pkgEcosystem (cpPackage package))) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
+                    -- A document holds heap, and its weight, as a cache expands it, covers that heap.
+                    singleDocumentLive single `shouldSatisfy` (> 0)
+                    singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
     describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
         it (toString (cpName package) <> "/" <> show shape) $ \measured -> do
             (size, _) <- authenticate package
@@ -120,7 +132,7 @@ checkMeasurement ecosystem shape size result = do
 within the memory gate's full-read charge, so a representation cannot outgrow what admission charges. -}
 envelopePermille :: Ecosystem -> Shape -> Integer
 envelopePermille Npm Typed = 500
-envelopePermille Npm Shared = 1750
+envelopePermille Npm Shared = 750
 envelopePermille PyPI Typed = 1750
 envelopePermille PyPI Shared = 3500
 envelopePermille _ shape = case shape of
@@ -148,6 +160,14 @@ peakLimits = \case
     Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 2000}
     PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1750}
     RubyGems -> Nothing
+
+{- Whether a listing's held entry stays smaller than the source it was read from. A PyPI entry holds each
+file as aeson's tree beside its typed view, which outgrows the file. -}
+entryBelowSource :: Ecosystem -> Bool
+entryBelowSource = \case
+    Npm -> True
+    PyPI -> False
+    RubyGems -> False
 
 listingBounds :: CorpusPackage -> Maybe (ChargeFactors, PeakLimits)
 listingBounds package = (,) <$> chargeFactors ecosystem <*> peakLimits ecosystem
