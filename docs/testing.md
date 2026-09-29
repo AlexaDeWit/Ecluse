@@ -397,9 +397,9 @@ its checkout step names that commit. The job writes its report to the run summar
 
 Arm64 CI is the calibration source, and you can also run `task perf-allocation` on x86_64. On an
 architecture other than the calibration's, the run still holds every leg to its budget and names
-both architectures in the report. Allocation on x86_64 has agreed with arm64 within about 1% in the
-work-per-request benchmarks, so a leg close to its budget can read differently there. The job is
-not part of `task check` or `task gate`.
+both architectures in the report and in a warning. Allocation can differ between architectures, so a
+leg close to its budget can read differently there. The job is not part of `task check` or
+`task gate`.
 
 ## Benchmarks (non-gating)
 
@@ -419,10 +419,11 @@ Read a red result according to its measurement:
 
 - Work-per-request benchmarks fail on build errors, harness crashes, failed complexity assertions, or an advisory row that leaves a version undecidable. They do not compare performance against regression thresholds.
 - Performance acceptance runs `task perf-acceptance`, the harness's `live` mode. It fails when the proxy's own code or limits
-  refuse a document, for example a body over the metadata size limit, and when a document does not decode. It also fails on
-  a TLS or protocol fault, and on a status that says the proxy asked wrongly, such as a 404 for a pinned package. A
-  timeout, an unreachable registry, a 408, a 429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report
-  then marks the run incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget
+  refuse a document, for example a body over the metadata size limit or a request it cannot form, and when a document does
+  not decode. It also fails on a status that says the proxy asked wrongly, such as a 404 for a pinned package. The harness
+  fetches through a stock HTTP client, so a transport fault tests none of the proxy's code. A transport fault, a 408, a
+  429, a 5xx, a 401, or a 403 makes the package unavailable instead. The report then marks the run incomplete, and the job
+  raises a warning. Live documents grow as packages publish, so no budget
   applies to them. Its report separates upstream time from the legs.
 - Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
   when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other way than the clean

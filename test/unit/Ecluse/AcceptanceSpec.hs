@@ -154,6 +154,9 @@ spec = do
                 `shouldBe` ["::warning title=Allocation below its calibration::npm lodash full allocated 899 bytes against a calibrated 1000, more than the margin below it. Recalibrate acceptance/criteria.json."]
         it "stays quiet within the margin below, and above" $
             capturesAnnotations (assessCaptures criteriaFixture [(Npm, [measured "lodash" 900 200])]) `shouldBe` []
+        it "warns when the run is on another architecture than the calibration's" $
+            capturesAnnotations (assessCaptures elsewhere{critAllocatedBytes = lodashOnly} [(Npm, [measured "lodash" 1000 100])])
+                `shouldBe` ["::warning title=Allocation budgets calibrated elsewhere::The budgets were calibrated on not-" <> hostArch <> " and this run is on " <> hostArch <> ", so a leg close to its budget can read differently."]
 
     describe "classifyFetch" $
         for_ fetchCases $ \(name, outcome, expected) ->
@@ -207,8 +210,8 @@ fetchCases =
     , ("refuses a body over the proxy's size limit", Left tooLarge, Refused (show tooLarge))
     , ("reports a transport timeout as unreachable", Left (transport TransportTimeout), Unreachable (show (transport TransportTimeout)))
     , ("reports a peer it cannot reach as unreachable", Left (transport TransportUnreachable), Unreachable (show (transport TransportUnreachable)))
-    , ("refuses a TLS refusal, which needs an operator", Left (transport TransportTls), Refused (show (transport TransportTls)))
-    , ("refuses an answer the client could not use", Left (transport TransportProtocol), Refused (show (transport TransportProtocol)))
+    , ("reports a TLS fault from the stock client as unreachable", Left (transport TransportTls), Unreachable (show (transport TransportTls)))
+    , ("reports a truncated or unusable answer as unreachable", Left (transport TransportProtocol), Unreachable (show (transport TransportProtocol)))
     , ("keeps a 2xx body", Right (response 200), Fetched "body")
     , ("refuses a 404, which a pinned package never answers", Right (response 404), Refused "registry HTTP 404")
     , ("refuses a 400, which says the proxy asked wrongly", Right (response 400), Refused "registry HTTP 400")
