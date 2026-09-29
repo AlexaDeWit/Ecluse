@@ -7,9 +7,12 @@ module Ecluse.Core.Registry.PyPI.Metadata (
     newPyPIMetadataReads,
     fetchPyPIManifest,
     pypiChargeFactors,
+    readPyPIIndex,
+    pypiIndexWalk,
     projectPyPIStream,
 ) where
 
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageName)
@@ -17,8 +20,8 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
-import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
+import Ecluse.Core.Registry.Json.Intern (InternTable, newInternTable, newTableKey)
+import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
@@ -47,11 +50,11 @@ newPyPIMetadataReads ::
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
-{- | PyPI's memory charges per source byte, which the residency tier holds above its maxima: a full
-read's retention (3.13, requests) and a listing's encoding with its strict copy (1.57, requests).
+{- | PyPI's memory charges per source byte, above the largest read peak from one meter step of source
+up (3.29, boto3) and a listing's encoding with its strict copy (1.57, requests).
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4200, cfOutputPermille = 1600}
 
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
@@ -77,12 +80,17 @@ fetchPyPIBody tracing origin name consume =
             (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
 
 decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
-decodePyPI tracing origin name mode readChunk = do
+decodePyPI tracing origin name mode = spanMetadataDecode tracing name . readPyPIIndex (ocLimits origin) name mode
+
+-- | Walk an index's chunks with the production field policy, over a table keyed afresh for the read.
+readPyPIIndex :: Limits -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
+readPyPIIndex limits name mode readChunk = do
     table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
-    spanMetadataDecode tracing name $
-        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)) readChunk
-  where
-    limits = ocLimits origin
+    readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiIndexWalk limits name mode table) readChunk
+
+-- | The production Simple-index walk over a caller's intern table.
+pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> TokenResult -> Step PyPIProjection
+pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
 
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version = do

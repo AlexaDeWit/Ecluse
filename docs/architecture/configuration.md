@@ -152,16 +152,32 @@ inviting a retry storm. Only one request at a time may run past the budget, unti
 shared work it waits on runs with it, so the overshoot stays within about one request and a pause
 never deadlocks.
 
-The per-byte charges sit at or above the retained-byte gate's measured maxima: 4.5 bytes held per
-source byte of a full read, and 1.6 for a listing's encoding with its strict copy. The residency
-tier in [`docs/testing.md`](../testing.md#residency-gate-ecluse-residency-gating) fails when a
-package retains more, so a representation change cannot silently outgrow the charge. A charge above
-the average costs little, because the sampler's measurement corrects the budget. After each major
-collection it measures the live data outside the charges, so the budget may grow until charges and
-that remainder reach a third of the heap, less room for the largest recent request under the
-overflow point. It halves the budget, at most once a second, while the collector takes more than
-half the CPU. The charges act the moment work starts and the measurement arrives later, so neither
-alone holds the line.
+A full read's charge per source byte is 1.25 times the highest peak per source byte that the
+residency tier measures for one ecosystem, among captures of at least one 1 MiB meter step, rounded
+up to a tenth. The peak is the most live data the read holds while it parses and projects, which is
+more than it keeps afterwards. npm's charge is 2.1 (typescript peaks at 1.65) and PyPI's is 4.2
+(boto3 peaks at 3.29). The margin covers packages shaped unlike the corpus. A capture under one step
+can peak above its per-byte charge, up to 2.36 for npm (request). What the meter holds for one such
+read, whole steps and at least the 1 MiB entry step, covers it. A request for a name that is not
+first-party reads its private and public documents at once on one ticket, so two such reads can
+exceed what the meter holds by a fraction of a step. The sampler's measurement of live data outside
+the charges absorbs that excess. A listing's response pays 1.6 per source byte. From one step of
+source up, that covers the encoding with its strict copy, which exceeds the listing's measured peak
+above the entry it holds.
+
+The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's read
+or render outgrows what the meter holds for it, so a representation change cannot silently outgrow
+a charge. From one step of source up, it fails once a read's peak passes a regression limit, the
+smallest quarter step at least 8% above the measured maximum: 2.0 per source byte for npm and 3.75
+for PyPI, 0.1 and 0.45 under their charges.
+
+A charge above what a request holds costs throughput. After each major collection the sampler
+measures the live data outside the charges, so the budget may grow until charges and that remainder
+reach a third of the heap, less room for the largest recent request under the overflow point. An
+excess charge takes budget that live data never fills, and the sampler cannot give it back. It
+halves the budget, at most once a second, while the collector takes more than half the CPU. The
+charges act the moment work starts and the measurement arrives later, so neither alone holds the
+line.
 
 The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
 pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains

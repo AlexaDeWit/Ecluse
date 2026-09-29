@@ -105,9 +105,9 @@ The retained samples include any backing arrays reachable through the selected s
 
 These counters distinguish the retained heap from allocation and cache accounting.
 The high-water sample includes rendering and cannot establish the production read/decode/project
-peak or a bound on transient buffers. The probes use production projection functions with the
-default structural limits. They do not execute the HTTP bounded read or prove that shipping
-response limits admit each capture.
+peak or a bound on transient buffers. The [listing probe](#listing-peaks) measures that peak. The
+probes use production projection functions with the default structural limits. They do not execute
+the HTTP bounded read or prove that shipping response limits admit each capture.
 
 The retained-byte gate uses the following corpus envelopes. The calibration used all nine npm and
 three PyPI captures in the arm64 Build job of
@@ -129,11 +129,11 @@ gate keeps its default.
 | PyPI | Shared cache entry | 3.130036392 | requests | 3.5 | 11.8% |
 
 A shared cache entry is what a listing's full read holds. Its gate is a regression limit, and the
-same test also checks that it stays within the memory gate's full-read charge, 4.5 bytes per source
-byte, read from each ecosystem's adapter. The same test checks the listing output charge: twice a
-shared entry's encoded size, for the lazy encoding and its strict copy, must stay within the 1.6
-output charge. That check covers the encoding, not the working set while the merged document is
-built. Raise a charge in the adapter, not here, when a representation outgrows it.
+same test also checks that it stays within the memory gate's full-read charge, read from each
+ecosystem's adapter. The same test checks the listing output charge: twice a shared entry's encoded
+size, for the lazy encoding and its strict copy, must stay within the 1.6 output charge. The
+[listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
+set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
 For example, the TypeScript shared shape retains 24,595,192 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
@@ -154,6 +154,72 @@ These residency measurements do not determine the shared entry-count allowance.
 Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6.4900 and 6.4389.
 Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
 or derived rendering, so they do not establish the same fully forced retained envelope.
+
+### Listing peaks
+
+`MemoryModelResidencySpec` also measures the most live data a listing holds, which the memory gate's
+[charges](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) must cover. For each
+capture, a fresh child process:
+
+1. streams the capture in 32 KiB chunks through the production parser, digest and projection,
+   enforces artifact locations against the capture's registry, and holds the cache entry
+2. renders the served body of a single-source listing in which every version survives, as the
+   strict bytes a response sends
+
+It reads and releases the capture once first, so the baseline holds the read's one-off state.
+It samples live bytes before the measured read, holding the entry, and holding the served body. The
+runtime's high-water after each phase gives that phase's peak. After the read phase it is an upper
+bound, since the warm-up read can set the high-water first. The child runs with
+`+RTS -F1 -A128k`: the old generation may not grow past its live data, so nearly every collection
+is major, and the high-water samples live data at least once per 128 KiB allocated. Under the
+default flags, the typescript read's high-water equalled what it keeps, because no major collection
+fell inside its transient. A 1 MiB nursery misses the peaks of captures under 1 MiB, which finish
+within a few collections.
+
+The checks compare bytes with each ecosystem's charges:
+
+- The read's peak fits what the meter holds after the full-read charge: whole 1 MiB steps, at least
+  the entry step. A capture under one step can peak above its per-byte charge, and this check shows
+  that what the meter holds still covers one such read. It does not check two at once. A listing
+  that reads a private and a public document of under one step on one ticket can exceed what the
+  meter holds by a fraction of a step, which the sampler's measurement of live data outside the
+  charges absorbs.
+- The peak through the read and the render fits what the meter holds after both charges, counted
+  the same way.
+- From one step of source up, the larger of the listing's peak above the held entry and twice the
+  served body fits the output charge. No collection observes the instant the lazy encoding and its
+  strict copy are both live, so the check counts both.
+- From one step of source up, the tier fails once a read's peak passes a regression limit per
+  ecosystem. Each limit is the smallest quarter step at least 8% above the maximum in the table
+  below: 2.0 per source byte for npm (typescript, 1.646, 21.5% margin), 0.1 under its charge, and
+  3.75 for PyPI (boto3, 3.287, 14.1% margin), 0.45 under its charge.
+
+The following figures come from the arm64 Build job of
+[CI run 36493748418](https://github.com/AlexaDeWit/Ecluse/actions/runs/36493748418/job/109168439524),
+with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
+read's peak and the held entry above the baseline, the listing's peak through the read and the
+render above the held entry, and the served body's length.
+
+| Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
+|---|---|--:|--:|--:|--:|--:|
+| npm | typescript | 14.97 | 1.646 | 1.540 | 0.661 | 0.659 |
+| npm | @types/node | 10.63 | 0.687 | 0.596 | 0.177 | 0.175 |
+| npm | react | 6.67 | 1.576 | 1.394 | 0.498 | 0.495 |
+| npm | webpack | 4.96 | 1.254 | 1.145 | 0.713 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 1.407 | 1.283 | 0.765 | 0.762 |
+| npm | express | 0.77 | 1.965 | 1.501 | 0.602 | 0.576 |
+| npm | @babel/core | 0.76 | 1.657 | 1.303 | 0.575 | 0.575 |
+| npm | request | 0.29 | 2.355 | 1.448 | 0.907 | 0.529 |
+| npm | lodash | 0.24 | 2.016 | 1.134 | 0.882 | 0.362 |
+| PyPI | numpy | 2.65 | 2.427 | 2.115 | 0.883 | 0.596 |
+| PyPI | boto3 | 2.10 | 3.287 | 2.918 | 0.995 | 0.621 |
+| PyPI | requests | 0.12 | 4.033 | 3.187 | 0.846 | 0.657 |
+
+The full-read charges and the read-peak limits derive from the read peaks of captures of at least
+one step, as [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling)
+sets out.
+From one step of source up, each listing's peak above its entry stays below twice its served body,
+and the output charge covers both.
 
 ### Read evaluation
 
@@ -761,6 +827,28 @@ harness builds with `-fno-wrapv` to let UndefinedBehaviorSanitizer see it, and
 `test/fuzz/json-lexer/ubsan.supp` names those two functions so fuzzing continues past it. The seed
 `nineteen-digit-integer` reaches it. `FUZZ_KNOWN=report task fuzz-json-lexer` reports it instead.
 
+## One pattern for every ecosystem
+
+Every ecosystem follows the testing pattern that npm and PyPI follow. npm is the model, because it
+has the most work put into it.
+[Adding an ecosystem](adding-an-ecosystem.md) sets out the matching performance pattern. Two
+obligations come with the testing pattern, beside the checklist in
+[Onboarding an ecosystem](#onboarding-an-ecosystem):
+
+- **Hold each metadata walk to a reference reader.** A differential property in `ecluse-core-unit`
+  compares the walk with an independent reader of the same fields, written with json-stream's
+  parser combinators. For a new ecosystem, that reader is a test oracle written for the walk. npm's
+  reference, `npmFields` in `Ecluse.Core.Registry.Npm.Streaming`, is the reader npm ran before its
+  walk. It stays production code, because `Ecluse.Core.Registry.Npm.Project.versionListParser`
+  still reads with it. PyPI's reference, `pypiFields` in `Ecluse.Test.Registry.PyPI.Streaming`, is
+  the reader PyPI ran before its walk.
+- **Give every test a counterpart in every ecosystem.** When a change adds a test, a benchmark row
+  or a load scenario for one ecosystem, it adds a counterpart for each other ecosystem. This applies
+  wherever the other ecosystem has the same path, even while its support is incomplete, because its
+  existing paths still need measuring. A cost that shows in one ecosystem often has a twin in
+  another, and a missing counterpart hides it. Where no counterpart can exist yet, the pull request
+  names the gap.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.
@@ -771,8 +859,13 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Obligation | Expected file or module pattern | Worked examples and current gaps |
 |---|---|---|
 | Unit contracts, gating in `ecluse-core-unit` | Mirror `Ecluse.Core.Registry.<Ecosystem>.*` with `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/*Spec.hs`, including the adapter contracts | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/). The shared [adapter spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) pins ecosystem dispatch. |
+| Recorded corpus outputs, gating in `ecluse-core-unit` | List the captures in [Ecluse.Test.Corpus](../test/support/Ecluse/Test/Corpus.hs) with a `CaptureUpstream`, give `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/StreamingSpec.hs` a `CorpusRead`, and record each capture's lines in [corpus-outputs.tsv](../core/test/unit/fixtures/corpus-outputs.tsv) | The [npm](../core/test/unit/Ecluse/Core/Registry/Npm/StreamingSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/StreamingSpec.hs) specs compare each capture's outputs, computed through `Ecluse.Test.Corpus.Outputs`, with its recorded lines. No tool writes the file. A new capture's spec fails, and its failure output lists the computed lines as Haskell string literals, with each tab shown as `\t`, to review and record. |
+| Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
+| Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `capture`, `envelopePermille`, `readPeakEnvelopePermille` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each read-peak limit below its full-read charge | Five of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The read-peak check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without a read-peak limit skips the [listing checks](#listing-peaks), and one without retained-heap limits takes the generic ones. `readLegacySource` reads an ecosystem it does not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
+| Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes. |
 | Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |

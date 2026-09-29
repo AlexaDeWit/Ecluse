@@ -198,7 +198,9 @@ more compact, with no slice-sharing surprises. Convert once at the boundary: `mk
 and `Map` keys run native. The discipline: **never convert in a hot loop**. If a value is *ever*
 sliced, parsed, or rewritten (a URL rewritten at serve, an SRI digest parsed), keep it `Text`.
 `Scope` and `PackageName`'s canonical and display keys are `ShortText`. `Hash.hashValue` and
-`Artifact.artUrl` stay `Text`.
+`Artifact.artUrl` stay `Text`. The typed metadata view keeps the `Text` it shares with its served
+document, for the reason in
+[Adding an ecosystem](adding-an-ecosystem.md#8-keep-only-what-a-reader-uses-in-the-typed-view).
 
 ---
 
