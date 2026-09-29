@@ -3,24 +3,24 @@
   "calibration": {
     "arch": "aarch64",
     "runner": "ubuntu-24.04-arm",
-    "commit": "0f519b7b0e01b4dbbc2e5f46eb55cce8f0cb1705",
+    "commit": "f8963760fcf32e0bbf2204d2f3893dc9f39e8426",
     "runs": [
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36489408213/job/109154183105"
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36506785690/job/109210050234"
     ],
     "marginPercent": 10
   },
   "allocatedBytes": {
     "npm": {
       "lodash": {
-        "full": 13464528,
+        "full": 13464536,
         "singleVersion": 6880704
       },
       "request": {
-        "full": 18032448,
+        "full": 18032440,
         "singleVersion": 7679392
       },
       "react": {
-        "full": 401248432,
+        "full": 401248448,
         "singleVersion": 164937792
       },
       "@babel/core": {
