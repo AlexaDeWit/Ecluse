@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * Replaying a merge plan
     overlaySurvivors,
     overlayObjectSurvivors,
+    overlayObjectSources,
 
     -- * The interpolated-name gate
     safeDocumentName,
@@ -86,8 +87,12 @@ overlaySurvivors entriesOf bySource plan =
 Only object coordinates are served. Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
 overlayObjectSurvivors :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
-overlayObjectSurvivors entriesOf bySource plan =
-    [ (version, entry)
+overlayObjectSurvivors entriesOf bySource plan = [(version, entry) | (version, _, entry) <- overlayObjectSources entriesOf bySource plan]
+
+-- | 'overlayObjectSurvivors' with the source each entry came from.
+overlayObjectSources :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, SourceId, entry)]
+overlayObjectSources entriesOf bySource plan =
+    [ (version, sid, entry)
     | ((sid, digest, ObjectEntry key), (version, kept)) <- Map.toAscList (admittedIndex plan)
     , usableEntry kept
     , Just source <- [Map.lookup sid bySource]

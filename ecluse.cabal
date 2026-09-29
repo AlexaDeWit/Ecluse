@@ -189,6 +189,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Credential
+    Ecluse.Core.Registry.Npm.Document
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
@@ -1490,6 +1491,7 @@ benchmark ecluse-bench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
     Ecluse.Core.MergeBench
+    Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
     Ecluse.Core.SecurityBench

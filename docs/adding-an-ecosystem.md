@@ -53,7 +53,7 @@ flowchart TD
     steps --> walk["The ecosystem's walk over the lexer's tokens"]
     walk --> shape["readShape: build each kept value once, through the read's intern table"]
     shape --> collect["collectField: decode typed values as each release or file completes"]
-    collect --> finish["finishProjection: check the name and limits, keep the served document"]
+    collect --> finish["finish: check the name and limits, keep the served document"]
     finish --> enforce["enforceArtifactLocations"]
     enforce --> manifest["Manifest, for the cache and the rules"]
 ```
@@ -200,9 +200,9 @@ every field of that view, including a field that nothing reads.
   [The internal domain model](architecture/registry-model.md#the-internal-domain-model) sets out
   what the view holds and why. Removing a field never means defaulting a signal: a signal
   the rules read stays explicitly unknown when the reader cannot determine it.
-- Take typed text from the kept value's own strings, not a fresh copy, so the typed view and the
-  served document share one text. A lone npm integrity component in the typed view is the served
-  document's own text.
+- Take typed text from the kept value's own strings, not a fresh copy, so the typed view and a
+  served document that a read holds as aeson's tree share one text. A read that packs its served
+  releases (step 10) decodes the typed view's text from the packed bytes instead.
 - Keep that text as `Text`, although [the style guide, 6.5](style.md#6-naming-and-domain-types)
   stores bulk identifiers as `ShortText`. A conversion copies the text, so the view would hold a
   second copy of what the served document holds. On the corpus, `ShortText` made the cache entry no
@@ -214,7 +214,7 @@ An unevaluated field in a read's result keeps decoder state alive. That state th
 the rules phase. On a `304`, which never renders, it lives until the request ends.
 
 - Evaluate each typed value as the step stores it, as `Right $! details` does in npm's
-  `collectField`.
+  `projectRelease`.
 - Evaluate the elements of each list the result keeps with `strictElements` from
   `Ecluse.Core.Strict`.
 - Rebuild a list in source order with its keys evaluated, as PyPI's `servedFiles` does, instead of
@@ -223,7 +223,40 @@ the rules phase. On a `304`, which never renders, it lives until the request end
 [Read evaluation](testing.md#read-evaluation) checks that every capture's result is fully evaluated
 when its read finishes.
 
-### 10. Set the memory charges from measured peaks
+### 10. Pack the served releases, and render listings by copying bytes
+
+A full read keeps every release it serves until a listing renders. As aeson's tree, each release is
+many small objects, and a render encodes each string again. A packed release is one array of bytes
+that a render copies.
+
+- `readNpmFull` in `Ecluse.Core.Registry.Npm.Metadata` walks the tokens with `npmWalk` and a
+  `Writer` from [`Ecluse.Core.Registry.Json.Writer`](../core/src/Ecluse/Core/Registry/Json/Writer.hs).
+  The writer writes each kept release into one scratch buffer for the read, as the walk reads it.
+  It then copies the finished release into an array of its exact size.
+- A packed release refers to the read's intern table for each key and shared string. It holds each
+  other string as the bytes aeson writes for it.
+  [`Ecluse.Core.Registry.Json.Packed`](../core/src/Ecluse/Core/Registry/Json/Packed.hs) holds the
+  format, and the table that the read seals when it finishes (`DocTable`).
+- Decode the typed facts from the packed release, and decode only the members they read
+  (`decodePicked`). The read then never holds the release as a tree.
+- A packed release holds one hole: the string that an assembly rebases for each request. npm's hole
+  is the tarball URL (`tarballHole`). The read keeps the hole only when today's rebase rule rewrites
+  that URL.
+- Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
+  surviving releases, each over its own source's table. `renderPlan` writes the listing into one
+  buffer of its exact length. It copies the bytes of each release, and writes each hole as the
+  mount's prefix for the package followed by the URL's file name.
+- `weighCachedDoc` charges a packed document the heap bytes it holds, in the compact units that a
+  cache expands.
+
+Hold the packed read to the tree read of the same bytes: the same typed view, a document that
+decodes to the same tree, and listings that render to the same bytes. The properties cover hostile
+input, chunk boundaries and listings merged from several sources
+([One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem)). The recorded
+corpus outputs change only in their full-document charge lines, and the residency tier checks that
+each npm listing's held entry stays smaller than its source ([Listing peaks](testing.md#listing-peaks)).
+
+### 11. Set the memory charges from measured peaks
 
 The memory gate admits work by what each request pays, not by what it holds. A charge below a
 read's real peak lets the heap overflow. A charge far above it holds budget that live data never
