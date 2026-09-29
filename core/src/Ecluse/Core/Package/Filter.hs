@@ -4,6 +4,7 @@
 
 {- | Ecosystem-independent listing decisions and artifact-location admission.
 Adapters replay the surviving versions and files onto their raw documents.
+"Ecluse.Core.Package.Filter.Internal" holds the per-artifact location check.
 -}
 module Ecluse.Core.Package.Filter (
     -- * Rule-filter plan
@@ -19,10 +20,8 @@ module Ecluse.Core.Package.Filter (
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Data.Text qualified as T
 
 import Ecluse.Core.Package (
-    Artifact (artFilename, artUrl),
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile, InvalidVersionManifest),
     PackageDetails (pkgArtifacts),
@@ -30,11 +29,10 @@ import Ecluse.Core.Package (
     mkInvalidEntry,
     pkgVersion,
  )
+import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, ArtifactRefusal (..), artifactOrigin, resolveArtifact)
 import Ecluse.Core.Rules.Types (Decision (Admitted))
-import Ecluse.Core.Security (AllowedHostPorts, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
-import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
+import Ecluse.Core.Security (AllowedHostPorts, authorityLabel)
 import Ecluse.Core.Strict (strictElements)
-import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (renderVersion)
 
 {- | The filtering decisions for one public packument, for the adapter to replay onto the raw
@@ -85,10 +83,11 @@ enforceArtifactLocations :: AllowedHostPorts -> Text -> PackageInfo -> PackageIn
 enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
     info{infoVersions = kept, infoInvalidEntries = strictElements (infoInvalidEntries info <> drops)}
   where
+    origin = artifactOrigin ecosystemHosts upstreamBaseUrl
     (kept, drops) = Map.foldrWithKey step (Map.empty, []) (infoVersions info)
 
     step rawVersion details (keptAcc, dropAcc) =
-        case partitionArtifacts ecosystemHosts upstreamBaseUrl rawVersion details of
+        case partitionArtifacts origin rawVersion details of
             (Just survivors, fileDrops) -> (Map.insert rawVersion survivors keptAcc, fileDrops <> dropAcc)
             (Nothing, emptied) -> (keptAcc, emptied <> dropAcc)
 
@@ -97,29 +96,21 @@ enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
 -}
 enforceArtifactLocationsOf :: AllowedHostPorts -> Text -> PackageDetails -> Maybe PackageDetails
 enforceArtifactLocationsOf ecosystemHosts upstreamBaseUrl details =
-    fst (partitionArtifacts ecosystemHosts upstreamBaseUrl (renderVersion (pkgVersion details)) details)
-
--- The reason and the offending URL a refused artifact carries, named so a drop record can
--- reduce the URL to its authority.
-data ArtifactRefusal = ArtifactRefusal
-    { refusedFile :: Text
-    , refusedReason :: Text
-    , refusedUrl :: Text
-    }
+    fst (partitionArtifacts (artifactOrigin ecosystemHosts upstreamBaseUrl) (renderVersion (pkgVersion details)) details)
 
 -- 'Nothing' survivors means the version itself drops, recorded once under its version key
 -- rather than once per file, so an emptied version reads as one loss.
-partitionArtifacts :: AllowedHostPorts -> Text -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
-partitionArtifacts ecosystemHosts upstreamBaseUrl rawVersion details =
+partitionArtifacts :: ArtifactOrigin -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
+partitionArtifacts origin rawVersion details =
     case nonEmpty (rights resolved) of
         Just survivors -> (Just details{pkgArtifacts = strictElements survivors}, map fileDrop refusals)
         Nothing -> (Nothing, map (versionDrop rawVersion) (take 1 refusals))
   where
-    resolved = map (resolveArtifact ecosystemHosts upstreamBaseUrl) (toList (pkgArtifacts details))
+    resolved = map (resolveArtifact origin) (toList (pkgArtifacts details))
     refusals = lefts resolved
 
--- Record one dropped file under its own name. 'mkInvalidEntry' recognises a scheme-bearing
--- string, so the URL is reduced to its authority whatever its spelling.
+-- Record one dropped file under its own name. 'mkInvalidEntry' reduces only a scheme-bearing
+-- string, so the URL is reduced here, whatever its spelling.
 fileDrop :: ArtifactRefusal -> InvalidEntry
 fileDrop refusal =
     mkInvalidEntry InvalidIndexFile (refusedFile refusal) (String (authorityLabel (refusedUrl refusal))) (refusedReason refusal)
@@ -128,35 +119,3 @@ fileDrop refusal =
 versionDrop :: Text -> ArtifactRefusal -> InvalidEntry
 versionDrop rawVersion refusal =
     mkInvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel (refusedUrl refusal))) (refusedReason refusal)
-
--- A non-https upstream is a test or dev loopback, which the scheme step leaves alone. The
--- authority check still applies, because the download gate applies it whatever the scheme.
-resolveArtifact :: AllowedHostPorts -> Text -> Artifact -> Either ArtifactRefusal Artifact
-resolveArtifact ecosystemHosts upstreamBaseUrl art = do
-    checkFilename art
-    normalised <- normaliseScheme
-    checkFilename normalised
-    if artifactAuthorityHonoured ecosystemHosts originAuthority (hostPortAddress (artUrl normalised))
-        then Right normalised
-        else Left (refusal "artifact authority is neither the serving upstream nor a declared artifact host" (artUrl normalised))
-  where
-    originAuthority = hostPortAddress upstreamBaseUrl
-
-    checkFilename candidate =
-        when (isNothing (urlFilename (artUrl candidate))) $
-            Left (refusal "artifact URL has no safe filename" (artUrl candidate))
-
-    normaliseScheme = case httpsUpstreamHost upstreamBaseUrl of
-        Nothing -> Right art
-        Just upstreamHost -> case resolveTarballUrl upstreamHost (artUrl art) of
-            Right resolved -> Right art{artUrl = registryUrlText resolved}
-            Left reason -> Left (refusal reason (artUrl art))
-
-    refusal reason url = ArtifactRefusal{refusedFile = artFilename art, refusedReason = reason, refusedUrl = url}
-
--- The bare host of an @https@ upstream base URL, or 'Nothing' for a non-https (test/dev
--- loopback) upstream whose artifact URLs the scheme normalisation leaves untouched.
-httpsUpstreamHost :: Text -> Maybe Text
-httpsUpstreamHost baseUrl
-    | "https://" `T.isPrefixOf` T.toLower baseUrl = Just (hostAddress baseUrl)
-    | otherwise = Nothing

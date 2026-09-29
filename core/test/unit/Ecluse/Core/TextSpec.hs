@@ -8,13 +8,13 @@ module Ecluse.Core.TextSpec (spec) where
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Hedgehog (forAll, (===))
+import Hedgehog (cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
 
 -- | Text parsing contracts, ISO-8601 rendering parity and text storage.
 spec :: Spec
@@ -25,6 +25,7 @@ spec = do
     urlFilenameSpec
     urlFilenameComponentSpec
     afterFirstSpec
+    isPrefixOfLoweredSpec
     readDecimalTextSpec
     readHexTextSpec
     renderIso8601Spec
@@ -38,6 +39,39 @@ afterFirstSpec = describe "afterFirst" $ do
 
     it "returns the whole input when the needle is absent" $
         afterFirst "://" "registry.npmjs.org:443" `shouldBe` "registry.npmjs.org:443"
+
+isPrefixOfLoweredSpec :: Spec
+isPrefixOfLoweredSpec = describe "isPrefixOfLowered" $ do
+    -- Lowering each Char on its own to one or more Chars makes a prefix's lowering decide the
+    -- whole text's, whatever the case tables map.
+    describe "rests on text lowering each Char on its own" $ do
+        it "to at least one Char" $
+            filter (T.null . lowerOne) [minBound .. maxBound] `shouldBe` []
+
+        it "the same beside itself as alone" $
+            filter (\c -> T.toLower (T.pack [c, c]) /= lowerOne c <> lowerOne c) [minBound .. maxBound] `shouldBe` []
+
+        it "the same after and before a letter as alone" $
+            filter (\c -> T.toLower (T.pack ['a', c]) /= "a" <> lowerOne c || T.toLower (T.pack [c, 'a']) /= lowerOne c <> "a") [minBound .. maxBound]
+                `shouldBe` []
+
+    it "matches each scheme prefix whole, and not one character short" $ do
+        isPrefixOfLowered httpsPrefix "HTTPS://x" `shouldBe` True
+        isPrefixOfLowered httpsPrefix "HTTPS:/x" `shouldBe` False
+        isPrefixOfLowered httpPrefix "HTTP://x" `shouldBe` True
+        isPrefixOfLowered httpPrefix "HTTP:/x" `shouldBe` False
+
+    it "agrees with lowering the whole text, including characters that lower to several" $
+        hedgehog $ do
+            (prefix, spelled) <- forAll (Gen.element [(httpsPrefix, "https://"), (httpPrefix, "http://")])
+            lead <- forAll (Gen.element ["", "HTTPS://", "hTtP://", "HTTPS:", "\x130", "\x212A"])
+            rest <- forAll (Gen.text (Range.linear 0 8) (Gen.frequency [(4, Gen.element ("hHtTpPsS:/ i\x130\x212A" :: String)), (1, Gen.unicode)]))
+            let t = lead <> rest
+                expected = spelled `T.isPrefixOf` T.toLower t
+            cover 5 "the prefix begins the lowered text" expected
+            isPrefixOfLowered prefix t === expected
+  where
+    lowerOne = T.toLower . T.singleton
 
 readDecimalTextSpec :: Spec
 readDecimalTextSpec = describe "readDecimalText" $ do
