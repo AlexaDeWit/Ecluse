@@ -18,6 +18,7 @@ import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
@@ -37,7 +38,7 @@ import Ecluse.Test.Snapshot (readDetails)
 
 -- | Measure the npm transform against the original fetch snapshot, excluding its digest cost.
 serveTransformSize :: EvalContext -> (Snapshot Value, PackageInfo) -> IO Int
-serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody assemble ctx input
+serveTransformSize ctx input = fromIntegral . BSL.length <$> transformBody BSL.empty assemble ctx input
   where
     assemble sources plan base = encode (assembleMergedPackument syntheticProxyBase sources plan base)
 
@@ -50,19 +51,19 @@ serveDocumentSize :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, Pack
 serveDocumentSize adapter ctx input = fromIntegral . BSL.length <$> serveDocumentBody adapter ctx input
 
 serveDocumentBody :: AdapterMetadata -> EvalContext -> (Snapshot CachedDoc, PackageInfo) -> IO LByteString
-serveDocumentBody adapter = transformBody assemble
+serveDocumentBody adapter ctx input = transformBody (Right BSL.empty) assemble ctx input >>= either throwIO pure
   where
     assemble sources plan base =
         metadataSerialise adapter (metadataAssemble adapter syntheticProxyBase sources plan (Just base))
 
-transformBody :: (Map SourceId (Snapshot raw) -> MergePlan -> raw -> LByteString) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO LByteString
-transformBody assemble ctx (source, info) = do
+transformBody :: body -> (Map SourceId (Snapshot raw) -> MergePlan -> raw -> body) -> EvalContext -> (Snapshot raw, PackageInfo) -> IO body
+transformBody unserved assemble ctx (source, info) = do
     plan <- filterPlan inertRuleDeps ctx permissiveAgeRules info
     pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info <$ source)] of
         Just merged
             | not (Map.null (mpSurvivors merged)) ->
                 assemble (Map.singleton 0 source) merged (snapshotValue source)
-        _ -> BSL.empty
+        _ -> unserved
 
 -- | Distinguish a measured read from a missing version or failed projection.
 data SelectedDepth

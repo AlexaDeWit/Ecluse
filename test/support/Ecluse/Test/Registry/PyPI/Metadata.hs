@@ -5,6 +5,7 @@
 -- | PyPI fixtures pass through the production extraction and projection, and documents convert to and from JSON.
 module Ecluse.Test.Registry.PyPI.Metadata (
     projectPyPIIndex,
+    readPyPIHeld,
     projectPyPIVersion,
     projectPyPIChunks,
     documentFromValue,
@@ -13,24 +14,34 @@ module Ecluse.Test.Registry.PyPI.Metadata (
 
 import Data.Aeson (Value (Array, Object))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiIndexWalk)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiIndexWalk, readPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (heldChunks, testTable, walkJsonChunks)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
 projectPyPIIndex limits name body = projectPyPIChunks limits name FullRead [body] >>= projectPyPIStream limits name
+
+-- | The production full read of held bytes through the reader a fetch runs, fed from memory.
+readPyPIHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
+readPyPIHeld limits name body = do
+    next <- heldChunks [body]
+    let held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
+    streamed <- readPyPIIndex held name FullRead next
+    pure (first MetadataBoundExceeded streamed >>= fmap (second (fst pypiSimpleCached)) . projectPyPIStream held name)
 
 -- | Select one release without retaining its siblings, using original file positions.
 projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)

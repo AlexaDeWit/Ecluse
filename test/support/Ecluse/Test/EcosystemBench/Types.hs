@@ -32,6 +32,8 @@ data EcosystemBench = EcosystemBench
     , ebDecode :: PackageName -> ByteString -> Either Text [Text]
     -- ^ Decode release keys through the adapter's wire parser.
     , ebProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+    , ebRead :: PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
+    -- ^ The full read of held bytes through the reader a fetch runs.
     , ebSelective :: PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
     , ebReadDocument :: ByteString -> Either Text CachedDoc
     -- ^ Prepare a wire guard's native input outside its measured operation.

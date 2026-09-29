@@ -66,8 +66,10 @@ urlFilename :: Text -> Maybe Text
 urlFilename url = do
     let filename = urlFilenameComponent url
     guard (isSafeComponent filename)
-    decoded <- rightToMaybe (TE.decodeUtf8' (urlDecode False (encodeUtf8 filename)))
-    guard (isSafeComponent decoded)
+    -- A component with no percent sign decodes to itself.
+    when (T.any (== '%') filename) $ do
+        decoded <- rightToMaybe (TE.decodeUtf8' (urlDecode False (encodeUtf8 filename)))
+        guard (isSafeComponent decoded)
     pure filename
 
 {- | The raw final URL path component without query or fragment, possibly empty.

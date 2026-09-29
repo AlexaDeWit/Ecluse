@@ -11,7 +11,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Katip (closeScribes)
+import Katip (LogEnv, closeScribes)
 import Network.HTTP.Client (HttpException, defaultManagerSettings, httpNoBody, newManager, parseRequest)
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types (Header, Status, hConnection, hContentType, methodDelete, methodHead, methodPut, status200, status404, status500, statusCode)
@@ -41,13 +41,14 @@ import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataSerialise), AdapterPublish (publishRelay))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused (RenderRefused))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
@@ -58,7 +59,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
-import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
+import Ecluse.Core.Server.Context (MountRouter, PackumentDeps (pdMetadata), PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
 import Ecluse.Core.Server.Readiness (Readiness (Latched))
@@ -86,14 +87,16 @@ import Ecluse.Runtime.Server.Internal (
     runWarp,
     serveBound,
  )
-import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Test.Support (newTestEnv, newTestEnvLogging)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
-import Ecluse.Test.Log (memoryLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, memoryLogEnv, newTestLogEnv)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (bodyContainsAll, freePort, selfBaseUrlOf, servedVersions, status)
@@ -250,6 +253,7 @@ spec = do
     perimeterGuardSpec
     composedNpmMountSpec
     partialAdvisorySpec
+    refusedRenderSpec
     runWarpDrainWiringSpec
     listeningLineSpec
     raceServerAgainstLoopSpec
@@ -671,6 +675,28 @@ partialAdvisorySpec = describe "two mounts, one advisory database" $ do
             (app, _) <- partialAdvisoryApp (stubLocalhostUrl stub) overridePolicy
             overridden <- requestPath app "/pypi/simple/leftpad/"
             status overridden `shouldBe` 200
+
+refusedRenderSpec :: Spec
+refusedRenderSpec = describe "a served document whose render the adapter refuses" $
+    it "answers the neutral 500 as a render fault, and caches no assembled body" $
+        withRoutedStub upstreamReply $ \stub -> do
+            (statuses, logged) <- captureJsonLog $ \logEnv -> do
+                app <- refusingRenderApp (stubLocalhostUrl stub) logEnv
+                -- An assembled body cached by the first request would answer the second with 200.
+                replicateM 2 (status <$> requestPath app "/npm/leftpad")
+            statuses `shouldBe` [500, 500]
+            T.count "\"perimeterCause\":\"RenderFault\"" logged `shouldBe` 2
+
+-- One npm mount over the upstream whose serialiser refuses every render, logging to the given environment.
+refusingRenderApp :: Text -> LogEnv -> IO Application
+refusingRenderApp upstreamBase logEnv = do
+    rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
+    queue <- newTestMemoryQueue
+    manager <- newManager defaultManagerSettings
+    env <- newTestEnvLogging logEnv queue (manager, manager) telemetryDisabled
+    let deps = npmServeDeps Nothing (loopbackRegistryUrl upstreamBase) NoMirrorWrite rules (pure servedAt)
+        refusing = deps{pdMetadata = (pdMetadata deps){metadataSerialise = const (Left RenderRefused)}}
+    pure (application (mkServerConfig (maybeToList (mountBindingFor Npm refusing Nothing))) env)
 
 {- | Both mounts as the composition root resolves them, over one upstream, with npm's advisory
 database installed and PyPI's slot empty. The handles come back so a test can land PyPI's.
