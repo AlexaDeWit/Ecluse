@@ -36,7 +36,7 @@ for the new ecosystem before you call its reads done.
 | Retained heap per source byte stays within its regression limit | The retained-heap gate of the [residency tier](testing.md#residency-gate-ecluse-residency-gating) |
 | A read's peak and a listing's render fit what the memory gate charges | [Listing peaks](testing.md#listing-peaks) |
 | Time and allocation per request show on every pull request | The work-per-request benchmarks ([Benchmarks](testing.md#benchmarks-non-gating)) |
-| Each capture's full, single-version, and advisory-loaded reads stay within their allocation budgets | The [allocation gate](testing.md#allocation-budgets-perf-allocation-gating) |
+| Each capture's measured legs stay within their allocation budgets | The [allocation gate](testing.md#allocation-budgets-perf-allocation-gating) |
 
 ## The read, end to end
 
@@ -273,18 +273,12 @@ bytes for a capture. For counterparts in other ecosystems, see
 
 ### The allocation gate
 
-The `allocation` CI job holds the full and single-version reads of every committed capture to an
-allocation budget, and it gates the merge.
-[Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating) describes the legs, the
-margin, and what fails the job. A new ecosystem joins the gate through its registered
-`EcosystemBench` corpus, because the gate measures every capture there and fails on one with no
-calibrated figure.
-
-To calibrate the new ecosystem, add its captures and open the pull request. The job's report on
-the arm64 run prints every leg's figure. Copy all of them from that one run into
-`acceptance/criteria.json`, the new ecosystem's section and the existing ones alike, and record the
-run and the commit it checked out as the calibration. From then on, a change to the new
-ecosystem's reads that allocates more than the margin above its figure fails the gate.
+The `allocation` CI job holds the measured legs of every committed capture to allocation budgets,
+and it gates the merge. [Allocation budgets](testing.md#allocation-budgets-perf-allocation-gating)
+describes the legs, the part of a read they cover, the margin, and what fails the job. A new
+ecosystem joins the gate through its registered `EcosystemBench` corpus, because the gate measures
+every capture there and fails on one with no calibrated figure. To calibrate the new ecosystem,
+open the pull request that adds its captures, and follow the recalibration steps in that section.
 
 Two of the gate's legs repeat the full read with an advisory database served, under the shipped
 policy and under all three advisory rules. Their data is the captured osv.dev records and EPSS rows
