@@ -24,7 +24,7 @@ durable memory: load detailed guidance only when the task needs it. See
 | Change architecture or module boundaries | [`docs/architecture.md`](docs/architecture.md) and only the linked concern documents affected |
 | Change operator behaviour or configuration | [`web/content/docs/`](web/content/docs/), [`config/default.yaml`](config/default.yaml), and the relevant architecture document |
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
-| Add an ecosystem | [`docs/adding-an-ecosystem.md`](docs/adding-an-ecosystem.md), then [`docs/testing.md`, Onboarding an ecosystem](docs/testing.md#onboarding-an-ecosystem) |
+| Add an ecosystem | [`docs/adding-an-ecosystem.md`](docs/adding-an-ecosystem.md), [`docs/architecture/registry-model.md`, Registry abstraction](docs/architecture/registry-model.md#registry-abstraction), then [`docs/testing.md`, One pattern for every ecosystem](docs/testing.md#one-pattern-for-every-ecosystem) and the onboarding checklist after it |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
 | Coordinate implementation slices | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
