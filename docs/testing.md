@@ -196,9 +196,9 @@ the serving path's assembly. It reports the output basis the serving path comput
 - oldest heavy base: as the heavy base, with the oldest tenth of the versions, whose releases are
   the smallest
 
-The first five are realistic: they model private copies that deployments serve, and they set the
-output charge and its regression limit. The heavy bases stress the basis instead, and the output
-charge must hold them.
+The single-source listing and the first four shapes are realistic: they model private copies
+that deployments serve, and they set the output charge and its regression limit. The heavy bases
+stress the basis instead, and the output charge must hold them.
 
 `Ecluse.Test.Corpus.Merge` writes each shaped document from the capture, and
 `Ecluse.Test.Corpus.Subset` cuts it to its versions. A cut document stays consistent: an npm cut
@@ -214,7 +214,8 @@ The checks compare bytes with each ecosystem's charges:
   can exceed what the meter holds by a fraction of a step, which the sampler's measurement of live
   data outside the charges absorbs.
 - The peak through the reads and the render fits what the meter holds after the full-read and
-  output charges, counted the same way.
+  output charges, counted the same way. Every listing's output working set, a heavy base's or a
+  capture's under one step included, fits the whole steps its output charge alone buys.
 - From one step of basis up, every listing's output working set, a heavy base's included, fits the
   output charge on the basis. The working set is the larger of the listing's peak above the
   documents it holds and twice the served body. No collection observes the instant the lazy
@@ -230,11 +231,11 @@ The checks compare bytes with each ecosystem's charges:
   realistic shapes in the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3,
   1.524, 14.8% margin), 0.25 under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1
   under its charge. One example checks that each limit sits below its charge.
-- Every npm listing's held entry stays smaller than the source it was read from. `entryBelowSource`
-  names the ecosystems this check covers. PyPI's entry holds each file as aeson's tree beside its
-  typed view, which outgrows the file.
-- The entry frees live bytes when it drops its served document, and the document's weight, expanded
-  as a cache expands it, covers them.
+- Every single-source npm listing's held entry stays smaller than the source it was read from.
+  `entryBelowSource` names the ecosystems this check covers. PyPI's entry holds each file as
+  aeson's tree beside its typed view, which outgrows the file.
+- A single-source listing's entry frees live bytes when it drops its served document, and the
+  document's weight, expanded as a cache expands it, covers them.
 
 The following figures come from the arm64 Build job of
 [CI run 36537317917](https://github.com/AlexaDeWit/Ecluse/actions/runs/36537317917/job/109304478187),
@@ -259,7 +260,7 @@ read.
 | PyPI | requests | 0.12 | 4.005 | 3.096 | 0.909 | 0.657 |
 
 The arm64 Build job of
-[CI run 36561729183](https://github.com/AlexaDeWit/Ecluse/actions/runs/36561729183/job/109384272217)
+[CI run 36562979100](https://github.com/AlexaDeWit/Ecluse/actions/runs/36562979100/job/109388236444)
 gives each listing's output working set per byte of its basis, for a single document and for each
 merge shape.
 
@@ -273,7 +274,7 @@ merge shape.
 | npm | express | 1.151 | 1.151 | 1.122 | 1.091 | 1.017 | 1.388 | 1.427 |
 | npm | @babel/core | 1.149 | 1.149 | 1.148 | 1.148 | 1.149 | 1.431 | 1.461 |
 | npm | request | 1.058 | 1.058 | 0.943 | 0.854 | 0.839 | 1.201 | 1.223 |
-| npm | lodash | 1.034 | 0.919 | 0.806 | 0.749 | 0.915 | 1.077 | 1.092 |
+| npm | lodash | 1.034 | 0.944 | 0.807 | 0.774 | 0.911 | 1.077 | 1.092 |
 | PyPI | numpy | 1.193 | 1.193 | 1.195 | 1.199 | 0.956 | 1.467 | 1.541 |
 | PyPI | boto3 | 1.242 | 1.242 | 1.242 | 1.242 | 1.242 | 1.495 | 1.496 |
 | PyPI | requests | 1.315 | 1.315 | 1.323 | 1.318 | 1.185 | 1.544 | 1.588 |

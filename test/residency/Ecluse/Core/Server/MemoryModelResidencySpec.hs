@@ -97,7 +97,7 @@ spec = do
                     for_ (listingBounds package) $ \(factors, limits) -> do
                         checkPaid factors peaks
                         checkOutputCharge factors peaks
-                        -- A heavy base must fit the charge the realistic shapes set.
+                        -- Only the realistic shapes answer to the regression limit.
                         when (realisticShape shape) (checkOutputLimit limits peaks)
 
 merges :: [(CorpusPackage, MergeShape)]
@@ -177,11 +177,13 @@ listingBounds package = (,) <$> chargeFactors ecosystem <*> peakLimits ecosystem
   where
     ecosystem = pkgEcosystem (cpPackage package)
 
--- A listing pays whole meter steps from its entry step on, for its reads and then its render.
+{- A listing pays whole meter steps from its entry step on, for its reads and then its render. The
+output's own steps hold its working set whatever the capture's size or shape. -}
 checkPaid :: ChargeFactors -> ListingPeaks -> Expectation
 checkPaid factors peaks = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)
     rise listingPeak listingBaseline peaks `shouldSatisfy` (<= paid (fullRead + output))
+    outputWorkingSet peaks `shouldSatisfy` (<= paid output)
   where
     fullRead = scaleCharge (cfFullReadPermille factors) (listingSourceBytes peaks)
     output = scaleCharge (cfOutputPermille factors) (listingBasisBytes peaks)

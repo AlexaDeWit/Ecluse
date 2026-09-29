@@ -260,7 +260,8 @@ probeReads documents package = do
         bracket (prepareListingRender (pkgEcosystem (cpPackage package)) sources) (freeStablePtr . fst) $ \(servedRoot, basis) -> do
             rendered <- sample
             served <- deRefStablePtr servedRoot
-            pure
+            -- Evaluated here, so nothing sampled later holds the sources or the served body.
+            evaluate
                 ListingPeaks
                     { listingSourceBytes = sum (map srcBodyBytes sources)
                     , listingBasisBytes = basis

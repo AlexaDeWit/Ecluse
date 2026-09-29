@@ -178,16 +178,18 @@ realistic shapes: a single document, and merges whose documents are identical, o
 version, or put the newest quarter of the versions in the private copy, as a registry that holds
 the versions a deployment consumed does. npm's charge is 2.0 (@aws-sdk/client-s3 at 1.52) and
 PyPI's is 1.6 (boto3 at 1.24). The tier also renders heavy bases, private documents that render
-far more than their version count suggests, and holds each of them within the output charge.
+far more than their version count suggests, and from one step of basis up holds each of them
+within the output charge. Below one step, the whole meter steps a response pays for hold every
+listing's output working set, heavy bases included, and the tier checks that too.
 
 The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails when a capture's reads
 or render outgrow what the meter holds for them, so a representation change cannot silently
-outgrow a charge. From one step up, it fails once a read's peak or an output working set passes a
-regression limit. The read limits are 2.0 per source byte for npm and 3.75 for PyPI, 0.1 and 0.45
-under their charges. Each was set as the smallest quarter step at least 8% above the measured
-maximum, which for the read maxima above gives 1.0 for npm and 3.5 for PyPI. The output limits,
-set by the same rule over the realistic shapes, are 1.75 per basis byte for npm and 1.5 for PyPI,
-0.25 and 0.1 under their charges.
+outgrow a charge. From one step up, it fails once a read's peak or a realistic listing's output
+working set passes a regression limit. The read limits are 2.0 per source byte for npm and 3.75
+for PyPI, 0.1 and 0.45 under their charges. Each was set as the smallest quarter step at least 8%
+above the measured maximum, which for the read maxima above gives 1.0 for npm and 3.5 for PyPI.
+The output limits, set by the same rule over the realistic shapes, are 1.75 per basis byte for npm
+and 1.5 for PyPI, 0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder

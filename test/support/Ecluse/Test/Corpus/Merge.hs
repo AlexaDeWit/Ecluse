@@ -53,9 +53,12 @@ data MergeShape
 -- | Whether the shape models a private copy a deployment serves, not a stress on the basis.
 realisticShape :: MergeShape -> Bool
 realisticShape = \case
+    Identical -> True
+    Overlapping -> True
+    Disjoint -> True
+    PublishOrder -> True
     HeavyBase -> False
     HeavyOldBase -> False
-    _ -> True
 
 -- | One side of a merge: the capture as captured, or a document rewritten from it.
 data MergeDocument = Captured | Rewritten Value

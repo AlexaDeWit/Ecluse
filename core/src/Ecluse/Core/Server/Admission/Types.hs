@@ -29,7 +29,7 @@ data ChargeFactors = ChargeFactors
     -}
     , cfOutputPermille :: Int
     {- ^ Per byte of a listing's output basis: 1.25 times the largest output working set per basis byte
-    on a residency capture of at least one meter step, rounded up to a tenth.
+    of a single document or a realistic merge, on a capture of at least one meter step, rounded up.
     -}
     }
     deriving stock (Eq, Show)

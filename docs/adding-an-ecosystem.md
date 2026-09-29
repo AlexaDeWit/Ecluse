@@ -276,8 +276,8 @@ The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, a
   merge probes in [Listing peaks](testing.md#listing-peaks) calibrate it over a single document and
   the realistic merge shapes, from one meter step of basis up, and hold the heavy-base shapes
   within it. It must cover the listing's peak above the documents it holds, and twice the served
-  body. The retained-heap gate checks every capture,
-  whatever its size: twice the shared entry's encoded size must fit within the output charge.
+  body. The retained-heap gate checks every capture, whatever its size: twice the shared entry's
+  encoded size must fit within the output charge.
 
 To calibrate them:
 
