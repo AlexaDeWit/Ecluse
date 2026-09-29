@@ -12,7 +12,9 @@ module Ecluse.Core.Registry.Json.Packed (
     -- * Encoded strings
     encodeString,
     encodedLength,
+    writeEncoded,
     plain,
+    quote,
 
     -- * The format
     opNull,
@@ -66,7 +68,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder.Extra qualified as Builder
 import Data.ByteString.Internal qualified as BSI
 import Data.ByteString.Short qualified as SBS
 import Data.ByteString.Unsafe qualified as BSU
@@ -85,32 +86,25 @@ import Foreign.Marshal.Utils (copyBytes)
 import Foreign.Ptr (Ptr, castPtr, plusPtr)
 import Foreign.Storable (pokeByteOff)
 
--- | The bytes aeson writes for a string, quotes included.
+import Ecluse.Core.Text (textStorageBytes)
+
+-- | The bytes aeson writes for a string, quotes included: 'encodedLength' of them.
 encodeString :: Text -> ByteString
 encodeString text@(TI.Text array offset len)
     | plain text = BSI.unsafeCreate (len + 2) $ \target -> do
         pokeByteOff target 0 quote
         copyByteArrayToAddr (target `plusPtr` 1) array offset len
         pokeByteOff target (len + 1) quote
-    | otherwise = toStrict (Builder.toLazyByteStringWith (Builder.untrimmedStrategy size size) mempty (Encoding.fromEncoding (Encoding.text text)))
-  where
-    size = encodedLength text
+    | otherwise = SBS.fromShort (SBS.ShortByteString (createByteArray (encodedLength text) (\target -> void (writeEncoded text target 0))))
 
-{- | The length of 'encodeString', counted from aeson's escapes: two bytes for a backslash, a quote, a
-newline, a return or a tab, six for any other byte below a space, and one for every other byte.
--}
+-- | The length of 'encodeString', from the escape 'writeEncoded' writes for each byte.
 encodedLength :: Text -> Int
 encodedLength (TI.Text array offset len) = go offset 2
   where
     end = offset + len
     go !i !total
         | i >= end = total
-        | otherwise = go (i + 1) (total + width (TA.unsafeIndex array i))
-    width byte
-        | byte == 0x5c || byte == 0x22 = 2
-        | byte >= 0x20 = 1
-        | byte == 0x0a || byte == 0x0d || byte == 0x09 = 2
-        | otherwise = 6
+        | otherwise = go (i + 1) (total + escapeWidth (escapeOf (TA.unsafeIndex array i)))
 
 -- | Whether aeson writes the string's bytes as they are: no backslash, quote or byte below a space.
 plain :: Text -> Bool
@@ -119,10 +113,73 @@ plain (TI.Text array offset len) = go offset
     end = offset + len
     go !i
         | i >= end = True
-        | otherwise =
-            let byte = TA.unsafeIndex array i
-             in byte >= 0x20 && byte /= 0x22 && byte /= 0x5c && go (i + 1)
+        | otherwise = case escapeOf (TA.unsafeIndex array i) of
+            Verbatim -> go (i + 1)
+            _ -> False
 
+-- | Write 'encodeString' at an offset, and return the offset after it.
+writeEncoded :: Text -> MutableByteArray st -> Int -> ST st Int
+writeEncoded text@(TI.Text array offset len) target at
+    | plain text = do
+        writeByteArray target at quote
+        copyByteArray target (at + 1) array offset len
+        writeByteArray target (at + len + 1) quote
+        pure (at + len + 2)
+    | otherwise = do
+        writeByteArray target at quote
+        end <- escapeFrom array offset (offset + len) target (at + 1)
+        writeByteArray target end quote
+        pure (end + 1)
+
+{- aeson's escape for one byte of a string: the byte as it is, a backslash and a letter for a
+backslash, a quote, a newline, a return or a tab, and a lower-case hexadecimal code below a space. -}
+data Escape = Verbatim | Named !Word8 | Coded
+
+escapeOf :: Word8 -> Escape
+escapeOf byte
+    | byte == 0x5c = Named 0x5c
+    | byte == 0x22 = Named 0x22
+    | byte >= 0x20 = Verbatim
+    | byte == 0x0a = Named 0x6e
+    | byte == 0x0d = Named 0x72
+    | byte == 0x09 = Named 0x74
+    | otherwise = Coded
+{-# INLINE escapeOf #-}
+
+escapeWidth :: Escape -> Int
+escapeWidth = \case
+    Verbatim -> 1
+    Named _ -> 2
+    Coded -> 6
+{-# INLINE escapeWidth #-}
+
+escapeFrom :: TA.Array -> Int -> Int -> MutableByteArray st -> Int -> ST st Int
+escapeFrom array !from !to target !at
+    | from >= to = pure at
+    | otherwise = case escapeOf byte of
+        Verbatim -> writeByteArray target at byte >> next 1
+        Named letter -> do
+            writeByteArray target at (0x5c :: Word8)
+            writeByteArray target (at + 1) letter
+            next 2
+        Coded -> do
+            writeByteArray target at (0x5c :: Word8)
+            writeByteArray target (at + 1) (0x75 :: Word8)
+            writeByteArray target (at + 2) (0x30 :: Word8)
+            writeByteArray target (at + 3) (0x30 :: Word8)
+            writeByteArray target (at + 4) (hexDigit (byte `shiftR` 4))
+            writeByteArray target (at + 5) (hexDigit (byte .&. 0x0f))
+            next 6
+  where
+    byte = TA.unsafeIndex array from
+    next width = escapeFrom array (from + 1) to target (at + width)
+
+hexDigit :: Word8 -> Word8
+hexDigit digit
+    | digit < 10 = 0x30 + digit
+    | otherwise = 0x57 + digit
+
+-- | The quote byte that opens and closes a string's encoding.
 quote :: Word8
 quote = 0x22
 
@@ -179,7 +236,7 @@ valueEnd blob position = case indexByteArray blob position :: Word8 of
         | otherwise = items (count - 1) (valueEnd blob at)
 
 -- | One document's shared strings, back to back as aeson writes them, and where each begins.
-data DocTable = DocTable !ByteArray !(PrimArray Word32)
+data DocTable = DocTable !ByteArray !(PrimArray Int)
     deriving stock (Eq, Show)
 
 -- | Lay out the table from its strings in index order.
@@ -190,37 +247,31 @@ docTable strings = DocTable arena offsets
     offsets = runPrimArray $ do
         target <- newPrimArray (count + 1)
         let fill !index !offset = do
-                writePrimArray target index (fromIntegral offset)
+                writePrimArray target index offset
                 when (index < count) (fill (index + 1) (offset + encodedLength (indexSmallArray strings index)))
         fill 0 0
         pure target
-    arena = createByteArray (fromIntegral (indexPrimArray offsets count)) (`placeFrom` 0)
+    arena = createByteArray (indexPrimArray offsets count) (`placeFrom` 0)
     placeFrom target !index = when (index < count) $ do
-        place target (fromIntegral (indexPrimArray offsets index)) (indexSmallArray strings index)
+        void (writeEncoded (indexSmallArray strings index) target (indexPrimArray offsets index))
         placeFrom target (index + 1)
-    place target offset text@(TI.Text array start len)
-        | plain text = do
-            writeByteArray target offset quote
-            copyByteArray target (offset + 1) array start len
-            writeByteArray target (offset + len + 1) quote
-        | otherwise = let bytes = SBS.toShort (encodeString text) in copyByteArray target offset (SBS.unShortByteString bytes) 0 (SBS.length bytes)
 
 -- | The heap bytes the table holds: its record, and its two arrays with their headers.
 tableResident :: DocTable -> Int
-tableResident (DocTable arena offsets) = 24 + arrayResident (sizeofByteArray arena) + arrayResident (4 * sizeofPrimArray offsets)
+tableResident (DocTable arena offsets) = 24 + arrayResident (sizeofByteArray arena) + arrayResident (8 * sizeofPrimArray offsets)
 
 -- The heap bytes of a byte array with the given payload: a two-word header and the payload in whole words.
 arrayResident :: Int -> Int
 arrayResident size = 16 + 8 * ((size + 7) `div` 8)
 
--- Where a table string's encoding starts in the arena, and its length. An index past the table
--- reads as the empty span, so a damaged blob never reads outside the arena.
+-- Where a table string's encoding starts in the arena, and its length. An index past the table has
+-- length -1, which a render refuses, so a damaged blob never reads outside the arena.
 tableEntry :: DocTable -> Int -> (# Int, Int #)
 tableEntry (DocTable _ offsets) index
-    | index < 0 || index + 1 >= sizeofPrimArray offsets = (# 0, 0 #)
+    | index < 0 || index + 1 >= sizeofPrimArray offsets = (# 0, -1 #)
     | otherwise =
-        let start = fromIntegral (indexPrimArray offsets index)
-         in (# start, fromIntegral (indexPrimArray offsets (index + 1)) - start #)
+        let start = indexPrimArray offsets index
+         in (# start, indexPrimArray offsets (index + 1) - start #)
 {-# INLINE tableEntry #-}
 
 tableArena :: DocTable -> ByteArray
@@ -250,7 +301,8 @@ packedResident value = 24 + arrayResident (packedBytes value)
 withoutHole :: Packed -> Packed
 withoutHole (Packed blob _) = Packed blob (-1)
 
--- The encoded length of the value at a position, and the position after it.
+-- The encoded length of the value at a position, or -1 when it names a string the table lacks, and
+-- the position after it.
 encodedAt :: DocTable -> ByteArray -> Int -> (# Int, Int #)
 encodedAt table blob position = case indexByteArray blob position :: Word8 of
     byte
@@ -270,13 +322,20 @@ encodedAt table blob position = case indexByteArray blob position :: Word8 of
         | otherwise = case readVarint blob at of
             (# tagged, next #)
                 | even tagged -> case tableEntry table (tagged `div` 2) of
-                    (# _, keyLen #) -> case encodedAt table blob next of
-                        (# len, after #) -> members (count - 1) after (total + keyLen + 1 + len)
-                | otherwise -> case encodedAt table blob (next + tagged `div` 2) of
-                    (# len, after #) -> members (count - 1) after (total + tagged `div` 2 + 1 + len)
+                    (# _, keyLen #)
+                        | keyLen < 0 -> (# -1, next #)
+                        | otherwise -> member count next (keyLen + 1) total
+                | otherwise -> member count (next + tagged `div` 2) (tagged `div` 2 + 1) total
+    member !count !at !keyed !total = case encodedAt table blob at of
+        (# len, after #)
+            | len < 0 -> (# -1, after #)
+            | otherwise -> members (count - 1) after (total + keyed + len)
     items !count !at !total
         | count <= 0 = (# total, at #)
-        | otherwise = case encodedAt table blob at of (# len, after #) -> items (count - 1) after (total + len)
+        | otherwise = case encodedAt table blob at of
+            (# len, after #)
+                | len < 0 -> (# -1, after #)
+                | otherwise -> items (count - 1) after (total + len)
 
 -- Two brackets and a comma between each pair of members or items.
 separators :: Int -> Int
@@ -306,7 +365,9 @@ urlPrefix text = UrlPrefix (SBS.unShortByteString (SBS.toShort (BS.take (BS.leng
 {- Where the file name lies in an encoded URL: after the last slash before any query or fragment. No
 escape writes a slash, a question mark or a hash, so the span is the file name's own encoding. -}
 fileSpan :: ByteArray -> Int -> Int -> (# Int, Int #)
-fileSpan array start len = (# fileStart, pathEnd - fileStart #)
+fileSpan array start len
+    | len < 2 = (# start, 0 #)
+    | otherwise = (# fileStart, pathEnd - fileStart #)
   where
     end = start + len - 1
     pathEnd = scanPath (start + 1)
@@ -322,24 +383,30 @@ fileSpan array start len = (# fileStart, pathEnd - fileStart #)
         | (indexByteArray array (at - 1) :: Word8) == 0x2f = at
         | otherwise = scanSlash (at - 1)
 
--- The length of a value's encoding, with its hole rebased onto the prefix when one is given.
+-- The length of a value's encoding, with its hole rebased onto the prefix when one is given, or -1
+-- when it names a string the table lacks.
 renderedLength :: DocTable -> Maybe UrlPrefix -> Packed -> Int
 renderedLength table prefix (Packed blob hole) = case encodedAt table blob 0 of
-    (# len, _ #) -> case prefix of
-        Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
-            (# array, start, old, _ #) -> case fileSpan array start old of
-                (# _, file #) -> len - old + 2 + sizeofByteArray bytes + file
-        _ -> len
+    (# len, _ #)
+        | len < 0 -> -1
+        | otherwise -> case prefix of
+            Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
+                (# array, start, old, _ #) -> case fileSpan array start old of
+                    (# _, file #) -> len - old + 2 + sizeofByteArray bytes + file
+            _ -> len
 
-{- Write the value's encoding at an offset and return the offset after it. With a prefix, the hole's
-URL is written as the prefix followed by the URL's file name. -}
-pokePacked :: Ptr Word8 -> Int -> DocTable -> Maybe UrlPrefix -> Packed -> IO Int
-pokePacked target start table prefix (Packed blob hole) = do
+{- Write the value's encoding at an offset, before the limit, and return the offset after it. A write
+that would pass the limit, or a string the table lacks, returns an offset past the limit instead. -}
+pokePacked :: Ptr Word8 -> Int -> Int -> DocTable -> Maybe UrlPrefix -> Packed -> IO Int
+pokePacked target limit start table prefix (Packed blob hole) = do
     at <- newPrimVar 0
     out <- newPrimVar start
-    let byte w = readPrimVar out >>= \o -> pokeByteOff target o (w :: Word8) >> writePrimVar out (o + 1)
-        copyFrom array from len = readPrimVar out >>= \o -> copyByteArrayToAddr (target `plusPtr` o) array from len >> writePrimVar out (o + len)
-        literal bytes = readPrimVar out >>= \o -> BSU.unsafeUseAsCStringLen bytes (\(source, len) -> copyBytes (target `plusPtr` o) (castPtr source) len >> writePrimVar out (o + len))
+    let bounded len write = do
+            o <- readPrimVar out
+            if len >= 0 && o + len <= limit then write o >> writePrimVar out (o + len) else writePrimVar out (limit + 1)
+        byte w = bounded 1 (\o -> pokeByteOff target o (w :: Word8))
+        copyFrom array from len = bounded len (\o -> copyByteArrayToAddr (target `plusPtr` o) array from len)
+        literal bytes = bounded (BS.length bytes) (\o -> BSU.unsafeUseAsCStringLen bytes (\(source, len) -> copyBytes (target `plusPtr` o) (castPtr source) len))
         value = do
             position <- readPrimVar at
             case prefix of
@@ -454,12 +521,18 @@ class TableStrings t where
 newtype OfTable st = OfTable DocTable
 
 instance TableStrings OfTable where
-    tableValue (OfTable table) index = pure $! case tableEntry table index of (# start, len #) -> decodeScalar (tableArena table) start len
+    tableValue (OfTable table) index = pure $! tableString table index
     tableKey (OfTable table) index =
-        pure $! case tableEntry table index of
-            (# start, len #) -> case decodeScalar (tableArena table) start len of
-                String text -> Key.fromText text
-                _ -> ""
+        pure $! case tableString table index of
+            String text -> Key.fromText text
+            _ -> ""
+
+-- A table string as aeson reads it, or null for an index past the table.
+tableString :: DocTable -> Int -> Value
+tableString table index = case tableEntry table index of
+    (# start, len #)
+        | len < 0 -> Null
+        | otherwise -> decodeScalar (tableArena table) start len
 
 {- | Read the value at the position the variable holds back as aeson's tree, and move the variable
 past it. The strings resolve a table index to its string and to its key.
@@ -552,7 +625,9 @@ rebasedValue table prefix value@(Packed blob hole) = case prefix of
 data Piece = Piece !Int !Packed
     deriving stock (Eq, Show)
 
--- | The packed member of a rendered document: an object's members in order, or an array's items.
+{- | The packed member of a rendered document: an object's members, sorted by key with no key twice,
+or an array's items. A render writes them in list order.
+-}
 data Pieces = ObjectPieces ![(Text, Piece)] | ArrayPieces ![Piece]
     deriving stock (Eq, Show)
 
@@ -568,11 +643,11 @@ data RenderPlan = RenderPlan
     }
     deriving stock (Eq, Show)
 
--- The plan's table at an index. An index past the plan reads as the empty table.
-tableAt :: SmallArray DocTable -> Int -> DocTable
+-- The plan's table at an index, or nothing past the plan.
+tableAt :: SmallArray DocTable -> Int -> Maybe DocTable
 tableAt tables index
-    | index >= 0 && index < sizeofSmallArray tables = indexSmallArray tables index
-    | otherwise = docTable mempty
+    | index >= 0 && index < sizeofSmallArray tables = Just (indexSmallArray tables index)
+    | otherwise = Nothing
 
 data Part = Encoded !ByteString | Packs
 
@@ -583,55 +658,75 @@ planParts plan =
     | (key, part) <- KeyMap.toAscList (KeyMap.insert (planSlot plan) Nothing (Just <$> planMembers plan))
     ]
 
-partsLength :: RenderPlan -> [(ByteString, Part)] -> Int
-partsLength plan parts = separators (length parts) + sum (map partLength parts)
+-- The render's length, or nothing when a piece names a table or string the plan lacks.
+partsLength :: RenderPlan -> [(ByteString, Part)] -> Maybe Int
+partsLength plan parts = (separators (length parts) +) . sum <$> traverse partLength parts
   where
     partLength (key, part) =
-        BS.length key + 1 + case part of
-            Encoded bytes -> BS.length bytes
+        (BS.length key + 1 +) <$> case part of
+            Encoded bytes -> Just (BS.length bytes)
             Packs -> case planPieces plan of
-                ObjectPieces members -> separators (length members) + sum [encodedLength version + 1 + pieceLength piece | (version, piece) <- members]
-                ArrayPieces items -> separators (length items) + sum (map pieceLength items)
-    pieceLength (Piece index value) = renderedLength (tableAt (planTables plan) index) (planPrefix plan) value
+                ObjectPieces members -> (separators (length members) +) . sum <$> traverse (\(version, piece) -> (encodedLength version + 1 +) <$> pieceLength piece) members
+                ArrayPieces items -> (separators (length items) +) . sum <$> traverse pieceLength items
+    pieceLength (Piece index value) = do
+        table <- tableAt (planTables plan) index
+        let len = renderedLength table (planPrefix plan) value
+        guard (len >= 0)
+        pure len
 
--- | Render an assembled document into one buffer of its exact length.
-renderPlan :: RenderPlan -> ByteString
-renderPlan plan = BSI.unsafeCreate (partsLength plan parts) $ \target -> do
-    let byte offset w = pokeByteOff target offset (w :: Word8) >> pure (offset + 1)
-        bytes offset b = BSU.unsafeUseAsCStringLen b $ \(source, len) -> copyBytes (target `plusPtr` offset) (castPtr source) len >> pure (offset + len)
-        separated offset list write = foldlM (\o (index, item) -> (if index > (0 :: Int) then byte o 0x2c else pure o) >>= \o' -> write o' item) offset (zip [0 ..] list)
-        piece offset (Piece index value) = pokePacked target offset (tableAt (planTables plan) index) (planPrefix plan) value
-        part offset = \case
-            Encoded b -> bytes offset b
-            Packs -> case planPieces plan of
-                ObjectPieces members -> do
-                    o <- byte offset 0x7b
-                    end <- separated o members $ \o' (version, item) -> bytes o' (encodeString version) >>= \o'' -> byte o'' 0x3a >>= \o''' -> piece o''' item
-                    byte end 0x7d
-                ArrayPieces items -> do
-                    o <- byte offset 0x5b
-                    end <- separated o items piece
-                    byte end 0x5d
-    o <- byte 0 0x7b
-    end <- separated o parts $ \o' (key, p) -> bytes o' key >>= \o'' -> byte o'' 0x3a >>= \o''' -> part o''' p
-    void (byte end 0x7d)
+{- | Render an assembled document into one buffer of its exact length, or nothing when a piece names a
+table or string the plan lacks, or the render does not fill the buffer exactly.
+-}
+renderPlan :: RenderPlan -> Maybe ByteString
+renderPlan plan = do
+    size <- partsLength plan parts
+    let rendered = BSI.unsafeCreateUptoN size $ \target -> do
+            let within offset len write
+                    | len >= 0 && offset + len <= size = write >> pure (offset + len)
+                    | otherwise = pure (size + 1)
+                byte offset w = within offset 1 (pokeByteOff target offset (w :: Word8))
+                bytes offset b = within offset (BS.length b) (BSU.unsafeUseAsCStringLen b (\(source, len) -> copyBytes (target `plusPtr` offset) (castPtr source) len))
+                separated offset list write = foldlM (\o (index, item) -> (if index > (0 :: Int) then byte o 0x2c else pure o) >>= \afterComma -> write afterComma item) offset (zip [0 ..] list)
+                member offset key write = bytes offset key >>= \afterKey -> byte afterKey 0x3a >>= write
+                piece offset (Piece index value) = case tableAt (planTables plan) index of
+                    Just table | offset <= size -> pokePacked target size offset table (planPrefix plan) value
+                    _ -> pure (size + 1)
+                part offset = \case
+                    Encoded b -> bytes offset b
+                    Packs -> case planPieces plan of
+                        ObjectPieces members -> do
+                            open <- byte offset 0x7b
+                            end <- separated open members $ \at (version, item) -> member at (encodeString version) (`piece` item)
+                            byte end 0x7d
+                        ArrayPieces items -> do
+                            open <- byte offset 0x5b
+                            end <- separated open items piece
+                            byte end 0x5d
+            open <- byte 0 0x7b
+            end <- separated open parts $ \at (key, p) -> member at key (`part` p)
+            final <- byte end 0x7d
+            pure (if final == size then size else 0)
+    guard (BS.length rendered == size)
+    pure rendered
   where
     parts = planParts plan
 
--- | The assembled document as aeson's tree, as its render writes it.
-planValue :: RenderPlan -> Value
-planValue plan = Object (KeyMap.insert (planSlot plan) slotValue (planMembers plan))
+{- | The assembled document as aeson's tree, as its render writes it, or nothing when a piece names a
+table the plan lacks.
+-}
+planValue :: RenderPlan -> Maybe Value
+planValue plan = (\slotValue -> Object (KeyMap.insert (planSlot plan) slotValue (planMembers plan))) <$> slot
   where
-    slotValue = case planPieces plan of
-        ObjectPieces list -> Object (KeyMap.fromList [(Key.fromText version, pieceValue item) | (version, item) <- list])
-        ArrayPieces list -> Array (V.fromList (map pieceValue list))
-    pieceValue (Piece index value) = rebasedValue (tableAt (planTables plan) index) (planPrefix plan) value
+    slot = case planPieces plan of
+        ObjectPieces list -> Object . KeyMap.fromList <$> traverse (\(version, item) -> (Key.fromText version,) <$> pieceValue item) list
+        ArrayPieces list -> Array . V.fromList <$> traverse pieceValue list
+    pieceValue (Piece index value) = (\table -> rebasedValue table (planPrefix plan) value) <$> tableAt (planTables plan) index
 
--- | The heap bytes the plan's tables and pieces hold, each piece with its list cell and record.
+-- | The heap bytes the plan's tables and pieces hold, each piece with its list cell, record and key.
 planResident :: RenderPlan -> Int
 planResident plan =
     sum (map tableResident (toList (planTables plan))) + case planPieces plan of
-        ObjectPieces list -> sum [72 + pieceResident item | (_, item) <- list]
+        ObjectPieces list -> sum [72 + textStorageBytes version + pieceResident item | (version, item) <- list]
         ArrayPieces list -> sum [48 + pieceResident item | item <- list]
   where
     pieceResident (Piece _ value) = packedResident value

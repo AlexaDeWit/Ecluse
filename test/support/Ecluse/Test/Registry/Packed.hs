@@ -41,7 +41,7 @@ packValue :: Shape -> [Text] -> Value -> Either LimitError (StreamResult (DocTab
 packValue shape hole value = packBytes shape hole [toStrict (encode value) <> " "]
 
 -- | One packed value rendered alone: the one item of an array under the key @k@, without the wrapping.
-renderAlone :: DocTable -> Maybe UrlPrefix -> Packed -> ByteString
-renderAlone table prefix value = BS.dropEnd 2 (BS.drop 6 (renderPlan plan))
+renderAlone :: DocTable -> Maybe UrlPrefix -> Packed -> Maybe ByteString
+renderAlone table prefix value = BS.dropEnd 2 . BS.drop 6 <$> renderPlan plan
   where
     plan = RenderPlan{planMembers = mempty, planSlot = "k", planTables = fromList [table], planPieces = ArrayPieces [Piece 0 value], planPrefix = prefix}

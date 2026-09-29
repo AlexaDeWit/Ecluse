@@ -58,7 +58,7 @@ npmCached = (\v -> CachedNpm v (estimateValueBytes v), project)
     project = \case
         CachedNpm v _ -> Just v
         PackedNpm packed -> Just (packumentValue packed)
-        RenderedNpm plan -> Just (planValue plan)
+        RenderedNpm plan -> planValue plan
         CachedPyPISimple _ _ -> Nothing
 
 -- | PyPI's boundary pair, spelled out arm by arm for the same reason as 'npmCached'.

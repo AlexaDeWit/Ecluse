@@ -152,7 +152,7 @@ assembleMergedDocument mountBase bySource plan base =
 
 -- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'. Another ecosystem's document serialises as @{}@.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument doc = maybe (serialiseAcross (fmap toEncoding . snd npmCached) doc) (fromStrict . renderPlan) (snd npmRendered doc)
+serialiseMergedDocument doc = maybe (serialiseAcross (fmap toEncoding . snd npmCached) doc) fromStrict (snd npmRendered doc >>= renderPlan)
 
 versionEntries :: Value -> KeyMap Value
 versionEntries = fromMaybe mempty . objectField "versions" . documentObject

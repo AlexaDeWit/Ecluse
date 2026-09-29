@@ -7,6 +7,8 @@ module Ecluse.Core.Registry.Json.ScratchSpec (spec) where
 
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Number), encode)
+import Data.Aeson.Encoding (encodingToLazyByteString)
+import Data.Aeson.Encoding qualified as Encoding
 import Data.ByteString.Short qualified as SBS
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -22,7 +24,7 @@ spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do
     it "writes each string as aeson writes it, growing from a small buffer" $
         hedgehog $ do
             texts <- forAll (Gen.list (Range.linear 0 8) (Gen.text (Range.linear 0 40) (Gen.frequency [(3, Gen.unicode), (2, Gen.element hostile)])))
-            written (\scratch -> traverse_ (putEncodedText scratch) texts) === foldMap encodeString texts
+            written (\scratch -> traverse_ (putEncodedText scratch) texts) === foldMap (toStrict . encodingToLazyByteString . Encoding.text) texts
 
     it "writes each integer as aeson writes it, and counts its digits" $
         hedgehog $ do

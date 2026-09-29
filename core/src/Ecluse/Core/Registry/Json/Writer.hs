@@ -37,7 +37,7 @@ import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimArray (MutablePrimArray, copyMutablePrimArray, getSizeofMutablePrimArray, newPrimArray, readPrimArray, setPrimArray, writePrimArray)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
-import Ecluse.Core.Registry.Json.Intern (Entry (..), Name, foldName)
+import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
 import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, encodedLength, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, valueEnd, varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putAt, putByte, putDecimal, putEncodedText, putPlainBytes, putRawBytes, putVarint, reserve, rewindTo, scratchBuffer, scratchCursor)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
@@ -52,15 +52,16 @@ data Writer st = Writer
     , writerKeys :: MutVar st (MutableArray st Text)
     , writerTop :: PrimVar st Int
     , writerSeen :: MutVar st (MutablePrimArray st Int)
-    , writerEntries :: MutVar st (MutableArray st Entry)
+    , writerStrings :: MutVar st (MutableArray st Value)
     , writerOrder :: MutVar st (MutablePrimArray st Int)
     , writerDepth :: PrimVar st Int
     , writerAdded :: Maybe (Entry, Entry)
     , writerMarks :: MutablePrimArray st Int
+    , writerReplaced :: MutVar st (Maybe ByteArray)
     }
 
-{- | A writer for one read. Each top-level object it writes also holds the given member, a table key
-and a table string, in place of any member under that key.
+{- | A writer for one read. Each top-level object also holds the given member, a table key and a
+string, in place of its own under that key. An object read in 'Keep' mode keeps its own instead.
 -}
 newWriter :: Maybe (Entry, Entry) -> ST st (Writer st)
 newWriter added =
@@ -70,15 +71,12 @@ newWriter added =
         <*> (newArray 32 "" >>= newMutVar)
         <*> newPrimVar 0
         <*> (newFilled 256 (-1) >>= newMutVar)
-        <*> (newArray 256 unregistered >>= newMutVar)
+        <*> (newArray 256 Null >>= newMutVar)
         <*> (newPrimArray 64 >>= newMutVar)
         <*> newPrimVar 0
         <*> pure added
         <*> newMarks
-
--- The table entry of a slot no string has claimed. A blob never refers to one.
-unregistered :: Entry
-unregistered = Entry "" (String "") False (-1)
+        <*> newMutVar Nothing
 
 newFilled :: Int -> Int -> ST st (MutablePrimArray st Int)
 newFilled size value = do
@@ -281,18 +279,18 @@ putWhole scratch = \case
         putVarint scratch (length values)
         traverse_ (putWhole scratch) values
 
--- Record the table entry a blob is about to refer to.
+-- Record the table string a blob is about to refer to. A slot no string has claimed holds null.
 register :: Writer st -> Entry -> ST st ()
 register writer entry = do
     let index = entryIndex entry
-    entries <- readMutVar (writerEntries writer)
-    if index < sizeofMutableArray entries
-        then writeArray entries index entry
+    strings <- readMutVar (writerStrings writer)
+    if index < sizeofMutableArray strings
+        then writeArray strings index (entryString entry)
         else do
-            grown <- newArray (max (index + 1) (2 * sizeofMutableArray entries)) unregistered
-            Array.copyMutableArray grown 0 entries 0 (sizeofMutableArray entries)
-            writeArray grown index entry
-            writeMutVar (writerEntries writer) grown
+            grown <- newArray (max (index + 1) (2 * sizeofMutableArray strings)) Null
+            Array.copyMutableArray grown 0 strings 0 (sizeofMutableArray strings)
+            writeArray grown index (entryString entry)
+            writeMutVar (writerStrings writer) grown
 {-# INLINE register #-}
 
 -- The member that last recorded the table key, or -1.
@@ -473,9 +471,8 @@ shiftInto keys work from item !at
             then writePrimArray work at previous >> shiftInto keys work from item (at - 1)
             else writePrimArray work at item
 
-{- | Merge runs of doubling width, alternating between the first half of the workspace and the second,
-and return the half that holds the result.
--}
+{- Merge runs of doubling width, alternating between the first half of the workspace and the second,
+and return the half that holds the result. -}
 mergeRuns :: MutableArray st Text -> MutablePrimArray st Int -> Int -> Int -> Int -> ST st Int
 mergeRuns keys work count !width !source
     | width >= count = pure source
@@ -542,29 +539,32 @@ hole is the string at the path of member names, when the value holds one there.
 -}
 sealValue :: Writer st -> [Text] -> ST st Packed
 sealValue writer path = do
-    start <- readPrimArray (writerMarks writer) valueStart
-    end <- scratchCursor (writerScratch writer)
-    blob <- copyOut (writerScratch writer) start end
+    let scratch = writerScratch writer
+        marks = writerMarks writer
+    start <- readPrimArray marks valueStart
+    end <- scratchCursor scratch
+    blob <- copyOut scratch start end
+    from <- readPrimArray marks replacedStart
+    to <- readPrimArray marks replacedEnd
+    replaced <- if from >= 0 then Just <$> copyOut scratch from to else pure Nothing
     discard writer
+    writeMutVar (writerReplaced writer) replaced
     hole <- holeAt writer blob path 0
     pure (packed blob hole)
 
--- | Forget the value the writer holds.
+-- | Forget the value the writer holds, and the member its top-level object replaced.
 discard :: Writer st -> ST st ()
 discard writer = do
     rewindTo (writerScratch writer) 0
     writePrimArray (writerMarks writer) valueStart 0
+    writePrimArray (writerMarks writer) replacedStart (-1)
+    writeMutVar (writerReplaced writer) Nothing
 
-{- | The member the added member replaced in the top-level object sealed last, as read, until the
-writer writes again. An object that had no such member gives nothing.
+{- | The member the added member replaced in the value sealed last, as read, or nothing when that
+value held none or the writer discarded a value since.
 -}
 replacedMember :: Writer st -> ST st (Maybe Value)
-replacedMember writer = do
-    start <- readPrimArray (writerMarks writer) replacedStart
-    end <- readPrimArray (writerMarks writer) replacedEnd
-    if start < 0
-        then pure Nothing
-        else copyOut (writerScratch writer) start end >>= \blob -> Just <$> (newPrimVar 0 >>= decodeWith writer blob)
+replacedMember writer = readMutVar (writerReplaced writer) >>= traverse (\blob -> newPrimVar 0 >>= decodeWith writer blob)
 
 -- Where the string at the path of member names starts, or -1.
 holeAt :: Writer st -> ByteArray -> [Text] -> Int -> ST st Int
@@ -591,9 +591,9 @@ keyAt :: Writer st -> ByteArray -> Int -> (Text -> Int -> ST st a) -> ST st a
 keyAt writer blob at next = case readVarint blob at of
     (# tagged, after #)
         | even tagged -> do
-            entries <- readMutVar (writerEntries writer)
-            entry <- readArray entries (tagged `div` 2)
-            next (entryText entry) after
+            strings <- readMutVar (writerStrings writer)
+            string <- readArray strings (tagged `div` 2)
+            next (stringText string) after
         | otherwise -> case decodeScalar blob after (tagged `div` 2) of
             String text -> next text (after + tagged `div` 2)
             _ -> next "" (after + tagged `div` 2)
@@ -661,10 +661,15 @@ decodeWhole writer value = newPrimVar 0 >>= decodeWith writer (packedBlob value)
 -- A decode reads the read's own entries, so decoded strings share the typed view's texts.
 instance TableStrings Writer where
     tableValue writer index = do
-        entries <- readMutVar (writerEntries writer)
-        entry <- readArray entries index
-        pure $! entryString entry
+        strings <- readMutVar (writerStrings writer)
+        readArray strings index
     tableKey writer index = do
-        entries <- readMutVar (writerEntries writer)
-        entry <- readArray entries index
-        pure $! Key.fromText (entryText entry)
+        strings <- readMutVar (writerStrings writer)
+        string <- readArray strings index
+        pure $! Key.fromText (stringText string)
+
+-- A registered string's text. Every slot a blob refers to holds a string.
+stringText :: Value -> Text
+stringText = \case
+    String text -> text
+    _ -> ""
