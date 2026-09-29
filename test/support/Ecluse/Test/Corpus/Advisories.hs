@@ -34,12 +34,12 @@ import Data.Time (nominalDay)
 import Network.HTTP.Types (status200)
 import System.FilePath (takeFileName, (</>))
 
-import Ecluse.Core.Cve (CveLookup (cveAdvisoriesFor, cveCoveredNames))
+import Ecluse.Core.Cve (AdvisoryRange, CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
-import Ecluse.Core.Package (PackageName, canonicalise, pkgEcosystem, renderPackageName)
-import Ecluse.Core.Rules (RuleDeps, withCveLookup)
+import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), readAdvisories, withCveLookup)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
@@ -82,21 +82,27 @@ compileCorpusAdvisories eco dir = do
 compileAdvisoryInputs :: Ecosystem -> FilePath -> AdvisoryInputs -> IO FilePath
 compileAdvisoryInputs eco dir inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
 
-{- | Check, reading as the rules read, that the served generation returns rows for every capture it
-covers and covers at least one. A rule that finds no row abstains, and would pass for a speed-up.
+{- | Check that the served generation names at least one capture, and that every capture it names
+yields rows through 'readAdvisories', under the key the rules look it up by.
 -}
 checkCapturesServed :: RuleDeps -> [PackageName] -> IO (Either Text ())
-checkCapturesServed deps packages = withCveLookup deps $ \case
-    Nothing -> pure (Left "no advisory generation is serving")
-    Just (_, cve) -> do
-        covered <- cveCoveredNames cve
-        case filter (`elem` covered) (map canonicalKey packages) of
+checkCapturesServed deps packages =
+    withCveLookup deps (traverse (cveCoveredNames . snd)) >>= \case
+        Nothing -> pure (Left "no advisory generation is serving")
+        Just covered -> case filter ((`elem` covered) . renderPackageName) packages of
             [] -> pure (Left "the served advisories cover none of the captures")
-            names -> do
-                unserved <- filterM (fmap null . cveAdvisoriesFor cve) names
-                pure (if null unserved then Right () else Left ("the served advisories return no row for " <> T.intercalate ", " unserved))
-  where
-    canonicalKey package = canonicalise (pkgEcosystem package) (renderPackageName package)
+            named -> do
+                unserved <- filterM (fmap null . rowsTheRulesRead deps) named
+                pure (if null unserved then Right () else Left ("the served advisories return no row for " <> T.intercalate ", " (map renderPackageName unserved)))
+
+-- The rows 'readAdvisories' fetches for a package, caught on their way out of the generation it pins.
+rowsTheRulesRead :: RuleDeps -> PackageName -> IO [AdvisoryRange]
+rowsTheRulesRead deps package = do
+    seen <- newIORef []
+    let recording cve = cve{cveAdvisoriesFor = cveAdvisoriesFor cve >=> \rows -> rows <$ writeIORef seen rows}
+        spied = deps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> withCveLookup deps (use . fmap (second recording)))}
+    void (readAdvisories spied package)
+    readIORef seen
 
 -- | The shipped policy: the minimum-age quarantine and the remediation fast lane.
 shippedPolicy :: [PrecededRule]

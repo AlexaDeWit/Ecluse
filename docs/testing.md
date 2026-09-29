@@ -364,16 +364,17 @@ The advisory legs use the captured corpus advisories in `bench/corpus/advisories
 [advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
 `Ecluse.Core.Osv.Compile`, and a slot serves the artifact, as a synced mount reads it. A rule that
 finds no row abstains, which would pass for a speed-up. So setup fails when the artifact holds no
-range, and when a capture the artifact covers returns no row, read the way the rules read it.
+range, when it names none of the captures, and when a capture it names yields no row through the
+rules' own read, under the key the rules look it up by.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
 GHC's per-thread allocation counter. For one build over one input, that figure moves by a few bytes
 at most between runs. Wall-clock time appears in the report for information only. The age rules
 evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they admit the same
-versions on every run. The harness links the
-shipped server's RTS options (the `shipped-rts` stanza in `ecluse.cabal`), and the report prints
-the capabilities and allocation area it read from the running RTS.
+versions on every run. The harness links the shipped server's RTS options (the `shipped-rts`
+stanza in `ecluse.cabal`), and the report prints the capabilities and allocation area it read from
+the running RTS.
 
 [acceptance/criteria.json](../acceptance/criteria.json) holds each leg's calibrated figure in
 bytes. A leg's budget is that figure plus the file's `marginPercent`, rounded up to a whole byte.
@@ -788,9 +789,10 @@ Smoke coverage never replaces a gating case.
 Advisory-shaped test data comes from committed OSV JSON, apart from the benchmarks' generated
 worst case. The suites read `test/fixtures/osv/`
 (`v1/`, plus the `v2/` delta). The benchmarks' [advisory rule rows](#advisory-rule-rows), the
-[allocation gate](#allocation-budgets-perf-allocation-gating), and the load harness's advisory
-scenarios read `bench/corpus/advisories/`. A suite derives everything it consumes from those files
-at test time.
+[allocation gate](#allocation-budgets-perf-allocation-gating) and the live performance-acceptance
+run, the load harness's advisory scenarios, and `ecluse-unit` (`Ecluse.Test.Corpus.AdvisoriesSpec`)
+read `bench/corpus/advisories/`. A suite derives everything it consumes from those files at test
+time.
 No `osv.db` is ever committed as a binary, so a fixture cannot drift from the artifact contract
 (`Ecluse.Core.Osv.Schema`). Helpers in `ecluse-test-support` assemble the osv.dev-shaped zip, plus
 *hostile* artifacts for rejection tests. They compile the corpus through the real OSV pipeline

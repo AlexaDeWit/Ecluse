@@ -10,12 +10,14 @@ import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Config (RulePolicy (policyRules), defaultPolicy)
-import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (cveCoveredNames))
+import Ecluse.Core.Cve (CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.Rules (inertRuleDeps, servingRuleDeps)
 
 spec :: Spec
 spec = do
@@ -29,6 +31,14 @@ spec = do
                         sort (filter (`elem` covered) (map cpName captures)) `shouldBe` advised
                         checkCapturesServed deps (map cpPackage captures) `shouldReturn` Right ()
                         checkCapturesServed deps [mkPackageName eco Nothing "ecluse-not-advised"] `shouldReturn` Left "the served advisories cover none of the captures"
+
+    describe "checkCapturesServed" $ do
+        let react = mkPackageName Npm Nothing "react"
+        it "fails a capture the generation names when the rules read no row for it" $
+            checkCapturesServed (servingRuleDeps (DbEtag "t") (CveLookup (const (pure [])) (pure ["react"]))) [react]
+                `shouldReturn` Left "the served advisories return no row for react"
+        it "fails when no generation is serving" $
+            checkCapturesServed inertRuleDeps [react] `shouldReturn` Left "no advisory generation is serving"
 
     describe "shippedPolicy" $
         it "is the policy config/default.yaml ships" $
