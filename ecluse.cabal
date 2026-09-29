@@ -154,6 +154,7 @@ library ecluse-core
     Ecluse.Core.Package.Admission
     Ecluse.Core.Package.Entry
     Ecluse.Core.Package.Filter
+    Ecluse.Core.Package.Filter.Internal
     Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.InvalidEntry
@@ -835,6 +836,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.SchemaSpec
     Ecluse.Core.Osv.StreamSpec
     Ecluse.Core.Package.AdmissionSpec
+    Ecluse.Core.Package.Filter.InternalSpec
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
     Ecluse.Core.Package.IntegritySpec
@@ -961,6 +963,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
+    Ecluse.Package.Filter.Support
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support

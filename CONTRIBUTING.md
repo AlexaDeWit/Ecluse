@@ -9,6 +9,8 @@ requirements. This file is policy. The practical guides live alongside it:
 - **Code style**: [`docs/style.md`](docs/style.md). Documentation:
   [`docs/haddock.md`](docs/haddock.md). Prose: [`docs/prose.md`](docs/prose.md).
 - **Design**: [`docs/architecture.md`](docs/architecture.md).
+- **A new ecosystem**: [Adding an ecosystem](docs/adding-an-ecosystem.md) covers the reader and
+  measurement pattern every ecosystem follows.
 - **Agent instructions**: [`AGENTS.md`](AGENTS.md).
 
 ## Working language
