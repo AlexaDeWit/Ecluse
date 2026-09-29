@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
 
+import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -16,25 +17,28 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
-import Ecluse.Core.Registry.Json.Walk (Step, nestingLimit, readJsonWalk)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
 parseJsonChunks :: BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> [ByteString] -> Either LimitError (StreamResult s)
-parseJsonChunks bound parser step initial = evalState (readJsonStream bound parser step initial next)
-  where
-    next = state $ \case
-        [] -> (BS.empty, [])
-        chunk : rest -> (chunk, rest)
+parseJsonChunks bound parser step initial = evalState (readJsonStream bound parser step initial nextChunk)
 
 -- | Run the production walk driver against explicit chunks.
 walkJsonChunks :: BodyLimit -> (TokenResult -> Step s) -> [ByteString] -> Either LimitError (StreamResult s)
-walkJsonChunks bound walk = evalState (readJsonWalk bound walk next)
-  where
-    next = state $ \case
-        [] -> (BS.empty, [])
-        chunk : rest -> (chunk, rest)
+walkJsonChunks bound walk = evalState (readJsonWalk bound walk nextChunk)
+
+-- | Run a walk that writes as it reads against explicit chunks, from a setup that makes its writer.
+walkWritingChunks :: BodyLimit -> (forall st. ST st (TokenResult -> ST st (Steps (ST st) s))) -> [ByteString] -> Either LimitError (StreamResult s)
+walkWritingChunks bound setup chunks = runST $ do
+    walk <- setup
+    evalStateT (readJsonWalkST lift bound walk nextChunk) chunks
+
+nextChunk :: (MonadState [ByteString] m) => m ByteString
+nextChunk = state $ \case
+    [] -> (BS.empty, [])
+    chunk : rest -> (chunk, rest)
 
 -- | A document table with the production hash under a fixed key, for reads that must repeat exactly.
 testTable :: [Text] -> InternTable

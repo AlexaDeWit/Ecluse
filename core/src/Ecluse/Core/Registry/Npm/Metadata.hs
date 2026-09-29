@@ -1,6 +1,9 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+-- The reads specialise here. Full laziness would float each member's rarely taken continuation out
+-- of the element's continuation, and every member of a read would allocate it.
+{-# OPTIONS_GHC -fno-full-laziness #-}
 
 {- | npm metadata reads for full manifests and selected versions.
 Both fetch the full packument because publish-age rules need its @time@ map.

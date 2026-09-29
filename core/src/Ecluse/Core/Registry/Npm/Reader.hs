@@ -16,8 +16,8 @@ import Data.Aeson (Value (Null))
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (Entry (entryText), InternTable, Interned (..), internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), everyMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walked (..), eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..), versionFields)
 import Ecluse.Core.Security (LimitError)
@@ -36,15 +36,17 @@ releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 keeps enters the table, and only the first of each member it repeats.
 -}
 npmWalk :: Int -> PackumentRead -> (s -> NpmField -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
-npmWalk depth mode step keeps table0 initial tokens
-    | depth <= 0 = withElement tokens tooDeep
-    | otherwise = withElement tokens $ \element rest -> case element of
-        ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-        _ -> skipFrom element rest (const (Finished initial))
+{-# INLINE npmWalk #-}
+npmWalk depth mode step keeps table0 initial = start
   where
+    start tokens
+        | depth <= 0 = withElement tokens tooDeep
+        | otherwise = withElement tokens $ \element rest -> case element of
+            ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
+            _ -> skipFrom element rest (const (Finished initial))
     topField (Walked table acc) name after continue = case nameBytes name of
         "name" -> withElement after $ \element rest ->
-            readShape (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
+            readShape Trees (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
                 emit acc (NameField field) (\acc' -> continue (Walked table acc') afterValue)
         "versions" -> container VersionsContainer table acc after continue (releases table)
         "time" -> container TimeContainer table acc after continue $ case mode of
@@ -54,7 +56,7 @@ npmWalk depth mode step keeps table0 initial tokens
             WholePackument -> everyScalar TagField table
             OneRelease _ -> oneScalar "latest" (TagField "latest") table
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked table acc))
-    emit = Walk.emit step
+    emit = Walk.emit (pureStep step)
     target = case mode of
         OneRelease version -> Just (encodeUtf8 version)
         WholePackument -> Nothing
@@ -77,17 +79,17 @@ npmWalk depth mode step keeps table0 initial tokens
         _
             | keeps acc text -> case internName key table of
                 Interned entry keyed -> withElement after $ \element rest ->
-                    readShape releaseShape Share keyed element rest $ \release' table' afterValue ->
+                    readShape Trees releaseShape Share keyed element rest $ \release' table' afterValue ->
                         emit acc (VersionField (entryText entry) (Just release')) (\acc' -> continue (Walked table' acc') afterValue)
             | otherwise -> withElement after $ \element rest ->
-                readShape releaseShape Keep table element rest $ \release' _ afterValue ->
+                readShape Trees releaseShape Keep table element rest $ \release' _ afterValue ->
                     emit acc (VersionField text (Just release')) (\acc' -> continue (Walked table acc') afterValue)
       where
         text = nameText key
 
     everyScalar field table acc rest finish = eachMember (timestamp field) finish (Walked table acc) rest
     timestamp field (Walked table acc) key after continue = withElement after $ \element rest ->
-        readShape (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
+        readShape Trees (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
             emit acc (field (nameText key) scalar) (\acc' -> continue (Walked table acc') afterValue)
 
     -- json-stream's objectWithKey: the first match yields, and the rest of the object is skipped unread.
@@ -95,7 +97,7 @@ npmWalk depth mode step keeps table0 initial tokens
       where
         visit (Walked held current) key after continue
             | nameBytes key == wanted = withElement after $ \element afterKey ->
-                readShape (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
+                readShape Trees (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
                     emit current (field scalar) (skipRest 1 afterValue . finish . Walked held)
             | otherwise = withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked held current))
 
