@@ -12,7 +12,7 @@ import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Registry.Json.Packed (packedResident, tableResident)
+import Ecluse.Core.Registry.Json.Packed (docTable, packedResident, tableResident)
 import Ecluse.Core.Registry.Json.Shape (Shape (Generic))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), packumentResident, packumentValue, tarballHole, tarballUrl, withTarball)
@@ -38,12 +38,13 @@ spec = do
                 (if isJust (tarballUrl value) then pass else withTarball url value === value)
 
     describe "packumentValue" $
-        it "holds each packed release under its version beside the top-level members" $ do
+        it "holds each packed release under its version beside the top-level members, or refuses a damaged one" $ do
             let packedRelease = release (String "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz")
             case packValue (Generic 64) tarballHole packedRelease of
                 Right (StreamResult (Right (table, form)) _) -> do
                     let document = PackedPackument (KeyMap.singleton "name" "thing") table (KeyMap.singleton "1.0.0" form)
-                    packumentValue document `shouldBe` object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= packedRelease]]
+                    packumentValue document `shouldBe` Just (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= packedRelease]])
+                    packumentValue document{packumentTable = docTable mempty} `shouldBe` Nothing
                     packumentResident document `shouldSatisfy` (>= tableResident table + packedResident form + 104)
                 _ -> expectationFailure "did not pack the release"
   where

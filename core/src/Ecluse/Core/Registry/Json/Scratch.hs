@@ -85,9 +85,13 @@ putVarint :: Scratch st -> Int -> ST st ()
 putVarint scratch n = putAt scratch (varintSize n) (writeVarint n)
 {-# INLINE putVarint #-}
 
--- | Write the bytes aeson writes for a string, quotes included.
-putEncodedText :: Scratch st -> Text -> ST st ()
-putEncodedText scratch text = putAt scratch (encodedLength text) (writeEncoded text)
+{- | Write the varint a header makes of a string's encoded length, then the bytes aeson writes for the
+string, quotes included.
+-}
+putEncodedText :: Scratch st -> (Int -> Int) -> Text -> ST st ()
+putEncodedText scratch header text = putVarint scratch (header len) >> putAt scratch len (writeEncoded text)
+  where
+    len = encodedLength text
 
 -- | Write a string whose bytes need no escape, between quotes.
 putPlainBytes :: Scratch st -> ByteString -> ST st ()

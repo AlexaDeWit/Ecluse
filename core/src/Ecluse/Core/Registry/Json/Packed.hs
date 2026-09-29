@@ -517,22 +517,18 @@ class TableStrings t where
     tableValue :: t st -> Int -> ST st Value
     tableKey :: t st -> Int -> ST st Key.Key
 
--- A document table as a decode reads it.
-newtype OfTable st = OfTable DocTable
+-- A document table as a decode reads it, and a flag an index past the table sets.
+data OfTable st = OfTable !DocTable !(PrimVar st Int)
 
 instance TableStrings OfTable where
-    tableValue (OfTable table) index = pure $! tableString table index
-    tableKey (OfTable table) index =
-        pure $! case tableString table index of
+    tableValue (OfTable table missing) index = case tableEntry table index of
+        (# start, len #)
+            | len < 0 -> writePrimVar missing 1 $> Null
+            | otherwise -> pure $! decodeScalar (tableArena table) start len
+    tableKey strings index =
+        tableValue strings index <&> \case
             String text -> Key.fromText text
             _ -> ""
-
--- A table string as aeson reads it, or null for an index past the table.
-tableString :: DocTable -> Int -> Value
-tableString table index = case tableEntry table index of
-    (# start, len #)
-        | len < 0 -> Null
-        | otherwise -> decodeScalar (tableArena table) start len
 
 {- | Read the value at the position the variable holds back as aeson's tree, and move the variable
 past it. The strings resolve a table index to its string and to its key.
@@ -597,14 +593,19 @@ decodeItemsWith strings blob at !count acc
     | otherwise = decodeWith strings blob at >>= \item -> decodeItemsWith strings blob at (count - 1) (item : acc)
 {-# INLINEABLE decodeItemsWith #-}
 
--- | The value back as aeson's tree.
-packedValue :: DocTable -> Packed -> Value
-packedValue table (Packed blob _) = runST (newPrimVar 0 >>= decodeWith (OfTable table) blob)
+-- | The value back as aeson's tree, or nothing when it names a string its table lacks.
+packedValue :: DocTable -> Packed -> Maybe Value
+packedValue table (Packed blob _) = runST $ do
+    missing <- newPrimVar 0
+    value <- newPrimVar 0 >>= decodeWith (OfTable table missing) blob
+    readPrimVar missing <&> \flag -> value <$ guard (flag == 0)
 
--- The value as aeson's tree, with its hole's URL rebased onto the prefix as a render writes it.
-rebasedValue :: DocTable -> Maybe UrlPrefix -> Packed -> Value
+-- The value as aeson's tree, with its hole's URL rebased onto the prefix as a render writes it, or
+-- nothing when it names a string its table lacks.
+rebasedValue :: DocTable -> Maybe UrlPrefix -> Packed -> Maybe Value
 rebasedValue table prefix value@(Packed blob hole) = case prefix of
     Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
+        (# _, _, len, _ #) | len < 0 -> Nothing
         (# array, from, len, next #) -> case fileSpan array from len of
             (# file, fileLen #) ->
                 let size = 2 + sizeofByteArray bytes + fileLen
@@ -712,7 +713,7 @@ renderPlan plan = do
     parts = planParts plan
 
 {- | The assembled document as aeson's tree, as its render writes it, or nothing when a piece names a
-table the plan lacks.
+table or string the plan lacks.
 -}
 planValue :: RenderPlan -> Maybe Value
 planValue plan = (\slotValue -> Object (KeyMap.insert (planSlot plan) slotValue (planMembers plan))) <$> slot
@@ -720,7 +721,7 @@ planValue plan = (\slotValue -> Object (KeyMap.insert (planSlot plan) slotValue 
     slot = case planPieces plan of
         ObjectPieces list -> Object . KeyMap.fromList <$> traverse (\(version, item) -> (Key.fromText version,) <$> pieceValue item) list
         ArrayPieces list -> Array . V.fromList <$> traverse pieceValue list
-    pieceValue (Piece index value) = (\table -> rebasedValue table (planPrefix plan) value) <$> tableAt (planTables plan) index
+    pieceValue (Piece index value) = tableAt (planTables plan) index >>= \table -> rebasedValue table (planPrefix plan) value
 
 -- | The heap bytes the plan's tables and pieces hold, each piece with its list cell, record and key.
 planResident :: RenderPlan -> Int

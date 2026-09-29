@@ -49,15 +49,15 @@ weighCachedDoc = \case
     PackedNpm packed -> estimateValueBytes (Object (packumentTop packed)) + fromIntegral (chargeForResident (packumentResident packed))
     RenderedNpm plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
 
-{- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here
-rather than silently projecting as 'Nothing'. A packed or rendered document projects as its tree.
+{- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here. A packed
+or rendered document projects as its tree, or as 'Nothing' when it names a string or table it lacks.
 -}
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
 npmCached = (\v -> CachedNpm v (estimateValueBytes v), project)
   where
     project = \case
         CachedNpm v _ -> Just v
-        PackedNpm packed -> Just (packumentValue packed)
+        PackedNpm packed -> packumentValue packed
         RenderedNpm plan -> planValue plan
         CachedPyPISimple _ _ -> Nothing
 

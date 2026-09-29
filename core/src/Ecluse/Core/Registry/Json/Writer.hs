@@ -38,7 +38,7 @@ import Data.Primitive.PrimArray (MutablePrimArray, copyMutablePrimArray, getSize
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, encodedLength, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, valueEnd, varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, valueEnd, varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putAt, putByte, putDecimal, putEncodedText, putPlainBytes, putRawBytes, putVarint, reserve, rewindTo, scratchBuffer, scratchCursor)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
 import Ecluse.Core.Registry.Json.Walk (Steps)
@@ -249,10 +249,11 @@ putOwnBytes scratch bytes = do
     putPlainBytes scratch bytes
 
 putOwnText :: Scratch st -> Text -> ST st ()
-putOwnText scratch text = do
-    putByte scratch opInline
-    putVarint scratch (encodedLength text)
-    putEncodedText scratch text
+putOwnText scratch text = putByte scratch opInline >> putEncodedText scratch id text
+
+-- The tag of an object key written in full: its encoded length, doubled and odd. A table key's is even.
+ownKey :: Int -> Int
+ownKey len = 2 * len + 1
 
 -- A value taken whole: aeson's bytes for a number, and object keys of their own.
 putWhole :: Scratch st -> Value -> ST st ()
@@ -270,9 +271,7 @@ putWhole scratch = \case
         putByte scratch opObject
         putVarint scratch (KeyMap.size fields)
         forM_ (KeyMap.toAscList fields) $ \(key, value) -> do
-            let text = Key.toText key
-            putVarint scratch (2 * encodedLength text + 1)
-            putEncodedText scratch text
+            putEncodedText scratch ownKey (Key.toText key)
             putWhole scratch value
     Array values -> do
         putByte scratch opArray
@@ -400,9 +399,7 @@ copyMembers scratch keys spans order kept !position = when (position < kept) $ d
     if index >= 0
         then putVarint scratch (2 * index)
         else do
-            text <- readArray keys member
-            putVarint scratch (2 * encodedLength text + 1)
-            putEncodedText scratch text
+            readArray keys member >>= putEncodedText scratch ownKey
     putAt scratch (to - from) $ \buffer at -> copyMutableByteArray buffer at buffer from (to - from) $> at + (to - from)
     copyMembers scratch keys spans order kept (position + 1)
 

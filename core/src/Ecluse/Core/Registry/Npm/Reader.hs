@@ -16,7 +16,7 @@ module Ecluse.Core.Registry.Npm.Reader (
 import Data.Aeson (Value (Null))
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
-import Ecluse.Core.Registry.Json.Intern (Entry (entryText), InternTable, Interned (..), internName, nameBytes, nameText)
+import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), entryText, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk

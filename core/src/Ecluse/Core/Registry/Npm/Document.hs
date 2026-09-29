@@ -30,10 +30,13 @@ data PackedPackument = PackedPackument
     }
     deriving stock (Eq, Show)
 
--- | The packument as aeson's tree, as the read would have built it.
-packumentValue :: PackedPackument -> Value
+{- | The packument as aeson's tree, as the read would have built it, or nothing when a release names a
+string its table lacks.
+-}
+packumentValue :: PackedPackument -> Maybe Value
 packumentValue packument =
-    Object (KeyMap.insert "versions" (Object (KeyMap.map (packedValue (packumentTable packument)) (packumentVersions packument))) (packumentTop packument))
+    (\versions -> Object (KeyMap.insert "versions" (Object versions) (packumentTop packument)))
+        <$> traverse (packedValue (packumentTable packument)) (packumentVersions packument)
 
 {- | The heap bytes the table and the releases hold: each release with its map node, its version key's
 text and array, and its packed value.

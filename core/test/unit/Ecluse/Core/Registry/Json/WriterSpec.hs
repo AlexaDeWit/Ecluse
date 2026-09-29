@@ -122,7 +122,7 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
     bound = MetadataBodyLimit (sum (map BS.length chunks))
     tree tokens = withElement tokens $ \element rest ->
         readShape Trees shape mode (testTable ["url"]) element rest $ \value _ _ ->
-            Finished (Just (value, value, Just (toStrict (encode value)), toStrict (encode value), True))
+            Finished (Just (value, Just value, Just (toStrict (encode value)), toStrict (encode value), True))
     packed :: ST st (TokenResult -> ST st (Steps (ST st) (Maybe Held)))
     packed =
         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
@@ -131,11 +131,11 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
                 shared <- decodeWhole writer form
                 let held = docTable (tableTexts table)
                     decoded = packedValue held form
-                pure (Finished (Just (shared, decoded, renderAlone held Nothing form, toStrict (encode decoded), valueEnd (packedBlob form) 0 == packedBytes form)))
+                pure (Finished (Just (shared, decoded, renderAlone held Nothing form, foldMap (toStrict . encode) decoded, valueEnd (packedBlob form) 0 == packedBytes form)))
 
 -- What a read holds: the value decoded with the read's strings and with the sealed table, its render
 -- and its encoding, and whether its opcodes end where its blob does.
-type Held = (Value, Value, Maybe ByteString, ByteString, Bool)
+type Held = (Value, Maybe Value, Maybe ByteString, ByteString, Bool)
 
 sameAsTree :: Shape -> Mode -> [ByteString] -> PropertyT IO ()
 sameAsTree shape mode chunks = do
