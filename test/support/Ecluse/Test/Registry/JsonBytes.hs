@@ -12,6 +12,7 @@ module Ecluse.Test.Registry.JsonBytes (
     genPackumentBytes,
     genServablePackumentBytes,
     genSimpleIndexBytes,
+    genServableSimpleIndexBytes,
     damaged,
     genChunks,
     releaseKeys,
@@ -23,7 +24,7 @@ import Hedgehog (Gen)
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 
-import Ecluse.Test.Package (validSha1, validSha512Sri)
+import Ecluse.Test.Package (validSha1, validSha256, validSha512Sri)
 
 -- | Any JSON value, with member names drawn from the given pool as often as not.
 genJsonBytes :: [ByteString] -> Gen ByteString
@@ -102,6 +103,27 @@ genSimpleIndexBytes = render <$> objectOf (Gen.list (Range.linear 0 7) member)
         project <- Gen.element ["thing", "Thing", "other"]
         suffix <- Gen.element [".tar.gz", "-py3-none-any.whl", ".zip", "-cp312-cp312-manylinux_2_17_x86_64.whl", ".exe"]
         pure (project <> "-" <> Builder.byteString version <> suffix)
+
+{- | A PyPI Simple index for @thing@ whose files carry what installation reads among hostile members,
+file URLs with escapes, queries and fragments, and other envelope members, so an index from it serves.
+-}
+genServableSimpleIndexBytes :: Gen ByteString
+genServableSimpleIndexBytes = do
+    files <- arrayOf (Gen.list (Range.linear 1 6) file)
+    versions <- arrayOf (Gen.list (Range.linear 0 4) (quoted . Builder.byteString <$> Gen.element releaseKeys))
+    others <- Gen.list (Range.linear 0 2) ((,) <$> genKey ["project-status", "other"] <*> genValue ["status", "reason"] 2)
+    members <- Gen.shuffle ([(quoted "name", quoted "thing"), (quoted "meta", "{\"api-version\":\"1.1\"}"), (quoted "files", files), (quoted "versions", versions)] <> others)
+    render <$> objectOf (pure members)
+  where
+    file = do
+        version <- Gen.element releaseKeys
+        suffix <- Gen.element [".tar.gz", "-py3-none-any.whl", ".zip"]
+        let name = "thing-" <> Builder.byteString version <> suffix
+        path <- Gen.frequency [(4, pure name), (2, (name <>) . mconcat <$> Gen.list (Range.linear 1 3) (Gen.element urlPieces))]
+        extra <- Gen.list (Range.linear 0 4) ((,) <$> genKey ["requires-python", "size", "upload-time", "yanked", "provenance", "core-metadata", "gpg-sig"] <*> Gen.frequency [(3, genScalar), (1, genValue [] 2)])
+        fields <- Gen.shuffle ([(quoted "filename", quoted name), (quoted "url", quoted ("https://files.example/packages/ab/" <> path)), (quoted "hashes", "{\"sha256\":\"" <> Builder.byteString (encodeUtf8 validSha256) <> "\"}")] <> extra)
+        objectOf (pure fields)
+    urlPieces = ["?q=1", "#sha256=ab", "\\u0041", "%2F", "\\/", "\\n", "\xe9", "\\u002f"]
 
 -- | The release keys generated bodies use, so a selected read finds its release as often as not.
 releaseKeys :: [ByteString]

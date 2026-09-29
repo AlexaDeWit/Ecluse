@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TypeFamilies #-}
 
 {- | The Simple-index walk for full and selected reads. It emits the fields that
 "Ecluse.Core.Registry.PyPI.Streaming" emits for the same mode, in the same order, and builds each
@@ -16,33 +17,32 @@ import Data.Aeson.Key qualified as Key
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), Trees (..), knownMembers, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Shape (Build (..), Mode (..), Shape (..), Trees (..), knownMembers, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachItem, eachMember, skipFrom, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
-import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIFieldOf (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 
 -- | Members whose values differ in every file, so the table keeps them as read.
 fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
-{- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
-full read keeps enters the table, and only the first of each member it repeats.
+{- | Walk one project's Simple index into the builder, passing each field to the step as it completes.
+Only a file a full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk :: (Build b r, Result r ~ Walked s) => b -> Int -> PyPIRead -> FieldStep s (PyPIFieldOf (Built b)) r -> (s -> Bool) -> InternTable -> s -> TokenResult -> r
 {-# INLINE pypiWalk #-}
-pypiWalk depth mode step keeps table0 initial = start
+pypiWalk build depth mode step keeps table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
         | otherwise = withElement tokens $ \element rest -> case element of
-            ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-            _ -> skipFrom element rest (const (Finished initial))
+            ObjectBegin -> eachMember topField (\walked _ -> finish walked) (Walked table0 initial) rest
+            _ -> skipFrom element rest (const (finish (Walked table0 initial)))
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
-    emit = Walk.emit (pureStep step)
+    emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
         "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
@@ -66,10 +66,11 @@ pypiWalk depth mode step keeps table0 initial = start
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
         | otherwise = case mode of
-            FullRead -> readShape Trees (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained Just)
-            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained id)
+            FullRead -> readShape build (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained . Just)
+            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest $ \payload table' afterValue ->
+                maybe (retained Nothing table' afterValue) (\value -> whole build value (\built -> retained (Just built) table' afterValue)) payload
       where
-        retained wrap payload table' afterValue = emit acc (FileField position (wrap payload)) (\acc' -> continue (Walked table' acc') afterValue)
+        retained payload table' afterValue = emit acc (FileField position payload) (\acc' -> continue (Walked table' acc') afterValue)
 
     version (Walked table acc) position element rest continue =
         readShape Trees (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->

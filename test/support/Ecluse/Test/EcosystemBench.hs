@@ -37,7 +37,7 @@ import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmVersion, readNpmHeld)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIVersion, readPyPIHeld, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIFull, projectPyPIVersion, readPyPIHeld, simpleValue)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -86,7 +86,7 @@ pypiBench =
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
-        , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
+        , ebProject = projectPyPIFull defaultLimits
         , ebRead = readPyPIHeld defaultLimits
         , ebSelective = projectPyPIVersion defaultLimits
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)

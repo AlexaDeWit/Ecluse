@@ -225,9 +225,9 @@ when its read finishes.
 
 ### 10. Pack the served releases, and render listings by copying bytes
 
-A full read keeps every release it serves until a listing renders. As aeson's tree, each release is
-many small objects, and a render encodes each string again. A packed release is one array of bytes
-that a render copies.
+A full read keeps every release or file it serves until a listing renders. As aeson's tree, each one
+is many small objects, and a render encodes each string again. A packed release is one array of
+bytes that a render copies. npm's `readNpmFull` and PyPI's `readPyPIFull` both pack.
 
 - `readNpmFull` in `Ecluse.Core.Registry.Npm.Metadata` walks the tokens with `npmWalk` and a
   `Writer` from [`Ecluse.Core.Registry.Json.Writer`](../core/src/Ecluse/Core/Registry/Json/Writer.hs).
@@ -237,11 +237,13 @@ that a render copies.
   other string as the bytes aeson writes for it.
   [`Ecluse.Core.Registry.Json.Packed`](../core/src/Ecluse/Core/Registry/Json/Packed.hs) holds the
   format, and the table that the read seals when it finishes (`DocTable`).
-- Decode the typed facts from the packed release, and decode only the members they read
-  (`decodePicked`). The read then never holds the release as a tree.
+- Decode the typed facts from the packed release, so the read never holds the release as a tree.
+  npm decodes only the members they read (`decodePicked`). PyPI decodes each file whole, because
+  its files are small and nearly every member is one the typed facts read.
 - A packed release holds one hole: the string that an assembly rebases for each request. npm's hole
-  is the tarball URL (`tarballHole`). The read keeps the hole only when today's rebase rule rewrites
-  that URL.
+  is the tarball URL (`tarballHole`), and PyPI's is the file URL (`urlHole`). The read keeps the
+  hole only when today's rebase rule rewrites that URL. An npm release without a hole serves its URL
+  as read, and a PyPI file without one does not serve.
 - Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
   surviving releases, each over its own source's table. `renderPlan` writes the listing into one
   buffer of its exact length. It copies the bytes of each release, and writes each hole as the

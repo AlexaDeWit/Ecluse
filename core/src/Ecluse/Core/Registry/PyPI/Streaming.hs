@@ -7,7 +7,8 @@ files. Selected reads retain pending fields only until the first filename exclud
 -}
 module Ecluse.Core.Registry.PyPI.Streaming (
     PyPIRead (..),
-    PyPIField (..),
+    PyPIFieldOf (..),
+    PyPIField,
     fileScalars,
     hashNames,
     SelectedFileEvent (..),
@@ -30,14 +31,17 @@ data PyPIRead = FullRead | SelectedRead PackageName Text
     deriving stock (Eq, Show)
 
 -- | File events carry original positions, including items that yield no retained payload.
-data PyPIField
+data PyPIFieldOf file
     = EnvelopeField Text Value
     | FilesShape Bool
-    | FileField Int (Maybe Value)
+    | FileField Int (Maybe file)
     | VersionsShape Bool
     | InvalidVersionField Int Value
     | IgnoredField
     deriving stock (Eq, Show)
+
+-- | A field whose file is aeson's tree.
+type PyPIField = PyPIFieldOf Value
 
 -- | The scalar members a file retains.
 fileScalars :: [Text]

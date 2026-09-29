@@ -38,6 +38,7 @@ module Ecluse.Core.Registry.Json.Packed (
     packedBlob,
     packedBytes,
     packedResident,
+    hasHole,
     withoutHole,
 
     -- * Rendering
@@ -245,6 +246,10 @@ packedBytes (Packed blob _) = sizeofByteArray blob
 -- | The heap bytes the value holds itself: its record, and its blob with the array's header.
 packedResident :: Packed -> Int
 packedResident value = 24 + arrayResident (packedBytes value)
+
+-- | Whether the value holds a hole.
+hasHole :: Packed -> Bool
+hasHole (Packed _ hole) = hole >= 0
 
 -- | The value with no hole, so every render writes it as read.
 withoutHole :: Packed -> Packed

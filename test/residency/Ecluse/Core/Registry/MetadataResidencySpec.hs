@@ -19,9 +19,9 @@ import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, finally)
 
 import Ecluse.Core.Package (PackageInfo (infoVersions))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
-import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
 
@@ -73,13 +73,14 @@ detach package = do
     (,,) <$> (evaluate info >>= newStablePtr) <*> newStablePtr served <*> pure keys
 
 -- The document and every object it serves, each with its member map, which a thunk could keep alone.
--- A packed document serves its table and each packed release.
+-- A packed document serves its table and each packed release or file.
 documentKeys :: CachedDoc -> IO [Weak ()]
 documentKeys document =
-    (<>) <$> sequence [track document] <*> case (snd npmPacked document, snd npmCached document, snd pypiSimpleCached document) of
-        (Just packed, _, _) -> (<>) <$> trackMembers (packumentTop packed) <*> ((:) <$> track (packumentTable packed) <*> traverse track (KeyMap.elems (packumentVersions packed)))
-        (_, Just root, _) -> concat <$> traverse trackObject (root : releases root)
-        (_, _, Just simple) -> (<>) <$> trackMembers (simpleEnvelope simple) <*> (concat <$> traverse (trackObject . snd) (simpleFiles simple))
+    (<>) <$> sequence [track document] <*> case (snd npmPacked document, snd pypiPacked document, snd npmCached document, snd pypiSimpleCached document) of
+        (Just packed, _, _, _) -> (<>) <$> trackMembers (packumentTop packed) <*> ((:) <$> track (packumentTable packed) <*> traverse track (KeyMap.elems (packumentVersions packed)))
+        (_, Just packed, _, _) -> (<>) <$> trackMembers (packedEnvelope packed) <*> ((:) <$> track (packedTable packed) <*> traverse (track . snd) (packedFiles packed))
+        (_, _, Just root, _) -> concat <$> traverse trackObject (root : releases root)
+        (_, _, _, Just simple) -> (<>) <$> trackMembers (simpleEnvelope simple) <*> (concat <$> traverse (trackObject . snd) (simpleFiles simple))
         _ -> pure []
   where
     track :: a -> IO (Weak ())

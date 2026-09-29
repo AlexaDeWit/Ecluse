@@ -14,7 +14,7 @@ import Data.JsonStream.Parser qualified as J
 
 import Ecluse.Core.Registry.JsonStream (everyMember, namedMembers, retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
 import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField, PyPIFieldOf (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected)
 
 -- | Read supported fields in any member order. Empty first containers still claim their keys.
 pypiFields :: Int -> PyPIRead -> J.Parser PyPIField
