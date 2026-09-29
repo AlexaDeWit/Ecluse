@@ -13,12 +13,11 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), VersionRead)
-import Ecluse.Core.Registry.Npm.Metadata (packedWalk, projectNpmPacked, projectNpmStream, selectNpmRead)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
+import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, packedWalk, projectNpmPacked, projectNpmStream, selectNpmRead)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
-import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, keepsRelease)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 
@@ -47,7 +46,7 @@ projectBytes limits name mode body = do
             MetadataBoundExceeded
             ( walkJsonChunks
                 (MetadataBodyLimit (BS.length body))
-                (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease (testTable releaseUniqueFields) emptyProjection)
+                (npmPackumentWalk limits name mode (testTable releaseUniqueFields))
                 [body]
             )
     projected <- projectNpmStream limits name "https://registry.npmjs.org" streamed

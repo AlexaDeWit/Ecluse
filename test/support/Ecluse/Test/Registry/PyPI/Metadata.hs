@@ -22,11 +22,11 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (packedWalk, projectPyPIPacked, projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
+import Ecluse.Core.Registry.PyPI.Metadata (packedWalk, projectPyPIPacked, projectPyPIStream, pypiIndexWalk)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
 
@@ -53,7 +53,7 @@ projectPyPIChunks limits name mode =
     first MetadataBoundExceeded
         . walkJsonChunks
             (MetadataBodyLimit (maxMetadataBytes limits))
-            (pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection name))
+            (pypiIndexWalk limits name mode (testTable fileUniqueFields))
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.
 documentFromValue :: Value -> SimpleDocument

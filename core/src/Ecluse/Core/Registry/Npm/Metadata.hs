@@ -17,6 +17,10 @@ module Ecluse.Core.Registry.Npm.Metadata (
     -- * The memory budget
     npmChargeFactors,
 
+    -- * Reading a packument
+    readNpmPackument,
+    npmPackumentWalk,
+
     -- * Pure projection
     projectNpmStream,
     packedWalk,
@@ -28,15 +32,14 @@ module Ecluse.Core.Registry.Npm.Metadata (
 import Data.Aeson (Value (Object))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 
-import Data.JsonStream.TokenParser (TokenResult)
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, newInternTable, newTableKey)
 import Ecluse.Core.Registry.Json.Pack (sealTable)
 import Ecluse.Core.Registry.Json.Packed (Packed)
@@ -69,11 +72,11 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
-{- | npm's memory charges per source byte, which the residency tier holds above its maxima: a full read's
-retention (1.57, typescript) and a listing's encoding with its strict copy (1.51, @aws-sdk/client-s3).
+{- | npm's memory charges per source byte, above the largest read peak from one meter step of source up
+(1.65, typescript) and a listing's encoding with its strict copy (1.52, @aws-sdk/client-s3).
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 4500, cfOutputPermille = 1600}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 2100, cfOutputPermille = 1600}
 
 -- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
@@ -99,12 +102,17 @@ fetchNpmBody tracing origin name consume =
             (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (metadataRequest (originBaseUrl origin) (ocToken origin) Full name))
 
 decodeNpm :: TracingPort -> OriginClient -> PackageName -> PackumentRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
-decodeNpm tracing origin name mode readChunk = do
+decodeNpm tracing origin name mode = spanMetadataDecode tracing name . readNpmPackument (ocLimits origin) name mode
+
+-- | Walk a packument's chunks with the production field policy, over a table keyed afresh for the read.
+readNpmPackument :: Limits -> PackageName -> PackumentRead -> IO ByteString -> IO (Either LimitError (StreamResult NpmProjection))
+readNpmPackument limits name mode readChunk = do
     table <- newInternTable <$> newTableKey <*> pure releaseUniqueFields
-    spanMetadataDecode tracing name $
-        readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease table emptyProjection) readChunk
-  where
-    limits = ocLimits origin
+    readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmPackumentWalk limits name mode table) readChunk
+
+-- | The production packument walk over a caller's intern table.
+npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> TokenResult -> Step NpmProjection
+npmPackumentWalk limits name mode table = npmWalk (maxNestingDepth limits) mode (collectField limits name) keepsRelease table emptyProjection
 
 -- A full read packs each kept release against a table keyed for this read.
 decodePacked :: TracingPort -> OriginClient -> PackageName -> IO ByteString -> IO (Either LimitError (StreamResult (InternTable, NpmProjectionOf Packed)))
