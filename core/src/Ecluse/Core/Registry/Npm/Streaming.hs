@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Npm.Streaming (
     NpmRead (..),
     NpmFieldOf (..),
     NpmField,
+    withoutRelease,
     NpmContainer (..),
     npmFields,
     versionFields,
@@ -39,6 +40,17 @@ data NpmFieldOf release
 
 -- | A field whose release is aeson's tree.
 type NpmField = NpmFieldOf Value
+
+-- | The field without its release, as a read that does not keep the release still counts it.
+withoutRelease :: NpmFieldOf a -> NpmFieldOf b
+withoutRelease = \case
+    IgnoredField -> IgnoredField
+    BeginContainer container -> BeginContainer container
+    InvalidContainer container -> InvalidContainer container
+    NameField value -> NameField value
+    VersionField key _ -> VersionField key Nothing
+    TimeField key value -> TimeField key value
+    TagField key value -> TagField key value
 
 -- | Extract independent maps without assuming their ordering in the source.
 npmFields :: Int -> NpmRead -> J.Parser NpmField

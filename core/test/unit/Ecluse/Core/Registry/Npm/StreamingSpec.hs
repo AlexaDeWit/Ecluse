@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
-import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, finishTree, treeStep)
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
@@ -194,12 +194,12 @@ spec = describe "npmFields" $ do
                 ( parseJsonChunks
                     (MetadataBodyLimit (BS.length body))
                     (npmFields (maxNestingDepth defaultLimits) FullRead)
-                    (collectField defaultLimits name)
-                    emptyProjection
+                    (treeStep defaultLimits name)
+                    emptyTreeRead
                     (map BS.singleton (BS.unpack body))
                 )
         projected <- expectRight (streamValue streamed)
-        (info, _) <- expectRight (finishProjection defaultLimits name "See source" projected)
+        (info, _) <- expectRight (finishTree defaultLimits name "See source" projected)
         Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
 
     it "retains no sibling release objects on selected reads" $ do
@@ -208,12 +208,12 @@ spec = describe "npmFields" $ do
                 ( parseJsonChunks
                     (MetadataBodyLimit (BS.length body))
                     (npmFields (maxNestingDepth defaultLimits) (SelectedRead "absent"))
-                    (collectField defaultLimits name)
-                    emptyProjection
+                    (treeStep defaultLimits name)
+                    emptyTreeRead
                     [body]
                 )
         projected <- expectRight (streamValue streamed)
-        (_, compact) <- expectRight (finishProjection defaultLimits name "See source" projected)
+        (_, compact) <- expectRight (finishTree defaultLimits name "See source" projected)
         fieldAt "versions" compact `shouldBe` Just (Object mempty)
 
     forM_

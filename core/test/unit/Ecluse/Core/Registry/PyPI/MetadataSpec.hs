@@ -5,9 +5,11 @@
 -- | PyPI protocol, artifact identity and release-age projection parity.
 module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Hedgehog (forAll, (===))
@@ -24,22 +26,23 @@ import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionAdmit, Admissi
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.Json.Walk (Steps)
+import Ecluse.Core.Registry.Json.Writer (newWriter)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
-import Ecluse.Core.Registry.PyPI.Metadata (packedWalk, projectPyPIPacked, projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIPacked, projectPyPIStream, pypiFullWalk, pypiIndexWalk)
 import Ecluse.Core.Registry.PyPI.Project (projectName)
-import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (FullRead))
-import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
     LimitError (TooManyArtifacts, TooManyVersions),
-    Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount),
+    Limits (maxArtifactCount, maxMetadataBytes, maxVersionCount),
     defaultLimits,
  )
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
@@ -47,7 +50,7 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPath), pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename, unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
@@ -88,14 +91,15 @@ packedReadSpec = describe "packedWalk" $ do
 -- Both full reads of the same chunks through the production projection, for the project the body names.
 bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, Maybe SimpleDocument), Either MetadataError (PackageInfo, CachedDoc))
 bothFullReads chunks =
-    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (pypiWalk depth FullRead (collectField limits FullRead) keepsFile (testTable fileUniqueFields) (emptyProjection name)) chunks) >>= projectPyPIStream limits name)
-    , second (fst pypiPacked) <$> (first MetadataBoundExceeded (walkJsonChunks bound (packedWalk limits name (testTable fileUniqueFields)) chunks) >>= projectPyPIPacked limits name)
+    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (pypiIndexWalk limits name FullRead (testTable fileUniqueFields)) chunks) >>= projectPyPIStream limits name)
+    , second (fst pypiPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound packedWalk chunks) >>= projectPyPIPacked limits name)
     )
   where
     total = sum (map BS.length chunks)
     bound = MetadataBodyLimit total
     limits = defaultLimits{maxMetadataBytes = max 1 total}
-    depth = maxNestingDepth limits
+    packedWalk :: ST st (TokenResult -> ST st (Steps (ST st) PyPIFullRead))
+    packedWalk = newWriter Nothing <&> \writer -> pypiFullWalk writer limits name (testTable fileUniqueFields)
     name = case eitherDecodeStrict (mconcat chunks) of
         Right (Object fields) | Just (String reported) <- KeyMap.lookup "name" fields, Right parsed <- projectName reported -> parsed
         _ -> unscopedPyPI "thing"

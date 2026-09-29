@@ -36,8 +36,8 @@ spec = do
             walkJsonChunks bound skipOne ["{\"keep\":"] `shouldBe` Right (StreamResult (Left (ParseError "incomplete registry JSON")) 8)
 
         it "passes a refused field through as the read's refusal" $ do
-            let refuse = emit (\() () -> Left (TooManyVersions 2 1)) () () Finished
-            walkJsonChunks bound (\tokens -> withElement tokens (\element rest -> skipFrom element rest (const refuse))) ["{}"]
+            let refused = emit (pureStep (\() () -> Left (TooManyVersions 2 1))) () () Finished
+            walkJsonChunks bound (\tokens -> withElement tokens (\element rest -> skipFrom element rest (const refused))) ["{}"]
                 `shouldBe` (Left (TooManyVersions 2 1) :: Either LimitError (StreamResult ()))
 
         it "fails an exhausted budget with the nesting limit after skipping the value" $

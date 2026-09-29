@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Json.Intern (
     -- * Names as read
     Name (Plain),
     decodedName,
+    foldName,
     nameText,
     nameBytes,
 
@@ -23,7 +24,7 @@ module Ecluse.Core.Registry.Json.Intern (
     Entry (..),
     Interned (..),
     internName,
-    tableStrings,
+    tableTexts,
     sipHash,
 ) where
 
@@ -32,15 +33,15 @@ import Data.Aeson (Value (String))
 import Data.Bits (rotateL, shiftL, (.|.))
 import Data.ByteArray.Hash (SipKey (..))
 import Data.ByteString qualified as BS
-import Data.ByteString.Short qualified as SBS
 import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable (..))
 import Data.JsonStream.Unescape (unsafeDecodeASCII)
+import Data.Primitive.SmallArray (SmallArray, newSmallArray, runSmallArray, writeSmallArray)
 import Data.Text.Array qualified as TA
 import Data.Text.Internal qualified as TI
 
-import Ecluse.Core.Registry.Json.Packed (TableString (..), encodeString, encodedLength, plain)
+import Ecluse.Core.Registry.Json.Packed (encodedLength)
 
 -- | A member name or string as the lexer read it: plain ASCII bytes, or text decoded from escapes or UTF-8.
 data Name = Plain !ByteString | Decoded !Text ~ByteString
@@ -48,6 +49,13 @@ data Name = Plain !ByteString | Decoded !Text ~ByteString
 -- | A name decoded from escapes or UTF-8. Its bytes are encoded once, when first asked for.
 decodedName :: Text -> Name
 decodedName text = Decoded text (encodeUtf8 text)
+
+-- | Take a name as its plain ASCII bytes or as its decoded text.
+foldName :: (ByteString -> a) -> (Text -> a) -> Name -> a
+foldName onPlain onDecoded = \case
+    Plain bytes -> onPlain bytes
+    Decoded text _ -> onDecoded text
+{-# INLINE foldName #-}
 
 -- | The name's text on an array of its own. Plain bytes are copied, so no text keeps its input chunk.
 nameText :: Name -> Text
@@ -92,7 +100,9 @@ whose values differ in every release or file, so they never enter the table.
 newInternTable :: SipKey -> [Text] -> InternTable
 newInternTable key = foldl' seed (InternTable key mempty 0)
   where
-    seed table@(InternTable _ _ count) name = insertEntry (encodeUtf8 name) (Entry name (String name) True count (encodedLength name)) table
+    seed table@(InternTable _ entries count) name
+        | HashMap.member (probeOf key (encodeUtf8 name)) entries = table
+        | otherwise = insertEntry (encodeUtf8 name) (Entry name (String name) True count (encodedLength name)) table
 
 {- | The table's entry for a name. A name the table lacks gets an entry of its own text, which the
 returned table holds from then on.
@@ -113,13 +123,15 @@ insertEntry :: ByteString -> Entry -> InternTable -> InternTable
 insertEntry bytes entry (InternTable key entries count) =
     InternTable key (HashMap.insert (Probe (fromIntegral (sipHash 1 3 key bytes)) (Owned (entryText entry))) entry entries) (count + 1)
 
--- | Every entry's string in index order, as the packed form's table lays them out.
-tableStrings :: InternTable -> [TableString]
-tableStrings (InternTable _ entries _) = map (layout . entryText) (sortOn entryIndex (HashMap.elems entries))
-  where
-    layout text
-        | plain text = PlainString text
-        | otherwise = EscapedString (SBS.toShort (encodeString text))
+probeOf :: SipKey -> ByteString -> Probe
+probeOf key bytes = Probe (fromIntegral (sipHash 1 3 key bytes)) (Slice bytes)
+
+-- | Every entry's text in index order. Each index below the table's count holds exactly one entry.
+tableTexts :: InternTable -> SmallArray Text
+tableTexts (InternTable _ entries count) = runSmallArray $ do
+    slots <- newSmallArray count ""
+    forM_ (HashMap.elems entries) $ \entry -> when (entryIndex entry < count) (writeSmallArray slots (entryIndex entry) (entryText entry))
+    pure slots
 
 -- A key with its hash computed once. A probe holds the bytes it looks up, and a stored key its entry's text.
 data Probe = Probe {-# UNPACK #-} !Int !Bytes

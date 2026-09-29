@@ -170,10 +170,11 @@ library ecluse-core
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Json.Intern
-    Ecluse.Core.Registry.Json.Pack
     Ecluse.Core.Registry.Json.Packed
+    Ecluse.Core.Registry.Json.Scratch
     Ecluse.Core.Registry.Json.Shape
     Ecluse.Core.Registry.Json.Walk
+    Ecluse.Core.Registry.Json.Writer
     Ecluse.Core.Registry.JsonStream
     Ecluse.Core.Registry.VersionList
     Ecluse.Core.Registry.Maintenance

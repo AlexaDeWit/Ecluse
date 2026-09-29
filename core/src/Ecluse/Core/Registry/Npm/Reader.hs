@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TypeFamilies #-}
 
 {- | The packument walk for full and selected reads. It emits the fields that
 "Ecluse.Core.Registry.Npm.Streaming" emits for the same mode, in the same order, and builds each
@@ -9,7 +10,6 @@ retained release once with its keys and strings interned as read.
 module Ecluse.Core.Registry.Npm.Reader (
     PackumentRead (..),
     npmWalk,
-    npmWalkTable,
     releaseUniqueFields,
 ) where
 
@@ -17,12 +17,10 @@ import Data.Aeson (Value (Null))
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (Entry (entryText), InternTable, Interned (..), internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Pack (Tree)
-import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Retained, Shape (..), everyMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionFields)
-import Ecluse.Core.Security (LimitError)
 
 -- | The whole packument, or one release with its timestamp and the latest tag.
 data PackumentRead = WholePackument | OneRelease Text
@@ -34,29 +32,21 @@ at any depth, so a rarer member such as @_npmUser.url@ is kept as read too.
 releaseUniqueFields :: [Text]
 releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 
-{- | Walk one packument, passing each field to the step as it completes. Only a release the consumer
-keeps enters the table, and only the first of each member it repeats.
+{- | Walk one packument, passing each field to the step as it completes, and finish with the read's
+table. The builder builds each release. Only a release the consumer keeps enters the table, and only
+the first of each member it repeats.
 -}
-npmWalk :: (Retained r) => Int -> PackumentRead -> (s -> NpmFieldOf r -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s
-npmWalk depth mode step keeps = npmWalkWith depth mode step keeps (const id)
+npmWalk :: (Build b r, Result r ~ Walked s) => b -> Int -> PackumentRead -> FieldStep s (NpmFieldOf (Built b)) r -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> r
 {-# INLINEABLE npmWalk #-}
-{-# SPECIALIZE npmWalk :: Int -> PackumentRead -> (s -> NpmFieldOf Value -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step s #-}
-
--- | 'npmWalk' that also hands back the read's table, which a packed document indexes.
-npmWalkTable :: Int -> PackumentRead -> (s -> NpmFieldOf Tree -> Either LimitError s) -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> Step (InternTable, s)
-npmWalkTable depth mode step keeps = npmWalkWith depth mode step keeps (,)
-
-{-# INLINEABLE npmWalkWith #-}
-npmWalkWith :: (Retained r) => Int -> PackumentRead -> (s -> NpmFieldOf r -> Either LimitError s) -> (s -> Text -> Bool) -> (InternTable -> s -> t) -> InternTable -> s -> TokenResult -> Step t
-npmWalkWith depth mode step keeps seal table0 initial tokens
+npmWalk build depth mode step keeps table0 initial tokens
     | depth <= 0 = withElement tokens tooDeep
     | otherwise = withElement tokens $ \element rest -> case element of
-        ObjectBegin -> eachMember topField (\(Walked table acc) _ -> Finished (seal table acc)) (Walked table0 initial) rest
-        _ -> skipFrom element rest (const (Finished (seal table0 initial)))
+        ObjectBegin -> eachMember topField (\walked _ -> finish walked) (Walked table0 initial) rest
+        _ -> skipFrom element rest (const (finish (Walked table0 initial)))
   where
     topField (Walked table acc) name after continue = case nameBytes name of
         "name" -> withElement after $ \element rest ->
-            readShape (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
+            readShape Trees (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
                 emit acc (NameField field) (\acc' -> continue (Walked table acc') afterValue)
         "versions" -> container VersionsContainer table acc after continue (releases table)
         "time" -> container TimeContainer table acc after continue $ case mode of
@@ -82,33 +72,33 @@ npmWalkWith depth mode step keeps seal table0 initial tokens
                 JValue Null -> emit acc (BeginContainer slot) (\begun -> continue (Walked table begun) rest)
                 _ -> skipFrom element rest (\afterValue -> emit acc (InvalidContainer slot) (\marked -> continue (Walked table marked) afterValue))
 
-    releases table acc rest finish = eachMember release finish (Walked table acc) rest
+    releases table acc rest done = eachMember release done (Walked table acc) rest
     release (Walked table acc) key after continue = case target of
         Just wanted | nameBytes key /= wanted -> withElement after $ \element rest ->
             skipFrom element rest (\afterValue -> emit acc (VersionField "" Nothing) (\acc' -> continue (Walked table acc') afterValue))
         _
             | keeps acc text -> case internName key table of
                 Interned entry keyed -> withElement after $ \element rest ->
-                    readShape releaseShape Share keyed element rest $ \release' table' afterValue ->
+                    readShape build releaseShape Share keyed element rest $ \release' table' afterValue ->
                         emit acc (VersionField (entryText entry) (Just release')) (\acc' -> continue (Walked table' acc') afterValue)
             | otherwise -> withElement after $ \element rest ->
-                readShape releaseShape Keep table element rest $ \release' _ afterValue ->
+                readShape build releaseShape Keep table element rest $ \release' _ afterValue ->
                     emit acc (VersionField text (Just release')) (\acc' -> continue (Walked table acc') afterValue)
       where
         text = nameText key
 
-    everyScalar field table acc rest finish = eachMember (timestamp field) finish (Walked table acc) rest
+    everyScalar field table acc rest done = eachMember (timestamp field) done (Walked table acc) rest
     timestamp field (Walked table acc) key after continue = withElement after $ \element rest ->
-        readShape (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
+        readShape Trees (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
             emit acc (field (nameText key) scalar) (\acc' -> continue (Walked table acc') afterValue)
 
     -- json-stream's objectWithKey: the first match yields, and the rest of the object is skipped unread.
-    oneScalar wanted field table acc rest finish = eachMember visit finish (Walked table acc) rest
+    oneScalar wanted field table acc rest done = eachMember visit done (Walked table acc) rest
       where
         visit (Walked held current) key after continue
             | nameBytes key == wanted = withElement after $ \element afterKey ->
-                readShape (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
-                    emit current (field scalar) (skipRest 1 afterValue . finish . Walked held)
+                readShape Trees (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
+                    emit current (field scalar) (skipRest 1 afterValue . done . Walked held)
             | otherwise = withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked held current))
 
     releaseShape = Checked (depth - 2) (ObjectOr Null (releaseMembers depth))

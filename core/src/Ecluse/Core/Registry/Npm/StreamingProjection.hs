@@ -2,26 +2,34 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Join streamed npm versions, tags and timestamps without retaining the source document.
+{- | Join streamed npm versions, tags and timestamps without retaining the source document. The typed
+projection keeps each release's typed facts, and each read keeps the served releases in its own form:
+aeson's tree, or packed against the read's table.
+-}
 module Ecluse.Core.Registry.Npm.StreamingProjection (
-    NpmProjectionOf,
+    -- * Typed facts
     NpmProjection,
+    TypedRelease,
     emptyProjection,
-    KeepRelease,
-    valueRelease,
-    projectRelease,
-    collectField,
-    collectFieldWith,
     keepsRelease,
-    NpmParts (..),
-    finishParts,
-    finishProjection,
+    collectField,
 
-    -- * Packed full reads
-    packedRelease,
-    packedDocument,
+    -- * Reading releases as aeson's tree
+    TreeRead,
+    emptyTreeRead,
+    keepsTreeRelease,
+    treeStep,
+    finishTree,
+
+    -- * Reading releases packed
+    PackedRead,
+    emptyPackedRead,
+    keepsPackedRelease,
+    packedStep,
+    finishPacked,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value (..), parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -32,23 +40,26 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
-import Ecluse.Core.Registry.Json.Intern (Entry)
-import Ecluse.Core.Registry.Json.Pack (Tree, packTree, treeMembers, treeValue, withMember)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed)
+import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, sealValue)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
-import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField, NpmFieldOf (..), versionListFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields, withoutRelease)
+import Ecluse.Core.Registry.Npm.Wire (distFields)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 
+-- | A kept release's typed facts, or the entry that records why it was dropped.
+type TypedRelease = Either InvalidEntry PackageDetails
+
 -- | Independent source maps. Typed releases are built as each retained version finishes.
-data NpmProjectionOf doc = NpmProjection
+data NpmProjection = NpmProjection
     { projectedName :: Maybe Value
-    , projectedVersions :: Map Text (Either InvalidEntry PackageDetails, doc)
+    , projectedVersions :: Map Text TypedRelease
     , projectedTimes :: Map Text (Either InvalidEntry UTCTime)
     , projectedTags :: Map Text (Either InvalidEntry Version)
     , projectedBookkeeping :: Map Text Value
@@ -58,26 +69,8 @@ data NpmProjectionOf doc = NpmProjection
     , projectedInvalidContainer :: Bool
     }
 
--- | A projection whose served releases are aeson's tree.
-type NpmProjection = NpmProjectionOf Value
-
--- | How a read keeps a release: its typed projection, and the form the served document holds.
-type KeepRelease release doc = Text -> release -> (Either InvalidEntry PackageDetails, doc)
-
--- | Keep each release as aeson's tree.
-valueRelease :: PackageName -> KeepRelease Value Value
-valueRelease name key value = let !typed = projectRelease name key value value in (typed, value)
-
-{- | Project a release's typed facts from the members they read. A release that does not project is
-recorded with its whole value.
--}
-projectRelease :: PackageName -> Text -> Value -> Value -> Either InvalidEntry PackageDetails
-projectRelease name key projected whole = case projectVersionEntryResult name (mkVersion Npm key) Nothing projected of
-    Left err -> Left $! mkInvalidEntry InvalidVersionManifest key whole (toText err)
-    Right details -> Right $! details
-
 -- | Start one source projection. No document or input chunk is retained here.
-emptyProjection :: NpmProjectionOf doc
+emptyProjection :: NpmProjection
 emptyProjection =
     NpmProjection
         { projectedName = Nothing
@@ -92,16 +85,12 @@ emptyProjection =
         }
 
 -- | Whether a release read now under the key would be kept: the key's first in the first versions object.
-keepsRelease :: NpmProjectionOf doc -> Text -> Bool
+keepsRelease :: NpmProjection -> Text -> Bool
 keepsRelease acc key = projectedActiveContainer acc == Just VersionsContainer && Map.notMember key (projectedVersions acc)
 
--- | Project each release once and enforce the version ceiling while receiving source fields.
-collectField :: Limits -> PackageName -> NpmProjection -> NpmField -> Either LimitError NpmProjection
-collectField limits name = collectFieldWith limits (valueRelease name)
-
--- | 'collectField' for any release form, kept as the given function keeps it.
-collectFieldWith :: Limits -> KeepRelease release doc -> NpmProjectionOf doc -> NpmFieldOf release -> Either LimitError (NpmProjectionOf doc)
-collectFieldWith limits keep acc = \case
+-- | Keep each kept release's typed facts and enforce the version ceiling while receiving source fields.
+collectField :: Limits -> NpmProjection -> NpmFieldOf TypedRelease -> Either LimitError NpmProjection
+collectField limits acc = \case
     IgnoredField -> Right acc{projectedActiveContainer = Nothing}
     BeginContainer container ->
         Right
@@ -118,12 +107,12 @@ collectFieldWith limits keep acc = \case
                 }
     NameField value -> Right acc{projectedName = projectedName acc <|> Just value}
     VersionField _ _ | projectedActiveContainer acc /= Just VersionsContainer -> Right acc
-    VersionField key raw -> do
+    VersionField key typed -> do
         let count = projectedCount acc + 1
             counted = acc{projectedCount = count}
         checkVersionCountOf limits count
-        pure $ case raw of
-            Just value | Map.notMember key (projectedVersions acc) -> retain key value counted
+        pure $ case typed of
+            Just release | Map.notMember key (projectedVersions acc) -> counted{projectedVersions = Map.insert key release (projectedVersions acc)}
             _ -> counted
     TimeField _ _ | projectedActiveContainer acc /= Just TimeContainer -> Right acc
     TimeField key _ | Map.member key (projectedTimes acc) -> Right acc
@@ -140,9 +129,6 @@ collectFieldWith limits keep acc = \case
     TagField key _ | Map.member key (projectedTags acc) -> Right acc
     TagField key value -> Right acc{projectedTags = firstInsert key (decode (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
   where
-    -- The walk interned the key and release, so the typed release reads the served document's texts.
-    retain key value current = case keep key value of
-        (!typed, !doc) -> current{projectedVersions = Map.insert key (typed, doc) (projectedVersions current)}
     -- Force the decoded payload so a successful entry cannot retain its source Value.
     decode convert kind key value = case parseEither parseJSON value of
         Left err -> Left $! mkInvalidEntry kind key value (toText err)
@@ -151,27 +137,29 @@ collectFieldWith limits keep acc = \case
 firstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
 firstInsert = Map.insertWith (\_ old -> old)
 
--- | A finished read's served parts: its name, its releases in the read's form, and its bookkeeping times.
-data NpmParts doc = NpmParts
-    { partName :: Value
-    , partVersions :: Map Text doc
-    , partTime :: Map Text Value
-    }
+-- A release's typed facts from the members they read, or why it does not project.
+projectRelease :: PackageName -> Text -> Value -> Either Text PackageDetails
+projectRelease name key projected = case projectVersionEntryResult name (mkVersion Npm key) Nothing projected of
+    Left err -> Left (toText err)
+    Right details -> Right $! details
 
--- | Bind the reported name and join policy timestamps with their same-source release objects.
-finishProjection :: Limits -> PackageName -> Text -> NpmProjection -> Either MetadataError (PackageInfo, Value)
-finishProjection limits requested authorPointer acc = second (valueDocument authorPointer) <$> finishParts limits requested acc
+-- A dropped release, recorded with the whole release as read.
+invalidRelease :: Text -> Value -> Text -> TypedRelease
+invalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest key whole reason
 
--- | 'finishProjection' for any release form, leaving the served document to its builder.
-finishParts :: Limits -> PackageName -> NpmProjectionOf doc -> Either MetadataError (PackageInfo, NpmParts doc)
+-- The parts a finished read serves beside its releases: the reported name and the bookkeeping times.
+data NpmParts = NpmParts Value (Map Text Value)
+
+-- Bind the reported name and join policy timestamps with their same-source releases.
+finishParts :: Limits -> PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
 finishParts limits requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
     reported <- validateReportedName projectName (projectedName acc)
     _ <- projectionResult (checkNameAgreement requested reported ())
     info <- first MetadataBoundExceeded (checkArtifactCount limits package)
-    pure (info, NpmParts (fromMaybe Null (projectedName acc)) (Map.map snd (projectedVersions acc)) (projectedBookkeeping acc))
+    pure (info, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
   where
-    versions = Map.mapMaybe (rightToMaybe . fst) (projectedVersions acc)
+    versions = Map.mapMaybe rightToMaybe (projectedVersions acc)
     times = Map.mapMaybe rightToMaybe (projectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (projectedTags acc)
     stamp key details = details{pkgPublishedAt = Map.lookup key times}
@@ -183,49 +171,99 @@ finishParts limits requested acc = do
             , infoDistTags = tags
             , infoInvalidEntries =
                 strictElements
-                    ( lefts (map fst (Map.elems (projectedVersions acc)))
+                    ( drops (projectedVersions acc)
                         <> drops (projectedTags acc)
                         <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
                     )
             }
 
-valueDocument :: Text -> NpmParts Value -> Value
-valueDocument authorPointer parts =
-    Object
-        ( KeyMap.fromList
-            [ ("name", partName parts)
-            , ("author", String authorPointer)
-            , ("versions", Object (KeyMap.fromList [(Key.fromText key, withPointer raw) | (key, raw) <- Map.toList (partVersions parts)]))
-            , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList (partTime parts)]))
-            ]
-        )
+-- | A read that keeps each release as aeson's tree: the typed facts, and the served releases.
+data TreeRead = TreeRead NpmProjection (Map Text Value)
+
+-- | Start a tree read.
+emptyTreeRead :: TreeRead
+emptyTreeRead = TreeRead emptyProjection mempty
+
+-- | Whether the tree read keeps a release read now under the key.
+keepsTreeRelease :: TreeRead -> Text -> Bool
+keepsTreeRelease (TreeRead acc _) = keepsRelease acc
+
+-- | Project each kept release from its tree, and serve the tree as read.
+treeStep :: Limits -> PackageName -> TreeRead -> NpmFieldOf Value -> Either LimitError TreeRead
+treeStep limits name (TreeRead acc served) = \case
+    VersionField key (Just value) | keepsRelease acc key -> do
+        let !typed = either (invalidRelease key value) Right (projectRelease name key value)
+        kept <- collectField limits acc (VersionField key (Just typed))
+        pure (TreeRead kept (Map.insert key value served))
+    field -> (`TreeRead` served) <$> collectField limits acc (withoutRelease field)
+
+-- | Bind the reported name, and serve each kept release with the source author pointer.
+finishTree :: Limits -> PackageName -> Text -> TreeRead -> Either MetadataError (PackageInfo, Value)
+finishTree limits requested authorPointer (TreeRead acc served) = second document <$> finishParts limits requested acc
   where
+    document (NpmParts name time) =
+        Object
+            ( KeyMap.fromList
+                [ ("name", name)
+                , ("author", String authorPointer)
+                , ("versions", Object (KeyMap.fromList [(Key.fromText key, withPointer raw) | (key, raw) <- Map.toList served]))
+                , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList time]))
+                ]
+            )
     withPointer = \case
         Object fields -> Object (KeyMap.insert "author" (String authorPointer) fields)
         other -> other
 
-{- | Keep each release packed, with the source author pointer under its @author@ key. Its typed facts
-read only the members 'versionListFields' names.
+-- | A read that keeps each release packed against its table: the typed facts, and the served releases, latest first.
+data PackedRead = PackedRead NpmProjection [(Text, Packed)]
+
+-- | Start a packed read.
+emptyPackedRead :: PackedRead
+emptyPackedRead = PackedRead emptyProjection []
+
+-- | Whether the packed read keeps a release read now under the key.
+keepsPackedRelease :: PackedRead -> Text -> Bool
+keepsPackedRelease (PackedRead acc _) = keepsRelease acc
+
+{- | Seal each kept release the writer finished, and project its typed facts from the members they
+read. A release the read does not keep is discarded.
 -}
-packedRelease :: PackageName -> Entry -> Entry -> KeepRelease Tree Packed
-packedRelease name authorKey pointer key tree =
-    let !typed = projectRelease name key (treeMembers typedKeys tree) (treeValue tree)
-        !packed = packTree tarballHole (withMember authorKey pointer tree)
-     in (typed, packed)
+packedStep :: Writer st -> Limits -> PackageName -> PackedRead -> NpmFieldOf () -> (Either LimitError PackedRead -> ST st r) -> ST st r
+packedStep writer limits name (PackedRead acc served) field next = case field of
+    VersionField key (Just ())
+        | keepsRelease acc key -> do
+            release <- sealValue writer tarballHole
+            typed <-
+                decodePicked writer typedMembers release >>= \subset -> case projectRelease name key subset of
+                    Right details -> pure (Right details)
+                    Left reason -> (\whole -> invalidRelease key (withoutPointer whole) reason) <$> decodeWhole writer release
+            next $ do
+                kept <- collectField limits acc (VersionField key (Just typed))
+                pure (PackedRead kept ((key, release) : served))
+        | otherwise -> discard writer >> unchanged
+    _ -> unchanged
+  where
+    unchanged = next ((`PackedRead` served) <$> collectField limits acc (withoutRelease field))
+    withoutPointer = \case
+        Object fields -> Object (KeyMap.delete "author" fields)
+        other -> other
 
-typedKeys :: [Key.Key]
-typedKeys = map Key.fromText versionListFields
+-- The members a release's typed facts read: the version list's fields, and of @dist@ what 'Dist' reads.
+typedMembers :: Pick
+typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
 
--- | The packed document of a finished read, over the read's sealed table.
-packedDocument :: Text -> DocTable -> NpmParts Packed -> PackedPackument
-packedDocument authorPointer table parts =
-    PackedPackument
-        { packumentTop =
-            KeyMap.fromList
-                [ ("name", partName parts)
-                , ("author", String authorPointer)
-                , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList (partTime parts)]))
-                ]
-        , packumentTable = table
-        , packumentVersions = KeyMap.fromList [(Key.fromText key, packed) | (key, packed) <- Map.toList (partVersions parts)]
-        }
+-- | Bind the reported name, and serve each kept release packed over the read's sealed table.
+finishPacked :: Limits -> PackageName -> Text -> DocTable -> PackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+finishPacked limits requested authorPointer table (PackedRead acc served) = second document <$> finishParts limits requested acc
+  where
+    document (NpmParts name time) =
+        PackedPackument
+            { packumentTop =
+                KeyMap.fromList
+                    [ ("name", name)
+                    , ("author", String authorPointer)
+                    , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList time]))
+                    ]
+            , packumentTable = table
+            , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) served])
+            }

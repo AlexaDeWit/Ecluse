@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.Npm.Document (
 ) where
 
 import Data.Aeson (Value (Object))
-import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 
@@ -37,5 +36,5 @@ packumentBytes :: PackedPackument -> Int
 packumentBytes packument = tableBytes (packumentTable packument) + sum (map packedBytes (KeyMap.elems (packumentVersions packument)))
 
 -- | The member path of the string a served release rebases.
-tarballHole :: [Key.Key]
+tarballHole :: [Text]
 tarballHole = ["dist", "tarball"]

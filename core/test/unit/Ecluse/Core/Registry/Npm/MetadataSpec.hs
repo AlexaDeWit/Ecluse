@@ -5,11 +5,13 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict, encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -26,16 +28,16 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
+import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
-import Ecluse.Core.Registry.Npm.Metadata (packedWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, keepsRelease)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), releaseUniqueFields)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
     LimitError (TooDeeplyNested, TooManyVersions),
@@ -48,7 +50,7 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages)
 import Ecluse.Test.Json (encodeStrict, genJsonText, genValue, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
 import Ecluse.Test.Support (expectRight)
@@ -85,16 +87,17 @@ packedReadSpec = describe "packedWalk" $ do
 -- Both full reads of the same chunks through the production projection, for the package @thing@.
 bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, Maybe Value), Either MetadataError (PackageInfo, CachedDoc))
 bothFullReads chunks =
-    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (npmWalk depth WholePackument (collectField limits name) keepsRelease (testTable releaseUniqueFields) emptyProjection) chunks) >>= projectNpmStream limits name registry)
-    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkJsonChunks bound (packedWalk limits name registry (testTable releaseUniqueFields)) chunks) >>= projectNpmPacked limits name registry)
+    ( second Just <$> (first MetadataBoundExceeded (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name registry)
+    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound packedWalk chunks) >>= projectNpmPacked limits name registry)
     )
   where
     total = sum (map BS.length chunks)
     bound = MetadataBodyLimit total
     limits = defaultLimits{maxMetadataBytes = max 1 total}
-    depth = maxNestingDepth limits
     name = packageNameOf chunks
     registry = "https://registry.npmjs.org"
+    packedWalk :: ST st (TokenResult -> ST st (Steps (ST st) NpmFullRead))
+    packedWalk = npmFullTable registry name (testTable releaseUniqueFields) <&> \(table, writer) -> npmFullWalk writer limits name table
 
 -- The capture's own package, or @thing@ for a generated body.
 packageNameOf :: [ByteString] -> PackageName

@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.PyPI.Streaming (
     PyPIRead (..),
     PyPIFieldOf (..),
     PyPIField,
+    withoutFile,
     fileScalars,
     hashNames,
     SelectedFileEvent (..),
@@ -42,6 +43,16 @@ data PyPIFieldOf file
 
 -- | A field whose file is aeson's tree.
 type PyPIField = PyPIFieldOf Value
+
+-- | The field without its file, as a read that does not keep the file still counts it.
+withoutFile :: PyPIFieldOf a -> PyPIFieldOf b
+withoutFile = \case
+    EnvelopeField key value -> EnvelopeField key value
+    FilesShape valid -> FilesShape valid
+    FileField position _ -> FileField position Nothing
+    VersionsShape valid -> VersionsShape valid
+    InvalidVersionField position value -> InvalidVersionField position value
+    IgnoredField -> IgnoredField
 
 -- | The scalar members a file retains.
 fileScalars :: [Text]

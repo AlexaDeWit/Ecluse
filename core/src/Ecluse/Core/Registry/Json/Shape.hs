@@ -1,11 +1,12 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TypeFamilies #-}
 
 {- | Retained-value shapes for the token walk, and the reader that builds each value once. A shape
 reads what the matching "Ecluse.Core.Registry.JsonStream" combinator reads, and interns keys and
-strings by the bytes the lexer read unless its mode keeps them as read. The reader builds any
-'Retained' form: aeson's tree for selected reads, the packed tree for full reads.
+strings by the bytes the lexer read unless its mode keeps them as read. A 'Build' says what the
+reader builds: aeson's tree, or the packed form a full read writes.
 -}
 module Ecluse.Core.Registry.Json.Shape (
     Shape (..),
@@ -14,7 +15,10 @@ module Ecluse.Core.Registry.Json.Shape (
     everyMember,
     knownMembers,
     Mode (..),
-    Retained (..),
+    MemberKey (..),
+    memberText,
+    Build (..),
+    Trees (..),
     readShape,
 ) where
 
@@ -27,40 +31,7 @@ import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (Entry (..), InternTable, Interned (..), Name (Plain), decodedName, internName, nameBytes, nameText)
-
-import Ecluse.Core.Registry.Json.Walk (Step (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
-
--- | What a read builds for each retained value.
-class Retained v where
-    -- | A string the document's table shares.
-    sharedString :: Entry -> v
-
-    -- | A string with a copy of its own.
-    ownString :: Text -> v
-
-    -- | A number, boolean, null or fallback value, taken whole.
-    whole :: Value -> v
-
-    -- | The empty array a scalar shape keeps for a container it skips.
-    emptyContainer :: v
-
-    -- | A member's value under a key the table shares.
-    sharedMember :: Entry -> v -> v
-
-    -- | An object from its members.
-    object :: KeyMap.KeyMap v -> v
-
-    -- | An array from its item count and its items in reverse.
-    array :: Int -> [v] -> v
-
-instance Retained Value where
-    sharedString = entryString
-    ownString = String
-    whole = id
-    emptyContainer = emptyArray
-    sharedMember _ value = value
-    object = Object
-    array count values = Array (V.fromListN count (reverse values))
+import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
 none left is skipped and fails the read.
@@ -99,171 +70,256 @@ knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, (Key.fro
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
 data Mode = Share | Keep
 
+-- | A member's key: the table's entry, or a key with its own copy.
+data MemberKey = SharedKey !Entry | OwnKey !Key.Key
+
+-- | The key's text.
+memberText :: MemberKey -> Text
+memberText = \case
+    SharedKey entry -> entryText entry
+    OwnKey key -> Key.toText key
+{-# INLINE memberText #-}
+
+{- | What a read builds, one value at a time, each step handing its result to a continuation. An
+object's members arrive in source order, and a repeated key's value is read and then dropped.
+-}
+class (Walk r) => Build b r where
+    -- | A finished value.
+    type Built b
+
+    -- | An object being read.
+    type Fields b
+
+    -- | An array being read.
+    type Items b
+
+    -- | A string the document's table shares.
+    sharedString :: b -> Entry -> (Built b -> r) -> r
+
+    -- | A string with a copy of its own.
+    ownString :: b -> Name -> (Built b -> r) -> r
+
+    -- | An integer the lexer read whole.
+    integer :: b -> Int -> (Built b -> r) -> r
+
+    -- | A number, boolean, null or fallback value, taken whole.
+    whole :: b -> Value -> (Built b -> r) -> r
+
+    -- | The empty array a scalar shape keeps for a container it skips.
+    emptyContainer :: b -> (Built b -> r) -> r
+
+    openObject :: b -> (Fields b -> r) -> r
+
+    -- | A member under the key begins, and whether the object already holds the key.
+    beginMember :: b -> MemberKey -> Fields b -> (Bool -> r) -> r
+
+    addMember :: b -> MemberKey -> Built b -> Fields b -> (Fields b -> r) -> r
+
+    -- | Forget the member begun last, whose key the object already holds.
+    dropValue :: b -> Built b -> r -> r
+
+    closeObject :: b -> Fields b -> (Built b -> r) -> r
+
+    openArray :: b -> (Items b -> r) -> r
+
+    addItem :: b -> Built b -> Items b -> (Items b -> r) -> r
+
+    -- | Finish an array of the given item count.
+    closeArray :: b -> Int -> Items b -> (Built b -> r) -> r
+
+-- | Build aeson's tree.
+data Trees = Trees
+
+instance (Walk r) => Build Trees r where
+    type Built Trees = Value
+    type Fields Trees = KeyMap.KeyMap Value
+    type Items Trees = [Value]
+    sharedString _ entry next = next (entryString entry)
+    ownString _ name next = next (String (nameText name))
+    integer _ number next = let !value = Number (fromIntegral number) in next value
+    whole _ value next = next value
+    emptyContainer _ next = next emptyArray
+    openObject _ next = next KeyMap.empty
+    beginMember _ key fields next = next (KeyMap.member (Key.fromText (memberText key)) fields)
+    addMember _ key value fields next = next (KeyMap.insert (Key.fromText (memberText key)) value fields)
+    dropValue _ _ next = next
+    closeObject _ fields next = next (Object fields)
+    openArray _ next = next []
+    addItem _ value values next = next (value : values)
+    closeArray _ count values next = let !array = Array (V.fromListN count (reverse values)) in next array
+    {-# INLINE sharedString #-}
+    {-# INLINE ownString #-}
+    {-# INLINE integer #-}
+    {-# INLINE whole #-}
+    {-# INLINE emptyContainer #-}
+    {-# INLINE openObject #-}
+    {-# INLINE beginMember #-}
+    {-# INLINE addMember #-}
+    {-# INLINE dropValue #-}
+    {-# INLINE closeObject #-}
+    {-# INLINE openArray #-}
+    {-# INLINE addItem #-}
+    {-# INLINE closeArray #-}
+
 -- | Read the value starting at the element and build it once.
-readShape :: (Retained v) => Shape -> Mode -> InternTable -> Element -> TokenResult -> (v -> InternTable -> TokenResult -> Step s) -> Step s
-readShape = readAt 0 False
+readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readShape build = readAt build 0 False
 {-# INLINEABLE readShape #-}
-{-# SPECIALIZE readShape :: Shape -> Mode -> InternTable -> Element -> TokenResult -> (Value -> InternTable -> TokenResult -> Step s) -> Step s #-}
 
 -- json-stream races a skip of a container an alternative rejects, whose lexer failure beats a nesting
 -- failure. open counts levels inside the outermost raced container, and raced marks a raced value.
-{-# INLINEABLE readAt #-}
-readAt :: (Retained v) => Int -> Bool -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (v -> InternTable -> TokenResult -> Step s) -> Step s
-readAt open raced shape mode table element rest next = case shape of
+readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readAt build open raced shape mode table element rest next = case shape of
     Scalar budget
         | budget <= 0 -> tooDeepAt open element rest
-        | otherwise -> readScalar mode table element rest next (next emptyContainer table)
+        | otherwise -> readScalar build mode table element rest next (\after -> emptyContainer build (\value -> next value table after))
     Generic budget
         | budget <= 0 -> tooDeepAt open element rest
         | otherwise -> case element of
-            ObjectBegin -> readObject (entering raced) (everyMember (Generic (budget - 1))) mode table rest next
-            ArrayBegin -> readArray (entering True) (Generic (budget - 1)) mode table rest next
-            _ -> readScalar mode table element rest next (\_ -> Failed "unexpected container")
+            ObjectBegin -> readObject build (entering raced) (everyMember (Generic (budget - 1))) mode table rest next
+            ArrayBegin -> readArray build (entering True) (Generic (budget - 1)) mode table rest next
+            _ -> readScalar build mode table element rest next (\_ -> failWith "unexpected container")
     ObjectWith budget members fallback
         | budget <= 0 -> tooDeepAt open element rest
-        | ObjectBegin <- element -> readObject (entering raced) members mode table rest next
-        | otherwise -> readAt open True fallback mode table element rest next
+        | ObjectBegin <- element -> readObject build (entering raced) members mode table rest next
+        | otherwise -> readAt build open True fallback mode table element rest next
     ArrayWith budget item fallback
         | budget <= 0 -> tooDeepAt open element rest
-        | ArrayBegin <- element -> readArray (entering raced) item mode table rest next
-        | otherwise -> readAt open True fallback mode table element rest next
+        | ArrayBegin <- element -> readArray build (entering raced) item mode table rest next
+        | otherwise -> readAt build open True fallback mode table element rest next
     StringOr budget other
         | budget <= 0 -> tooDeepAt open element rest
-        | isString element -> readString element rest (string mode table next)
-        | otherwise -> readAt open True other mode table element rest next
+        | isString element -> readString element rest (string build mode table next)
+        | otherwise -> readAt build open True other mode table element rest next
     ObjectOr fallback members
-        | ObjectBegin <- element -> readObject (entering raced) members mode table rest next
-        | otherwise -> let !value = whole fallback in skipFrom element rest (next value table)
+        | ObjectBegin <- element -> readObject build (entering raced) members mode table rest next
+        | otherwise -> skipFrom element rest (\after -> whole build fallback (\value -> next value table after))
     Checked budget inner
         | budget <= 0 -> tooDeepAt open element rest
-        | otherwise -> readAt open raced inner mode table element rest next
+        | otherwise -> readAt build open raced inner mode table element rest next
   where
     entering racing
         | open > 0 = open + 1
         | racing = 1
         | otherwise = 0
+{-# INLINEABLE readAt #-}
 
 -- Skip the value, then fail on the nesting limit, unless a parallel skip has already failed further on.
-tooDeepAt :: Int -> Element -> TokenResult -> Step s
+tooDeepAt :: (Walk r) => Int -> Element -> TokenResult -> r
 tooDeepAt open element rest
     | open > 0 = skipFrom element rest (raceFailure open)
     | otherwise = tooDeep element rest
+{-# INLINEABLE tooDeepAt #-}
 
-raceFailure :: Int -> TokenResult -> Step s
+raceFailure :: (Walk r) => Int -> TokenResult -> r
 raceFailure !level tokens = case tokens of
-    TokFailed -> Failed "the JSON lexer failed"
-    TokMoreData _ -> Failed nestingLimit
+    TokFailed -> failWith "the JSON lexer failed"
+    TokMoreData _ -> failWith nestingLimit
     PartialResult element rest -> case element of
         ArrayEnd _ -> closed rest
         ObjectEnd _ -> closed rest
         ArrayBegin -> raceFailure (level + 1) rest
         ObjectBegin -> raceFailure (level + 1) rest
         StringContent _ -> longString rest
-        StringEnd _ -> Failed "unexpected end of string"
+        StringEnd _ -> failWith "unexpected end of string"
         _ -> raceFailure level rest
   where
     closed rest
-        | level <= 1 = Failed nestingLimit
+        | level <= 1 = failWith nestingLimit
         | otherwise = raceFailure (level - 1) rest
     longString = \case
-        TokFailed -> Failed "the JSON lexer failed"
-        TokMoreData _ -> Failed nestingLimit
+        TokFailed -> failWith "the JSON lexer failed"
+        TokMoreData _ -> failWith nestingLimit
         PartialResult (StringContent _) rest -> longString rest
         PartialResult (StringEnd _) rest -> raceFailure level rest
-        PartialResult _ _ -> Failed "unexpected token in a string"
+        PartialResult _ _ -> failWith "unexpected token in a string"
+{-# INLINEABLE raceFailure #-}
 
 -- json-stream's scalar parsers: a container is skipped and handed to the last continuation.
-{-# INLINEABLE readScalar #-}
-readScalar :: (Retained v) => Mode -> InternTable -> Element -> TokenResult -> (v -> InternTable -> TokenResult -> Step s) -> (TokenResult -> Step s) -> Step s
-readScalar mode table element rest next container = case element of
-    JInteger number -> let !value = whole (Number (fromIntegral number)) in next value table rest
-    JValue (String text) -> string mode table next (decodedName text) rest
-    JValue value -> let !built = whole value in next built table rest
+readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> (TokenResult -> r) -> r
+readScalar build mode table element rest next container = case element of
+    JInteger number -> integer build (fromIntegral number) (\value -> next value table rest)
+    JValue (String text) -> string build mode table next (decodedName text) rest
+    JValue value -> whole build value (\built -> next built table rest)
     ObjectBegin -> skipFrom element rest container
     ArrayBegin -> skipFrom element rest container
     _
-        | isString element -> readString element rest (string mode table next)
-        | otherwise -> Failed "unexpected token where a value belongs"
+        | isString element -> readString element rest (string build mode table next)
+        | otherwise -> failWith "unexpected token where a value belongs"
+{-# INLINEABLE readScalar #-}
 
 -- The table's shared copy of a string, or a copy of its own when the mode keeps it.
-{-# INLINEABLE stringValue #-}
-stringValue :: (Retained v) => Mode -> InternTable -> Name -> Built v
-stringValue mode table name = case mode of
-    Keep -> Built (ownString (nameText name)) table
+string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> TokenResult -> r) -> Name -> TokenResult -> r
+string build mode table next name after = case mode of
+    Keep -> ownString build name (\value -> next value table after)
     Share -> case internName name table of
-        Interned entry held -> Built (sharedString entry) held
-
--- A value built in full, so no retained value holds a thunk or a slice of an input chunk.
-data Built v = Built !v !InternTable
-
-{-# INLINEABLE string #-}
-string :: (Retained v) => Mode -> InternTable -> (v -> InternTable -> TokenResult -> Step s) -> Name -> TokenResult -> Step s
-string mode table next name after = case stringValue mode table name of
-    Built value held -> next value held after
+        Interned entry held -> sharedString build entry (\value -> next value held after)
+{-# INLINE string #-}
 
 -- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
 -- then dropped, and nothing it holds enters the table.
-{-# INLINEABLE readObject #-}
-readObject :: (Retained v) => Int -> Members -> Mode -> InternTable -> TokenResult -> (v -> InternTable -> TokenResult -> Step s) -> Step s
-readObject open (Members named other) mode table0 tokens0 next = loop table0 KeyMap.empty tokens0
+readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readObject build open (Members named other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
     loop table !fields tokens = case tokens of
-        PartialResult (ObjectEnd _) rest -> let !built = object fields in next built table rest
-        PartialResult (StringRaw bytes True _) rest -> field table fields (Plain bytes) rest
+        PartialResult (ObjectEnd _) rest -> closeObject build fields (\built -> next built table rest)
+        PartialResult (StringRaw bytes True _) rest -> member table fields (Plain bytes) rest
         _ -> withElement tokens $ \element rest -> case element of
-            ObjectEnd _ -> let !built = object fields in next built table rest
-            _ -> memberName element rest (field table fields) (loop table fields)
-    field table fields name rest = case HashMap.lookup (nameBytes name) named of
+            ObjectEnd _ -> closeObject build fields (\built -> next built table rest)
+            _ -> memberName element rest (member table fields) (loop table fields)
+    member table fields name rest = case HashMap.lookup (nameBytes name) named of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
         Nothing -> case other of
             Just shape -> value table fields name Nothing shape rest
             Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
-    value table fields name shared shape rest = case memberKey mode table name shared of
-        SharedKey key entry valueMode held -> field' key (sharedMember entry) valueMode held
-        OwnKey key held -> field' key id Keep held
+    -- A shared key goes through the table, and a key the table keeps holds its value as read.
+    value table fields name shared shape rest = case mode of
+        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
+        Share -> case internName name table of
+            Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
       where
-        field' key keyed valueMode held
-            | KeyMap.member key fields = withElement rest $ \element afterKey -> case sameForm fields (direct shape Keep table element) of
-                Direct _ _ -> loop table fields afterKey
-                Indirect -> readAt open False shape Keep table element afterKey (\ignored _ -> dropped fields ignored `seq` loop table fields)
-            | otherwise = withElement rest $ \element afterKey -> case direct shape valueMode held element of
-                Direct built table' -> loop table' (KeyMap.insert key (keyed built) fields) afterKey
-                Indirect -> readAt open False shape valueMode held element afterKey $ \built table' -> loop table' (KeyMap.insert key (keyed built) fields)
-        {-# INLINE field' #-}
+        keyed key !valueMode held = beginMember build key fields $ \ !repeated ->
+            if repeated
+                then withElement rest $ \element afterKey ->
+                    withDirect build (direct shape Keep table element) table (\ignored _ -> dropValue build ignored (loop table fields afterKey)) $
+                        readAt build open False shape Keep table element afterKey (\ignored _ -> dropValue build ignored . loop table fields)
+                else withElement rest $ \element afterKey ->
+                    withDirect build (direct shape valueMode held element) held (\field table' -> addMember build key field fields (\fields' -> loop table' fields' afterKey)) $
+                        readAt build open False shape valueMode held element afterKey $ \field table' afterValue ->
+                            addMember build key field fields (\fields' -> loop table' fields' afterValue)
+        {-# INLINE keyed #-}
+{-# INLINEABLE readObject #-}
 
--- A member's key: shared through the table with the mode for its value, or kept as read.
-data Keyed = SharedKey !Key.Key !Entry !Mode !InternTable | OwnKey !Key.Key !InternTable
-
--- A repeated member is read in the form its object builds, then dropped.
-sameForm :: KeyMap.KeyMap v -> Direct v -> Direct v
-sameForm _ built = built
-
-dropped :: KeyMap.KeyMap v -> v -> ()
-dropped _ _ = ()
-
--- A shared key goes through the table, and a key the table keeps holds its value as read.
-memberKey :: Mode -> InternTable -> Name -> Maybe Key.Key -> Keyed
-memberKey mode table name shared = case mode of
-    Keep -> OwnKey (fromMaybe (Key.fromText (nameText name)) shared) table
-    Share -> case internName name table of
-        Interned entry held -> SharedKey (Key.fromText (entryText entry)) entry (if entryKeeps entry then Keep else Share) held
-{-# INLINE memberKey #-}
-
-{-# INLINEABLE readArray #-}
-readArray :: (Retained v) => Int -> Shape -> Mode -> InternTable -> TokenResult -> (v -> InternTable -> TokenResult -> Step s) -> Step s
-readArray open item mode table0 tokens0 next = loop table0 0 [] tokens0
+readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readArray build open item mode table0 tokens0 next = openArray build (\items0 -> loop table0 0 items0 tokens0)
   where
-    loop table !count values tokens = withElement tokens $ \element rest -> case element of
-        ArrayEnd _ -> let !items = array count values in next items table rest
-        _ -> case direct item mode table element of
-            Direct field table' -> loop table' (count + 1) (field : values) rest
-            Indirect -> readAt open False item mode table element rest $ \field table' afterValue -> loop table' (count + 1) (field : values) afterValue
+    loop table !count items tokens = withElement tokens $ \element rest -> case element of
+        ArrayEnd _ -> closeArray build count items (\array -> next array table rest)
+        _ ->
+            withDirect build (direct item mode table element) table (\field table' -> addItem build field items (\items' -> loop table' (count + 1) items' rest)) $
+                readAt build open False item mode table element rest $ \field table' afterValue ->
+                    addItem build field items (\items' -> loop table' (count + 1) items' afterValue)
+{-# INLINEABLE readArray #-}
 
 -- A complete scalar token's value under a shape, when the shape takes it without reading further.
-data Direct v = Direct !v !InternTable | Indirect
+data Direct
+    = DirectShared !Entry !InternTable
+    | DirectOwn !Name
+    | DirectInteger !Int
+    | DirectWhole !Value
+    | Indirect
 
-{-# INLINEABLE direct #-}
-direct :: (Retained v) => Shape -> Mode -> InternTable -> Element -> Direct v
+-- Build a complete scalar token's value, or read the value on when the token does not complete it.
+withDirect :: (Build b r) => b -> Direct -> InternTable -> (Built b -> InternTable -> r) -> r -> r
+withDirect build scalar table next indirect = case scalar of
+    DirectShared entry held -> sharedString build entry (`next` held)
+    DirectOwn name -> ownString build name (`next` table)
+    DirectInteger number -> integer build number (`next` table)
+    DirectWhole value -> whole build value (`next` table)
+    Indirect -> indirect
+{-# INLINE withDirect #-}
+
+direct :: Shape -> Mode -> InternTable -> Element -> Direct
 direct shape mode table element = case shape of
     Scalar budget | budget > 0 -> scalarToken mode table element
     Generic budget | budget > 0 -> scalarToken mode table element
@@ -275,25 +331,26 @@ direct shape mode table element = case shape of
             JValue (String _) -> scalarToken mode table element
             _ -> direct other mode table element
     ObjectOr fallback _ -> case element of
-        StringRaw{} -> Direct (whole fallback) table
-        JValue _ -> Direct (whole fallback) table
-        JInteger _ -> Direct (whole fallback) table
+        StringRaw{} -> DirectWhole fallback
+        JValue _ -> DirectWhole fallback
+        JInteger _ -> DirectWhole fallback
         _ -> Indirect
     Checked budget inner | budget > 0 -> direct inner mode table element
     _ -> Indirect
 
-{-# INLINEABLE scalarToken #-}
-scalarToken :: (Retained v) => Mode -> InternTable -> Element -> Direct v
+scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
     StringRaw bytes True _ -> direct' (Plain bytes)
     StringRaw bytes False _ -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
     JValue (String text) -> direct' (decodedName text)
-    JValue scalar -> Direct (whole scalar) table
-    JInteger number -> Direct (whole (Number (fromIntegral number))) table
+    JValue scalar -> DirectWhole scalar
+    JInteger number -> DirectInteger (fromIntegral number)
     _ -> Indirect
   where
-    direct' name = case stringValue mode table name of
-        Built value held -> Direct value held
+    direct' name = case mode of
+        Keep -> DirectOwn name
+        Share -> case internName name table of
+            Interned entry held -> DirectShared entry held
 
 emptyArray :: Value
 emptyArray = Array mempty

@@ -20,7 +20,6 @@ module Ecluse.Core.Registry.PyPI.Document (
 
 import Data.Aeson (Encoding, Object, Value, toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
-import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 
 import Ecluse.Core.Package.Entry (EntryKey)
@@ -68,5 +67,5 @@ packedSimpleBytes :: PackedSimple -> Int
 packedSimpleBytes packed = tableBytes (packedTable packed) + sum (map (packedBytes . snd) (packedFiles packed))
 
 -- | The member path of the string a served file rebases.
-urlHole :: [Key.Key]
+urlHole :: [Text]
 urlHole = ["url"]

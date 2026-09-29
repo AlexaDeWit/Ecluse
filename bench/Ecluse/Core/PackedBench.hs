@@ -43,7 +43,7 @@ benchmarks ecosystem = do
             bgroup
                 (entryName entry)
                 [ bench "full read, aeson's tree" (whnf (versionCount . treeRead name) bytes)
-                , bench "full read, packed" (whnf (versionCount . ebProject ecosystem name) bytes)
+                , bench "full read, packed" (whnfAppIO (fmap versionCount . ebRead ecosystem name) bytes)
                 , bench "listing render, aeson's tree" (whnfAppIO serve (Snapshot digest tree, info))
                 , bench "listing render, packed" (whnfAppIO serve (Snapshot digest document, info))
                 ]
