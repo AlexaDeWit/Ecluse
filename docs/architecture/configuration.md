@@ -152,14 +152,13 @@ inviting a retry storm. Only one request at a time may run past the budget, unti
 shared work it waits on runs with it, so the overshoot stays within about one request and a pause
 never deadlocks.
 
-A full read's charge per source byte is 1.25 times the highest peak per source byte that the
-residency tier measures for one ecosystem, among captures of at least one 1 MiB meter step, rounded
-up to a tenth. The peak is the most live data the read holds while it parses and projects, which is
-more than it keeps afterwards. npm's charge is 2.1 and PyPI's is 4.2. npm's packed full read peaks
-at 0.89 (react), for which the rule gives 1.2, and PyPI's peaks at 3.07 (boto3), for which it gives
-3.9. npm's full-read charge and its read-peak limit stay at their current values until the owner
-rules on re-deriving them. The margin covers packages shaped unlike the corpus. A capture under one
-step can peak above the per-byte charge the rule gives, up to 1.67 for npm (lodash). What the meter
+The rule for a full read's charge per source byte is 1.25 times the highest peak per source byte
+that the residency tier measures for one ecosystem, among captures of at least one 1 MiB meter step,
+rounded up to a tenth. The peak is the most live data the read holds while it parses and projects,
+which is more than it keeps afterwards. npm's charge is 2.1 and PyPI's is 4.2. npm's packed full
+read peaks at 0.89 (react), for which the rule gives 1.2, and PyPI's peaks at 3.07 (boto3), for
+which it gives 3.9. The margin covers packages shaped unlike the corpus. A capture under one step
+can peak above the per-byte charge the rule gives, up to 1.69 for npm (lodash). What the meter
 holds for one such read, whole steps and at least the 1 MiB entry step, covers it. A request for a name that is not
 first-party reads its private and public documents at once on one ticket, so two such reads can
 exceed what the meter holds by a fraction of a step. The sampler's measurement of live data outside

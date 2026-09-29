@@ -240,9 +240,9 @@ that a render copies.
   format, and the table that the read seals when it finishes (`DocTable`).
 - Decode the typed facts from the packed release, and decode only the members they read
   (`decodePicked`). The read decodes a release whole only to record why it dropped an invalid one.
-- A packed release holds at most one hole: the string that an assembly rebases for each request. npm's hole
-  is the tarball URL (`tarballHole`). The read keeps the hole only when today's rebase rule rewrites
-  that URL.
+- A packed release holds at most one hole: the string that an assembly rebases for each request.
+  npm's hole is the tarball URL (`tarballHole`). The read keeps the hole only when the rebase rule
+  rewrites that URL.
 - Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
   surviving releases, each over its own source's table. `renderPlan` writes the listing into one
   buffer of its exact length. It copies the bytes of each release, and writes each hole as the

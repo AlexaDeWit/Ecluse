@@ -67,8 +67,8 @@ assembleAcross (inject, project) assemble mountBase bySource plan base =
 serialiseAcross :: (CachedDoc -> Maybe Encoding) -> CachedDoc -> LByteString
 serialiseAcross project = encodingToLazyByteString . fromMaybe emptyObject_ . project
 
-{- | A served document whose render refused its plan, one that names a table or string it lacks. The
-pipeline answers it as a render fault instead of serving a short or empty body.
+{- | A served document whose render refused its plan, because the plan names a table or string it
+lacks or the render does not fill its buffer exactly. The pipeline answers it as a render fault.
 -}
 data RenderRefused = RenderRefused
     deriving stock (Eq, Show)
