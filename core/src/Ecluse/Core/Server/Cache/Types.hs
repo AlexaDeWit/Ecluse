@@ -16,13 +16,10 @@ module Ecluse.Core.Server.Cache.Types (
     fullKey,
     versionKey,
     assembledKey,
-    renderCacheKey,
+    cacheKeyStore,
     cacheKeyIdentity,
 ) where
 
-import Crypto.Hash (SHA256 (SHA256), hashWith)
-import Data.ByteArray.Encoding (Base (Base16), convertToBase)
-import Data.ByteString qualified as BS
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 
@@ -32,6 +29,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest)
 import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Framing (frameComponents)
+import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore))
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Retention floors, used only to stop a store evicting its own live entries.
@@ -74,47 +72,39 @@ data CacheEntry = CacheEntry
     deriving stock (Eq, Show)
 
 {- | One entry's address in one store, built only by 'fullKey', 'versionKey' and 'assembledKey'.
-Equality confirms the identity behind an equal rendering, so a digest collision reads as a miss.
+Two keys are equal when their stores and their identities are, so no two stores share a key.
 -}
 data CacheKey = CacheKey
-    { ckRendered :: ShortByteString
+    { ckStore :: CacheStore
     , ckIdentity :: ShortByteString
     }
-    deriving stock (Show)
-
-instance Eq CacheKey where
-    a == b = renderCacheKey a == renderCacheKey b && cacheKeyIdentity a == cacheKeyIdentity b
-
-instance Ord CacheKey where
-    compare = comparing renderCacheKey <> comparing cacheKeyIdentity
+    deriving stock (Eq, Ord, Show)
 
 instance Hashable CacheKey where
-    hashWithSalt salt = hashWithSalt salt . renderCacheKey
+    hashWithSalt salt key = salt `hashWithSalt` ckStore key `hashWithSalt` ckIdentity key
 
-{- | The one rendering, the key a store holds: @ecluse@, the envelope version, the store, its codec
-version, and the hex SHA-256 of the identity, joined by colons.
--}
-renderCacheKey :: CacheKey -> ShortByteString
-renderCacheKey = ckRendered
+-- | The store a key addresses.
+cacheKeyStore :: CacheKey -> CacheStore
+cacheKeyStore = ckStore
 
--- | The length-framed components the digest covers: the entry's identity in the clear.
+-- | A key's identity within its store: its components in a fixed order, each framed by its length.
 cacheKeyIdentity :: CacheKey -> ShortByteString
 cacheKeyIdentity = ckIdentity
 
 -- | The key of one package's full metadata from one source.
 fullKey :: Source -> PackageName -> CacheKey
-fullKey source name = storeKey "full" (packageComponents source name)
+fullKey source name = storeKey FullStore (packageComponents source name)
 
 -- | The key of one selected version: an entry of its own, apart from the package's full metadata.
 versionKey :: Source -> PackageName -> Version -> CacheKey
 versionKey source name version =
-    storeKey "version" (packageComponents source name <> [Just (encodeUtf8 (renderVersion version))])
+    storeKey VersionStore (packageComponents source name <> [Just (encodeUtf8 (renderVersion version))])
 
 {- | The key of an assembled response. The validator is its only component: it binds the body to
 the inputs of the request that built it, and it carries no credential and no caller identity.
 -}
 assembledKey :: ETag -> CacheKey
-assembledKey etag = storeKey "assembled" [Just (encodeUtf8 (renderETag etag))]
+assembledKey etag = storeKey AssembledStore [Just (encodeUtf8 (renderETag etag))]
 
 -- The fields 'PackageName' equality reads, under the source: the scope is absent for an unscoped name.
 packageComponents :: Source -> PackageName -> [Maybe ByteString]
@@ -125,17 +115,5 @@ packageComponents (Source source) name =
     , Just (TS.toByteString (pkgCanonical name))
     ]
 
-storeKey :: ByteString -> [Maybe ByteString] -> CacheKey
-storeKey store components =
-    CacheKey
-        { ckRendered = toShort (BS.intercalate ":" ["ecluse", envelopeVersion, store, codecVersion, digest])
-        , ckIdentity = toShort framed
-        }
-  where
-    framed = frameComponents components
-    digest = convertToBase Base16 (hashWith SHA256 framed)
-
--- The format versions a key's namespace names. A change to either leaves every older entry unreachable.
-envelopeVersion, codecVersion :: ByteString
-envelopeVersion = "0"
-codecVersion = "0"
+storeKey :: CacheStore -> [Maybe ByteString] -> CacheKey
+storeKey store components = CacheKey store (toShort (frameComponents components))

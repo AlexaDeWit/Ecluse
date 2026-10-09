@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Length framing for the byte strings a digest covers. Each component carries its own length,
-so no content can pass for a boundary.
+{- | Length framing for byte strings that stand for a tuple of components: the input of a digest, or
+the identity of a cache key. Each component carries its own length, so no content can pass for a boundary.
 -}
 module Ecluse.Core.Server.Framing (
     frameBytes,

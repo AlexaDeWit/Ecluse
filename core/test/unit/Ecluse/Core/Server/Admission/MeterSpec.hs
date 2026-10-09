@@ -24,6 +24,7 @@ import Ecluse.Core.Server.Admission.Meter (
     withMemoryEntry,
  )
 import Ecluse.Core.Server.Admission.Types (BrakeLevel (Braking, Calm), FlightKey (FlightKey), MeterSnapshot (..))
+import Ecluse.Core.Telemetry.Metrics (CacheStore (FullStore))
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Port (noopMetricsPort)
 
@@ -156,9 +157,9 @@ spec = describe "Ecluse.Core.Server.Admission.Meter" $ do
 
     it "moves shared work the token holder waits on after its own read ends early" $ do
         (meter, port, _) <- newMeter 30
-        let flight = FlightKey "typescript"
+        let flight = FlightKey FullStore "typescript"
         (served, goServed) <- enteredCharger port meter (\ticket -> charge (servingFlight flight ticket) 15)
-        (unserved, goUnserved) <- enteredCharger port meter (\ticket -> charge (servingFlight (FlightKey "react") ticket) 15)
+        (unserved, goUnserved) <- enteredCharger port meter (\ticket -> charge (servingFlight (FlightKey FullStore "react") ticket) 15)
         holderWaits <- newEmptyMVar
         (finish, holder) <- startTokenHolderWith port meter $ \ticket -> awaitingFlight ticket flight (takeMVar holderWaits)
         goServed

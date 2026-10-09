@@ -69,9 +69,9 @@ import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), complet
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille), FlightKey (FlightKey))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache (resolveAssembled)
-import Ecluse.Core.Server.Cache.Types (assembledKey, renderCacheKey)
+import Ecluse.Core.Server.Cache.Types (assembledKey)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -412,7 +412,7 @@ servedBytes serving sources plan etag =
     rt = psvRuntime serving
     deps = psvDeps serving
     key = assembledKey etag
-    flight = FlightKey (renderCacheKey key)
+    flight = flightOf key
     outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (outputBasisBytes plan sources)
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)

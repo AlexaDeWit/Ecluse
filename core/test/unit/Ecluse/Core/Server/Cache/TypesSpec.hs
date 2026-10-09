@@ -2,83 +2,91 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Cache keys: the pinned rendering of each store, and the identity that keeps entries apart.
+-- | Cache keys: the pinned identity of each store's key, and the store and identity that keep entries apart.
 module Ecluse.Core.Server.Cache.TypesSpec (spec) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
-import Data.ByteString.Char8 qualified as BS8
-import Data.ByteString.Short qualified as SBS
 import Data.Universe.Class qualified as Universe
-import Hedgehog (Gen, PropertyT, assert, cover, forAll, (===))
+import Hedgehog (Gen, PropertyT, cover, forAll, (/==), (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, fullKey, renderCacheKey, versionKey)
+import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, cacheKeyStore, fullKey, versionKey)
 import Ecluse.Core.Server.Conditional (ETag, mkStrongETag)
+import Ecluse.Core.Telemetry.Metrics (CacheStore (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Package (npmVersion, pypiVersion, scopedNpm, unscopedNpm, unscopedPyPI)
 
 spec :: Spec
 spec = do
-    renderingSpec
+    pinnedSpec
+    storeSpec
     ecosystemSpec
     identitySpec
     instanceSpec
 
-renderingSpec :: Spec
-renderingSpec = describe "the rendering of each store" $ do
-    for_ pinnedKeys $ \(label, key, framed, rendering) ->
+pinnedSpec :: Spec
+pinnedSpec = describe "the identity of each store's key" $
+    for_ pinnedKeys $ \(label, key, store, framed) ->
         it ("pins " <> label) $ do
+            cacheKeyStore key `shouldBe` store
             cacheKeyIdentity key `shouldBe` framed
-            renderCacheKey key `shouldBe` rendering
 
-    describe "properties" $
-        it "renders every key of a store at one length, under that store's namespace" $
-            hedgehog $ do
-                subject <- forAll genSubject
-                let rendering = SBS.fromShort (renderCacheKey (keyOf subject))
-                    (namespace, digest) = BS8.splitAt (BS8.length (namespaceOf subject)) rendering
-                namespace === namespaceOf subject
-                BS8.length digest === 64
-                assert (BS8.all (`BS8.elem` "0123456789abcdef") digest)
-
--- One key per store and ecosystem: its label, the key, its identity, and its rendering.
-pinnedKeys :: [(String, CacheKey, ShortByteString, ShortByteString)]
+-- One key per store and name shape: its label, the key, its store, and its identity.
+pinnedKeys :: [(String, CacheKey, CacheStore, ShortByteString)]
 pinnedKeys =
     [
-        ( "a full npm key"
+        ( "a full key for an npm name"
+        , fullKey npmRegistry (unscopedNpm "thing")
+        , FullStore
+        , "26:https://registry.npmjs.org3:npm-5:thing"
+        )
+    ,
+        ( "a full key for a scoped npm name"
         , fullKey npmRegistry (scopedNpm "babel" "core")
+        , FullStore
         , "26:https://registry.npmjs.org3:npm5:babel11:@babel/core"
-        , "ecluse:0:full:0:8fb21f04f4b99a00a5e57a8e6aa7d2f3a14ad06e4bb41dfa208c808faf538412"
         )
     ,
-        ( "a full PyPI key"
+        ( "a full key for a PyPI name"
         , fullKey pypiIndex (unscopedPyPI "Flask_SQLAlchemy")
+        , FullStore
         , "23:https://pypi.org/simple4:pypi-16:flask-sqlalchemy"
-        , "ecluse:0:full:0:eefd13c5b5a2320d11995a2ad6a06a0ef7ab365db6173744fb17e50ea99f0715"
         )
     ,
-        ( "a selected-version npm key"
+        ( "a selected-version key for an npm name"
         , versionKey npmRegistry (unscopedNpm "thing") (npmVersion "1.0.0")
+        , VersionStore
         , "26:https://registry.npmjs.org3:npm-5:thing5:1.0.0"
-        , "ecluse:0:version:0:875791437c4d4a33a63dcbc77460ecd4f6a260ee78c2ce56c5e1c3d316b96e74"
         )
     ,
-        ( "a selected-version PyPI key"
+        ( "a selected-version key for a scoped npm name"
+        , versionKey npmRegistry (scopedNpm "babel" "core") (npmVersion "7.26.0")
+        , VersionStore
+        , "26:https://registry.npmjs.org3:npm5:babel11:@babel/core6:7.26.0"
+        )
+    ,
+        ( "a selected-version key for a PyPI name"
         , versionKey pypiIndex (unscopedPyPI "requests") (pypiVersion "2.32.3")
+        , VersionStore
         , "23:https://pypi.org/simple4:pypi-8:requests6:2.32.3"
-        , "ecluse:0:version:0:4bba7e4b966b904dc623f54dd04536ad9693210dcd01d646a933dfd568f853db"
         )
     ,
         ( "an assembled key"
         , assembledKey (validatorOf "fingerprint")
+        , AssembledStore
         , "66:\"44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0\""
-        , "ecluse:0:assembled:0:8c247eb182e687b42c52b404807c98e98d4ee8eccdecba091b9715d972ea6f1f"
         )
     ]
+
+storeSpec :: Spec
+storeSpec = describe "the store" $
+    it "tags the key of every store with that store" $
+        for_ Universe.universe $ \store ->
+            cacheKeyStore (keyOf sampleSubject{subjectStore = store}) `shouldBe` store
 
 ecosystemSpec :: Spec
 ecosystemSpec = describe "the ecosystem component" $
@@ -110,29 +118,25 @@ identitySpec = describe "the identity" $ do
     it "gives one PyPI project one key under every spelling of its name" $
         fullKey pypiIndex (unscopedPyPI "Flask_SQLAlchemy") `shouldBe` fullKey pypiIndex (unscopedPyPI "flask-sqlalchemy")
 
-    describe "properties" $ do
-        it "gives two subjects one identity only when they are the same entry" $
+    describe "properties" $
+        it "gives two subjects of one store one identity only when they are the same entry" $
             hedgehog $ do
                 (a, b) <- forAllPairs
-                (cacheKeyIdentity (keyOf a) == cacheKeyIdentity (keyOf b)) === sameEntry a b
-
-        it "gives two subjects one rendering only when they are the same entry" $
-            hedgehog $ do
-                (a, b) <- forAllPairs
-                (renderCacheKey (keyOf a) == renderCacheKey (keyOf b)) === sameEntry a b
+                when (subjectStore a == subjectStore b) $
+                    (cacheKeyIdentity (keyOf a) == cacheKeyIdentity (keyOf b)) === sameEntry a b
 
 instanceSpec :: Spec
-instanceSpec = describe "equality, order and hashing" $
+instanceSpec = describe "equality and hashing" $
     describe "properties" $ do
         it "equates two keys only when they are the same entry" $
             hedgehog $ do
                 (a, b) <- forAllPairs
                 (keyOf a == keyOf b) === sameEntry a b
 
-        it "orders keys as their renderings order" $
+        it "never equates keys of different stores" $
             hedgehog $ do
                 (a, b) <- forAllPairs
-                compare (keyOf a) (keyOf b) === comparing (renderCacheKey . keyOf) a b
+                when (subjectStore a /= subjectStore b) (keyOf a /== keyOf b)
 
         it "hashes two equal keys alike" $
             hedgehog $ do
@@ -141,7 +145,7 @@ instanceSpec = describe "equality, order and hashing" $
 
 -- The raw components of one entry. A store's key reads its own fields and no others.
 data Subject = Subject
-    { subjectStore :: Store
+    { subjectStore :: CacheStore
     , subjectSource :: Text
     , subjectEcosystem :: Ecosystem
     , subjectScope :: Maybe Text
@@ -149,9 +153,6 @@ data Subject = Subject
     , subjectVersion :: Text
     , subjectFingerprint :: ByteString
     }
-    deriving stock (Eq, Show)
-
-data Store = FullStore | VersionStore | AssembledStore
     deriving stock (Eq, Show)
 
 keyOf :: Subject -> CacheKey
@@ -169,11 +170,8 @@ nameOf subject = mkPackageName (subjectEcosystem subject) (mkScope <$> subjectSc
 versionOf :: Subject -> Version
 versionOf subject = mkVersion (subjectEcosystem subject) (subjectVersion subject)
 
-namespaceOf :: Subject -> ByteString
-namespaceOf subject = case subjectStore subject of
-    FullStore -> "ecluse:0:full:0:"
-    VersionStore -> "ecluse:0:version:0:"
-    AssembledStore -> "ecluse:0:assembled:0:"
+sampleSubject :: Subject
+sampleSubject = Subject FullStore "https://a.example" Npm Nothing "thing" "1.0.0" "fingerprint"
 
 -- Whether two subjects are one entry, by the equality of the domain values and never by a key.
 sameEntry :: Subject -> Subject -> Bool
@@ -200,32 +198,36 @@ componentsApart a b =
     alike :: (Eq component) => (Subject -> component) -> Bool
     alike component = component a == component b
 
--- A pair for a property. The run fails unless it meets equal entries and entries one component apart.
+-- A pair for a property. The run fails unless it meets equal entries, near misses, and two stores.
 forAllPairs :: PropertyT IO (Subject, Subject)
 forAllPairs = do
     (a, b) <- forAll genSubjectPair
     cover 10 "the same entry" (sameEntry a b)
     cover 10 "one component apart" (not (sameEntry a b) && componentsApart a b == 1)
+    cover 10 "different stores" (subjectStore a /= subjectStore b)
     pure (a, b)
 
--- A subject beside itself, beside itself with one component drawn again, or beside an unrelated one.
+-- A subject beside itself, one component away, in another store, or beside an unrelated subject.
 genSubjectPair :: Gen (Subject, Subject)
 genSubjectPair = do
     subject <- genSubject
-    other <- Gen.frequency [(2, pure subject), (3, genRedrawn subject), (1, genSubject)]
+    other <- Gen.frequency [(2, pure subject), (3, genRedrawn subject), (2, genInOtherStore subject), (1, genSubject)]
     pure (subject, other)
+
+-- The same components under another store.
+genInOtherStore :: Subject -> Gen Subject
+genInOtherStore subject = (\store -> subject{subjectStore = store}) <$> Gen.element (filter (/= subjectStore subject) Universe.universe)
 
 genSubject :: Gen Subject
 genSubject = Subject <$> genStore <*> genSource <*> genEcosystem <*> genScope <*> genName <*> genVersion <*> genFingerprint
 
--- The subject with its store, or one component its store's key reads, drawn again.
+-- The subject with one component its store's key reads drawn again.
 genRedrawn :: Subject -> Gen Subject
 genRedrawn subject =
-    Gen.choice $
-        ((\store -> subject{subjectStore = store}) <$> genStore) : case subjectStore subject of
-            FullStore -> package
-            VersionStore -> ((\version -> subject{subjectVersion = version}) <$> genVersion) : package
-            AssembledStore -> [(\fingerprint -> subject{subjectFingerprint = fingerprint}) <$> genFingerprint]
+    Gen.choice $ case subjectStore subject of
+        FullStore -> package
+        VersionStore -> ((\version -> subject{subjectVersion = version}) <$> genVersion) : package
+        AssembledStore -> [(\fingerprint -> subject{subjectFingerprint = fingerprint}) <$> genFingerprint]
   where
     package =
         [ (\source -> subject{subjectSource = source}) <$> genSource
@@ -234,8 +236,8 @@ genRedrawn subject =
         , (\name -> subject{subjectName = name}) <$> genName
         ]
 
-genStore :: Gen Store
-genStore = Gen.element [FullStore, VersionStore, AssembledStore]
+genStore :: Gen CacheStore
+genStore = Gen.element Universe.universe
 
 genSource :: Gen Text
 genSource = Gen.element ["", "https://a.example", "https://a.example/", "https://a.example\USnpm", "https://b.example"]
