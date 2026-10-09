@@ -4,8 +4,9 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 {- | How a measured proxy ended, and the invariants that fail a load run: a load with no successful
-response, a count of successes below its floor in "Ecluse.BenchLoad.Floors", and a proxy that did
-not end in the clean shutdown the harness asked for. Latency and memory stay informational.
+response, a count of successes below its floor in "Ecluse.BenchLoad.Floors", a scheduled run its
+configuration keeps off the floors, and a proxy that did not end in the clean shutdown the harness
+asked for. Latency and memory stay informational.
 -}
 module Ecluse.BenchLoad.Verdict (
     ProxyEnding (..),
@@ -13,12 +14,23 @@ module Ecluse.BenchLoad.Verdict (
     describeEnding,
     RunEvidence (..),
     runViolations,
+    runVerdict,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 
-import Ecluse.BenchLoad.Floors (FloorCheck (AtLeast, NoFloor), floorsPath)
+import Ecluse.BenchLoad.Floors (
+    Enforcement,
+    FloorCheck (AtLeast, NoFloor, Unchecked),
+    FloorKey,
+    Trigger,
+    floorCheck,
+    floorsPath,
+    passKey,
+    staleFloorViolations,
+    unheldViolations,
+ )
 
 -- | How the proxy process ended, read from its exit status, its stderr, and its cgroup.
 data ProxyEnding
@@ -68,8 +80,6 @@ data RunEvidence = RunEvidence
     { reScenario :: Text
     , reSuccesses :: [(Text, Int)]
     -- ^ Successful responses per load or ramp step, labelled for the failure message.
-    , reFloor :: FloorCheck
-    -- ^ What every count in 'reSuccesses' is held to.
     , reOomKills :: Int
     , reEnding :: Maybe ProxyEnding
     -- ^ 'Nothing' for a scenario that runs in the harness process.
@@ -78,11 +88,11 @@ data RunEvidence = RunEvidence
     }
     deriving stock (Eq, Show)
 
--- | One line per broken invariant, empty when the run holds.
-runViolations :: RunEvidence -> [Text]
-runViolations evidence =
+-- | One line per invariant a scenario broke in one pass, with every load held to the pass's floor.
+runViolations :: FloorCheck -> RunEvidence -> [Text]
+runViolations check evidence =
     concatMap successViolations (reSuccesses evidence)
-        <> [scenario <> ": no success floor for this pass and pod shape in " <> toText floorsPath | reFloor evidence == NoFloor]
+        <> floorless
         <> [scenario <> ": the kernel OOM-killed the proxy (" <> show (reOomKills evidence) <> " oom_kill events)" | reOomKills evidence > 0]
         <> endingViolations
         <> [scenario <> ": the proxy exited before the harness stopped it" | reExitedEarly evidence]
@@ -90,10 +100,14 @@ runViolations evidence =
     -- A load with no success keeps its own line, whatever its floor.
     successViolations (label, count)
         | count <= 0 = [scenario <> ": no successful responses" <> labelled label]
-        | AtLeast least <- reFloor evidence
+        | AtLeast least <- check
         , count < least =
             [scenario <> ": " <> show count <> " successful responses, below the floor of " <> show least <> labelled label]
         | otherwise = []
+    floorless = case check of
+        NoFloor whichPass -> [scenario <> ": no " <> passKey whichPass <> " floor for this pod shape in " <> toText floorsPath]
+        AtLeast _ -> []
+        Unchecked -> []
     -- The OOM kill already has its own line from the cgroup's count.
     endingViolations = case reEnding evidence of
         Just HeapOverflow -> [scenario <> ": the proxy exited on heap overflow"]
@@ -103,3 +117,15 @@ runViolations evidence =
         _ -> []
     scenario = reScenario evidence
     labelled label = if T.null label then "" else " (" <> label <> ")"
+
+{- | Every invariant a run broke: a scheduled run its configuration keeps off the floors, each pass
+of each scenario failed outright or read against its own floor, and a held run's stale floors.
+-}
+runVerdict :: Trigger -> Enforcement -> Set FloorKey -> [(FloorKey, Either Text RunEvidence)] -> [Text]
+runVerdict trigger enforcement checked passes =
+    unheldViolations trigger enforcement
+        <> concatMap passViolations passes
+        <> staleFloorViolations enforcement checked
+  where
+    passViolations (key@(scenario, _), outcome) =
+        either (\failure -> [scenario <> ": " <> failure]) (runViolations (floorCheck enforcement key)) outcome

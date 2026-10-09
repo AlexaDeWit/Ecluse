@@ -25,12 +25,15 @@ import UnliftIO (bracket_)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Floors (
     Enforcement,
+    FloorKey,
     Floors (floorsCalibration),
     Pass (ConcurrencyOne, Loaded),
+    RunFacts (..),
     enforce,
-    floorCheck,
     loadFloors,
-    staleFloorViolations,
+    patternOverridesIn,
+    runnerIn,
+    triggerIn,
  )
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (lkUpstreamLatencyMicros),
@@ -47,11 +50,11 @@ import Ecluse.BenchLoad.Pod (PodShape (Limited), renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
-import Ecluse.BenchLoad.Report (renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
+import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Scenarios (checkedCounts, findScenario, fixtures, runsUnder)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
-import Ecluse.BenchLoad.Verdict (runViolations)
+import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
@@ -97,35 +100,52 @@ runPasses :: LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
 runPasses knobs shape selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
+    environment <- Map.fromList . map (bimap toText toText) <$> getEnvironment
     npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     processors <- getNumProcessors
-    let enforcement = enforce floors (operatingPoint knobs selected) shape
+    let facts =
+            RunFacts
+                { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
+                , rfRunner = runnerIn environment
+                , rfShape = shape
+                , rfNpmLatencyMs = baselineInjectedMs (fixtureBaseline Npm (lkUpstreamLatencyMicros knobs) npmBaseline)
+                }
+        enforcement = enforce floors facts
     ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement npmBaseline self capabilities processors)) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
-        , concatMap snd ran <> staleFloorViolations shape enforcement (checkedCounts shape)
+        , runVerdict (triggerIn environment) enforcement (checkedCounts shape) (concatMap snd ran)
         )
 
--- One ecosystem's loaded and concurrency-one passes: its report section, and the invariants they broke.
-fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [Text]))
+-- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
+fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))
 fixturePasses setup fixture
     | null chosen = pure Nothing
     | otherwise = do
         loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild self loadOverrides (keyOf s)) chosen
         c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild self c1Overrides (keyOf s)) serviceTime
-        let loadedReports = rights (map snd loaded)
-            c1Reports = rights (map snd c1)
+        let section =
+                Section
+                    { sectionKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
+                    , sectionCapabilities = capabilities
+                    , sectionProcessors = setupProcessors setup
+                    , sectionShape = renderPodShape (setupShape setup)
+                    , sectionEcosystem = eco
+                    , sectionEnforcement = setupEnforcement setup
+                    , sectionConcurrencyOne = rights (map snd c1)
+                    , sectionLoaded = rights (map snd loaded)
+                    }
             body =
                 fixtureSection eco $
                     [pypiLoadNotes knobs | eco == PyPI]
-                        <> [ renderReports loadPassKnobs capabilities (setupProcessors setup) (renderPodShape (setupShape setup)) eco floorOf c1Reports loadedReports
-                           , renderServiceTime baseline c1Reports
-                           , renderLoadSaturation c1Reports (filter ((`elem` map keyOf serviceTime) . srName) loadedReports)
+                        <> [ renderReports section
+                           , renderServiceTime baseline (sectionConcurrencyOne section)
+                           , renderLoadSaturation (sectionConcurrencyOne section) (filter ((`elem` map keyOf serviceTime) . srName) (sectionLoaded section))
                            ]
-        pure (Just (body, concatMap (violationsOf Loaded) loaded <> concatMap (violationsOf ConcurrencyOne) c1))
+        pure (Just (body, map (outcomeOf Loaded) loaded <> map (outcomeOf ConcurrencyOne) c1))
   where
     knobs = setupKnobs setup
     self = setupSelf setup
@@ -139,10 +159,7 @@ fixturePasses setup fixture
     injMs = baselineInjectedMs baseline
     loadOverrides = [latencyOverride injMs, childRts capabilities]
     c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), childRts capabilities]
-    loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
-    floorOf whichPass key = floorCheck (setupEnforcement setup) (key, whichPass)
-    violationsOf whichPass (key, result) =
-        either (\failure -> [key <> ": " <> failure]) (runViolations . reportEvidence (floorOf whichPass key)) result
+    outcomeOf whichPass (key, result) = ((key, whichPass), reportEvidence <$> result)
 
 -- Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
 -- so the probe fails only when no limit produced a report.

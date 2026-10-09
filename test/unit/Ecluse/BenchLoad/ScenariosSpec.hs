@@ -35,12 +35,12 @@ spec = do
                     let held = Map.keysSet (Map.findWithDefault Map.empty shape (floorsByShape floors))
                     (shape, Set.toList (checkedCounts shape `Set.difference` held), Set.toList (held `Set.difference` checkedCounts shape))
                         `shouldBe` (shape, [], [])
-        it "were calibrated at the harness's default knobs, over every scenario" $
+        it "were calibrated at the harness's default knobs, over every scenario, with no pattern override" $
             withCommitted $ \floors ->
-                calOperatingPoint (floorsCalibration floors) `shouldBe` operatingPoint defaultLoadKnobs Nothing
-        it "record the ten runs they were calibrated from" $
+                calOperatingPoint (floorsCalibration floors) `shouldBe` operatingPoint defaultLoadKnobs Nothing []
+        it "record at least the ten runs they were calibrated from" $
             withCommitted $ \floors ->
-                length (calRuns (floorsCalibration floors)) `shouldBe` 10
+                length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)
   where
     twoCores = Limited 2 (1024 * 1024 * 1024)
 

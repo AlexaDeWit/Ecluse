@@ -37,8 +37,10 @@ data PodShape
 -- | The shapes a scheduled run measures, in the order of the workflow's matrix.
 scheduledPodShapes :: [PodShape]
 scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
-  where
-    gib = 1024 * 1024 * 1024
+
+mib, gib :: Int
+mib = 1024 * 1024
+gib = 1024 * mib
 
 -- | Parse @unlimited@, @\<cores\>cpu-\<size\>mib@ or @\<cores\>cpu-\<size\>gib@.
 parsePodShape :: Text -> Either Text PodShape
@@ -49,8 +51,8 @@ parsePodShape raw = case T.splitOn "-" (T.toLower (T.strip raw)) of
   where
     cores part = maybe (Left refusal) Right (T.stripSuffix "cpu" part >>= positive)
     memory part
-        | Just n <- T.stripSuffix "gib" part >>= positive = Right (n * 1024 * 1024 * 1024)
-        | Just n <- T.stripSuffix "mib" part >>= positive = Right (n * 1024 * 1024)
+        | Just n <- T.stripSuffix "gib" part >>= positive = Right (n * gib)
+        | Just n <- T.stripSuffix "mib" part >>= positive = Right (n * mib)
         | otherwise = Left refusal
     positive digits
         | not (T.null digits) && T.all isDigit digits = mfilter (> 0) (readMaybe (toString digits))
@@ -64,9 +66,6 @@ renderPodShape = \case
     Limited cpus bytes
         | bytes `mod` gib == 0 -> show cpus <> "cpu-" <> show (bytes `div` gib) <> "gib"
         | otherwise -> show cpus <> "cpu-" <> show (bytes `div` mib) <> "mib"
-  where
-    mib = 1024 * 1024
-    gib = 1024 * mib
 
 -- | The @cpu.max@ body granting whole cores over the kernel's default 100 ms period.
 cpuMaxValue :: Int -> Text

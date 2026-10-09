@@ -55,7 +55,7 @@ import Ecluse.BenchLoad.Exposition (
     seriesTotal,
     summariseGauge,
  )
-import Ecluse.BenchLoad.Floors (FloorCheck, OperatingPoint (..))
+import Ecluse.BenchLoad.Floors (OperatingPoint (..))
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
@@ -154,9 +154,9 @@ loadKnobsFromEnv = do
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
 
--- | The operating point of a run with these knobs over these scenarios, where 'Nothing' is all of them.
-operatingPoint :: LoadKnobs -> Maybe [Text] -> OperatingPoint
-operatingPoint knobs selected =
+-- | The operating point of a run with these knobs, scenarios ('Nothing' is all of them), and pattern overrides.
+operatingPoint :: LoadKnobs -> Maybe [Text] -> [Text] -> OperatingPoint
+operatingPoint knobs selected patternOverrides =
     OperatingPoint
         { opDurationSeconds = lkDurationSeconds knobs
         , opConcurrency = lkConcurrency knobs
@@ -168,6 +168,7 @@ operatingPoint knobs selected =
         , opPublicConnectionsPerHost = lkPublicConnectionsPerHost knobs
         , opPrivateConnectionsPerHost = lkPrivateConnectionsPerHost knobs
         , opScenarios = selected
+        , opPatternOverrides = patternOverrides
         }
 
 -- | A per-ecosystem fixture: the ecosystem it serves and its scenarios.
@@ -536,13 +537,12 @@ windowAttempts = sum . map (\l -> lsCompleted l + lsTransportFailures l) . windo
 windowRefusals :: ScenarioReport -> Int
 windowRefusals = sum . map lsRefusals . windowLoads
 
--- | The invariant evidence one report carries: successes per load or step and their floor, OOM kills, and the ending.
-reportEvidence :: FloorCheck -> ScenarioReport -> RunEvidence
-reportEvidence check r =
+-- | The invariant evidence one report carries: successes per load or step, OOM kills, and the ending.
+reportEvidence :: ScenarioReport -> RunEvidence
+reportEvidence r =
     RunEvidence
         { reScenario = srName r <> " (" <> srShape r <> ", " <> show (lsConnections (srLoad r)) <> " connections)"
         , reSuccesses = [(lsLabel l, lsSuccesses l) | l <- windowLoads r]
-        , reFloor = check
         , reOomKills = maybe 0 (counter "oom_kill" . crMemoryEvents) (pfCgroup =<< srProxy r)
         , reEnding = pfEnding <$> srProxy r
         , reExitedEarly = maybe False pfExitedEarly (srProxy r)

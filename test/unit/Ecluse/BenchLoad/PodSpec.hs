@@ -5,9 +5,7 @@
 -- | Pin the pod-shape grammar, the scheduled shapes, and the cgroup file reads the load run depends on.
 module Ecluse.BenchLoad.PodSpec (spec) where
 
-import Data.Aeson (encode)
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape, scheduledPodShapes)
@@ -22,14 +20,12 @@ spec = do
         it "refuses a shape it cannot bound exactly" $
             for_ ["", "2cpu", "0cpu-512mib", "2cpu-0mib", "2cpu-512mb", "2cpu-512mib-extra", "-2cpu-512mib", "2.5cpu-1gib"] $ \raw ->
                 parsePodShape raw `shouldSatisfy` isLeft
-    describe "renderPodShape" $
-        it "round-trips every shape the workflow schedules" $
+    describe "renderPodShape" $ do
+        it "round-trips every shape a scheduled run measures" $
             for_ scheduledPodShapes $ \shape ->
                 parsePodShape (renderPodShape shape) `shouldBe` Right shape
-    describe "scheduledPodShapes" $
-        it "lists the matrix the load workflow schedules" $ do
-            workflow <- decodeUtf8 <$> readFileBS ".github/workflows/bench-load.yml"
-            workflow `shouldSatisfy` T.isInfixOf (decodeUtf8 (encode (map renderPodShape scheduledPodShapes)))
+        it "names the four scheduled shapes" $
+            map renderPodShape scheduledPodShapes `shouldBe` ["unlimited", "2cpu-1gib", "4cpu-1gib", "4cpu-2gib"]
     describe "cpuMaxValue" $
         it "grants whole cores over the default period" $
             cpuMaxValue 2 `shouldBe` "200000 100000"

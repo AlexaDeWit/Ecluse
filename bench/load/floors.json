@@ -1,20 +1,21 @@
 {
-  "_note": "Success floors for the load test (bench/load). floors holds, per pod shape and scenario, the fewest successes the scenario may have in its loaded pass and, where it joins that pass, in its concurrency-one pass. A run held to the floors fails on a count below its floor, on a scenario without a floor, and on a floor that names no scenario. A ramp holds every step to its floor, and a paired scenario both of its loads. The floors hold only for a run at calibration.operatingPoint, where null leaves a bound to the proxy's computed default, and null scenarios means every scenario. Recalibrate every floor by calibration.rule from the last ten scheduled runs of the Load test workflow on main, and record their runner, commit, and URLs here. docs/testing.md, Success floors, has the procedure.",
+  "_note": "Success floors for the load test (bench/load). floors holds, per pod shape and scenario, the fewest successes the scenario may have in its loaded pass and, where it joins that pass, in its concurrency-one pass. A run held to the floors fails on a count below its floor, on a scenario without a floor, and on a floor that names no scenario. A ramp holds every step to its floor, and a paired scenario both of its loads. A run is held only when it matches calibration: on GitHub Actions under runnerOs and runnerArch, at operatingPoint, under a pod shape that floors holds, and while its npm fixture injects at most npmInjectedLatency.ceilingMs of upstream latency. In operatingPoint, null leaves a bound to the proxy's computed default, null scenarios means every scenario, and patternOverrides names the BENCH_PATTERN_* variables set. runs lists every run a floor came from, each with the commit it measured. docs/testing.md, Success floors, has the recalibration procedure.",
   "calibration": {
     "rule": "Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them.",
     "runner": "ubuntu-26.04-arm",
-    "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8",
+    "runnerOs": "Linux",
+    "runnerArch": "ARM64",
     "runs": [
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37923173226",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37769773705",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37611831876",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37455507981",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37303584780",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37195885786",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/37114558339",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36995975221",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36852452238",
-      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36702902323"
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37923173226", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37769773705", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37611831876", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37455507981", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37303584780", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37195885786", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/37114558339", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36995975221", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36852452238", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/36702902323", "commit": "f434ed026836d20e58ac4c6dac1d37abb4953bd8" }
     ],
     "operatingPoint": {
       "durationSeconds": 30,
@@ -26,7 +27,13 @@
       "serveMaxInFlight": null,
       "publicConnectionsPerHost": null,
       "privateConnectionsPerHost": null,
-      "scenarios": null
+      "scenarios": null,
+      "patternOverrides": []
+    },
+    "npmInjectedLatency": {
+      "rule": "The ceiling is 1.5 times the highest upstream latency the npm fixture injected in the calibration runs, rounded up to 10 ms.",
+      "highestMs": 165,
+      "ceilingMs": 250
     }
   },
   "floors": {

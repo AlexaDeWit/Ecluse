@@ -570,12 +570,12 @@ Read a red result according to its measurement:
   incomplete, and the job raises a warning. Live documents grow as packages publish, so no budget applies to them. Its
   report separates upstream time from the legs.
 - Load benchmarks use `oha` against a proxy process. A run fails when a scenario or a ramp step gets no successful response,
-  when a count of successes is below its [success floor](#success-floors), when the kernel OOM-kills a proxy, when a proxy
-  exits on heap overflow, and when a proxy ends any other way than the clean shutdown the harness asks for, early exits
-  included. It also fails when the harness or a proxy cannot boot, when `oha` cannot run, and when a fixture preflight sees
-  an unexpected status, index shape, or wheel body. Latency and memory have no regression threshold. Shared-runner noise and
-  the load run's cost make it unsuitable as a per-PR signal, so it never runs on a pull request and never gates a merge. Its
-  scheduled run goes red on these checks.
+  when a count of successes is below its [success floor](#success-floors), when a scheduled run's configuration keeps it
+  off the floors, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow, and when a proxy ends any other
+  way than the clean shutdown the harness asks for, early exits included. It also fails when the harness or a proxy cannot
+  boot, when `oha` cannot run, and when a fixture preflight sees an unexpected status, index shape, or wheel body. Latency
+  and memory have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR
+  signal, so it never runs on a pull request and never gates a merge. Its scheduled run goes red on these checks.
 
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
 
@@ -645,10 +645,10 @@ Each ecosystem section also shows:
   base concurrency set to one. A scenario that scales its own connections keeps that scale. The
   table adds the concurrency-one pass's success floor, the allocation per refusal, each
   allocation with the count it divides by, and the missed and collapsed cache lookups summed over
-  the stores. One request can look up more than
-  one store, so these count lookups, not requests. A loaded figure far above its concurrency-one
-  figure points at contention, or at work the concurrent requests did not share. A scenario
-  outside the concurrency-one pass shows `n/a` for those figures
+  the stores. One request can look up more than one store, so these count lookups, not requests.
+  A loaded figure far above its concurrency-one figure points at contention, or at work the
+  concurrent requests did not share. A scenario outside the concurrency-one pass shows `n/a` for
+  those figures
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
 seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That
@@ -716,11 +716,11 @@ heap overflows as its reading, so they do not fail it. It fails only when no lim
 
 [bench/load/floors.json](../bench/load/floors.json) holds a reviewed minimum for every count of
 successes a scheduled run checks: one floor per scenario, pass, and pod shape, for npm and PyPI
-alike. A run fails when a count is below its floor. A floor catches what the zero-success check
-cannot: a scenario whose successes fall to a tenth of normal still gets some successful response.
-The floors are loose. Each is half the lowest count of ten nightly runs, so it leaves room for the
-spread between nights and for a change that moves throughput by a few percent. The load test still
-never gates a merge: a breach turns only its own scheduled or dispatched run red.
+alike. A run held to the floors fails when a count is below its floor. A floor catches what the
+zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
+are loose. Each is half the lowest count of ten nightly runs, so it leaves room for the spread
+between nights and for a change that moves throughput by a few percent. The load test never gates a
+merge: a breach turns only its own scheduled or dispatched run red.
 
 | Count | What its floor holds |
 |---|---|
@@ -733,39 +733,80 @@ never gates a merge: a breach turns only its own scheduled or dispatched run red
 
 The check fails closed, and it covers every scenario the zero-success check covers:
 
-- A run held to the floors fails on a scenario that has no floor for its pass and pod shape.
+- A run held to the floors fails on a scenario that has no floor for its pass.
 - It fails on a floor for a count that no scenario reports.
 - `Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, compares the file with the harness's
-  scenarios and the scheduled pod shapes. A scenario added without floors therefore fails its pull
-  request instead of the next scheduled run.
+  scenarios and the four scheduled pod shapes. A scenario added without floors therefore fails its
+  pull request instead of the next scheduled run.
 
-The floors hold only at the operating point they were calibrated at, which the file records in
-`calibration.operatingPoint`: the default of every load knob (30 seconds, 100 connections, the
-default payload), the proxy's computed admission and pools, and every scenario. A scheduled run is
-at that point, and so is a dispatch that changes only the pod shape. A run with any other knob, or
-with a `BENCH_LOAD_SCENARIOS` subset, is not held to the floors, and the "Success floors" section
-of its report names the settings that differ. The GC-thrash probe is never held to them. The
-harness does not check the runner, so a run on another machine at the same knobs is held to floors
-calibrated on the `ubuntu-26.04-arm` runner.
+A run is held to the floors only when it matches what they were calibrated at. The file's
+`calibration` record holds each part, and the harness reads the run's side from its environment:
 
-The npm fixture injects the public round-trip time each run probes, and the PyPI fixture injects
-the configured 5 ms. The latency-bound npm counts (`npm/tarball-hot-path`, `npm/tarball-onboarding`,
-and the npm concurrency-one pass) move with that probe, so they spread the widest between nights.
+| Part | A held run | The harness reads |
+|---|---|---|
+| Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
+| Settings | Equals `operatingPoint`: every load knob at its default (30 seconds, 100 connections, the default payload, the proxy's computed admission and pools), every scenario, and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, and the names of the `BENCH_PATTERN_*` variables that are set |
+| Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
+| Injected npm latency | Injects at most `npmInjectedLatency.ceilingMs`, 250 ms | The public round trip the run probes, which the report prints as "injected upstream latency" |
 
-To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and read each
-pod shape's `bench-load-results.md`:
+A run that misses a part is not held. It skips the floor check, its floor cells read `not held`,
+and the "Success floors" section of its report names every reason in one line. Every other check
+applies to it. A dispatch that changes only the pod shape, among the four, is held. A run on
+another machine is not, and neither is the GC-thrash probe.
 
-| Count | Where the report shows it |
+A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
+floors, it fails with one violation that names what differs. A changed workflow default therefore
+turns the next scheduled run red, where it would otherwise switch the floors off. Latency above the
+ceiling is the one exception: the network decides it, so that run stays green and not held.
+
+The harness compares nothing else:
+
+- `BENCH_LOAD_PROBE_RTT` only swaps the probed latency for the configured 5 ms, which is under the
+  ceiling.
+- The workflow fixes `BENCH_LOAD_ISOLATE_OHA` and the harness's `-N`, and no dispatch input changes
+  them.
+- The harness reads the runner's operating system and architecture, not its label, so any Linux
+  ARM64 runner on GitHub Actions counts as the calibrated `ubuntu-26.04-arm`.
+
+The npm fixture injects the public round trip each run probes. The PyPI fixture runs no probe and
+injects the configured 5 ms. The latency-bound npm counts (`npm/tarball-hot-path`,
+`npm/tarball-onboarding`, `npm/worker-mirroring`, and the npm concurrency-one pass) fall as that
+latency rises, so they spread the widest between nights. The ceiling is 1.5 times the highest
+latency of the calibration runs (165 ms), rounded up to 10 ms. Fitted over those runs, the first
+floor a healthy run breaches is `npm/tarball-hot-path` near 271 ms, so a held run has room below
+it. On a night with a slower network the job stays green, and its "Success floors" section gives
+the latency its npm fixture injects and the ceiling. That whole run is not held, its PyPI
+scenarios included, because the harness decides once for the run.
+
+To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`. Leave out a
+run that was red, or that the committed floors would fail, and take the next older run in its
+place, so a collapse never lowers a floor. Read each pod shape's `bench-load-results.md`:
+
+| Figure | Where the report shows it |
 |---|---|
 | Loaded pass | The `successes` column of "At a glance" |
 | Each ramp step | The step table in the scenario's own section |
 | The concurrent load of a paired scenario | The "concurrent load: successes" row in the scenario's own section |
 | Concurrency-one pass | The count of successes in the first "at base concurrency one" column of "Loaded cost against concurrency one" |
+| Injected npm latency | The "injected upstream latency" row of the npm section's operating point |
 
 Set each floor to half the lowest count over the ten runs, rounded down, and at least 1. A scenario
-with several loads takes the lowest count of any of them. Record the rule, the runner, the commit,
-the ten run URLs, and the operating point in `calibration`. A report prints each floor beside the
-count it holds, so you can read a run against the floors without the file.
+with several loads takes the lowest count of any of them. Then write the `calibration` record:
+
+- `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
+  carries its own.
+- `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`.
+- `npmInjectedLatency`: the highest injected npm latency of the forty reports, and the ceiling. The
+  reader refuses a ceiling that is not 1.5 times the highest, rounded up to 10 ms.
+
+A new scenario needs floors before ten nights hold it. Dispatch the workflow at least three times
+on the branch that adds it. Those runs go red on the missing floors, and their reports carry the
+counts all the same. Set the scenario's floors to half its lowest count by the same rule, and add
+those runs to `runs`, each with the branch commit it measured. The next recalibration replaces
+those floors and drops those runs.
+
+A report prints each floor beside the count it holds, so you can read a run against the floors
+without the file.
 
 ### Benchmark captures
 
