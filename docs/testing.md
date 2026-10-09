@@ -224,13 +224,13 @@ The checks compare bytes with each ecosystem's charges:
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
 - From one step up, the tier fails once a single read's peak or a realistic listing's output
-  working set passes a regression limit per ecosystem. The read limits are 2.0 per source byte for
-  npm, 0.1 under its charge, and 3.75 for PyPI, 0.45 under its charge. The rule for a limit is the
-  smallest quarter step at least 8% above the maximum. From the first table below it gives 1.0 for
-  npm (react, 0.888) and 3.5 for PyPI (boto3, 3.070). The output limits, set by that rule from the
-  realistic shapes in the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3,
-  1.524, 14.8% margin), 0.25 under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1
-  under its charge. One example checks that each limit sits below its charge.
+  working set passes a regression limit per ecosystem. The rule for a limit is the smallest quarter
+  step at least 8% above the maximum. The read limits, set by that rule from the first table below,
+  are 1.0 per source byte for npm (react, 0.888), 0.4 under its charge, and 3.5 for PyPI (boto3,
+  3.070), 0.4 under its charge. The output limits, set by that rule from the realistic shapes in
+  the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3, 1.524, 14.8% margin), 0.25
+  under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1 under its charge. One
+  example checks that each limit sits below its charge.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   `entryBelowSource` names the ecosystems this check covers. PyPI's entry holds each file as
   aeson's tree beside its typed view, which outgrows the file.
@@ -259,6 +259,13 @@ read.
 | PyPI | boto3 | 2.10 | 3.070 | 2.855 | 1.012 | 0.621 |
 | PyPI | requests | 0.12 | 4.005 | 3.096 | 0.909 | 0.657 |
 
+The full-read charges take each listing's read peak per source byte, merges included, among
+listings with at least one step of sources. In the arm64 Build job of
+[CI run 37923084079](https://github.com/AlexaDeWit/Ecluse/actions/runs/37923084079/job/113795530414),
+npm's realistic listings peak at 0.955 (express, publish order) and its heavy bases at 1.387
+(express, oldest heavy base). PyPI's listings peak at 3.070 (boto3, single document), heavy bases
+included.
+
 The arm64 Build job of
 [CI run 36562979100](https://github.com/AlexaDeWit/Ecluse/actions/runs/36562979100/job/109388236444)
 gives each listing's output working set per byte of its basis, for a single document and for each
@@ -283,7 +290,7 @@ Under the output charges, npm 2.0 and PyPI 1.6 per basis byte, the heavy bases h
 of their charge from one step of basis up (numpy, oldest heavy base) and 0.992 below it (requests,
 oldest heavy base).
 
-The rules for the charges and the limits take the captures of at least one step, as
+The rules for the charges and the limits take the listings of at least one step, as
 [configuration.md](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) sets out.
 From one step up, each listing's peak above the documents it holds stays below twice its served
 body, so twice the served body sets the output working set.

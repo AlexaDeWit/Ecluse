@@ -157,11 +157,11 @@ data PeakLimits = PeakLimits
     }
 
 {- From one meter step up, a read's peak and a realistic listing's output working set fail the tier
-past these limits. An output limit is the smallest quarter step 8% above those shapes' maximum. -}
+past these limits. Each is the smallest quarter step at least 8% above its measured maximum. -}
 peakLimits :: Ecosystem -> Maybe PeakLimits
 peakLimits = \case
-    Npm -> Just PeakLimits{readPeakLimit = 2000, outputLimit = 1750}
-    PyPI -> Just PeakLimits{readPeakLimit = 3750, outputLimit = 1500}
+    Npm -> Just PeakLimits{readPeakLimit = 1000, outputLimit = 1750}
+    PyPI -> Just PeakLimits{readPeakLimit = 3500, outputLimit = 1500}
     RubyGems -> Nothing
 
 {- Whether a listing's held entry stays smaller than the source it was read from. A PyPI entry holds each
