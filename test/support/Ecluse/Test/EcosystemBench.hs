@@ -30,7 +30,7 @@ import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFi
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPackages, cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
@@ -64,6 +64,7 @@ npmBench =
     EcosystemBench
         { ebEcosystem = Npm
         , ebCorpus = []
+        , ebUpstream = npmCaptureUpstream
         , ebSynthetic = syntheticPackumentBytes
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . (\body -> RegistryResponse 200 (BS.length body) body)
@@ -83,6 +84,7 @@ pypiBench =
     EcosystemBench
         { ebEcosystem = PyPI
         , ebCorpus = []
+        , ebUpstream = pypiCaptureUpstream
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
