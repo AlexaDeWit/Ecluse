@@ -23,8 +23,6 @@ module Ecluse.Core.Server.Cache.Types (
 import Crypto.Hash (SHA256 (SHA256), hashWith)
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (toLazyByteString)
-import Data.ByteString.Lazy qualified as LBS
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 
@@ -134,7 +132,7 @@ storeKey store components =
         , ckIdentity = toShort framed
         }
   where
-    framed = LBS.toStrict (toLazyByteString (frameComponents components))
+    framed = frameComponents components
     digest = convertToBase Base16 (hashWith SHA256 framed)
 
 -- The format versions a key's namespace names. A change to either leaves every older entry unreachable.
