@@ -26,6 +26,7 @@ extra-source-files:
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
   bench/corpus/pins.json
+  bench/load/floors.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/osv/v1/*.json
@@ -1062,6 +1063,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.ExpositionSpec
+    Ecluse.BenchLoad.FloorsSpec
     Ecluse.BenchLoad.LatencySpec
     Ecluse.BenchLoad.NpmArtifactSpec
     Ecluse.BenchLoad.NpmSpec
@@ -1080,7 +1082,10 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.RtsProbe
     Ecluse.BenchLoad.RtsProbeSpec
     Ecluse.BenchLoad.RtsWindowSpec
+    Ecluse.BenchLoad.Scenarios
+    Ecluse.BenchLoad.ScenariosSpec
     Ecluse.BenchLoad.SelectionSpec
+    Ecluse.BenchLoad.Support
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Oha
@@ -1564,6 +1569,7 @@ executable bench-load
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
+    Ecluse.BenchLoad.Scenarios
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
 
@@ -1594,14 +1600,15 @@ executable bench-load
     , wai              ^>=3.2
     , warp             ^>=3.4
 
--- Pure load-report arithmetic, pod shapes, and verdicts, shared with the gating unit suite.
--- Live probes, sockets, and process orchestration remain in the bench-load executable.
+-- Pure load-report arithmetic, pod shapes, success floors, and verdicts, shared with the gating
+-- unit suite. Live probes, sockets, and process orchestration remain in the bench-load executable.
 library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
   exposed-modules:
     Ecluse.BenchLoad.BootLines
     Ecluse.BenchLoad.Exposition
+    Ecluse.BenchLoad.Floors
     Ecluse.BenchLoad.Latency
     Ecluse.BenchLoad.NpmArtifact
     Ecluse.BenchLoad.Normalise

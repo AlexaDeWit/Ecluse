@@ -381,9 +381,12 @@ A PR reaches the architect only when **all** hold:
 - [ ] A PR that touches npm serving or fetching (the serve path or the worker's back-fill) does
       not flip ready until the team lead reads both perf suites against main's latest artifacts:
       the PR's own Work-per-request benchmarks run, and a load run dispatched with
-      `gh workflow run bench-load.yml --ref <branch>`. The comparison is a manual artifact read,
-      as no cross-run baseline exists. Allocations per request are the signal. Normalise by
-      successes when shedding dominates. Wall time is runner noise.
+      `gh workflow run bench-load.yml --ref <branch>`. That dispatch runs at the default knobs, so
+      at or below the latency ceiling it is held to the success floors
+      ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red below
+      one. The floors are loose minimums, so the comparison with main stays a manual artifact
+      read. Allocations per request are the signal. Normalise by successes when shedding
+      dominates. Wall time is runner noise.
 - [ ] Foreseeable branches tested by intent. `codecov/project` is a context the ruleset requires,
       so it must be green. `codecov/patch` (≥ 85% on changed lines) prompts a unit or integration
       test. It is not a gate.
