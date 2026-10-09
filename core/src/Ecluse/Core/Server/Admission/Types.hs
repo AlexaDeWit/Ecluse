@@ -35,7 +35,7 @@ data ChargeFactors = ChargeFactors
     deriving stock (Eq, Show)
 
 -- | One unit of work several requests may wait on: a shared fetch or a shared render, by its cache key.
-newtype FlightKey = FlightKey Text
+newtype FlightKey = FlightKey ShortByteString
     deriving stock (Eq, Ord, Show)
 
 -- | What the meter holds and who waits on it, for the gauges and the sampler.

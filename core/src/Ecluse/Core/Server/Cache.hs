@@ -21,7 +21,6 @@ module Ecluse.Core.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
-    metadataKey,
 
     -- * Single-version resolution
     resolveVersion,
@@ -31,15 +30,7 @@ module Ecluse.Core.Server.Cache (
     resolveAssembled,
 ) where
 
-import Data.Text.Short qualified as TS
-
-import Ecluse.Core.Package (
-    PackageName,
-    pkgCanonical,
-    pkgEcosystem,
-    pkgNamespace,
-    renderScope,
- )
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
 import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProvider, providerAssembled, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Store (
@@ -54,31 +45,14 @@ import Ecluse.Core.Server.Cache.Store (
 import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
-import Ecluse.Core.Version (Version, renderVersion)
-
--- | The key a full read of one package from one source is shared and retained under.
-metadataKey :: Source -> PackageName -> Text
-metadataKey = keyText
-
-keyText :: Source -> PackageName -> Text
-keyText (Source source) name =
-    source
-        <> "\x1f"
-        <> show (pkgEcosystem name)
-        <> "\x1f"
-        <> maybe "" renderScope (pkgNamespace name)
-        <> "\x1f"
-        <> TS.toText (pkgCanonical name)
-
-versionKey :: Source -> PackageName -> Version -> Text
-versionKey source name version = keyText source name <> "\x1f" <> renderVersion version
+import Ecluse.Core.Version (Version)
 
 -- | One provider supplies every retention capability beside process-local request coalescing.
 data MetadataCache = MetadataCache
-    { mcFull :: SingleFlight MetadataError Text CacheEntry
+    { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
     -- ^ Full fetches partition by source, ecosystem, and package without local retention.
-    , mcVersion :: SingleFlight MetadataError Text VersionRead
-    , mcAssembled :: SingleFlight Void Text ByteString
+    , mcVersion :: SingleFlight MetadataError CacheKey VersionRead
+    , mcAssembled :: SingleFlight Void CacheKey ByteString
     }
 
 -- | Select the shipped local provider without an external service dependency.
@@ -101,7 +75,7 @@ resolveMetadata metrics cache source name =
         (recordFullOccupancy metrics)
         (mpCacheRefused metrics Metric.FullStore)
         (mcFull cache)
-        (keyText source name)
+        (fullKey source name)
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
@@ -118,8 +92,8 @@ prepareVersion metrics cache source name version =
         (mcVersion cache)
         (versionKey source name version)
 
--- | Memoise a response under the content digest of this request's authorised inputs.
-resolveAssembled :: MetricsPort -> MetadataCache -> Text -> IO ByteString -> IO ByteString
+-- | Memoise a response under a key that binds it to this request's authorised inputs.
+resolveAssembled :: MetricsPort -> MetadataCache -> CacheKey -> IO ByteString -> IO ByteString
 resolveAssembled metrics cache key render =
     either absurd id
         <$> resolveSingleFlight

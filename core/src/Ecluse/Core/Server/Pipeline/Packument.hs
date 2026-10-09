@@ -26,7 +26,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
 import Data.ByteString qualified as BS
-import Data.ByteString.Builder (Builder, byteString, intDec, toLazyByteString)
+import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -71,7 +71,8 @@ import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille), FlightKey (FlightKey))
 import Ecluse.Core.Server.Cache (resolveAssembled)
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
+import Ecluse.Core.Server.Cache.Types (assembledKey, renderCacheKey)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
@@ -84,6 +85,7 @@ import Ecluse.Core.Server.Context (
     pdPublicBaseUrl,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
+import Ecluse.Core.Server.Framing (frameBytes)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -368,7 +370,7 @@ packumentETag mountBaseUrl originBaseUrls name sources =
     fingerprint :: Builder
     fingerprint =
         "ecluse:packument-etag:v4\0"
-            <> foldMap (etagFrame . encodeUtf8) originBaseUrls
+            <> foldMap (frameBytes . encodeUtf8) originBaseUrls
             <> "\0"
             <> byteString (encodeUtf8 mountBaseUrl)
             <> "\0"
@@ -385,16 +387,13 @@ etagSourcePiece (provenance, digest, survivors) =
 
 etagVersionPiece :: (Text, [EntryKey]) -> Builder
 etagVersionPiece (version, entries) =
-    etagFrame (encodeUtf8 version) <> foldMap etagEntryPiece entries <> "\2"
+    frameBytes (encodeUtf8 version) <> foldMap etagEntryPiece entries <> "\2"
 
 etagEntryPiece :: EntryKey -> Builder
 etagEntryPiece = \case
-    ArrayEntry index -> "a" <> etagFrame (show index)
-    ObjectEntry key -> "o" <> etagFrame (encodeUtf8 key)
+    ArrayEntry index -> "a" <> frameBytes (show index)
+    ObjectEntry key -> "o" <> frameBytes (encodeUtf8 key)
     SingletonEntry -> "s"
-
-etagFrame :: ByteString -> Builder
-etagFrame bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
 
 etagProvenanceTag :: Provenance -> Builder
 etagProvenanceTag = \case
@@ -412,8 +411,8 @@ servedBytes serving sources plan etag =
   where
     rt = psvRuntime serving
     deps = psvDeps serving
-    key = renderETag etag
-    flight = FlightKey ("assembled " <> key)
+    key = assembledKey etag
+    flight = FlightKey (renderCacheKey key)
     outputCharge = scaleCharge (cfOutputPermille (metadataChargeFactors (pdMetadata deps))) (outputBasisBytes plan sources)
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)

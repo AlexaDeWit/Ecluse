@@ -12,10 +12,11 @@ import Ecluse.Core.Registry.Metadata (Manifest (..), VersionRead (..))
 import Ecluse.Core.Server.Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage), RetentionOperations)
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
+import Ecluse.Core.Server.Cache.Types (CacheKey)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleManifest, scopedNpm, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Server.Cache (externalOperations)
+import Ecluse.Test.Server.Cache (assembledKeyFor, externalOperations)
 import Ecluse.Test.Snapshot (untaggedRead)
 
 data AdapterFault = AdapterFault
@@ -24,8 +25,8 @@ data AdapterFault = AdapterFault
 instance Exception AdapterFault
 
 data RecordingStore value = RecordingStore
-    { rsOperations :: RetentionOperations Text value
-    , rsValues :: IORef (Map Text value)
+    { rsOperations :: RetentionOperations CacheKey value
+    , rsValues :: IORef (Map CacheKey value)
     , rsReads :: IORef Int
     , rsWrites :: IORef Int
     }
@@ -61,7 +62,7 @@ spec = describe "cacheProvider" $ do
         replicateM_ 2 $ do
             resolveMetadata noopMetricsPort cache source thingName (fetch (Right sampleEntry)) `shouldReturn` Right sampleEntry
             resolveVersion noopMetricsPort cache source thingName v1_0_0 (fetch (Right selected)) `shouldReturn` Right selected
-            resolveAssembled noopMetricsPort cache "digest" (fetch "assembled") `shouldReturn` "assembled"
+            resolveAssembled noopMetricsPort cache (assembledKeyFor "digest") (fetch "assembled") `shouldReturn` "assembled"
         readIORef calls `shouldReturn` 3
         traverse readIORef [rsReads full, rsReads version, rsReads assembled] `shouldReturn` [2, 2, 2]
         traverse readIORef [rsWrites full, rsWrites version, rsWrites assembled] `shouldReturn` [1, 1, 1]
@@ -70,7 +71,7 @@ spec = describe "cacheProvider" $ do
         writeIORef (rsValues assembled) Map.empty
         resolveMetadata noopMetricsPort cache source thingName (fetch (Right sampleEntry)) `shouldReturn` Right sampleEntry
         resolveVersion noopMetricsPort cache source thingName v1_0_0 (fetch (Right selected)) `shouldReturn` Right selected
-        resolveAssembled noopMetricsPort cache "digest" (fetch "fresh") `shouldReturn` "fresh"
+        resolveAssembled noopMetricsPort cache (assembledKeyFor "digest") (fetch "fresh") `shouldReturn` "fresh"
         readIORef calls `shouldReturn` 6
 
     it "leaves absent capabilities uncached instead of allocating local stores" $ do
@@ -80,7 +81,7 @@ spec = describe "cacheProvider" $ do
         replicateM_ 2 $ do
             _ <- resolveMetadata noopMetricsPort cache source thingName (fetch (Right sampleEntry))
             _ <- resolveVersion noopMetricsPort cache source thingName v1_0_0 (fetch (Right (untaggedRead Nothing)))
-            resolveAssembled noopMetricsPort cache "digest" (fetch "assembled") `shouldReturn` "assembled"
+            resolveAssembled noopMetricsPort cache (assembledKeyFor "digest") (fetch "assembled") `shouldReturn` "assembled"
         readIORef calls `shouldReturn` 6
 
     it "refetches after adapter failure without retaining the origin result locally" $ do
@@ -94,7 +95,7 @@ spec = describe "cacheProvider" $ do
         replicateM_ 2 $ do
             resolveMetadata metrics cache source thingName (fetch (Right sampleEntry)) `shouldReturn` Right sampleEntry
             resolveVersion metrics cache source thingName v1_0_0 (fetch (Right (untaggedRead Nothing))) `shouldReturn` Right (untaggedRead Nothing)
-            resolveAssembled metrics cache "digest" (fetch "assembled") `shouldReturn` "assembled"
+            resolveAssembled metrics cache (assembledKeyFor "digest") (fetch "assembled") `shouldReturn` "assembled"
         readIORef calls `shouldReturn` 6
         readIORef failures `shouldReturn` 12
 
