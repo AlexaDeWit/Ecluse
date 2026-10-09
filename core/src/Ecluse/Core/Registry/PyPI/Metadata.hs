@@ -57,7 +57,7 @@ newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
 working set per basis byte of a realistic merge (1.24, boto3) from one meter step up.
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4200, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
 
 -- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

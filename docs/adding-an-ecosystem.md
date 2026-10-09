@@ -76,7 +76,8 @@ inputs to prove it.
   `bench/corpus/pins.json`, and list them in `Ecluse.Test.Corpus` with a `CaptureUpstream`
   ([Benchmark captures](testing.md#benchmark-captures)).
 - Include several captures of at least one 1 MiB meter step, the unit the memory gate charges in.
-  Only those captures set the read charges.
+  Listings with at least one step of sources, merges included, set the read charges, and single
+  documents of at least one step set the read limits.
 - Record the captures' outputs in the golden set, as the recorded-outputs row of
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) describes.
 
@@ -270,7 +271,7 @@ The adapter's `metadataChargeFactors` holds a `ChargeFactors` with two fields, a
 `npmChargeFactors` shows:
 
 - `cfFullReadPermille` is what a full read pays per source byte as it reads. Derive it from the
-  largest read peak by the rule in Runtime sizing.
+  listings' read peaks, merges included, by the rule in Runtime sizing.
 - `cfOutputPermille` is what a listing's response pays per byte of its output basis before it
   renders. The serving path charges a merged listing on what it renders, by the larger of two
   anchored estimates that Runtime sizing sets out beside the rule that derives this charge. The
@@ -288,10 +289,10 @@ To calibrate them:
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
 - Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
-  the basis and the output working set per basis byte. Give `Ecluse.Test.Corpus.Subset` a cut for
-  the ecosystem's document, as npm and PyPI have, so the probes can shape its captures. Give
-  `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text, and an arm in its `keepVersions`,
-  which cuts an ecosystem it does not name as npm.
+  the read peak per source byte, the basis and the output working set per basis byte. Give
+  `Ecluse.Test.Corpus.Subset` a cut for the ecosystem's document, as npm and PyPI have, so the
+  probes can shape its captures. Give `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text,
+  and an arm in its `keepVersions`, which cuts an ecosystem it does not name as npm.
 - Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
   and add the captures to that section's tables.
 
