@@ -11,8 +11,7 @@ A supply-chain policy proxy for package registries, written in Haskell. The name
 controlled passage every dependency clears before it reaches your build.
 
 [Verifying the image](#verifying-the-image) covers how to verify a release instead of
-trusting it: the keyless provenance and SBOM attestations, and the bit-for-bit reproducible
-rebuild.
+trusting it: the keyless provenance and SBOM attestations, and a rebuild from pinned source.
 
 > **Status: generally available, pre-1.0.0.** The npm packument, tarball, and publish paths
 > run today and are ready for use. A `pypi` mount serves reads, the PEP 691 Simple index and
@@ -114,8 +113,7 @@ A `…-sbom.sigstore.json` bundle needs `--predicate-type` as well. The two
 bundles: read those directly, and pass `--bundle` the matching `…-sbom.sigstore.json` to
 check the signature over one.
 
-Stronger still, the image is bit-for-bit reproducible. Rebuild it from pinned source and
-compare, instead of trusting anyone.
+Nix builds the image from pinned source, so you can also rebuild it yourself.
 
 ```bash
 nix build github:AlexaDeWit/Ecluse/<ref>#dockerImage   # → ./result (a docker-archive)
