@@ -18,6 +18,12 @@ module Ecluse.Core.Package.Filter.Internal (
     LocationRefusal (..),
     locateArtifact,
 
+    -- * Checking a document's URLs
+    AuthorityVerdict,
+    noAuthorityVerdict,
+    locateNextArtifact,
+    locateArtifacts,
+
     -- * Checking an artifact
     ArtifactRefusal (..),
     resolveArtifact,
@@ -35,7 +41,17 @@ import Ecluse.Core.Package (
     InvalidEntryKind (InvalidIndexFile, InvalidVersionManifest),
     mkInvalidEntry,
  )
-import Ecluse.Core.Security (AllowedHostPorts, HostPort, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
+import Ecluse.Core.Security (
+    AllowedHostPorts,
+    AuthorityText,
+    HostPort,
+    artifactAuthorityHonoured,
+    authorityHostPort,
+    authorityLabel,
+    authorityText,
+    hostAddress,
+    hostPortAddress,
+ )
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Text (httpsPrefix, isPrefixOfLowered, urlFilename)
 
@@ -101,6 +117,61 @@ locateArtifact origin url = do
     -- Trimming that changes nothing leaves the name already checked.
     trimmedNamesFile = trimmed == url || isJust (urlFilename trimmed)
     trimmed = T.strip url
+
+{- | The authority a walk over one document's URLs decided last, with its verdict. It holds only
+for the 'ArtifactOrigin' that decided it.
+-}
+data AuthorityVerdict
+    = NoAuthorityVerdict
+    | AuthorityVerdict AuthorityText Bool
+
+-- | The verdict a walk starts with, before any URL reaches the authority test.
+noAuthorityVerdict :: AuthorityVerdict
+noAuthorityVerdict = NoAuthorityVerdict
+
+{- | 'locateArtifact' as one step of a walk, with the same result. The authority test reuses the
+previous verdict when the normalised URL has the same 'AuthorityText'.
+-}
+locateNextArtifact :: ArtifactOrigin -> AuthorityVerdict -> Text -> (AuthorityVerdict, Either LocationRefusal ArtifactLocation)
+locateNextArtifact origin !previous url = case beforeAuthority of
+    Left refusal -> (previous, Left refusal)
+    Right (filename, normalised, changed) -> case sharedVerdict origin previous (authorityText normalised) of
+        (verdict, True) ->
+            let !location = ArtifactLocation{locatedFilename = filename, locatedNormalised = changed, locatedTrimmedNamesFile = trimmedNamesFile}
+             in (verdict, Right location)
+        (verdict, False) -> (verdict, Left (LocationRefusal "artifact authority is neither the serving upstream nor a declared artifact host" normalised))
+  where
+    -- A copy of the tests 'locateArtifact' runs first, so the per-URL check stays as it is for the comparison.
+    beforeAuthority = do
+        filename <- namedFile url
+        normalised <- normaliseScheme
+        changed <-
+            if normalised == url
+                then Right Nothing
+                else Just normalised <$ namedFile normalised
+        pure (filename, normalised, changed)
+
+    namedFile candidate = maybeToRight (LocationRefusal "artifact URL has no safe filename" candidate) (urlFilename candidate)
+
+    normaliseScheme = case originHttpsHost origin of
+        Nothing -> Right url
+        Just upstreamHost -> bimap (`LocationRefusal` url) registryUrlText (resolveTarballUrl upstreamHost url)
+
+    trimmedNamesFile = trimmed == url || isJust (urlFilename trimmed)
+    trimmed = T.strip url
+
+-- The previous verdict for the same authority text, or the one 'locateArtifact' computes, to carry forward.
+sharedVerdict :: ArtifactOrigin -> AuthorityVerdict -> AuthorityText -> (AuthorityVerdict, Bool)
+sharedVerdict origin previous authority = case previous of
+    AuthorityVerdict decided honoured | decided == authority -> (previous, honoured)
+    _ ->
+        let !honoured = artifactAuthorityHonoured (originHosts origin) (originAuthority origin) (authorityHostPort authority)
+            !verdict = AuthorityVerdict authority honoured
+         in (verdict, honoured)
+
+-- | 'locateArtifact' for each URL of one document, in order, through 'locateNextArtifact'.
+locateArtifacts :: (Traversable t) => ArtifactOrigin -> t Text -> t (Either LocationRefusal ArtifactLocation)
+locateArtifacts origin = snd . mapAccumL (locateNextArtifact origin) noAuthorityVerdict
 
 -- | Why one artifact was refused, for the drop record that reports it.
 data ArtifactRefusal = ArtifactRefusal
