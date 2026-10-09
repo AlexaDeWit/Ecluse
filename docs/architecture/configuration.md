@@ -162,8 +162,8 @@ for packages that differ from the corpus. The all-shape figure is the smallest t
 the highest peak among all the listings. Those add the heavy bases, merges whose private document
 holds far more text than its version count suggests.
 
-The table gives each figure in heap bytes per source byte, with the read limit that the residency
-tier holds a single document's read to.
+The table gives each figure in heap bytes per source byte, among listings of at least one step. Its
+last row is the read limit that the residency tier holds a single document's read to.
 
 | Figure | npm | PyPI |
 |---|---|---|
@@ -185,12 +185,13 @@ charges absorbs that excess.
 The charges come from the committed corpus and its merges, so a document shaped or sized unlike
 them can hold more than it pays for. The measured case is an npm document whose text is mostly
 deprecation notices. An entry holds a release's deprecation notice twice, in the typed view and in
-the served release. In the tier's heavy-base merges of captures of at least one step, the private
-document's share of the held entry is 1.7 to 1.9 bytes per source byte, against a charge of 1.4.
-That figure is the difference between a heavy-base merge and the same capture's single listing,
-because no probe reads such a document alone. Écluse treats such documents as rare. Two things
-absorb the excess. The sampler measures it as live data outside the charges after the next major
-collection, and the ceiling the budget may reach, set out below, falls as that remainder grows.
+the served release. In the tier's npm heavy-base merges of captures of at least one step, the
+private document's share of the held entry is 1.7 to 1.9 bytes per source byte, against a charge
+of 1.4. That figure is the difference between a heavy-base merge and the same capture's single
+listing, because no probe reads such a document alone. Écluse treats such documents as rare. Two
+things absorb the excess. The sampler measures it as live data outside the charges after the next
+major collection, and the ceiling the budget may reach, set out below, falls as that remainder
+grows.
 
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
