@@ -382,7 +382,7 @@ A PR reaches the architect only when **all** hold:
       not flip ready until the team lead reads both perf suites against main's latest artifacts:
       the PR's own Work-per-request benchmarks run, and a load run dispatched with
       `gh workflow run bench-load.yml --ref <branch>`. That dispatch runs at the default knobs, so
-      it is held to the success floors
+      at or below the latency ceiling it is held to the success floors
       ([`docs/testing.md`, Success floors](../docs/testing.md#success-floors)) and goes red below
       one. The floors are loose minimums, so the comparison with main stays a manual artifact
       read. Allocations per request are the signal. Normalise by successes when shedding

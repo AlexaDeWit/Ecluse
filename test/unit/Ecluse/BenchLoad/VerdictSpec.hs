@@ -12,12 +12,11 @@ import Test.Hspec
 import Ecluse.BenchLoad.Floors (
     Enforcement (Enforced, NotHeld),
     FloorCheck (AtLeast, NoFloor, Unchecked),
-    FloorKey,
     Pass (ConcurrencyOne, Loaded),
     Trigger (OnDemand, Scheduled),
-    Unheld (LatencyAboveCeiling, SettingsDiffer),
+    Unheld (SettingsDiffer),
  )
-import Ecluse.BenchLoad.Pod (PodShape (Limited))
+import Ecluse.BenchLoad.Support (floorsAtTwoCores, slowNetwork, twoCores)
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), RunEvidence (..), classifyEnding, runVerdict, runViolations)
 
 spec :: Spec
@@ -82,15 +81,15 @@ spec = do
 
     describe "runVerdict" $ do
         it "reads each pass of each scenario against its own floor" $
-            runVerdict OnDemand (Enforced twoCores floors) (Map.keysSet floors) [(("npm/merge-cold", Loaded), Right healthy), (("npm/merge-cold", ConcurrencyOne), Right healthy), (("pypi/index-cold", Loaded), Right pypi), (("pypi/index-cold", ConcurrencyOne), Right pypi{reSuccesses = [("", 133)]})]
+            runVerdict OnDemand (Enforced twoCores floorsAtTwoCores) (Map.keysSet floorsAtTwoCores) [(("npm/merge-cold", Loaded), Right healthy), (("npm/merge-cold", ConcurrencyOne), Right healthy), (("pypi/index-cold", Loaded), Right pypi), (("pypi/index-cold", ConcurrencyOne), Right pypi{reSuccesses = [("", 133)]})]
                 `shouldBe` [ "npm/merge-cold (2cpu-1gib, 100 connections): 130 successful responses, below the floor of 338"
                            , "pypi/index-cold (2cpu-1gib, 100 connections): 133 successful responses, below the floor of 134"
                            ]
         it "reports a pass whose scenario process failed, under its scenario's name" $
-            runVerdict OnDemand (Enforced twoCores floors) (Map.keysSet floors) [(("pypi/index-cold", Loaded), Left "the scenario process exited 1.")]
+            runVerdict OnDemand (Enforced twoCores floorsAtTwoCores) (Map.keysSet floorsAtTwoCores) [(("pypi/index-cold", Loaded), Left "the scenario process exited 1.")]
                 `shouldBe` ["pypi/index-cold: the scenario process exited 1."]
         it "appends a held run's floors for counts it does not check" $
-            runVerdict OnDemand (Enforced twoCores floors) (Set.delete ("pypi/index-cold", ConcurrencyOne) (Map.keysSet floors)) [(("pypi/index-cold", Loaded), Right pypi{reSuccesses = [("", 1)]})]
+            runVerdict OnDemand (Enforced twoCores floorsAtTwoCores) (Set.delete ("pypi/index-cold", ConcurrencyOne) (Map.keysSet floorsAtTwoCores)) [(("pypi/index-cold", Loaded), Right pypi{reSuccesses = [("", 1)]})]
                 `shouldBe` [ "pypi/index-cold (2cpu-1gib, 100 connections): 1 successful responses, below the floor of 964"
                            , "bench/load/floors.json: the concurrencyOne floor for pypi/index-cold under 2cpu-1gib names no count this run checks"
                            ]
@@ -108,18 +107,3 @@ spec = do
 healthy, pypi :: RunEvidence
 healthy = RunEvidence "npm/merge-cold (2cpu-1gib, 100 connections)" [("", 130)] 0 (Just CleanShutdown) False
 pypi = RunEvidence "pypi/index-cold (2cpu-1gib, 100 connections)" [("", 964)] 0 (Just CleanShutdown) False
-
-twoCores :: PodShape
-twoCores = Limited 2 (1024 * 1024 * 1024)
-
-floors :: Map FloorKey Int
-floors =
-    Map.fromList
-        [ (("npm/merge-cold", Loaded), 338)
-        , (("npm/merge-cold", ConcurrencyOne), 46)
-        , (("pypi/index-cold", Loaded), 964)
-        , (("pypi/index-cold", ConcurrencyOne), 134)
-        ]
-
-slowNetwork :: Enforcement
-slowNetwork = NotHeld (LatencyAboveCeiling 444 250 :| [])

@@ -24,16 +24,18 @@ import UnliftIO (bracket_)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Floors (
-    Enforcement,
+    Enforcement (NotHeld),
     FloorKey,
     Floors (floorsCalibration),
     Pass (ConcurrencyOne, Loaded),
     RunFacts (..),
+    Unheld (ThrashProbe),
     enforce,
     loadFloors,
     patternOverridesIn,
     runnerIn,
     triggerIn,
+    unheldViolations,
  )
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (lkUpstreamLatencyMicros),
@@ -74,9 +76,11 @@ runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     shape <- podShapeFromEnv
     selected <- selectedKeys
     thrash <- thrashLimitsFromEnv
+    environment <- Map.fromList . map (bimap toText toText) <$> getEnvironment
     (rendered, violations) <- case thrash of
-        Just limits -> runThrashProbe knobs limits
-        Nothing -> runPasses knobs shape selected
+        -- The probe is never held to the floors, which a scheduled run must be.
+        Just limits -> second (unheldViolations (triggerIn environment) (NotHeld (ThrashProbe :| [])) <>) <$> runThrashProbe knobs limits
+        Nothing -> runPasses environment knobs shape selected
     -- The probe reads OOM kills and heap overflows as results, so only a broken probe has a verdict.
     let output = T.intercalate "\n" (rendered <> [renderVerdict violations | isNothing thrash || not (null violations)])
     putText output
@@ -90,30 +94,31 @@ data Setup = Setup
     , setupShape :: PodShape
     , setupSelected :: Maybe [Text]
     , setupEnforcement :: Enforcement
-    , setupNpmBaseline :: BaselineSource
+    , setupBaselineOf :: Ecosystem -> BaselineSource
     , setupSelf :: FilePath
     , setupCapabilities :: Int
     , setupProcessors :: Int
     }
 
-runPasses :: LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
-runPasses knobs shape selected = do
+runPasses :: Map Text Text -> LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
+runPasses environment knobs shape selected = do
     -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
-    environment <- Map.fromList . map (bimap toText toText) <$> getEnvironment
     npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     processors <- getNumProcessors
-    let facts =
+    -- One source for what each fixture injects, so the latency compared is the latency injected.
+    let baselineOf eco = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) npmBaseline
+        facts =
             RunFacts
                 { rfSettings = operatingPoint knobs selected (patternOverridesIn environment)
                 , rfRunner = runnerIn environment
                 , rfShape = shape
-                , rfNpmLatencyMs = baselineInjectedMs (fixtureBaseline Npm (lkUpstreamLatencyMicros knobs) npmBaseline)
+                , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
                 }
         enforcement = enforce floors facts
-    ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement npmBaseline self capabilities processors)) fixtures
+    ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement baselineOf self capabilities processors)) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
@@ -155,7 +160,7 @@ fixturePasses setup fixture
     chosen = filter runsHere (fixtureScenarios fixture)
     serviceTime = filter scenarioServiceTime chosen
     runsHere s = maybe True (keyOf s `elem`) (setupSelected setup) && runsUnder (setupShape setup) s
-    baseline = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) (setupNpmBaseline setup)
+    baseline = setupBaselineOf setup eco
     injMs = baselineInjectedMs baseline
     loadOverrides = [latencyOverride injMs, childRts capabilities]
     c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), childRts capabilities]

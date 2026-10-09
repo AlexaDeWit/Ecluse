@@ -11,8 +11,9 @@ import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint, calRuns), Floors (floorsByShape, floorsCalibration), Pass (ConcurrencyOne, Loaded), loadFloors)
 import Ecluse.BenchLoad.Harness (defaultLoadKnobs, operatingPoint)
-import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), scheduledPodShapes)
+import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
 import Ecluse.BenchLoad.Scenarios (checkedCounts)
+import Ecluse.BenchLoad.Support (twoCores)
 
 spec :: Spec
 spec = do
@@ -41,8 +42,6 @@ spec = do
         it "record at least the ten runs they were calibrated from" $
             withCommitted $ \floors ->
                 length (calRuns (floorsCalibration floors)) `shouldSatisfy` (>= 10)
-  where
-    twoCores = Limited 2 (1024 * 1024 * 1024)
 
 withCommitted :: (Floors -> Expectation) -> Expectation
 withCommitted check = loadFloors >>= either (expectationFailure . toString) check

@@ -1082,6 +1082,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Scenarios
     Ecluse.BenchLoad.ScenariosSpec
     Ecluse.BenchLoad.SelectionSpec
+    Ecluse.BenchLoad.Support
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Oha

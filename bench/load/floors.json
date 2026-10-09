@@ -1,5 +1,5 @@
 {
-  "_note": "Success floors for the load test (bench/load). floors holds, per pod shape and scenario, the fewest successes the scenario may have in its loaded pass and, where it joins that pass, in its concurrency-one pass. A run held to the floors fails on a count below its floor, on a scenario without a floor, and on a floor that names no scenario. A ramp holds every step to its floor, and a paired scenario both of its loads. A run is held only when it matches calibration: on GitHub Actions under runnerOs and runnerArch, at operatingPoint, under a pod shape that floors holds, and while its npm fixture injects at most npmInjectedLatency.ceilingMs of upstream latency. In operatingPoint, null leaves a bound to the proxy's computed default, null scenarios means every scenario, and patternOverrides names the BENCH_PATTERN_* variables set. runs lists every run a floor came from, each with the commit it measured. docs/testing.md, Success floors, has the recalibration procedure.",
+  "_note": "Success floors for the load test (bench/load). floors holds, per pod shape and scenario, the fewest successes the scenario may have in its loaded pass and, where it joins that pass, in its concurrency-one pass. A run held to the floors fails on a count below its floor, on a scenario without a floor, and on a floor that names no scenario. A ramp holds every step to its floor, and a paired scenario both of its loads. A run is held only when it matches calibration: on GitHub Actions under runnerOs and runnerArch, at operatingPoint, under a pod shape that floors holds, and while its npm fixture injects at most npmInjectedLatency.ceilingMs of upstream latency. In operatingPoint, null leaves a bound to the proxy's computed default, null scenarios means every scenario, and patternOverrides names the BENCH_PATTERN_* variables set. runs lists every run a floor came from, each with the commit it measured. npmInjectedLatency.highestMs holds, per pod shape, the highest upstream latency the npm fixture injected in those runs. docs/testing.md, Success floors, has the recalibration procedure.",
   "calibration": {
     "rule": "Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them.",
     "runner": "ubuntu-26.04-arm",
@@ -31,9 +31,9 @@
       "patternOverrides": []
     },
     "npmInjectedLatency": {
-      "rule": "The ceiling is 1.5 times the highest upstream latency the npm fixture injected in the calibration runs, rounded up to 10 ms.",
-      "highestMs": 165,
-      "ceilingMs": 250
+      "rule": "The ceiling is 1.5 times the lowest of the pod shapes' highest latencies, rounded up to 10 ms. A latency-bound floor first breaches near twice the highest latency of its own pod shape, so the pod shape with the lowest one binds.",
+      "highestMs": { "unlimited": 137, "2cpu-1gib": 135, "4cpu-1gib": 141, "4cpu-2gib": 165 },
+      "ceilingMs": 210
     }
   },
   "floors": {

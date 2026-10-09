@@ -738,6 +738,9 @@ The check fails closed, and it covers every scenario the zero-success check cove
 - `Ecluse.BenchLoad.ScenariosSpec`, in the gating unit suite, compares the file with the harness's
   scenarios and the four scheduled pod shapes. A scenario added without floors therefore fails its
   pull request instead of the next scheduled run.
+- No check ties those four shapes to the workflow's matrix. A shape added to the matrix fails its
+  scheduled job, because the file holds no entry for it. A shape dropped from the matrix goes
+  unnoticed.
 
 A run is held to the floors only when it matches what they were calibrated at. The file's
 `calibration` record holds each part, and the harness reads the run's side from its environment:
@@ -747,7 +750,7 @@ A run is held to the floors only when it matches what they were calibrated at. T
 | Runner | Runs on GitHub Actions under `runnerOs` and `runnerArch` (Linux, ARM64) | `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH` |
 | Settings | Equals `operatingPoint`: every load knob at its default (30 seconds, 100 connections, the default payload, the proxy's computed admission and pools), every scenario, and no `BENCH_PATTERN_*` variable set | The `BENCH_LOAD_*` knobs, `BENCH_LOAD_SCENARIOS`, and the names of the `BENCH_PATTERN_*` variables that are set |
 | Pod shape | Runs under a shape that `floors` holds | `BENCH_LOAD_POD` |
-| Injected npm latency | Injects at most `npmInjectedLatency.ceilingMs`, 250 ms | The public round trip the run probes, which the report prints as "injected upstream latency" |
+| Injected npm latency | Injects at most `npmInjectedLatency.ceilingMs` | The public round trip the run probes, which the report prints as "injected upstream latency" |
 
 A run that misses a part is not held. It skips the floor check, its floor cells read `not held`,
 and the "Success floors" section of its report names every reason in one line. Every other check
@@ -755,14 +758,17 @@ applies to it. A dispatch that changes only the pod shape, among the four, is he
 another machine is not, and neither is the GC-thrash probe.
 
 A scheduled run must be held. When its settings, its runner, or its pod shape keep it off the
-floors, it fails with one violation that names what differs. A changed workflow default therefore
-turns the next scheduled run red, where it would otherwise switch the floors off. Latency above the
-ceiling is the one exception: the network decides it, so that run stays green and not held.
+floors, or when it runs the GC-thrash probe, it fails with one violation that names the reason. A
+changed workflow default therefore turns the next scheduled run red, where it would otherwise
+switch the floors off. Latency above the ceiling is the one exception: the network decides it, so
+that run stays green and not held.
 
 The harness compares nothing else:
 
 - `BENCH_LOAD_PROBE_RTT` only swaps the probed latency for the configured 5 ms, which is under the
-  ceiling.
+  ceiling. A run with the probe off, or with a probe that failed, is therefore held, and at 5 ms its
+  latency-bound counts sit so far above their floors (more than thirty times in the concurrency-one
+  pass) that those floors detect nothing on it.
 - The workflow fixes `BENCH_LOAD_ISOLATE_OHA` and the harness's `-N`, and no dispatch input changes
   them.
 - The harness reads the runner's operating system and architecture, not its label, so any Linux
@@ -771,16 +777,24 @@ The harness compares nothing else:
 The npm fixture injects the public round trip each run probes. The PyPI fixture runs no probe and
 injects the configured 5 ms. The latency-bound npm counts (`npm/tarball-hot-path`,
 `npm/tarball-onboarding`, `npm/worker-mirroring`, and the npm concurrency-one pass) fall as that
-latency rises, so they spread the widest between nights. The ceiling is 1.5 times the highest
-latency of the calibration runs (165 ms), rounded up to 10 ms. Fitted over those runs, the first
-floor a healthy run breaches is `npm/tarball-hot-path` near 271 ms, so a held run has room below
-it. On a night with a slower network the job stays green, and its "Success floors" section gives
-the latency its npm fixture injects and the ceiling. That whole run is not held, its PyPI
-scenarios included, because the harness decides once for the run.
+latency rises, so they spread the widest between nights. A latency-bound floor is half a count
+that its own pod shape's slowest calibration run set, so it first breaches near twice that shape's
+highest latency. The ceiling is therefore 1.5 times the lowest of the pod shapes' highest
+latencies, rounded up to 10 ms: about three quarters of the latency at which the first floor
+breaches. `npmInjectedLatency.highestMs` records each shape's highest latency, so you can check the
+ceiling against the rule. On a night with a slower network the job stays green, and its "Success
+floors" section gives the latency its npm fixture injects and the ceiling. That whole run is not
+held, its PyPI scenarios included, because the harness decides once for the run.
 
-To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`. Leave out a
-run that was red, or that the committed floors would fail, and take the next older run in its
-place, so a collapse never lowers a floor. Read each pod shape's `bench-load-results.md`:
+To recalibrate, take the last ten scheduled runs of the Load test workflow on `main`, and take the
+next older run in place of each one you leave out:
+
+| Leave out a run | Why |
+|---|---|
+| That was red, or that the committed floors would fail | A collapse must never lower a floor |
+| With a job above the latency ceiling, which is green and not held | It would lift the recorded latency, and the ceiling with it |
+
+Read each pod shape's `bench-load-results.md`:
 
 | Figure | Where the report shows it |
 |---|---|
@@ -796,14 +810,20 @@ with several loads takes the lowest count of any of them. Then write the `calibr
 - `runs`: each run's URL with the commit it measured. Ten runs can span commits, so every run
   carries its own.
 - `rule`, `runner`, `runnerOs`, `runnerArch`, and `operatingPoint`.
-- `npmInjectedLatency`: the highest injected npm latency of the forty reports, and the ceiling. The
-  reader refuses a ceiling that is not 1.5 times the highest, rounded up to 10 ms.
+- `npmInjectedLatency`: under `highestMs`, each pod shape's highest injected npm latency over the
+  runs in `runs`, and the ceiling. The reader refuses a ceiling that is not 1.5 times the lowest of
+  those, rounded up to 10 ms, and a record whose pod shapes are not the ones `floors` holds.
 
-A new scenario needs floors before ten nights hold it. Dispatch the workflow at least three times
-on the branch that adds it. Those runs go red on the missing floors, and their reports carry the
-counts all the same. Set the scenario's floors to half its lowest count by the same rule, and add
-those runs to `runs`, each with the branch commit it measured. The next recalibration replaces
-those floors and drops those runs.
+Two cases have no ten scheduled runs to take:
+
+| Case | Why | What to do |
+|---|---|---|
+| A new scenario | No night has run it | Dispatch the workflow at least three times on the branch that adds it. Those runs go red on the missing floors, and their reports carry the counts all the same. Set the scenario's floors to half its lowest count |
+| A deliberate change of a knob default, the runner, or the pod shapes | A scheduled run at the changed setting is red by rule until the file matches it | Make the change and the recalibration in one pull request. Dispatch the workflow at least three times on that branch. Dispatched runs are on demand, so the rule does not fail them, and their reports carry every count. Set every floor from those runs |
+
+In both cases, add the dispatched runs to `runs`, each with the branch commit it measured. They
+count toward their pod shape's highest latency like any run in `runs`. The next recalibration from
+ten scheduled runs replaces those floors and drops those runs.
 
 A report prints each floor beside the count it holds, so you can read a run against the floors
 without the file.

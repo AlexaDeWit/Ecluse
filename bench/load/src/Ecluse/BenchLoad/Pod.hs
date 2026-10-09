@@ -34,7 +34,7 @@ data PodShape
     deriving stock (Eq, Ord, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
 
--- | The shapes a scheduled run measures, in the order of the workflow's matrix.
+-- | The shapes the committed floors must hold. The workflow's matrix lists the scheduled ones, and no check ties this list to it.
 scheduledPodShapes :: [PodShape]
 scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
 

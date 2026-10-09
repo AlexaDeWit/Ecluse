@@ -16,6 +16,7 @@ module Ecluse.BenchLoad.Floors (
     FloorKey,
     OperatingPoint (..),
     RunnerKind (..),
+    RunnerReading (..),
     CalibrationRun (..),
     LatencyCeiling (..),
     latencyCeilingMs,
@@ -140,6 +141,18 @@ data RunnerKind = RunnerKind
     }
     deriving stock (Eq, Show)
 
+-- | What a run's environment says of its runner: each variable as read, 'Nothing' when it is unset.
+data RunnerReading = RunnerReading
+    { rrGithubActions :: Maybe Text
+    , rrOs :: Maybe Text
+    , rrArch :: Maybe Text
+    }
+    deriving stock (Eq, Show)
+
+-- What a run on a GitHub Actions runner of this kind reads.
+readingOn :: RunnerKind -> RunnerReading
+readingOn kind = RunnerReading (Just "true") (Just (rkOs kind)) (Just (rkArch kind))
+
 -- | One run the floors were calibrated from, and the commit it measured.
 data CalibrationRun = CalibrationRun
     { runUrl :: Text
@@ -154,26 +167,39 @@ instance FromJSON CalibrationRun where
             fail "a calibration run must state its URL and its commit"
         pure run
 
--- | The most latency the npm fixture injected in the calibration runs, and the most a held run may inject.
+-- | The highest latency the npm fixture injected in the calibration runs under each pod shape, and the most a held run may inject.
 data LatencyCeiling = LatencyCeiling
     { lcRule :: Text
-    , lcHighestMs :: Int
+    , lcHighestMs :: Map PodShape Int
     , lcCeilingMs :: Int
     }
     deriving stock (Eq, Show)
 
 instance FromJSON LatencyCeiling where
     parseJSON = withObject "LatencyCeiling" $ \o -> do
-        latency <- LatencyCeiling <$> o .: "rule" <*> o .: "highestMs" <*> o .: "ceilingMs"
-        when (T.null (lcRule latency) || lcHighestMs latency < 1) $
-            fail "the latency ceiling must state its rule and a positive highest latency"
-        when (lcCeilingMs latency /= latencyCeilingMs (lcHighestMs latency)) $
-            fail "the latency ceiling must be 1.5 times the highest latency, rounded up to 10 ms"
-        pure latency
+        rule <- o .: "rule"
+        highest <- Map.fromList <$> (traverse shapeLatency . Map.toList =<< o .: "highestMs")
+        most <- o .: "ceilingMs"
+        when (T.null rule || any (< 1) highest) $
+            fail "the latency ceiling must state its rule, and a positive highest latency for each pod shape"
+        when (fmap latencyCeilingMs (nonEmpty (Map.elems highest)) /= Just most) $
+            fail "the latency ceiling must be 1.5 times the lowest of the pod shapes' highest latencies, rounded up to 10 ms"
+        pure (LatencyCeiling rule highest most)
+      where
+        shapeLatency :: (Text, Int) -> Parser (PodShape, Int)
+        shapeLatency (name, highest) = (,highest) <$> shapeNamed name
 
--- | The ceiling for a highest calibrated latency: one and a half times it, rounded up to 10 ms.
-latencyCeilingMs :: Int -> Int
-latencyCeilingMs highestMs = (highestMs * 3 + 19) `div` 20 * 10
+{- | The ceiling the rule gives: 1.5 times the lowest of the pod shapes' highest latencies, rounded up
+to 10 ms. A latency-bound floor first breaches near twice its own shape's highest, so the lowest binds.
+-}
+latencyCeilingMs :: NonEmpty Int -> Int
+latencyCeilingMs (highest :| others) = (foldl' min highest others * 3 + 19) `div` 20 * 10
+
+-- Only the rendered form names a pod shape, so two keys never mean the same one.
+shapeNamed :: Text -> Parser PodShape
+shapeNamed name = case parsePodShape name of
+    Right shape | renderPodShape shape == name -> pure shape
+    _ -> fail ("the floors name a pod shape that is not in its rendered form: " <> toString name)
 
 -- | Where the floors were measured, the rule that set them, and what a run must match to be held to them.
 data Calibration = Calibration
@@ -212,13 +238,13 @@ instance FromJSON Floors where
     parseJSON = withObject "Floors" $ \o -> do
         calibration <- o .: "calibration"
         shapes <- o .: "floors"
-        Floors calibration . Map.fromList <$> traverse parseShape (Map.toList shapes)
+        byShape <- Map.fromList <$> traverse parseShape (Map.toList shapes)
+        when (Map.keysSet byShape /= Map.keysSet (lcHighestMs (calNpmLatency calibration))) $
+            fail "the latency ceiling must record a highest latency for each pod shape the floors hold, and for no other"
+        pure (Floors calibration byShape)
       where
-        -- Only the rendered form names a shape, so two keys never mean the same one.
         parseShape :: (Text, Map Text (Map Text Int)) -> Parser (PodShape, Map FloorKey Int)
-        parseShape (name, scenarios) = case parsePodShape name of
-            Right shape | renderPodShape shape == name -> (shape,) . Map.fromList . concat <$> traverse parseScenario (Map.toList scenarios)
-            _ -> fail ("the floors name a pod shape that is not in its rendered form: " <> toString name)
+        parseShape (name, scenarios) = (,) <$> shapeNamed name <*> (Map.fromList . concat <$> traverse parseScenario (Map.toList scenarios))
         parseScenario :: (Text, Map Text Int) -> Parser [(FloorKey, Int)]
         parseScenario (scenario, passes) = traverse (parseFloor scenario) (Map.toList passes)
         parseFloor :: Text -> (Text, Int) -> Parser (FloorKey, Int)
@@ -252,11 +278,11 @@ triggerIn environment
     | Map.lookup "GITHUB_EVENT_NAME" environment == Just "schedule" = Scheduled
     | otherwise = OnDemand
 
--- | The runner GitHub's environment describes, 'Nothing' off GitHub Actions.
-runnerIn :: Map Text Text -> Maybe RunnerKind
-runnerIn environment = do
-    guard (Map.lookup "GITHUB_ACTIONS" environment == Just "true")
-    RunnerKind <$> Map.lookup "RUNNER_OS" environment <*> Map.lookup "RUNNER_ARCH" environment
+-- | What @GITHUB_ACTIONS@, @RUNNER_OS@, and @RUNNER_ARCH@ say of the runner in an environment.
+runnerIn :: Map Text Text -> RunnerReading
+runnerIn environment = RunnerReading (variable "GITHUB_ACTIONS") (variable "RUNNER_OS") (variable "RUNNER_ARCH")
+  where
+    variable name = Map.lookup name environment
 
 -- | The request-pattern variables an environment sets, by name. The floors were calibrated with none set.
 patternOverridesIn :: Map Text Text -> [Text]
@@ -265,8 +291,7 @@ patternOverridesIn = filter ("BENCH_PATTERN_" `T.isPrefixOf`) . Map.keys
 -- | What decides whether a run is held to the floors.
 data RunFacts = RunFacts
     { rfSettings :: OperatingPoint
-    , rfRunner :: Maybe RunnerKind
-    -- ^ 'Nothing' off GitHub Actions.
+    , rfRunner :: RunnerReading
     , rfShape :: PodShape
     , rfNpmLatencyMs :: Int
     -- ^ What the npm fixture injects: the public round trip the run probed, or the configured latency.
@@ -277,10 +302,12 @@ data RunFacts = RunFacts
 data Unheld
     = -- | It differs from the calibrated operating point in these settings.
       SettingsDiffer (NonEmpty Text)
-    | -- | It does not run on this runner, the calibrated one, named by its label and its kind.
-      OtherRunner Text RunnerKind
+    | -- | It does not run on the calibrated runner, named by its label and its kind. Last is what the run read.
+      OtherRunner Text RunnerKind RunnerReading
     | -- | The floors hold none for its pod shape.
       ShapeNotCalibrated PodShape
+    | -- | It runs the GC-thrash probe in place of the passes, and the probe is never held.
+      ThrashProbe
     | -- | Its npm fixture injects this many milliseconds, above this ceiling.
       LatencyAboveCeiling Int Int
     deriving stock (Eq, Show)
@@ -305,7 +332,7 @@ enforce floors facts = case (Map.lookup shape (floorsByShape floors), reasons) o
     most = lcCeilingMs (calNpmLatency calibration)
     reasons =
         [SettingsDiffer settings | Just settings <- [nonEmpty (differingSettings (calOperatingPoint calibration) (rfSettings facts))]]
-            <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) | rfRunner facts /= Just (calRunnerKind calibration)]
+            <> [OtherRunner (calRunner calibration) (calRunnerKind calibration) (rfRunner facts) | rfRunner facts /= readingOn (calRunnerKind calibration)]
             <> [LatencyAboveCeiling (rfNpmLatencyMs facts) most | rfNpmLatencyMs facts > most]
 
 -- | What one scenario's successes are held to in one pass.
@@ -347,16 +374,28 @@ unheldViolations trigger enforcement = case (trigger, enforcement) of
 configurationFault :: Unheld -> Maybe Text
 configurationFault reason = case reason of
     SettingsDiffer _ -> Just (describeUnheld reason)
-    OtherRunner _ _ -> Just (describeUnheld reason)
+    OtherRunner{} -> Just (describeUnheld reason)
     ShapeNotCalibrated _ -> Just (describeUnheld reason)
+    ThrashProbe -> Just (describeUnheld reason)
     LatencyAboveCeiling _ _ -> Nothing
 
 describeUnheld :: Unheld -> Text
 describeUnheld = \case
     SettingsDiffer settings -> "it differs from the calibrated operating point in " <> T.intercalate ", " (toList settings)
-    OtherRunner label kind -> "it does not run on the calibrated runner (" <> label <> ": GitHub Actions on " <> rkOs kind <> " " <> rkArch kind <> ")"
+    OtherRunner label kind reading ->
+        "it does not run on the calibrated runner ("
+            <> label
+            <> ": GitHub Actions on "
+            <> rkOs kind
+            <> " "
+            <> rkArch kind
+            <> "), and the harness read "
+            <> T.intercalate ", " [readAs "GITHUB_ACTIONS" (rrGithubActions reading), readAs "RUNNER_OS" (rrOs reading), readAs "RUNNER_ARCH" (rrArch reading)]
     ShapeNotCalibrated shape -> "the floors hold no entry for the pod shape " <> renderPodShape shape
+    ThrashProbe -> "it runs the GC-thrash probe in place of the passes"
     LatencyAboveCeiling injected most -> "its npm fixture injects " <> show injected <> " ms of upstream latency, above the ceiling of " <> show most <> " ms"
+  where
+    readAs name = maybe (name <> " unset") ((name <> "=") <>)
 
 -- | The report's one line on the floors: what a held run is held to, or every reason a run is not held.
 describeEnforcement :: Calibration -> Enforcement -> Text
