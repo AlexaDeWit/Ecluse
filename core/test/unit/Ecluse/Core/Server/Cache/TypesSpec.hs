@@ -2,28 +2,30 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Cache keys: the pinned rendering of each store, and the identity that keeps entries apart.
+-- | Cache keys: the pinned rendering of each store, and the store and identity that keep entries apart.
 module Ecluse.Core.Server.Cache.TypesSpec (spec) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Short qualified as SBS
 import Data.Universe.Class qualified as Universe
-import Hedgehog (Gen, PropertyT, assert, cover, forAll, (===))
+import Hedgehog (Gen, PropertyT, assert, cover, forAll, (/==), (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, fullKey, renderCacheKey, versionKey)
+import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, cacheKeyStore, fullKey, renderCacheKey, versionKey)
 import Ecluse.Core.Server.Conditional (ETag, mkStrongETag)
+import Ecluse.Core.Telemetry.Metrics (CacheStore (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Package (npmVersion, pypiVersion, scopedNpm, unscopedNpm, unscopedPyPI)
 
 spec :: Spec
 spec = do
     renderingSpec
+    storeSpec
     ecosystemSpec
     identitySpec
     instanceSpec
@@ -40,8 +42,8 @@ renderingSpec = describe "the rendering of each store" $ do
             hedgehog $ do
                 subject <- forAll genSubject
                 let rendering = SBS.fromShort (renderCacheKey (keyOf subject))
-                    (namespace, digest) = BS8.splitAt (BS8.length (namespaceOf subject)) rendering
-                namespace === namespaceOf subject
+                    (namespace, digest) = BS8.splitAt (BS8.length (namespaceOf (subjectStore subject))) rendering
+                namespace === namespaceOf (subjectStore subject)
                 BS8.length digest === 64
                 assert (BS8.all (`BS8.elem` "0123456789abcdef") digest)
 
@@ -80,6 +82,14 @@ pinnedKeys =
         )
     ]
 
+storeSpec :: Spec
+storeSpec = describe "the store" $
+    it "tags every store's key with that store and renders it under the store's own name" $
+        for_ Universe.universe $ \store -> do
+            let key = keyOf sampleSubject{subjectStore = store}
+            cacheKeyStore key `shouldBe` store
+            SBS.fromShort (renderCacheKey key) `shouldSatisfy` (namespaceOf store `BS8.isPrefixOf`)
+
 ecosystemSpec :: Spec
 ecosystemSpec = describe "the ecosystem component" $
     it "frames every constructor as its own wire name" $ do
@@ -111,10 +121,11 @@ identitySpec = describe "the identity" $ do
         fullKey pypiIndex (unscopedPyPI "Flask_SQLAlchemy") `shouldBe` fullKey pypiIndex (unscopedPyPI "flask-sqlalchemy")
 
     describe "properties" $ do
-        it "gives two subjects one identity only when they are the same entry" $
+        it "gives two subjects of one store one identity only when they are the same entry" $
             hedgehog $ do
                 (a, b) <- forAllPairs
-                (cacheKeyIdentity (keyOf a) == cacheKeyIdentity (keyOf b)) === sameEntry a b
+                when (subjectStore a == subjectStore b) $
+                    (cacheKeyIdentity (keyOf a) == cacheKeyIdentity (keyOf b)) === sameEntry a b
 
         it "gives two subjects one rendering only when they are the same entry" $
             hedgehog $ do
@@ -122,17 +133,22 @@ identitySpec = describe "the identity" $ do
                 (renderCacheKey (keyOf a) == renderCacheKey (keyOf b)) === sameEntry a b
 
 instanceSpec :: Spec
-instanceSpec = describe "equality, order and hashing" $
+instanceSpec = describe "equality and hashing" $
     describe "properties" $ do
         it "equates two keys only when they are the same entry" $
             hedgehog $ do
                 (a, b) <- forAllPairs
                 (keyOf a == keyOf b) === sameEntry a b
 
-        it "orders keys as their renderings order" $
+        it "never equates keys of different stores" $
             hedgehog $ do
                 (a, b) <- forAllPairs
-                compare (keyOf a) (keyOf b) === comparing (renderCacheKey . keyOf) a b
+                when (subjectStore a /= subjectStore b) (keyOf a /== keyOf b)
+
+        it "renders two equal keys alike" $
+            hedgehog $ do
+                (a, b) <- forAllPairs
+                when (keyOf a == keyOf b) (renderCacheKey (keyOf a) === renderCacheKey (keyOf b))
 
         it "hashes two equal keys alike" $
             hedgehog $ do
@@ -141,7 +157,7 @@ instanceSpec = describe "equality, order and hashing" $
 
 -- The raw components of one entry. A store's key reads its own fields and no others.
 data Subject = Subject
-    { subjectStore :: Store
+    { subjectStore :: CacheStore
     , subjectSource :: Text
     , subjectEcosystem :: Ecosystem
     , subjectScope :: Maybe Text
@@ -149,9 +165,6 @@ data Subject = Subject
     , subjectVersion :: Text
     , subjectFingerprint :: ByteString
     }
-    deriving stock (Eq, Show)
-
-data Store = FullStore | VersionStore | AssembledStore
     deriving stock (Eq, Show)
 
 keyOf :: Subject -> CacheKey
@@ -169,11 +182,14 @@ nameOf subject = mkPackageName (subjectEcosystem subject) (mkScope <$> subjectSc
 versionOf :: Subject -> Version
 versionOf subject = mkVersion (subjectEcosystem subject) (subjectVersion subject)
 
-namespaceOf :: Subject -> ByteString
-namespaceOf subject = case subjectStore subject of
+namespaceOf :: CacheStore -> ByteString
+namespaceOf = \case
     FullStore -> "ecluse:0:full:0:"
     VersionStore -> "ecluse:0:version:0:"
     AssembledStore -> "ecluse:0:assembled:0:"
+
+sampleSubject :: Subject
+sampleSubject = Subject FullStore "https://a.example" Npm Nothing "thing" "1.0.0" "fingerprint"
 
 -- Whether two subjects are one entry, by the equality of the domain values and never by a key.
 sameEntry :: Subject -> Subject -> Bool
@@ -200,32 +216,36 @@ componentsApart a b =
     alike :: (Eq component) => (Subject -> component) -> Bool
     alike component = component a == component b
 
--- A pair for a property. The run fails unless it meets equal entries and entries one component apart.
+-- A pair for a property. The run fails unless it meets equal entries, near misses, and two stores.
 forAllPairs :: PropertyT IO (Subject, Subject)
 forAllPairs = do
     (a, b) <- forAll genSubjectPair
     cover 10 "the same entry" (sameEntry a b)
     cover 10 "one component apart" (not (sameEntry a b) && componentsApart a b == 1)
+    cover 10 "different stores" (subjectStore a /= subjectStore b)
     pure (a, b)
 
--- A subject beside itself, beside itself with one component drawn again, or beside an unrelated one.
+-- A subject beside itself, one component away, in another store, or beside an unrelated subject.
 genSubjectPair :: Gen (Subject, Subject)
 genSubjectPair = do
     subject <- genSubject
-    other <- Gen.frequency [(2, pure subject), (3, genRedrawn subject), (1, genSubject)]
+    other <- Gen.frequency [(2, pure subject), (3, genRedrawn subject), (2, genInOtherStore subject), (1, genSubject)]
     pure (subject, other)
+
+-- The same components under another store.
+genInOtherStore :: Subject -> Gen Subject
+genInOtherStore subject = (\store -> subject{subjectStore = store}) <$> Gen.element (filter (/= subjectStore subject) Universe.universe)
 
 genSubject :: Gen Subject
 genSubject = Subject <$> genStore <*> genSource <*> genEcosystem <*> genScope <*> genName <*> genVersion <*> genFingerprint
 
--- The subject with its store, or one component its store's key reads, drawn again.
+-- The subject with one component its store's key reads drawn again.
 genRedrawn :: Subject -> Gen Subject
 genRedrawn subject =
-    Gen.choice $
-        ((\store -> subject{subjectStore = store}) <$> genStore) : case subjectStore subject of
-            FullStore -> package
-            VersionStore -> ((\version -> subject{subjectVersion = version}) <$> genVersion) : package
-            AssembledStore -> [(\fingerprint -> subject{subjectFingerprint = fingerprint}) <$> genFingerprint]
+    Gen.choice $ case subjectStore subject of
+        FullStore -> package
+        VersionStore -> ((\version -> subject{subjectVersion = version}) <$> genVersion) : package
+        AssembledStore -> [(\fingerprint -> subject{subjectFingerprint = fingerprint}) <$> genFingerprint]
   where
     package =
         [ (\source -> subject{subjectSource = source}) <$> genSource
@@ -234,8 +254,8 @@ genRedrawn subject =
         , (\name -> subject{subjectName = name}) <$> genName
         ]
 
-genStore :: Gen Store
-genStore = Gen.element [FullStore, VersionStore, AssembledStore]
+genStore :: Gen CacheStore
+genStore = Gen.element Universe.universe
 
 genSource :: Gen Text
 genSource = Gen.element ["", "https://a.example", "https://a.example/", "https://a.example\USnpm", "https://b.example"]

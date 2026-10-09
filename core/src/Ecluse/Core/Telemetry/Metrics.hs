@@ -177,7 +177,9 @@ instance Universe CacheResult where universe = universeGeneric
 
 -- | The independently budgeted metadata stores.
 data CacheStore = FullStore | VersionStore | AssembledStore
-    deriving stock (Eq, Generic, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Hashable CacheStore
 
 instance Universe CacheStore where universe = universeGeneric
 
