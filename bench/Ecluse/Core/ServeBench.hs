@@ -15,14 +15,15 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered)
+import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), RenderPlan (..))
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Server.Transform (serveDocumentSize)
 import Ecluse.Test.Snapshot (digestOf)
-import Test.Tasty.Bench (Benchmark, bench, bgroup, nf, whnfAppIO)
+import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
 -- | Measure real captures and the growth across synthetic release counts.
 benchmarks :: EcosystemBench -> Benchmark
@@ -41,17 +42,28 @@ benchmarks ecosystem =
   where
     serveDepth = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
 
+-- | Assemble each packed full read's listing as production does, before its render.
 npmAssemblyBenchmarks :: EcosystemBench -> Benchmark
 npmAssemblyBenchmarks ecosystem =
     bgroup
         "prepared npm assembly"
         [ bgroup
             (entryName entry)
-            [ bench label (nf (assembleMergedPackument syntheticProxyBase (Map.singleton 0 source) plan) raw)
+            [ bench label (whnf (planDepth . metadataAssemble (ebMetadata ecosystem) syntheticProxyBase (Map.singleton 0 source) plan . Just) document)
             | (label, survivors) <- [("all", Map.keysSet (infoVersions info)), ("one", Set.fromList (take 1 (Map.keys (infoVersions info))))]
             , Just plan <- [mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)]]
             ]
         | entry@(_, bytes, info, document) <- ebCorpus ecosystem
-        , Just raw <- [snd npmCached document]
-        , let source = Snapshot (digestOf bytes) raw
+        , isJust (snd npmPacked document)
+        , let source = Snapshot (digestOf bytes) document
         ]
+
+-- The survivors in the assembled plan, forcing what the render reads: its members, prefix and pieces.
+planDepth :: CachedDoc -> Int
+planDepth assembled = case snd npmRendered assembled of
+    Just plan -> rnf (planMembers plan) `seq` maybe () (`seq` ()) (planPrefix plan) `seq` pieceCount (planPieces plan)
+    Nothing -> -1
+  where
+    pieceCount = \case
+        ObjectPieces pieces -> foldl' (\count (key, piece) -> key `seq` piece `seq` count + 1) 0 pieces
+        ArrayPieces pieces -> foldl' (\count piece -> piece `seq` count + 1) 0 pieces

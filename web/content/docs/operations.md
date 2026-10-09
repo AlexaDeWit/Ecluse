@@ -454,16 +454,23 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
 | A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 2.1 bytes for npm, 4.2 bytes for PyPI |
-| A listing's response | 1.6 bytes per source byte of the documents it merges, before assembly |
+| A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.6 bytes for PyPI |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
 | A request that joins another request's public fetch or render | Nothing for that fetch or render |
 
+A listing's output basis is the larger of two estimates. One starts from the largest document the
+listing merges. The other starts from the base document, whose top-level fields the response
+keeps: the private document when there is one. Each adds the other document's size in proportion
+to the versions the starting document does not hold. A package mirrored into a private upstream
+renders about one document, so it pays for about one. A listing of one document, or of two that
+share no version, pays for every byte it merges.
+
 For packages of at least 1 MiB, the per-byte charges sit above the largest the residency tests
 measure on the captured package corpus: the most a full read holds while it parses, and a
-response's encoding with its copy. A smaller package can peak above its per-byte charge, but stays
-within what the meter holds for it, at least the entry step. The tests fail when a package would
-need more than the meter holds.
+response's encoding with its copy, for listings of one document and merges of two. A smaller
+package can peak above its per-byte charge, but stays within what the meter holds for it, at least
+the entry step. The tests fail when a package would need more than the meter holds.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The PyPI advisory variants' order in the fixture.
+-- | The order of the PyPI fixture's scenarios.
 module Ecluse.BenchLoad.PyPISpec (spec) where
 
 import Data.List (isInfixOf)
@@ -12,8 +12,13 @@ import Ecluse.BenchLoad.Harness (Scenario (scenarioName), UpstreamFixture (fixtu
 import Ecluse.BenchLoad.PyPI (pypiFixture)
 
 spec :: Spec
-spec = describe "PyPI advisory variants" $
-    it "run right after their no-database counterparts" $ do
-        let names = map scenarioName (fixtureScenarios pypiFixture)
-        names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules"]
-        names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
+spec = do
+    describe "PyPI advisory variants" $
+        it "run right after their no-database counterparts" $ do
+            names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules"]
+            names `shouldSatisfy` isInfixOf ["revalidate-not-modified", "revalidate-not-modified-advisories"]
+    describe "PyPI private copies" $
+        it "run after the cold listing and its advisory variants, from the smallest share to the complete capture" $
+            names `shouldSatisfy` isInfixOf ["index-cold", "index-cold-advisories", "index-cold-all-advisory-rules", "heavy-private-5pct", "heavy-private-25pct", "heavy-private"]
+  where
+    names = map scenarioName (fixtureScenarios pypiFixture)

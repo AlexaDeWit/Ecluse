@@ -10,11 +10,12 @@ module Ecluse.Core.SecurityBench (benchmarks) where
 import Ecluse.Test.Security.Limits (checkVersionCount)
 
 import Data.ByteString qualified as BS
-import Ecluse.Bench.Corpus (entryInfo, entryName, syntheticPackageInfo)
+import Ecluse.Bench.Corpus (entryInfo, entryName, forcedTree, syntheticPackageInfo, unHeldTree)
 import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfIO)
+import Test.Tasty (withResource)
+import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfAppIO, whnfIO)
 
 -- | Exercise bounded reads and both structural guards on real and synthetic inputs.
 benchmarks :: EcosystemBench -> Benchmark
@@ -23,7 +24,8 @@ benchmarks ecosystem =
         [env (pure bodyChunks) $ \chunks -> bench "boundedRead (8 MiB body, 64 KiB chunks)" (whnfIO (boundedReadDepth chunks))]
             <> [ bgroup
                     (entryName entry)
-                    [ bench "checkNestingDepth" (whnf (ebNestingDepth ecosystem) document)
+                    [ withResource (forcedTree ecosystem document) (const pass) $ \held ->
+                        bench "checkNestingDepth" (whnfAppIO (fmap (ebNestingDepth ecosystem . unHeldTree)) held)
                     , bench "checkVersionCount" (whnf versionCountDepth (entryInfo entry))
                     ]
                | entry@(_, _, _, document) <- ebCorpus ecosystem
