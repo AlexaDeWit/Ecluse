@@ -4,7 +4,7 @@
 
 {- | Ecosystem-independent listing decisions and artifact-location admission.
 Adapters replay the surviving versions and files onto their raw documents.
-"Ecluse.Core.Package.Filter.Internal" holds the per-artifact location check.
+"Ecluse.Core.Package.Filter.Internal" holds the location check and its drop records.
 -}
 module Ecluse.Core.Package.Filter (
     -- * Rule-filter plan
@@ -17,21 +17,18 @@ module Ecluse.Core.Package.Filter (
     enforceArtifactLocationsOf,
 ) where
 
-import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (
     InvalidEntry,
-    InvalidEntryKind (InvalidIndexFile, InvalidVersionManifest),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoInvalidEntries, infoVersions),
-    mkInvalidEntry,
     pkgVersion,
  )
-import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, ArtifactRefusal (..), artifactOrigin, resolveArtifact)
+import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, partitionArtifacts, resolveArtifact)
 import Ecluse.Core.Rules.Types (Decision (Admitted))
-import Ecluse.Core.Security (AllowedHostPorts, authorityLabel)
+import Ecluse.Core.Security (AllowedHostPorts)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (renderVersion)
 
@@ -87,8 +84,8 @@ enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
     (kept, drops) = Map.foldrWithKey step (Map.empty, []) (infoVersions info)
 
     step rawVersion details (keptAcc, dropAcc) =
-        case partitionArtifacts origin rawVersion details of
-            (Just survivors, fileDrops) -> (Map.insert rawVersion survivors keptAcc, fileDrops <> dropAcc)
+        case locatedVersion origin rawVersion details of
+            (Just located, fileDrops) -> (Map.insert rawVersion located keptAcc, fileDrops <> dropAcc)
             (Nothing, emptied) -> (keptAcc, emptied <> dropAcc)
 
 {- | The single-version form of 'enforceArtifactLocations', for the selective decode path.
@@ -96,26 +93,11 @@ enforceArtifactLocations ecosystemHosts upstreamBaseUrl info =
 -}
 enforceArtifactLocationsOf :: AllowedHostPorts -> Text -> PackageDetails -> Maybe PackageDetails
 enforceArtifactLocationsOf ecosystemHosts upstreamBaseUrl details =
-    fst (partitionArtifacts (artifactOrigin ecosystemHosts upstreamBaseUrl) (renderVersion (pkgVersion details)) details)
+    fst (locatedVersion (artifactOrigin ecosystemHosts upstreamBaseUrl) (renderVersion (pkgVersion details)) details)
 
--- 'Nothing' survivors means the version itself drops, recorded once under its version key
--- rather than once per file, so an emptied version reads as one loss.
-partitionArtifacts :: ArtifactOrigin -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
-partitionArtifacts origin rawVersion details =
-    case nonEmpty (rights resolved) of
-        Just survivors -> (Just details{pkgArtifacts = strictElements survivors}, map fileDrop refusals)
-        Nothing -> (Nothing, map (versionDrop rawVersion) (take 1 refusals))
-  where
-    resolved = map (resolveArtifact origin) (toList (pkgArtifacts details))
-    refusals = lefts resolved
-
--- Record one dropped file under its own name. 'mkInvalidEntry' reduces only a scheme-bearing
--- string, so the URL is reduced here, whatever its spelling.
-fileDrop :: ArtifactRefusal -> InvalidEntry
-fileDrop refusal =
-    mkInvalidEntry InvalidIndexFile (refusedFile refusal) (String (authorityLabel (refusedUrl refusal))) (refusedReason refusal)
-
--- Record a version whose every artifact was refused, keyed by its raw version string.
-versionDrop :: Text -> ArtifactRefusal -> InvalidEntry
-versionDrop rawVersion refusal =
-    mkInvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel (refusedUrl refusal))) (refusedReason refusal)
+-- A version with only its located artifacts, 'Nothing' when it has none, beside its drop records.
+locatedVersion :: ArtifactOrigin -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
+locatedVersion origin rawVersion details =
+    case partitionArtifacts rawVersion (map (resolveArtifact origin) (toList (pkgArtifacts details))) of
+        (Just survivors, drops) -> (Just details{pkgArtifacts = strictElements survivors}, drops)
+        (Nothing, drops) -> (Nothing, drops)
