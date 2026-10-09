@@ -60,9 +60,9 @@ import Ecluse.Core.Security (Limits (progressFloor))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
-import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille), FlightKey (FlightKey))
-import Ecluse.Core.Server.Cache (Source (Source), metadataKey)
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
+import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -72,6 +72,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Metadata (MetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
+import Ecluse.Core.Server.Pipeline.Shared (flightOf)
 import Ecluse.Core.Version (Version)
 
 -- | A parsed contribution with opaque source bytes and a digest for the derived validator.
@@ -161,7 +162,7 @@ fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> MemoryTicket -> PackageNam
 fetchPublicOrigin deps rt ticket name = do
     logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     -- Every request that shares this read waits on it, so whichever request leads it pays with their priority.
-    let flight = FlightKey (metadataKey (publicSource deps) name)
+    let flight = flightOf (fullKey (publicSource deps) name)
         origin = chargingFullReads (fullReadCharge deps (servingFlight flight ticket)) (publicOrigin rt deps)
     originResultOf <$> tryAny (awaitingFlight ticket flight (withMetadataClient rt deps (publicMetadataClient (srMetadataCache rt) (publicSource deps)) origin (`fetchFullManifest` name)))
 
@@ -208,7 +209,7 @@ privateOrigin rt deps = perCallerOrigin (pdLimits deps) (srPrivateManager rt)
 publicOrigin :: ServeRuntime -> PackumentDeps -> OriginFor Public
 publicOrigin rt deps = anonymousOrigin (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps)
 
--- The public origin's key in the shared metadata cache.
+-- The public origin's partition of the shared metadata cache.
 publicSource :: PackumentDeps -> Source
 publicSource deps = Source (registryUrlText (pdPublicBaseUrl deps))
 

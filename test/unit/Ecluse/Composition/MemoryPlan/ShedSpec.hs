@@ -17,8 +17,10 @@ import Ecluse.Core.Registry.Metadata (VersionRead)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Cache.Backend.Internal (CacheOccupancy (..), Recency (PreserveRecency), RetentionBackend (..))
 import Ecluse.Core.Server.Cache.Provider (localCacheProvider, providerAssembled, providerFull, providerVersion)
+import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), versionKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Test.Package (sampleDetails, thingName, v1_0_0)
+import Ecluse.Test.Package (npmVersion, sampleDetails, thingName, v1_0_0)
+import Ecluse.Test.Server.Cache (assembledKeyFor)
 import Ecluse.Test.Snapshot (untaggedRead)
 
 -- | Check count policy against retention, byte pressure, and explicit pins.
@@ -55,7 +57,7 @@ spec = describe "shared local entry allowance" $ do
         insertSelected fixture "513" selected64KiB
         occupancy fixture `shouldReturn` CacheOccupancy 513 (64 * mib)
         lookupSelected fixture "1" `shouldReturn` Nothing
-        rbLookup (pfAssembled fixture) (writeIORef (pfAssembledOccupancy fixture)) unexpected PreserveRecency "listing"
+        rbLookup (pfAssembled fixture) (writeIORef (pfAssembledOccupancy fixture)) unexpected PreserveRecency (assembledKeyFor "listing")
             `shouldReturn` Just assembled
 
     it "limits 1 KiB absences by global count while leaving byte headroom" $ do
@@ -88,8 +90,8 @@ plannedCache bytes entries = do
     pure (planCacheConfig settings plan)
 
 data PoolFixture = PoolFixture
-    { pfVersion :: RetentionBackend Text VersionRead
-    , pfAssembled :: RetentionBackend Text ByteString
+    { pfVersion :: RetentionBackend CacheKey VersionRead
+    , pfAssembled :: RetentionBackend CacheKey ByteString
     , pfVersionOccupancy :: IORef CacheOccupancy
     , pfAssembledOccupancy :: IORef CacheOccupancy
     }
@@ -110,13 +112,17 @@ occupancy fixture = do
     pure (CacheOccupancy (occEntries selected + occEntries assembled) (occBytes selected + occBytes assembled))
 
 insertSelected :: PoolFixture -> Text -> VersionRead -> IO ()
-insertSelected fixture = rbInsert (pfVersion fixture) (writeIORef (pfVersionOccupancy fixture)) unexpected unexpected
+insertSelected fixture = rbInsert (pfVersion fixture) (writeIORef (pfVersionOccupancy fixture)) unexpected unexpected . selectedKey
 
 insertAssembled :: PoolFixture -> Text -> ByteString -> IO ()
-insertAssembled fixture = rbInsert (pfAssembled fixture) (writeIORef (pfAssembledOccupancy fixture)) unexpected unexpected
+insertAssembled fixture = rbInsert (pfAssembled fixture) (writeIORef (pfAssembledOccupancy fixture)) unexpected unexpected . assembledKeyFor
 
 lookupSelected :: PoolFixture -> Text -> IO (Maybe VersionRead)
-lookupSelected fixture = rbLookup (pfVersion fixture) (writeIORef (pfVersionOccupancy fixture)) unexpected PreserveRecency
+lookupSelected fixture = rbLookup (pfVersion fixture) (writeIORef (pfVersionOccupancy fixture)) unexpected PreserveRecency . selectedKey
+
+-- One selected-version key per test label.
+selectedKey :: Text -> CacheKey
+selectedKey = versionKey (Source "https://public.example") thingName . npmVersion
 
 unexpected :: IO ()
 unexpected = expectationFailure "local retention unexpectedly refused or failed"

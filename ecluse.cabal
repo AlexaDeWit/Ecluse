@@ -267,6 +267,7 @@ library ecluse-core
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
@@ -939,11 +940,13 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Cache.Backend.Local.InternalSpec
     Ecluse.Core.Server.Cache.ProviderSpec
     Ecluse.Core.Server.Cache.StoreSpec
+    Ecluse.Core.Server.Cache.TypesSpec
     Ecluse.Core.Server.Cache.VersionWeightSpec
     Ecluse.Core.Server.CacheSpec
     Ecluse.Core.Server.ConditionalSpec
     Ecluse.Core.Server.ContractSpec
     Ecluse.Core.Server.FaultSpec
+    Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.PathSpec

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared authentication, admission shedding, and refusal handling.
+{- | Shared authentication, admission shedding, flight keys, and refusal handling.
 Route handlers keep their own response formats while sharing these policy decisions.
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
@@ -19,6 +19,9 @@ module Ecluse.Core.Server.Pipeline.Shared (
     hRetryAfter,
     shedRetryAfter,
     retryAfterHeaders,
+
+    -- * Shared work
+    flightOf,
 
     -- * First-party refusals
     firstPartyRule,
@@ -38,7 +41,9 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (FlightKey (FlightKey))
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
+import Ecluse.Core.Server.Cache.Types (CacheKey, cacheKeyIdentity, cacheKeyStore)
 import Ecluse.Core.Server.Context (MountBinding (bindingCredential), ServeRuntime (srAdmission, srMemoryMeter, srMetrics))
 import Ecluse.Core.Server.Response (
     HelpMessage,
@@ -75,6 +80,10 @@ shedMessage = "server is busy; retry later"
 -- | Emit Retry-After only when a decision supplies a delay.
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
 retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
+
+-- | The flight that the shared fetch or render behind a cache key runs under: the key's store and identity.
+flightOf :: CacheKey -> FlightKey
+flightOf key = FlightKey (cacheKeyStore key) (cacheKeyIdentity key)
 
 {- | Run metadata work behind the memory gate and then the CPU gate, and answer its result after both
 release. A shed at either gate answers with @shed@, counted once.

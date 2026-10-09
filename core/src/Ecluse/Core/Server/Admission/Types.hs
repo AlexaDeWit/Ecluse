@@ -21,6 +21,8 @@ module Ecluse.Core.Server.Admission.Types (
     BrakeBounds (..),
 ) where
 
+import Ecluse.Core.Telemetry.Metrics (CacheStore)
+
 -- | Live heap bytes charged per byte of a read or an output basis, in thousandths, for one ecosystem.
 data ChargeFactors = ChargeFactors
     { cfFullReadPermille :: Int
@@ -34,8 +36,8 @@ data ChargeFactors = ChargeFactors
     }
     deriving stock (Eq, Show)
 
--- | One unit of work several requests may wait on: a shared fetch or a shared render, by its cache key.
-newtype FlightKey = FlightKey Text
+-- | One unit of shared work that requests may wait on, a fetch or a render: its store and its cache key's identity.
+data FlightKey = FlightKey CacheStore ShortByteString
     deriving stock (Eq, Ord, Show)
 
 -- | What the meter holds and who waits on it, for the gauges and the sampler.

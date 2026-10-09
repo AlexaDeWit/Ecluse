@@ -43,7 +43,7 @@ import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetai
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIVersion)
-import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, newLocalRetention, weighCacheEntry)
+import Ecluse.Test.Server.Cache (assembledKeyFor, cachedMetadata, cachedVersion, externalOperations, newLocalRetention, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
@@ -59,7 +59,7 @@ newtype UnexpectedFault = UnexpectedFault MetadataError
 instance Exception UnexpectedFault
 
 resolveAssembled :: MetadataCache -> Text -> IO ByteString -> IO ByteString
-resolveAssembled = Cache.resolveAssembled noopMetricsPort
+resolveAssembled c = Cache.resolveAssembled noopMetricsPort c . assembledKeyFor
 
 countingRender :: IORef Int -> ByteString -> IO ByteString
 countingRender renders bytes = do
@@ -332,7 +332,7 @@ spec = do
             replicateM_ 2 $ do
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
                 _ <- Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
-                Cache.resolveAssembled port c "assembled" (pure "raw")
+                Cache.resolveAssembled port c (assembledKeyFor "assembled") (pure "raw")
             readIORef full `shouldReturn` [Metric.Miss, Metric.Miss]
             for_ [version, assembled] $ \seen ->
                 readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss]
@@ -347,18 +347,18 @@ spec = do
                     `shouldReturn` Right (entry name "raw")
                 Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
                     `shouldReturn` Right (untaggedRead Nothing)
-                Cache.resolveAssembled port c "assembled" (pure "raw") `shouldReturn` "raw"
+                Cache.resolveAssembled port c (assembledKeyFor "assembled") (pure "raw") `shouldReturn` "raw"
             readIORef refused `shouldReturn` concat (replicate 2 [Metric.AssembledStore, Metric.VersionStore])
 
         it "reports assembled expiry before retaining a replacement" $ do
             seen <- newIORef []
             let port = noopMetricsPort{mpAssembledCacheResidentBytes = \bytes -> modifyIORef' seen (bytes :)}
             c <- newMetadataCache (config 0 8)
-            Cache.resolveAssembled port c "expired" (pure "raw") `shouldReturn` "raw"
+            Cache.resolveAssembled port c (assembledKeyFor "expired") (pure "raw") `shouldReturn` "raw"
             weight <- sum <$> readIORef seen
             weight `shouldSatisfy` (> 0)
             threadDelay 1000
-            Cache.resolveAssembled port c "expired" (pure "new") `shouldReturn` "new"
+            Cache.resolveAssembled port c (assembledKeyFor "expired") (pure "new") `shouldReturn` "new"
             readIORef seen `shouldReturn` [weight, 0, weight]
 
         it "keeps full residency zero and reports selected-version expiry" $ do
@@ -439,7 +439,7 @@ spec = do
                 let name = unscopedNpm ("filler-" <> show i)
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
                 _ <- Cache.resolveVersion port c publicSource name (npmVersion "1.0.0") (pure (Right (untaggedRead Nothing)))
-                _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
+                _ <- Cache.resolveAssembled port c (assembledKeyFor (show i)) (pure (mkBytes 2048 'x'))
                 pass
             readIORef fullSeen `shouldReturn` 0
             total <- sum <$> traverse readIORef [versionSeen, assembledSeen]

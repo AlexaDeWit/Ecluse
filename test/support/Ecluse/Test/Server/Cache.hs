@@ -11,12 +11,15 @@ module Ecluse.Test.Server.Cache (
     newLocalBackend,
     newLocalRetention,
     newSingleFlight,
+    validatorFor,
+    assembledKeyFor,
     cachedMetadata,
     cachedVersion,
     weighCacheEntry,
     diagnosticDocumentValue,
 ) where
 
+import Crypto.Hash (SHA256 (SHA256), hashWith)
 import Data.Aeson (Value (Null), encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (NominalDiffTime)
@@ -28,7 +31,9 @@ import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCach
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend)
+import Ecluse.Core.Server.Cache.Types (CacheKey, assembledKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey)
+import Ecluse.Core.Server.Conditional (ETag, mkStrongETag)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (Version)
@@ -75,6 +80,14 @@ newLocalBackend ttl entries bytes weigh = retentionBackend LocalStorage <$> newL
 -- | Local retention fixture for generic coalescing and maintenance checks.
 newSingleFlight :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (SingleFlight e k v)
 newSingleFlight ttl entries bytes weigh = newLocalBackend ttl entries bytes weigh >>= newSingleFlightWithBackend . Just
+
+-- | A validator over the digest of some test bytes, in place of a served document's.
+validatorFor :: ByteString -> ETag
+validatorFor = mkStrongETag . hashWith SHA256
+
+-- | An assembled key for a test label, through a validator over the label's digest.
+assembledKeyFor :: Text -> CacheKey
+assembledKeyFor = assembledKey . validatorFor . encodeUtf8
 
 -- | Inspect retention with a failing origin double, so the probe never creates an entry.
 cachedMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
