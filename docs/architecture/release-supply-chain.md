@@ -11,8 +11,8 @@ contributor-facing summary and the `task` targets. The consumer-side verify reci
 
 Écluse ships as an OCI image that Nix builds (`dockerTools.buildLayeredImage`, see
 [`flake.nix`](../../flake.nix)), not a Dockerfile. The image is the binary's runtime closure plus CA
-certificates and nothing else: no shell, no package manager. It runs non-root (uid 65532) and is
-bit-for-bit reproducible. Build it locally with `task docker-build`, which writes `./result`, a
+certificates and nothing else: no shell, no package manager. It runs non-root (uid 65532). The flake's
+lock file pins its inputs. Build it locally with `task docker-build`, which writes `./result`, a
 `docker-archive`.
 
 Publishing is a separate, tag-triggered workflow
