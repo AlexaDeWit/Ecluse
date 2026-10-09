@@ -198,7 +198,8 @@ the serving path's assembly. It reports the output basis the serving path comput
 
 The single-source listing and the first four shapes are realistic: they model private copies
 that deployments serve, and they set the output charge and its regression limit. The heavy bases
-stress the basis instead, and the output charge must hold them.
+stress the basis instead, and the output charge must hold them. For the read charge, the realistic
+shapes set its margin figure, and the heavy bases set npm's charge.
 
 `Ecluse.Test.Corpus.Merge` writes each shaped document from the capture, and
 `Ecluse.Test.Corpus.Subset` cuts it to its versions. A cut document stays consistent: an npm cut

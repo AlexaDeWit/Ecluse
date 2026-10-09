@@ -466,11 +466,14 @@ to the versions the starting document does not hold. A package mirrored into a p
 renders about one document, so it pays for about one. A listing of one document, or of two that
 share no version, pays for every byte it merges.
 
-For packages of at least 1 MiB, the per-byte charges sit above the largest the residency tests
-measure on the captured package corpus: the most a full read holds while it parses, and a
-response's encoding with its copy, for listings of one document and merges of two. A smaller
-package can peak above its per-byte charge, but stays within what the meter holds for it, at least
-the entry step. The tests fail when a package would need more than the meter holds.
+For a listing that reads at least 1 MiB, the per-byte charges sit above the largest the residency
+tests measure on the captured package corpus, for one document and for merges that model the
+private copies deployments serve: the most its full reads hold while they parse, and a response's
+encoding with its copy. A smaller listing can peak above its per-byte charge. The tests hold every
+listing's reads and render within what the meter holds for it, whole 1 MiB steps and at least the
+entry step, and fail when one would need more. A document shaped unlike that corpus, such as an
+npm document made mostly of deprecation notices, can hold more than its charge, and the sampler's
+measurement of live data outside the charges, described below, absorbs the excess.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
 with `Retry-After: 1`. A request that has started reading pauses instead, keeping its CPU slot until

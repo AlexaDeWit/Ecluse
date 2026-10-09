@@ -76,7 +76,8 @@ inputs to prove it.
   `bench/corpus/pins.json`, and list them in `Ecluse.Test.Corpus` with a `CaptureUpstream`
   ([Benchmark captures](testing.md#benchmark-captures)).
 - Include several captures of at least one 1 MiB meter step, the unit the memory gate charges in.
-  Only those captures set the read charges.
+  Listings with at least one step of sources, merges included, set the read charges, and single
+  documents of at least one step set the read limits.
 - Record the captures' outputs in the golden set, as the recorded-outputs row of
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) describes.
 
