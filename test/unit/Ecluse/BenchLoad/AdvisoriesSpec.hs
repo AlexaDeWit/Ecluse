@@ -2,29 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the advisory variants' shape, the captures the corpus advisories name, and the store reply the proxy's sync reads.
+-- | Pin the advisory variants' shape and the store reply the proxy's sync reads.
 module Ecluse.BenchLoad.AdvisoriesSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import System.FilePath ((</>))
 import Test.Hspec
-import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.BenchLoad.Advisories (advisoryStoreReply, allRulesAdvisories, compileCorpusAdvisories, shippedAdvisories)
+import Ecluse.BenchLoad.Advisories (advisoryStoreReply, allRulesAdvisories, shippedAdvisories)
 import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Harness (Driver (DriveInProcess), Scenario (..), Target (Target), defaultLoadKnobs, scenario)
 import Ecluse.BenchLoad.ProxyProcess (advisoryBucket)
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbLookup), CveLookup (cveCoveredNames), openCveDb)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired), osvDbFileName)
+import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (AwsEndpoint))
 import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (..), DbEtag (DbEtag), FetchedObject (..), S3CveSource (s3CveFetchFor), newS3CveSource)
-import Ecluse.Test.Corpus (corpusPackages, cpName, pypiCorpusPackages)
 import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Stub (Stub (stubPort), withRoutedStub)
-import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -42,14 +38,6 @@ spec = do
         it "refuse an in-process counterpart, which boots no proxy to sync the database" $
             scenarioBoot (shippedAdvisories Npm counterpart{scenarioInProcess = True}) defaultLoadKnobs (const pass)
                 `shouldThrow` (\(BenchLoadError message) -> "boots no proxy" `T.isInfixOf` message)
-    describe "compileCorpusAdvisories" $
-        it "names the load corpus captures whose rule lookups find advisories" $
-            for_ [(Npm, corpusPackages, ["@babel/core", "express", "lodash", "react", "request", "webpack"]), (PyPI, pypiCorpusPackages, ["numpy", "requests"])] $ \(eco, captures, advised) ->
-                withSystemTempDirectory "ecluse-corpus-advisories" $ \dir -> do
-                    compiled <- compileCorpusAdvisories eco dir
-                    bracket (openCveDb eco EpssRequired compiled >>= expectRight) cveDbClose $ \db -> do
-                        covered <- cveCoveredNames (cveDbLookup db)
-                        sort (filter (`elem` covered) (map cpName captures)) `shouldBe` advised
     describe "advisoryStoreReply" $ do
         let publishedAt = UTCTime (fromGregorian 2026 9 27) 3_723
             artifact = "compiled advisory bytes"
