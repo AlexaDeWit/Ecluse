@@ -6,9 +6,8 @@
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
 import Crypto.Hash (Digest, SHA256, hash)
-import Data.Aeson (Object, encode, object, (.:), (.=))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.Types (Pair, Parser)
+import Data.Aeson (encode, object, (.=))
+import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -33,7 +32,7 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, writeMergeDocuments)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crBytes, crSha256), CorpusPackage (cpPackage, cpPath), cpName, readCaptureRecords)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 
 {- | Reject unauthenticated captures, roots that do not survive or release across collections, and
@@ -252,21 +251,12 @@ chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
 
 authenticate :: CorpusPackage -> IO (Int, Text)
 authenticate package = do
-    (expectedBytes, expectedHash) <- readCorpusPins (capture package) >>= either fail pure
+    records <- readCaptureRecords (pkgEcosystem (cpPackage package)) >>= either fail pure
+    record <- maybe (fail ("bench/corpus/pins.json records no capture for " <> toString (cpName package))) pure (Map.lookup (cpName package) records)
     bytes <- BS.readFile (cpPath package)
-    BS.length bytes `shouldBe` expectedBytes
-    (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` expectedHash
-    pure (expectedBytes, expectedHash)
-
-capture :: CorpusPackage -> Object -> Parser (Int, Text)
-capture package pins = do
-    captures <- pins .: "captures"
-    ecosystem <- case pkgEcosystem (cpPackage package) of
-        Npm -> captures .: "npm"
-        PyPI -> captures .: "pypi"
-        RubyGems -> fail "no RubyGems metadata residency corpus"
-    entry <- ecosystem .: Key.fromText (cpName package)
-    (,) <$> entry .: "bytes" <*> entry .: "sha256"
+    fromIntegral (BS.length bytes) `shouldBe` crBytes record
+    (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` crSha256 record
+    pure (fromIntegral (crBytes record), crSha256 record)
 
 report :: CorpusPackage -> Text -> Shape -> Measurement -> IO ()
 report package digest shape result = do

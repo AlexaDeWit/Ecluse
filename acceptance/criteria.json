@@ -1,64 +1,89 @@
 {
-  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 for feature head b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. The first run used a PR merge checkout, as detailed in _checkoutProvenance. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule. Each ecosystem names the CPU architecture its budgets were calibrated on in arch, as GHC's System.Info.arch names it. On another architecture the harness reports every leg as uncalibrated and exits 0.",
-  "ecosystems": {
+  "_note": "Allocation budgets for the performance-acceptance captures run. allocatedBytes holds, per ecosystem, package and leg, the bytes the leg allocated over its committed capture on the calibration run. A leg's budget is that figure plus marginPercent, rounded up to a whole byte. Wall-clock time has no budget. Recalibrate every figure from one arm64 CI run of the captures run, and record that run's runner and URL in calibration. calibration.commit is the commit the run checked out: a pull request run checks out the merge of its head into the base, which the log of its checkout step names.",
+  "calibration": {
+    "arch": "aarch64",
+    "runner": "ubuntu-26.04-arm",
+    "commit": "724b85b0625ccbbe922102c030c0f13053890188",
+    "runs": [
+      "https://github.com/AlexaDeWit/Ecluse/actions/runs/36566884495/job/109400980681"
+    ],
+    "marginPercent": 10
+  },
+  "allocatedBytes": {
     "npm": {
-      "arch": "x86_64",
-      "defaultBudgetMs": 100,
-      "perPackageBudgetMs": {
-        "@types/node": 300,
-        "typescript": 500,
-        "react": 250,
-        "webpack": 120,
-        "@aws-sdk/client-s3": 100
+      "lodash": {
+        "full": 11719432,
+        "singleVersion": 6883440,
+        "fullShippedAdvisories": 11941192,
+        "fullAllAdvisoryRules": 10360528
       },
-      "defaultSingleVersionBudgetMs": 25,
-      "perPackageSingleVersionBudgetMs": {
-        "@types/node": 100,
-        "typescript": 125,
-        "react": 50,
-        "webpack": 40,
-        "@aws-sdk/client-s3": 30
+      "request": {
+        "full": 13697584,
+        "singleVersion": 7683936,
+        "fullShippedAdvisories": 13822904,
+        "fullAllAdvisoryRules": 13999960
+      },
+      "react": {
+        "full": 322935288,
+        "singleVersion": 164967320,
+        "fullShippedAdvisories": 324647072,
+        "fullAllAdvisoryRules": 327818936
+      },
+      "@babel/core": {
+        "full": 30577360,
+        "singleVersion": 18155696,
+        "fullShippedAdvisories": 30763976,
+        "fullAllAdvisoryRules": 31081640
+      },
+      "typescript": {
+        "full": 677943048,
+        "singleVersion": 404254248,
+        "fullShippedAdvisories": 680163424,
+        "fullAllAdvisoryRules": 685374328
+      },
+      "express": {
+        "full": 39176576,
+        "singleVersion": 23946040,
+        "fullShippedAdvisories": 39463096,
+        "fullAllAdvisoryRules": 39861464
+      },
+      "@aws-sdk/client-s3": {
+        "full": 143475400,
+        "singleVersion": 88821512,
+        "fullShippedAdvisories": 143999200,
+        "fullAllAdvisoryRules": 145061840
+      },
+      "webpack": {
+        "full": 172701520,
+        "singleVersion": 106477816,
+        "fullShippedAdvisories": 173354496,
+        "fullAllAdvisoryRules": 170278136
+      },
+      "@types/node": {
+        "full": 400421736,
+        "singleVersion": 294969464,
+        "fullShippedAdvisories": 402071304,
+        "fullAllAdvisoryRules": 405308472
       }
     },
     "pypi": {
-      "arch": "x86_64",
-      "_calibration": {
-        "date": "2026-09-12",
-        "head": "b821206aadad083b7751f94d5d24f58851986719",
-        "_checkoutProvenance": "The head field names the feature commit. PR run 34714057634 checked out merge commit 2b76ec4c460f1146ee9edf1f73e7f60eef54f768, with parents e80cbb7e11947ffe1b97d7ae54d61b78f924070c and b821206aadad083b7751f94d5d24f58851986719. Dispatch runs 34714279674 and 34714526694 checked out b821206aadad083b7751f94d5d24f58851986719 directly. The merge-only base changes covered npm optional-null selective parsing, fault diagnostics, tests, and Cabal entries. They did not change PyPI processing. Every selected maximum came from direct-checkout run 34714526694.",
-        "runs": [
-          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714057634",
-          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714279674",
-          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714526694"
-        ],
-        "passesPerLeg": 5,
-        "observedMaximaMs": {
-          "requests": {
-            "full": 3.83,
-            "selective": 0.922
-          },
-          "numpy": {
-            "full": 75.745,
-            "selective": 17.381
-          },
-          "boto3": {
-            "full": 82.05,
-            "selective": 15.39
-          }
-        },
-        "_availability": "All three PyPI packages were measured in every run. npm typescript was unavailable in all three runs: FetchBoundExceeded (BodyTooLarge 12582912). The other eight npm packages stayed within their unchanged budgets."
+      "requests": {
+        "full": 10064552,
+        "singleVersion": 5457888,
+        "fullShippedAdvisories": 20823712,
+        "fullAllAdvisoryRules": 18447848
       },
-      "defaultBudgetMs": 180.51,
-      "perPackageBudgetMs": {
-        "requests": 8.43,
-        "numpy": 166.64,
-        "boto3": 180.51
+      "numpy": {
+        "full": 152855800,
+        "singleVersion": 103920368,
+        "fullShippedAdvisories": 158042360,
+        "fullAllAdvisoryRules": 146331968
       },
-      "defaultSingleVersionBudgetMs": 38.24,
-      "perPackageSingleVersionBudgetMs": {
-        "requests": 2.03,
-        "numpy": 38.24,
-        "boto3": 33.86
+      "boto3": {
+        "full": 173109136,
+        "singleVersion": 97558992,
+        "fullShippedAdvisories": 174593552,
+        "fullAllAdvisoryRules": 177483160
       }
     }
   }

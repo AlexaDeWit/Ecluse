@@ -152,9 +152,13 @@ tasks:
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-load'
   perf-acceptance:
-    desc: Run the live performance-acceptance harness
+    desc: Report allocation and time over live registry documents (informational)
     cmds:
-      - cabal run -v0 perf-acceptance
+      - cabal run -v0 perf-acceptance -- live
+  perf-allocation:
+    desc: Hold allocation over the committed captures to the budgets in acceptance/criteria.json (gating)
+    cmds:
+      - cabal run -v0 perf-acceptance -- captures
   doctest:
     desc: Run the Haddock >>> examples as tests
     cmds:

@@ -5,13 +5,18 @@
 {- | Advisory inputs for the benchmark corpus: the OSV records and EPSS rows captured under
 @bench/corpus/advisories/@, and a generated worst case with many ranges per package. Both take
 the served shape, an OSV export archive and a gzipped EPSS feed, for Pilot's compiler to read.
-The benchmarks and the load harness deny on them at the same suggested thresholds.
+The performance harnesses deny on them at the same suggested thresholds.
 -}
 module Ecluse.Test.Corpus.Advisories (
     AdvisoryInputs (..),
     corpusAdvisories,
+    compileAdvisoryInputs,
+    compileCorpusAdvisories,
+    checkCapturesServed,
     suggestedDenyIfCve,
     suggestedDenyIfEpss,
+    shippedPolicy,
+    allAdvisoryRules,
     SyntheticTarget (..),
     fillerTargets,
     syntheticAdvisories,
@@ -25,14 +30,29 @@ import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Short qualified as TS
+import Data.Time (nominalDay)
+import Network.HTTP.Types (status200)
 import System.FilePath (takeFileName, (</>))
 
+import Ecluse.Core.Cve (AdvisoryRange, CveLookup (cveAdvisoriesFor, cveCoveredNames))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Package (PackageName, pkgCanonical, renderPackageName)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), readAdvisories, withCveLookup)
+import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (DenyIfCveParams),
+    DenyIfEpssParams (DenyIfEpssParams),
+    FailureAlignment (FailDeny),
+    PrecededRule,
+    Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve, DenyIfEpss),
+ )
 import Ecluse.Core.Version (parseVersionKey)
 import Ecluse.Test.Corpus (readCorpusPins)
 import Ecluse.Test.Osv (osvZipOf)
+import Ecluse.Test.OsvDb (compileOsvZipDbWithFeedTo, scoresOf)
+import Ecluse.Test.Rules (atDefaultPrecedence)
 
 -- | One ecosystem's OSV export archive and the gzipped EPSS feed that scores it.
 data AdvisoryInputs = AdvisoryInputs
@@ -48,6 +68,58 @@ corpusAdvisories eco = do
     archive <- osvZipOf entries
     feed <- readPinned epss
     pure AdvisoryInputs{aiOsvZip = archive, aiEpssFeed = GZip.compress feed}
+
+{- | Compile the ecosystem's corpus advisories into the directory, returning the artifact's path.
+An artifact with no range would leave every advisory rule abstaining, so it fails.
+-}
+compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
+compileCorpusAdvisories eco dir = do
+    compiled <- corpusAdvisories eco >>= compileAdvisoryInputs eco dir
+    ranges <- scoresOf compiled
+    when (null ranges) (fail ("the " <> toString (ecosystemName eco) <> " corpus advisories compiled to no range"))
+    pure compiled
+
+-- | Compile advisory inputs into the directory through Pilot's compiler, returning the artifact's path.
+compileAdvisoryInputs :: Ecosystem -> FilePath -> AdvisoryInputs -> IO FilePath
+compileAdvisoryInputs eco dir inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
+
+{- | Check that each capture's display name is its lookup key, that the served generation names at
+least one capture, and that every capture it names yields rows through 'readAdvisories'.
+-}
+checkCapturesServed :: RuleDeps -> [PackageName] -> IO (Either Text ())
+checkCapturesServed deps packages = case filter (\package -> renderPackageName package /= lookupKey package) packages of
+    package : _ -> pure (Left ("the capture " <> renderPackageName package <> " differs from its lookup key " <> lookupKey package))
+    [] -> checkCoveredCaptures deps packages
+  where
+    lookupKey = TS.toText . pkgCanonical
+
+-- Covered captures are matched by display name, which 'checkCapturesServed' holds equal to the lookup key.
+checkCoveredCaptures :: RuleDeps -> [PackageName] -> IO (Either Text ())
+checkCoveredCaptures deps packages =
+    withCveLookup deps (traverse (cveCoveredNames . snd)) >>= \case
+        Nothing -> pure (Left "no advisory generation is serving")
+        Just covered -> case filter ((`elem` covered) . renderPackageName) packages of
+            [] -> pure (Left "the served advisories cover none of the captures")
+            named -> do
+                unserved <- filterM (fmap null . rowsTheRulesRead deps) named
+                pure (if null unserved then Right () else Left ("the served advisories return no row for " <> T.intercalate ", " (map renderPackageName unserved)))
+
+-- The rows 'readAdvisories' fetches for a package, caught on their way out of the generation it pins.
+rowsTheRulesRead :: RuleDeps -> PackageName -> IO [AdvisoryRange]
+rowsTheRulesRead deps package = do
+    seen <- newIORef []
+    let recording cve = cve{cveAdvisoriesFor = cveAdvisoriesFor cve >=> \rows -> rows <$ writeIORef seen rows}
+        spied = deps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> withCveLookup deps (use . fmap (second recording)))}
+    void (readAdvisories spied package)
+    readIORef seen
+
+-- | The shipped policy: the minimum-age quarantine and the remediation fast lane.
+shippedPolicy :: [PrecededRule]
+shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+
+-- | The shipped policy with both advisory denies, at the suggested thresholds.
+allAdvisoryRules :: [PrecededRule]
+allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
 
 -- | @DenyIfCve@ at the CVSS threshold @config/default.yaml@ suggests, failing closed.
 suggestedDenyIfCve :: DenyIfCveParams
