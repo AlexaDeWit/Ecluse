@@ -27,5 +27,6 @@ frameComponents components =
     LBS.toStrict (toLazyByteStringWith (untrimmedStrategy room smallChunkSize) LBS.empty frames)
   where
     frames = foldMap (maybe "-" frameBytes) components
-    -- One buffer holds the whole tuple: the writer wants 20 free bytes before a length and 4 before a marker.
+    -- Each present component gets its bytes, a colon, and the 20 free bytes the writer wants before a length.
+    -- An absent one gets the 4 it wants before a marker. A component over the builder's copy limit is its own chunk.
     room = sum (map (maybe 4 ((+ 21) . BS.length)) components)

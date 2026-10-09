@@ -5,9 +5,8 @@
 -- | Cache keys: the pinned identity of each store's key, and the store and identity that keep entries apart.
 module Ecluse.Core.Server.Cache.TypesSpec (spec) where
 
-import Crypto.Hash (SHA256 (SHA256), hashWith)
 import Data.Universe.Class qualified as Universe
-import Hedgehog (Gen, PropertyT, cover, forAll, (/==), (===))
+import Hedgehog (Gen, PropertyT, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
@@ -15,10 +14,10 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), assembledKey, cacheKeyIdentity, cacheKeyStore, fullKey, versionKey)
-import Ecluse.Core.Server.Conditional (ETag, mkStrongETag)
 import Ecluse.Core.Telemetry.Metrics (CacheStore (..))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Package (npmVersion, pypiVersion, scopedNpm, unscopedNpm, unscopedPyPI)
+import Ecluse.Test.Server.Cache (validatorFor)
 
 spec :: Spec
 spec = do
@@ -76,7 +75,7 @@ pinnedKeys =
         )
     ,
         ( "an assembled key"
-        , assembledKey (validatorOf "fingerprint")
+        , assembledKey (validatorFor "fingerprint")
         , AssembledStore
         , "66:\"44863b03e9909b7100e05b02526909a346fd7455183f6619e0fe6198c89981e0\""
         )
@@ -133,11 +132,6 @@ instanceSpec = describe "equality and hashing" $
                 (a, b) <- forAllPairs
                 (keyOf a == keyOf b) === sameEntry a b
 
-        it "never equates keys of different stores" $
-            hedgehog $ do
-                (a, b) <- forAllPairs
-                when (subjectStore a /= subjectStore b) (keyOf a /== keyOf b)
-
         it "hashes two equal keys alike" $
             hedgehog $ do
                 (a, b) <- forAllPairs
@@ -159,7 +153,7 @@ keyOf :: Subject -> CacheKey
 keyOf subject = case subjectStore subject of
     FullStore -> fullKey (sourceOf subject) (nameOf subject)
     VersionStore -> versionKey (sourceOf subject) (nameOf subject) (versionOf subject)
-    AssembledStore -> assembledKey (validatorOf (subjectFingerprint subject))
+    AssembledStore -> assembledKey (validatorFor (subjectFingerprint subject))
 
 sourceOf :: Subject -> Source
 sourceOf = Source . subjectSource
@@ -179,7 +173,7 @@ sameEntry a b =
     subjectStore a == subjectStore b && case subjectStore a of
         FullStore -> samePackage
         VersionStore -> samePackage && renderVersion (versionOf a) == renderVersion (versionOf b)
-        AssembledStore -> validatorOf (subjectFingerprint a) == validatorOf (subjectFingerprint b)
+        AssembledStore -> validatorFor (subjectFingerprint a) == validatorFor (subjectFingerprint b)
   where
     samePackage = sourceOf a == sourceOf b && nameOf a == nameOf b
 
@@ -198,12 +192,13 @@ componentsApart a b =
     alike :: (Eq component) => (Subject -> component) -> Bool
     alike component = component a == component b
 
--- A pair for a property. The run fails unless it meets equal entries, near misses, and two stores.
+-- A pair for a property. The run fails unless it meets equal entries, pairs of two stores, and
+-- pairs of one store that are different entries with exactly one component apart.
 forAllPairs :: PropertyT IO (Subject, Subject)
 forAllPairs = do
     (a, b) <- forAll genSubjectPair
     cover 10 "the same entry" (sameEntry a b)
-    cover 10 "one component apart" (not (sameEntry a b) && componentsApart a b == 1)
+    cover 10 "one store, one component apart" (subjectStore a == subjectStore b && not (sameEntry a b) && componentsApart a b == 1)
     cover 10 "different stores" (subjectStore a /= subjectStore b)
     pure (a, b)
 
@@ -211,7 +206,7 @@ forAllPairs = do
 genSubjectPair :: Gen (Subject, Subject)
 genSubjectPair = do
     subject <- genSubject
-    other <- Gen.frequency [(2, pure subject), (3, genRedrawn subject), (2, genInOtherStore subject), (1, genSubject)]
+    other <- Gen.frequency [(2, pure subject), (4, genRedrawn subject), (2, genInOtherStore subject), (1, genSubject)]
     pure (subject, other)
 
 -- The same components under another store.
@@ -257,9 +252,6 @@ genVersion = Gen.element ["", "1", "1.0.0", "1\US2", "2"]
 
 genFingerprint :: Gen ByteString
 genFingerprint = Gen.element ["", "a", "b"]
-
-validatorOf :: ByteString -> ETag
-validatorOf = mkStrongETag . hashWith SHA256
 
 npmRegistry, pypiIndex :: Source
 npmRegistry = Source "https://registry.npmjs.org"

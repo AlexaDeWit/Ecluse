@@ -41,6 +41,10 @@ spec = do
             frameComponents [Just "-"] `shouldNotBe` frameComponents [Nothing]
             frameComponents [Just "1.0", Just "0.2.0"] `shouldNotBe` frameComponents [Just "1.0.0", Just "2.0"]
 
+        it "frames a component above the builder's copy limit as its plain frames concatenate" $ do
+            let tuple = [Just "a", Just (BS.replicate 8161 120), Nothing, Just "b"]
+            frameComponents tuple `shouldBe` built (foldMap (maybe "-" frameBytes) tuple)
+
         describe "properties" $ do
             it "reads back every tuple from its frames" $
                 hedgehog $ do
