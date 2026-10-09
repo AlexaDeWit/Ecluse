@@ -10,6 +10,7 @@ plan as it would in a pod. The load generator and the stub upstreams stay outsid
 module Ecluse.BenchLoad.Pod (
     -- * Pod shapes
     PodShape (..),
+    scheduledPodShapes,
     parsePodShape,
     renderPodShape,
     cpuMaxValue,
@@ -30,8 +31,14 @@ data PodShape
     = Unlimited
     | -- | Whole cores, and the memory limit in bytes.
       Limited Int Int
-    deriving stock (Eq, Show, Generic)
+    deriving stock (Eq, Ord, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
+
+-- | The shapes a scheduled run measures, in the order of the workflow's matrix.
+scheduledPodShapes :: [PodShape]
+scheduledPodShapes = [Unlimited, Limited 2 gib, Limited 4 gib, Limited 4 (2 * gib)]
+  where
+    gib = 1024 * 1024 * 1024
 
 -- | Parse @unlimited@, @\<cores\>cpu-\<size\>mib@ or @\<cores\>cpu-\<size\>gib@.
 parsePodShape :: Text -> Either Text PodShape

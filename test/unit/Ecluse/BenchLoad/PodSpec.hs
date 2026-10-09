@@ -2,13 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the pod-shape grammar and the cgroup file reads the load run depends on.
+-- | Pin the pod-shape grammar, the scheduled shapes, and the cgroup file reads the load run depends on.
 module Ecluse.BenchLoad.PodSpec (spec) where
 
+import Data.Aeson (encode)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape)
+import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), counter, cpuMaxValue, keyedCounters, parsePodShape, renderPodShape, scheduledPodShapes)
 
 spec :: Spec
 spec = do
@@ -22,8 +24,12 @@ spec = do
                 parsePodShape raw `shouldSatisfy` isLeft
     describe "renderPodShape" $
         it "round-trips every shape the workflow schedules" $
-            for_ ["unlimited", "2cpu-1gib", "4cpu-1gib", "4cpu-2gib"] $ \raw ->
-                renderPodShape <$> parsePodShape raw `shouldBe` Right raw
+            for_ scheduledPodShapes $ \shape ->
+                parsePodShape (renderPodShape shape) `shouldBe` Right shape
+    describe "scheduledPodShapes" $
+        it "lists the matrix the load workflow schedules" $ do
+            workflow <- decodeUtf8 <$> readFileBS ".github/workflows/bench-load.yml"
+            workflow `shouldSatisfy` T.isInfixOf (decodeUtf8 (encode (map renderPodShape scheduledPodShapes)))
     describe "cpuMaxValue" $
         it "grants whole cores over the default period" $
             cpuMaxValue 2 `shouldBe` "200000 100000"

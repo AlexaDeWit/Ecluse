@@ -7,6 +7,7 @@ module Ecluse.BenchLoad.VerdictSpec (spec) where
 
 import Test.Hspec
 
+import Ecluse.BenchLoad.Floors (FloorCheck (AtLeast, NoFloor, Unchecked))
 import Ecluse.BenchLoad.Verdict (ProxyEnding (..), RunEvidence (..), classifyEnding, runViolations)
 
 spec :: Spec
@@ -25,7 +26,8 @@ spec = do
             classifyEnding 2 "boot refused" 0 False `shouldBe` ExitedWith 2
             classifyEnding (-15) "" 0 False `shouldBe` KilledBySignal 15
     describe "runViolations" $ do
-        let healthy = RunEvidence "npm/merge-cold" [("", 130)] 0 (Just CleanShutdown) False
+        let healthy = RunEvidence "npm/merge-cold" [("", 130)] Unchecked 0 (Just CleanShutdown) False
+            held = healthy{reScenario = "npm/merge-cold (2cpu-1gib, 100 connections)", reFloor = AtLeast 100}
         it "holds for a run with successes and a clean ending" $
             runViolations healthy `shouldBe` []
         it "fails a scenario that answered only refusals" $
@@ -44,3 +46,21 @@ spec = do
                 `shouldBe` ["npm/merge-cold: the proxy did not shut down cleanly (exited 2)", "npm/merge-cold: the proxy exited before the harness stopped it"]
         it "passes a scenario that runs in the harness process on its successes alone" $
             runViolations healthy{reEnding = Nothing} `shouldBe` []
+        it "fails a count below its floor, naming the scenario, the pod shape, the count, and the floor" $
+            runViolations held{reSuccesses = [("", 99)]}
+                `shouldBe` ["npm/merge-cold (2cpu-1gib, 100 connections): 99 successful responses, below the floor of 100"]
+        it "passes a count at its floor" $
+            runViolations held{reSuccesses = [("", 100)]} `shouldBe` []
+        it "keeps the zero-success line for a count of zero under a floor" $
+            runViolations held{reSuccesses = [("", 0)]}
+                `shouldBe` ["npm/merge-cold (2cpu-1gib, 100 connections): no successful responses"]
+        it "holds every load of a scenario to the one floor, and names the load that fell below it" $
+            runViolations held{reSuccesses = [("10 connections", 100), ("25 connections", 40), ("50 connections", 0)]}
+                `shouldBe` [ "npm/merge-cold (2cpu-1gib, 100 connections): 40 successful responses, below the floor of 100 (25 connections)"
+                           , "npm/merge-cold (2cpu-1gib, 100 connections): no successful responses (50 connections)"
+                           ]
+        it "fails closed, once, on a scenario the floors do not cover" $
+            runViolations held{reSuccesses = [("measured", 5), ("concurrent load", 5)], reFloor = NoFloor}
+                `shouldBe` ["npm/merge-cold (2cpu-1gib, 100 connections): no success floor for this pass and pod shape in bench/load/floors.json"]
+        it "holds a run off the calibrated operating point to no floor" $
+            runViolations healthy{reSuccesses = [("", 1)]} `shouldBe` []

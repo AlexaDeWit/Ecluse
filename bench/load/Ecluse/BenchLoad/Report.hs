@@ -3,14 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Render the child reports into the Markdown the run summary and the uploaded artifact carry.
-Successes lead every table. Memory, collector, admission, and cache figures describe the proxy
-process, and the verdict section lists every broken invariant.
+Successes lead every table, each beside the floor it is held to. Memory, collector, admission, and
+cache figures describe the proxy process, and the verdict section lists every broken invariant.
 -}
 module Ecluse.BenchLoad.Report (
     renderReports,
     renderServiceTime,
     renderLoadSaturation,
     renderThrash,
+    renderFloors,
     renderVerdict,
 ) where
 
@@ -20,6 +21,7 @@ import Numeric (showFFloat)
 
 import Ecluse.BenchLoad.BootLines (BootLimits (..), LoggedRule (..), bootLimits, loggedRules, ruleBootOrders)
 import Ecluse.BenchLoad.Exposition (CacheOutcomes (..), GaugeSummary (..))
+import Ecluse.BenchLoad.Floors (Calibration, Enforcement, FloorCheck (..), Pass (ConcurrencyOne, Loaded), describeEnforcement, floorsPath)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..), LoadSummary (..), ProxyFigures (..), ScenarioReport (..), windowAttempts, windowRefusals, windowSuccesses)
 import Ecluse.BenchLoad.Latency (Percentiles (..))
 import Ecluse.BenchLoad.Normalise (
@@ -40,52 +42,57 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 {- | One ecosystem's loaded pass: the operating point, the rule policy, the summary tables, and each
 scenario. The concurrency-one reports give the cost table its figures at concurrency one.
 -}
-renderReports :: LoadKnobs -> Int -> Int -> Text -> Ecosystem -> [ScenarioReport] -> [ScenarioReport] -> Text
-renderReports knobs capabilities processors shape ecosystem c1Reports reports =
+renderReports :: LoadKnobs -> Int -> Int -> Text -> Ecosystem -> (Pass -> Text -> FloorCheck) -> [ScenarioReport] -> [ScenarioReport] -> Text
+renderReports knobs capabilities processors shape ecosystem floorOf c1Reports reports =
     T.unlines $
         [ "## Load test: throughput and latency over " <> ecosystemName ecosystem
         , ""
         , "_Successful responses per window are the primary figure. Reading notes are at the end of the report._"
         , ""
-        , "**Operating point**"
-        , ""
-        , "| knob | value |"
-        , "| --- | --- |"
-        , row "pod shape" (shapeNote shape capabilities)
-        , row "runner processors" (show processors <> " (oha is pinned to core 0 when isolated)")
-        , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
-        , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
-        , row "CPU admission" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
-        , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
-        , row "private pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPrivateConnectionsPerHost knobs))
-        , row "public pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPublicConnectionsPerHost knobs))
-        , row "cache-eviction entries" (show (lkCacheMaxEntries knobs))
-        , row "working-set cap" (show (lkWorkingSet knobs) <> " projects")
-        , row "worker artifact" ("~" <> kib (fromIntegral (lkPayloadBytes knobs)))
-        , ""
         ]
+            <> operatingPointTable knobs capabilities processors shape (bootLimits (fromMaybe [] firstBoot))
             <> runtimeLines
             <> rulePolicyLines c1Reports reports
             <> [ "### At a glance"
                , ""
-               , "| scenario | connections | successes | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
-               , "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
+               , "| scenario | connections | successes | floor | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
+               , "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
                ]
-            <> map glanceRow reports
+            <> map (glanceRow (floorOf Loaded)) reports
             <> [""]
-            <> costTable c1Reports reports
+            <> costTable (floorOf ConcurrencyOne) c1Reports reports
             <> concatMap renderScenario reports
             <> readingNotes
   where
     firstBoot = listToMaybe [pfBootLines p | Just p <- map srProxy reports, not (null (pfBootLines p))]
-    limits = bootLimits (fromMaybe [] firstBoot)
-    origin = maybe " (the proxy's computed default)" (const " (explicit)")
     runtimeLines = case firstBoot of
         Nothing -> []
         Just lines' ->
             ["**Runtime posture and memory plan, as the first scenario's proxy logged them**", ""]
                 <> map ("- " <>) lines'
                 <> [""]
+
+operatingPointTable :: LoadKnobs -> Int -> Int -> Text -> BootLimits -> [Text]
+operatingPointTable knobs capabilities processors shape limits =
+    [ "**Operating point**"
+    , ""
+    , "| knob | value |"
+    , "| --- | --- |"
+    , row "pod shape" (shapeNote shape capabilities)
+    , row "runner processors" (show processors <> " (oha is pinned to core 0 when isolated)")
+    , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
+    , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
+    , row "CPU admission" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
+    , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
+    , row "private pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPrivateConnectionsPerHost knobs))
+    , row "public pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPublicConnectionsPerHost knobs))
+    , row "cache-eviction entries" (show (lkCacheMaxEntries knobs))
+    , row "working-set cap" (show (lkWorkingSet knobs) <> " projects")
+    , row "worker artifact" ("~" <> kib (fromIntegral (lkPayloadBytes knobs)))
+    , ""
+    ]
+  where
+    origin = maybe " (the proxy's computed default)" (const " (explicit)")
 
 -- The first scenario's rule policy, and the proxies of either pass that logged a different one.
 rulePolicyLines :: [ScenarioReport] -> [ScenarioReport] -> [Text]
@@ -117,8 +124,8 @@ shapeNote shape capabilities
     | shape == "unlimited" = "unlimited: no cgroup limit, runtime.cores " <> show capabilities
     | otherwise = shape <> ": the proxy's own cgroup, memory.max and cpu.max set, swap off"
 
-glanceRow :: ScenarioReport -> Text
-glanceRow r =
+glanceRow :: (Text -> FloorCheck) -> ScenarioReport -> Text
+glanceRow floorOf r =
     "| ["
         <> srName r
         <> "](#"
@@ -128,6 +135,7 @@ glanceRow r =
             " | "
             [ show (lsConnections load)
             , show (lsSuccesses load) <> (if null (srSteps r) then "" else " (last step)")
+            , floorCell r (floorOf (srName r))
             , show (lsRefusals load)
             , show (lsTransportFailures load)
             , fmt1 (throughput load)
@@ -142,13 +150,23 @@ glanceRow r =
   where
     load = srLoad r
 
--- Each scenario's loaded cost beside its concurrency-one cost, its refusals' cost, and cache sharing.
-costTable :: [ScenarioReport] -> [ScenarioReport] -> [Text]
-costTable c1Reports reports =
+-- A floor as a table cell. A scenario with several loads holds each of them to the one floor.
+floorCell :: ScenarioReport -> FloorCheck -> Text
+floorCell r = \case
+    Unchecked -> "not held"
+    NoFloor -> "**none**"
+    AtLeast least
+        | not (null (srSteps r)) -> show least <> " (every step)"
+        | isJust (srCompanion r) -> show least <> " (both loads)"
+        | otherwise -> show least
+
+-- Each scenario's loaded cost beside its concurrency-one cost and floor, its refusals' cost, and cache sharing.
+costTable :: (Text -> FloorCheck) -> [ScenarioReport] -> [ScenarioReport] -> [Text]
+costTable floorAtOne c1Reports reports =
     [ "### Loaded cost against concurrency one"
     , ""
-    , "| scenario | alloc / success (upper bound) | at base concurrency one | alloc / refusal (upper bound) | success p50 | at base concurrency one | missed lookups | collapsed lookups |"
-    , "| --- | --: | --: | --: | --: | --: | --: | --: |"
+    , "| scenario | alloc / success (upper bound) | at base concurrency one | success floor at base concurrency one | alloc / refusal (upper bound) | success p50 | at base concurrency one | missed lookups | collapsed lookups |"
+    , "| --- | --: | --: | --: | --: | --: | --: | --: | --: |"
     ]
         <> map costRow (withConcurrencyOne c1Reports reports)
         <> [""]
@@ -160,6 +178,7 @@ costTable c1Reports reports =
                 [ srName r
                 , countedKib (allocPerSuccess r) (windowSuccesses r) "successes"
                 , maybe "n/a" (\atOne -> countedKib (allocPerSuccess atOne) (windowSuccesses atOne) "successes") c1
+                , maybe "n/a" (\atOne -> floorCell atOne (floorAtOne (srName atOne))) c1
                 , countedKib (allocPerRefusal r) (windowRefusals r) "refusals"
                 , msCell (pP50Ms (lsLatency (srLoad r)))
                 , msCell (pP50Ms . lsLatency . srLoad =<< c1)
@@ -301,7 +320,8 @@ readingNotes =
     [ "### Reading the numbers"
     , ""
     , "- **Successes are the primary figure.** A 2xx or 3xx response is a success. A `503` shed or a `429` is a refusal: a client retries it at once, so refusal counts measure retry speed, not demand."
-    , "- **The run fails** when a scenario or a ramp step has no successful response, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow or ends any other way than the clean shutdown the harness asks for, or when it exits early. Throughput, latency, and memory have no threshold and never fail it."
+    , "- **The run fails** when a scenario or a ramp step has no successful response, when a count of successes is below its floor, when the kernel OOM-kills a proxy, when a proxy exits on heap overflow or ends any other way than the clean shutdown the harness asks for, or when it exits early. Latency and memory have no threshold and never fail it."
+    , "- **A success floor** is the fewest successes a scenario may have in one pass under this pod shape, from `" <> toText floorsPath <> "`. The at-a-glance table shows the loaded pass's floor, and the cost table the concurrency-one pass's. A ramp holds every step to its floor, and a paired scenario both of its loads. A run held to the floors also fails on a scenario without one, and on a floor that names no scenario. The Success floors section says whether this run is held to them."
     , "- **Allocation and collector figures describe the proxy process alone** over the measured window, and divide by every successful request in it: both generators of a paired scenario, every step of a ramp. The stub upstreams and the load generator run outside it."
     , "- **The proxy's cgroup is not charged for its logs.** They go through pipes the harness drains, and only unread pipe buffers, at most 64 KiB per pipe, count against the limit. On CI the build step has just built or restored the executable, so its text pages are already in the page cache when the proxy starts and are not charged to it either. The harness does not enforce that."
     , "- **Each scenario boots its own proxy** from its own cgroup, so the runtime posture and the admission budgets are the ones that pod shape resolves. A boot retried after the runtime could not start a thread gets a fresh cgroup, so its readings exclude the failed attempt."
@@ -341,7 +361,7 @@ renderThrash scenarioKey steps =
     T.unlines $
         [ "## GC-thrash probe: " <> scenarioKey
         , ""
-        , "The load stays fixed while the memory limit steps down. An OOM kill or a heap overflow here is the probe's reading, not a failed run."
+        , "The load stays fixed while the memory limit steps down. An OOM kill or a heap overflow here is the probe's reading, not a failed run. The probe is not held to the success floors."
         , ""
         , "| pod shape | successes | success p99 | GC share | major GCs | mean live after majors | RTS max live | heap ceiling | compaction crossed | memory peak / max | peak less RTS in use | oom_kill | ending |"
         , "| --- | --: | --: | --: | --: | --: | --: | --: | --- | --: | --: | --: | --- |"
@@ -369,13 +389,18 @@ renderThrash scenarioKey steps =
                 ]
             <> " |"
 
+-- | Whether the run is held to the success floors, with their calibration or the settings that differ.
+renderFloors :: Calibration -> Enforcement -> Text
+renderFloors calibration enforcement =
+    T.unlines ["## Success floors", "", describeEnforcement calibration enforcement]
+
 -- | The run's verdict: every broken invariant, or a line saying none broke.
 renderVerdict :: [Text] -> Text
 renderVerdict violations =
     T.unlines $
         ["## Verdict", ""]
             <> case violations of
-                [] -> ["Every scenario had successful responses, and no proxy was OOM-killed or exited on heap overflow."]
+                [] -> ["Every scenario had successful responses and reached any floor it is held to, and no proxy was OOM-killed or exited on heap overflow."]
                 _ -> "**The run fails:**" : "" : map ("- " <>) violations
 
 -- memory.peak less the RTS's own high-water mark: off-heap and kernel memory, and the overshoot

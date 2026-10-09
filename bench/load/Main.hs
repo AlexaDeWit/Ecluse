@@ -23,30 +23,37 @@ import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProc
 import UnliftIO (bracket_)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Floors (
+    Enforcement,
+    Floors (floorsCalibration),
+    Pass (ConcurrencyOne, Loaded),
+    enforce,
+    floorCheck,
+    loadFloors,
+    staleFloorViolations,
+ )
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (lkUpstreamLatencyMicros),
-    Scenario (scenarioInProcess, scenarioName, scenarioServiceTime),
+    Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (srName),
     UpstreamFixture (fixtureEcosystem, fixtureScenarios),
     loadKnobsFromEnv,
+    operatingPoint,
     reportEvidence,
     runScenario,
  )
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
-import Ecluse.BenchLoad.Npm (npmFixture)
-import Ecluse.BenchLoad.Pod (PodShape (Limited, Unlimited), renderPodShape)
+import Ecluse.BenchLoad.Pod (PodShape (Limited), renderPodShape)
 import Ecluse.BenchLoad.ProxyProcess (podShapeFromEnv, serveProxyFlag, sweepProxyCgroups)
 import Ecluse.BenchLoad.ProxyServe (runServeProxy)
-import Ecluse.BenchLoad.PyPI (pypiFixture, pypiLoadNotes)
-import Ecluse.BenchLoad.Report (renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
+import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
+import Ecluse.BenchLoad.Report (renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
-import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey, selectScenario)
+import Ecluse.BenchLoad.Scenarios (checkedCounts, findScenario, fixtures, runsUnder)
+import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
 import Ecluse.BenchLoad.Verdict (runViolations)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
-
-fixtures :: [UpstreamFixture]
-fixtures = [npmFixture, pypiFixture]
 
 -- | Run the passes, serve as a scenario's proxy, or run one ecosystem-qualified child scenario.
 main :: IO ()
@@ -74,52 +81,71 @@ runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     unless (null violations) $
         benchFail ("the load run broke " <> show (length violations) <> " invariant(s). The verdict section lists them.")
 
+-- What the passes of every fixture share.
+data Setup = Setup
+    { setupKnobs :: LoadKnobs
+    , setupShape :: PodShape
+    , setupSelected :: Maybe [Text]
+    , setupEnforcement :: Enforcement
+    , setupNpmBaseline :: BaselineSource
+    , setupSelf :: FilePath
+    , setupCapabilities :: Int
+    , setupProcessors :: Int
+    }
+
 runPasses :: LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
 runPasses knobs shape selected = do
+    -- Read before any scenario runs, so floors that do not decode cost no load.
+    floors <- either benchFail pure =<< loadFloors
     npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
     capabilities <- getNumCapabilities
     processors <- getNumProcessors
-    sections <- forM fixtures $ \fixture -> do
-        let eco = fixtureEcosystem fixture
-            chosen = filter (runsHere eco) (fixtureScenarios fixture)
-            baseline = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) npmBaseline
-            injMs = baselineInjectedMs baseline
-            pinChildren = childRts capabilities
-            loadOverrides = [latencyOverride injMs, pinChildren]
-            c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), pinChildren]
-            loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
-            notes = [pypiLoadNotes knobs | eco == PyPI]
-            keyOf = scenarioKey eco . scenarioName
-        if null chosen
-            then pure Nothing
-            else do
-                loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild self loadOverrides (keyOf s)) chosen
-                c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild self c1Overrides (keyOf s)) (filter scenarioServiceTime chosen)
-                let loadedReports = rights (map snd loaded)
-                    c1Reports = rights (map snd c1)
-                    serviceTimeKeys = map keyOf (filter scenarioServiceTime chosen)
-                    violations = concatMap (either pure (runViolations . reportEvidence)) (map labelled loaded <> map labelled c1)
-                    body =
-                        fixtureSection eco $
-                            notes
-                                <> [ renderReports loadPassKnobs capabilities processors (renderPodShape shape) eco c1Reports loadedReports
-                                   , renderServiceTime baseline c1Reports
-                                   , renderLoadSaturation c1Reports (filter ((`elem` serviceTimeKeys) . srName) loadedReports)
-                                   ]
-                pure (Just (body, violations))
-    let ran = catMaybes sections
+    let enforcement = enforce floors (operatingPoint knobs selected) shape
+    ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement npmBaseline self capabilities processors)) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
-    pure (map fst ran, concatMap snd ran)
-  where
-    runsHere eco s =
-        maybe True (scenarioKey eco (scenarioName s) `elem`) selected
-            && (shape == Unlimited || not (scenarioInProcess s))
-    labelled (key, result) = first (\failure -> key <> ": " <> failure) result
+    pure
+        ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
+        , concatMap snd ran <> staleFloorViolations shape enforcement (checkedCounts shape)
+        )
 
-{- | Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
-so the probe fails only when no limit produced a report.
--}
+-- One ecosystem's loaded and concurrency-one passes: its report section, and the invariants they broke.
+fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [Text]))
+fixturePasses setup fixture
+    | null chosen = pure Nothing
+    | otherwise = do
+        loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild self loadOverrides (keyOf s)) chosen
+        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild self c1Overrides (keyOf s)) serviceTime
+        let loadedReports = rights (map snd loaded)
+            c1Reports = rights (map snd c1)
+            body =
+                fixtureSection eco $
+                    [pypiLoadNotes knobs | eco == PyPI]
+                        <> [ renderReports loadPassKnobs capabilities (setupProcessors setup) (renderPodShape (setupShape setup)) eco floorOf c1Reports loadedReports
+                           , renderServiceTime baseline c1Reports
+                           , renderLoadSaturation c1Reports (filter ((`elem` map keyOf serviceTime) . srName) loadedReports)
+                           ]
+        pure (Just (body, concatMap (violationsOf Loaded) loaded <> concatMap (violationsOf ConcurrencyOne) c1))
+  where
+    knobs = setupKnobs setup
+    self = setupSelf setup
+    capabilities = setupCapabilities setup
+    eco = fixtureEcosystem fixture
+    keyOf = scenarioKey eco . scenarioName
+    chosen = filter runsHere (fixtureScenarios fixture)
+    serviceTime = filter scenarioServiceTime chosen
+    runsHere s = maybe True (keyOf s `elem`) (setupSelected setup) && runsUnder (setupShape setup) s
+    baseline = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) (setupNpmBaseline setup)
+    injMs = baselineInjectedMs baseline
+    loadOverrides = [latencyOverride injMs, childRts capabilities]
+    c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), childRts capabilities]
+    loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
+    floorOf whichPass key = floorCheck (setupEnforcement setup) (key, whichPass)
+    violationsOf whichPass (key, result) =
+        either (\failure -> [key <> ": " <> failure]) (runViolations . reportEvidence (floorOf whichPass key)) result
+
+-- Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
+-- so the probe fails only when no limit produced a report.
 runThrashProbe :: LoadKnobs -> [Int] -> IO ([Text], [Text])
 runThrashProbe knobs limitsMib = do
     self <- getExecutablePath
@@ -232,11 +258,3 @@ runChild name = do
     s <- maybe (benchFail ("unknown scenario: " <> name)) pure (findScenario name)
     report <- runScenario knobs s{scenarioName = name}
     LBSC.putStrLn (encode report)
-
-findScenario :: Text -> Maybe Scenario
-findScenario name =
-    selectScenario
-        name
-        [ (fixtureEcosystem fixture, [(scenarioName s, s) | s <- fixtureScenarios fixture])
-        | fixture <- fixtures
-        ]

@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | How a measured proxy ended, and the invariants that fail a load run. Throughput and latency
-stay informational. A load with no successful response, or a proxy that did not end in the clean
-shutdown the harness asked for, is a broken run whatever the other figures say.
+{- | How a measured proxy ended, and the invariants that fail a load run: a load with no successful
+response, a count of successes below its floor in "Ecluse.BenchLoad.Floors", and a proxy that did
+not end in the clean shutdown the harness asked for. Latency and memory stay informational.
 -}
 module Ecluse.BenchLoad.Verdict (
     ProxyEnding (..),
@@ -17,6 +17,8 @@ module Ecluse.BenchLoad.Verdict (
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
+
+import Ecluse.BenchLoad.Floors (FloorCheck (AtLeast, NoFloor), floorsPath)
 
 -- | How the proxy process ended, read from its exit status, its stderr, and its cgroup.
 data ProxyEnding
@@ -66,6 +68,8 @@ data RunEvidence = RunEvidence
     { reScenario :: Text
     , reSuccesses :: [(Text, Int)]
     -- ^ Successful responses per load or ramp step, labelled for the failure message.
+    , reFloor :: FloorCheck
+    -- ^ What every count in 'reSuccesses' is held to.
     , reOomKills :: Int
     , reEnding :: Maybe ProxyEnding
     -- ^ 'Nothing' for a scenario that runs in the harness process.
@@ -77,14 +81,19 @@ data RunEvidence = RunEvidence
 -- | One line per broken invariant, empty when the run holds.
 runViolations :: RunEvidence -> [Text]
 runViolations evidence =
-    [ scenario <> ": no successful responses" <> labelled label
-    | (label, count) <- reSuccesses evidence
-    , count <= 0
-    ]
+    concatMap successViolations (reSuccesses evidence)
+        <> [scenario <> ": no success floor for this pass and pod shape in " <> toText floorsPath | reFloor evidence == NoFloor]
         <> [scenario <> ": the kernel OOM-killed the proxy (" <> show (reOomKills evidence) <> " oom_kill events)" | reOomKills evidence > 0]
         <> endingViolations
         <> [scenario <> ": the proxy exited before the harness stopped it" | reExitedEarly evidence]
   where
+    -- A load with no success keeps its own line, whatever its floor.
+    successViolations (label, count)
+        | count <= 0 = [scenario <> ": no successful responses" <> labelled label]
+        | AtLeast least <- reFloor evidence
+        , count < least =
+            [scenario <> ": " <> show count <> " successful responses, below the floor of " <> show least <> labelled label]
+        | otherwise = []
     -- The OOM kill already has its own line from the cgroup's count.
     endingViolations = case reEnding evidence of
         Just HeapOverflow -> [scenario <> ": the proxy exited on heap overflow"]
