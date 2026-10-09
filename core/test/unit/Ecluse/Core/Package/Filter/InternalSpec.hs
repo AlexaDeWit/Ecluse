@@ -23,6 +23,7 @@ import Ecluse.Core.Package.Filter.Internal (
     partitionArtifacts,
     resolveArtifact,
  )
+import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Text (afterFirst, urlFilename)
@@ -78,6 +79,10 @@ locateArtifactSpec = describe "locateArtifact" $ do
         locateArtifact npmOrigin "http://registry.npmjs.org/thing/-/. "
             `shouldBe` Left (LocationRefusal "artifact URL has no safe filename" "https://registry.npmjs.org/thing/-/.")
 
+    it "keeps a PyPI file on a declared artifact host, which is not the index's own authority" $
+        locateArtifact pypiOrigin "https://files.pythonhosted.org/packages/ab/cd/requests-2.32.3-py3-none-any.whl"
+            `shouldBe` Right (ArtifactLocation "requests-2.32.3-py3-none-any.whl" Nothing True)
+
     modifyMaxSuccess (const 5000) $
         it "names the file urlFilename names and decides the trimmed name as rebaseArtifactUrl does, on generated hostile URLs" $
             hedgehog $ do
@@ -85,6 +90,8 @@ locateArtifactSpec = describe "locateArtifact" $ do
                 url <- forAll (genHostileUrl served)
                 let located = locateArtifact (artifactOrigin (ecosystemArtifactAuthorities hostUrls) upstreamBaseUrl) url
                 cover 5 "located" (isRight located)
+                cover 2 "located with text that trimming changes" (isRight located && T.strip url /= url)
+                cover 0.1 "located with no file named once trimmed" (fmap locatedTrimmedNamesFile located == Right False)
                 whenRight_ located $ \location -> do
                     Just (locatedFilename location) === urlFilename url
                     locatedTrimmedNamesFile location === isJust (rebaseArtifactUrl Just url)
@@ -109,6 +116,9 @@ partitionArtifactsSpec = describe "partitionArtifacts (against the reference enf
 
 npmOrigin :: ArtifactOrigin
 npmOrigin = artifactOrigin (ecosystemArtifactAuthorities []) "https://registry.npmjs.org"
+
+pypiOrigin :: ArtifactOrigin
+pypiOrigin = artifactOrigin (ecosystemArtifactAuthorities pypiArtifactHosts) "https://pypi.org/simple"
 
 loopbackOrigin :: ArtifactOrigin
 loopbackOrigin = artifactOrigin (ecosystemArtifactAuthorities []) "http://127.0.0.1:8080"
