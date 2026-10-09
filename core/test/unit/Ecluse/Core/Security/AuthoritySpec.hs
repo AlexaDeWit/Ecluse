@@ -41,7 +41,6 @@ hostAddressSpec = describe "hostAddress" $ do
     it "strips a port" $
         hostAddress "https://registry.npmjs.org:8443/thing" `shouldBe` "registry.npmjs.org"
     it "strips userinfo (a credential-stuffing trick)" $
-        -- The host dialled follows the last '@', never the part before it.
         hostAddress "https://registry.npmjs.org@evil.com/path" `shouldBe` "evil.com"
     it "gates on the scheme authority, not a later :// in the path or query" $
         -- A crafted dist.tarball can carry a second "://" in its query. The gate reads the
