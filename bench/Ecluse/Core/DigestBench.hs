@@ -29,7 +29,6 @@ ecosystemGroup ecosystem = do
     rows <- traverse captureRow (ebCorpus ecosystem)
     pure (bgroup ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem))) [bgroup "source digest (32 KiB chunks)" rows])
 
--- | A capture's row, once its chunked digest equals the digest of the whole body.
 captureRow :: LoadedEntry -> IO Benchmark
 captureRow entry@(_, raw, _, _) = do
     digest <- digested chunks
@@ -38,12 +37,10 @@ captureRow entry@(_, raw, _, _) = do
   where
     chunks = captureChunks raw
 
--- | Hash the chunks through the production source and keep nothing else.
 digested :: [ByteString] -> IO ContentDigest
 digested chunks = do
     next <- heldChunks chunks
     digestingRead drain next >>= either absurd (pure . snd)
 
--- | Read the source to its end.
 drain :: IO ByteString -> IO (Either Void ())
 drain next = next >>= \chunk -> if BS.null chunk then pure (Right ()) else drain next

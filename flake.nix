@@ -166,9 +166,8 @@
               "sha256-PTK9YMG+MGpHCnDDuIBKH2IzafLNJoK45iyTpoTSQo4=";
             tls = fromHackage "tls" "2.4.10"
               "sha256-nWYWYiiTwP07/Rnh3udM1KLWkWNEF5L06B3XRnUWQ3E=";
-            # No crypton-connection release or revision admits x509 1.10 yet. The
-            # jailbreak strips those caps, and the tarball's tls <2.4 cap that
-            # Hackage revision 1 lifts. Drop it when upstream widens.
+            # Drop the jailbreak when crypton-connection admits x509 1.10. It also
+            # strips the tls <2.4 cap that Hackage revision 1 already lifts.
             crypton-connection = hlib.doJailbreak
               (fromHackage "crypton-connection" "0.4.6"
                 "sha256-B+fGwEBaChFx9mrrG5JbIjTnCSfiwuPetOOoua5FMGA=");
