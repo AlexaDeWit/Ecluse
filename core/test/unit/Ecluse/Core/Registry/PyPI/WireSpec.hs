@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.PyPI.Wire (
     YankState (FileOffered, FileWithdrawn),
  )
 import Ecluse.Test.Json (encodeStrict)
-import Ecluse.Test.Registry.PyPI (simpleIndex)
+import Ecluse.Test.Registry.PyPI (simpleIndex, yankedForms)
 
 spec :: Spec
 spec = do
@@ -91,22 +91,11 @@ fileSpec = describe "IndexFile" $ do
             `shouldSatisfy` isLeft
 
 yankSpec :: Spec
-yankSpec = describe "yanked" $ do
-    it "reads an absent marker as offered" $ do
-        file <- shouldDecodeFile (fileEntry [])
-        ifYanked file `shouldBe` FileOffered
-
-    it "reads false as offered" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= False])
-        ifYanked file `shouldBe` FileOffered
-
-    it "reads true as withdrawn with no stated reason" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= True])
-        ifYanked file `shouldBe` FileWithdrawn Nothing
-
-    it "reads a string as withdrawn with that reason" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= ("broken sdist" :: Text)])
-        ifYanked file `shouldBe` FileWithdrawn (Just "broken sdist")
+yankSpec = describe "yanked" $
+    for_ yankedForms $ \(form, member, withdrawn) ->
+        it ("reads " <> form <> " as " <> (if withdrawn then "withdrawn" else "offered")) $ do
+            file <- shouldDecodeFile (fileEntry member)
+            ifYanked file `shouldBe` (if withdrawn then FileWithdrawn else FileOffered)
 
 apiVersionSpec :: Spec
 apiVersionSpec = describe "meta.api-version" $ do

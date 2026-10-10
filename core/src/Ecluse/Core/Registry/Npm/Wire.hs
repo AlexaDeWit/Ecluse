@@ -110,10 +110,8 @@ data VersionManifest = VersionManifest
     , vmVersion :: Text
     -- ^ The exact version string, kept opaque at this layer.
     , vmDist :: Dist
-    , vmDeprecated :: Maybe Text
-    {- ^ The deprecation message. A boolean @true@ reads as @""@, and @false@, @null@,
-    absence, or any other shape as 'Nothing'.
-    -}
+    , vmDeprecated :: Bool
+    -- ^ Whether @deprecated@ is a string of any length or @true@.
     , vmHasInstallScript :: Maybe Bool
     -- ^ Abbreviated form only. 'Nothing' in the full form, where 'vmScripts' carries it.
     , vmScripts :: Map Text Text
@@ -128,13 +126,13 @@ instance FromJSON VersionManifest where
             <$> o .: "name"
             <*> o .: "version"
             <*> o .: "dist"
-            <*> (deprecatedNotice <$> o .:? "deprecated")
+            <*> (isDeprecated <$> o .:? "deprecated")
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
 
-deprecatedNotice :: Maybe Value -> Maybe Text
-deprecatedNotice = \case
-    Just (String message) -> Just message
-    Just (Bool True) -> Just ""
-    _ -> Nothing
+isDeprecated :: Maybe Value -> Bool
+isDeprecated = \case
+    Just (String _) -> True
+    Just (Bool True) -> True
+    _ -> False

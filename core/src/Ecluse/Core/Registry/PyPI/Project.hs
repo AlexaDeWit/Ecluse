@@ -55,7 +55,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.Wire (
     IndexFile (..),
-    YankState (FileOffered, FileWithdrawn),
+    YankState (FileWithdrawn),
  )
 import Ecluse.Core.Registry.WireSupport (
     nameComponentWith,
@@ -147,14 +147,9 @@ releaseInstallCode entries
 
 -- A release is withdrawn only when PEP 592 withdraws every file of it.
 releaseAvailability :: NonEmpty IndexFile -> Availability
-releaseAvailability files = case traverse withdrawnReason files of
-    Just reasons -> Yanked (asum reasons)
-    Nothing -> Available
-
-withdrawnReason :: IndexFile -> Maybe (Maybe Text)
-withdrawnReason file = case ifYanked file of
-    FileWithdrawn reason -> Just reason
-    FileOffered -> Nothing
+releaseAvailability files
+    | all ((== FileWithdrawn) . ifYanked) files = Yanked
+    | otherwise = Available
 
 -- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
 -- against the egress and host policies afterward.

@@ -108,7 +108,7 @@ installHooks :: [Text]
 installHooks = ["preinstall", "install", "postinstall"]
 
 availability :: VersionManifest -> Availability
-availability vm = maybe Available Deprecated (vmDeprecated vm)
+availability vm = if vmDeprecated vm then Deprecated else Available
 
 {- The @tarball@ URL stays verbatim: "Ecluse.Core.Package.Filter" folds its scheme against the
 https-only egress policy afterward. -}

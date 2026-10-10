@@ -26,6 +26,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Registry.Npm.Wire
 import Ecluse.Test.Json (genValue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsExtraPairs), deprecatedForms, versionSpec, versionValue)
 import Ecluse.Test.Support (decodeJsonOrFail)
 
 {- | Decoding tests for the npm wire types, pure and offline over the fixtures in
@@ -35,6 +36,7 @@ They pin faithful capture of the rule-decisive fields and lenient string-or-obje
 spec :: Spec
 spec = do
     versionManifestSpec
+    deprecatedSpec
     distSpec
     advisoryFieldLeniencySpec
     lenientScalarSpec
@@ -55,29 +57,16 @@ versionManifestSpec = describe "VersionManifest" $ do
         vmHasInstallScript vm `shouldBe` Nothing
         Map.keys (vmScripts vm) `shouldBe` ["postinstall"]
 
-    it "captures the deprecation notice (request)" $ do
+deprecatedSpec :: Spec
+deprecatedSpec = describe "deprecated" $ do
+    it "reads a captured notice as deprecated (request)" $ do
         vm <- decodeFixture @VersionManifest "request.manifest.json"
-        vmDeprecated vm
-            `shouldBe` Just
-                "request has been deprecated, see https://github.com/request/request/issues/3142"
+        vmDeprecated vm `shouldBe` True
 
-    it "reads a boolean deprecated=false as not deprecated (npm's wire variant)" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":false}"
-        vmDeprecated vm `shouldBe` Nothing
-
-    it "reads a boolean deprecated=true as deprecated with an empty message" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":true}"
-        vmDeprecated vm `shouldBe` Just ""
-
-    it "still reads a string deprecated as the message (inline, not just the fixture)" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
-        vmDeprecated vm `shouldBe` Just "gone"
+    for_ deprecatedForms $ \(form, member, deprecated) ->
+        it ("reads " <> form <> " as " <> (if deprecated then "deprecated" else "not deprecated")) $
+            vmDeprecated <$> fromJSON (versionValue (versionSpec "x" "1.0.0" "https://e.test/x.tgz"){vsExtraPairs = member})
+                `shouldBe` Success deprecated
 
 distSpec :: Spec
 distSpec = describe "Dist" $ do

@@ -53,8 +53,8 @@ import Ecluse.Core.Version.Token (withinVersionLength)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
-import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys, yankedForms)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue, readThrough)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 import Ecluse.Test.Version (genPyPI)
@@ -379,7 +379,23 @@ versionFoldSpec = describe "the version-level folds over a release's files" $ do
         partly <- shouldProject requestsName (indexOf [yanked (sdistFile "2.34.2"), wheelFile "2.34.2"])
         pkgAvailability <$> Map.lookup "2.34.2" (infoVersions partly) `shouldBe` Just Available
         wholly <- shouldProject requestsName (indexOf [yanked (sdistFile "2.34.2"), yanked (wheelFile "2.34.2")])
-        pkgAvailability <$> Map.lookup "2.34.2" (infoVersions wholly) `shouldBe` Just (Yanked (Just "withdrawn"))
+        pkgAvailability <$> Map.lookup "2.34.2" (infoVersions wholly) `shouldBe` Just Yanked
+
+    for_ yankedForms $ \(form, member, withdrawn) ->
+        it ("reads " <> form <> " on every file, and on one file of two, alike on the full and the selected read") $ do
+            let marked = withFileKeys member
+                expected = if withdrawn then Yanked else Available
+            bothReads (indexOf [marked (sdistFile "2.34.2"), marked (wheelFile "2.34.2")]) `shouldReturn` (Just expected, Just expected)
+            bothReads (indexOf [marked (sdistFile "2.34.2"), wheelFile "2.34.2"]) `shouldReturn` (Just Available, Just Available)
+
+-- The availability of release 2.34.2 on the production full read and on its selected read.
+bothReads :: Value -> IO (Maybe Availability, Maybe Availability)
+bothReads index = do
+    (full, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+    selected <- expectRight (projectPyPIVersion defaultLimits requestsName (mkVersion PyPI "2.34.2") body)
+    pure (pkgAvailability <$> Map.lookup "2.34.2" (infoVersions full), pkgAvailability <$> selected)
+  where
+    body = encodeStrict index
 
 shouldProject :: PackageName -> Value -> IO PackageInfo
 shouldProject name value = case projectSimpleIndexFromValue name value of

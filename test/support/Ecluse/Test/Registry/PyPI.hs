@@ -10,13 +10,14 @@ module Ecluse.Test.Registry.PyPI (
     simpleFile,
     filesNamed,
     withFileKeys,
+    yankedForms,
     simpleIndex,
     simpleIndexWith,
     separatorHeavySdist,
     alicePair,
 ) where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (Bool, Null, Number, String), object, toJSON, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Pair)
 import Data.Text qualified as T
@@ -50,6 +51,21 @@ filesNamed = map simpleFile
 -- | A file entry with the given keys added or overridden, so an example names only its own axis.
 withFileKeys :: [(Key, Value)] -> Value -> Value
 withFileKeys = withKeys
+
+{- | Each wire form of a file entry's @yanked@ member, as the keys that carry it, with whether it
+withdraws the file.
+-}
+yankedForms :: [(String, [(Key, Value)], Bool)]
+yankedForms =
+    [ ("true", [("yanked", Bool True)], True)
+    , ("a string", [("yanked", String "broken sdist")], True)
+    , ("an empty string", [("yanked", String "")], True)
+    , ("false", [("yanked", Bool False)], False)
+    , ("null", [("yanked", Null)], False)
+    , ("an absent member", [], False)
+    , ("a number", [("yanked", Number 1)], False)
+    , ("an array", [("yanked", toJSON [String "broken sdist"])], False)
+    ]
 
 -- | A PEP 691 simple index: the project name and its file entries, nothing else.
 simpleIndex :: Text -> [Value] -> Value

@@ -19,6 +19,7 @@ module Ecluse.Test.Registry.Npm (
     listingValue,
     publishedDaysAgo,
     documentName,
+    deprecatedForms,
 
     -- * Mirror-write fixtures
     isOdd,
@@ -40,7 +41,7 @@ module Ecluse.Test.Registry.Npm (
     genPathSegments,
 ) where
 
-import Data.Aeson (Value (Object, String), object, (.=))
+import Data.Aeson (Value (Bool, Null, Number, Object, String), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
@@ -255,6 +256,22 @@ documentName doc = splitName (topLevelName doc)
             , not (T.null bare) ->
                 mkPackageName Npm (Just (mkScope scopeText)) bare
         _ -> mkPackageName Npm Nothing raw
+
+{- | Each wire form of a version object's @deprecated@ member, as the pairs that carry it, with
+whether it reads as deprecated.
+-}
+deprecatedForms :: [(String, [Pair], Bool)]
+deprecatedForms =
+    [ ("a string", ["deprecated" .= String "gone"], True)
+    , ("an empty string", ["deprecated" .= String ""], True)
+    , ("true", ["deprecated" .= Bool True], True)
+    , ("false", ["deprecated" .= Bool False], False)
+    , ("null", ["deprecated" .= Null], False)
+    , ("an absent member", [], False)
+    , ("a number", ["deprecated" .= Number 1], False)
+    , ("an array", ["deprecated" .= toJSON [String "gone"]], False)
+    , ("an object", ["deprecated" .= object ["reason" .= String "gone"]], False)
+    ]
 
 -- Apply site-specific fields last so their exact representation wins.
 objectWithExtraPairs :: [Pair] -> [Pair] -> Value

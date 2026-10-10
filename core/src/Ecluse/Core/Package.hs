@@ -202,16 +202,16 @@ data CodeExecSignal
       CodeExecUnknown
     deriving stock (Eq, Show)
 
--- | Whether a version is offered, advisory-deprecated, or withdrawn.
+{- | Whether a version is offered, advisory-deprecated, or withdrawn. The registry's notice text
+stays in the served document.
+-}
 data Availability
     = -- | Offered normally.
       Available
-    | -- | Advisory deprecation (npm), still resolvable. Carries the message.
-      Deprecated Text
-    | {- | Withdrawn from resolution (PyPI yank keeps the file, RubyGems yank
-      removes it). Carries the reason, if given.
-      -}
-      Yanked (Maybe Text)
+    | -- | Advisory deprecation (npm), still resolvable.
+      Deprecated
+    | -- | Withdrawn from resolution (PyPI yank keeps the file, RubyGems yank removes it).
+      Yanked
     deriving stock (Eq, Show)
 
 {- | One distribution file for a version. A version owns a 'NonEmpty' list of

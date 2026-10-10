@@ -9,6 +9,7 @@ import Data.ByteString qualified as BS
 import Data.Aeson (Value (Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Pair)
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -38,6 +39,7 @@ import Ecluse.Core.Package (
     pkgCanonical,
  )
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Project (
     npmNameLeadChars,
     projectName,
@@ -49,7 +51,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
@@ -251,15 +253,22 @@ signalMappingSpec = describe "signal mapping" $ do
             pkgInstallCode d `shouldSatisfy` runsCode
 
     describe "deprecated → Availability" $ do
-        it "maps a deprecation notice to Deprecated carrying the message (request)" $ do
+        it "maps a deprecation notice to Deprecated (request)" $ do
             d <- projectVersion "request.full.json" (mkVersion Npm "2.88.2")
-            pkgAvailability d
-                `shouldBe` Deprecated
-                    "request has been deprecated, see https://github.com/request/request/issues/3142"
+            pkgAvailability d `shouldBe` Deprecated
 
         it "maps the absence of a notice to Available (is-odd)" $ do
             d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
             pkgAvailability d `shouldBe` Available
+
+        for_ NpmFixture.deprecatedForms $ \(form, member, deprecated) ->
+            it ("reads " <> form <> " alike on the full and the selected read") $ do
+                let expected = if deprecated then Deprecated else Available
+                    body = flaggedPackument member
+                (full, _) <- expectRight (projectNpmFull defaultLimits flaggedName body)
+                selected <- expectRight (projectNpmVersion defaultLimits flaggedName (mkVersion Npm "1.0.0") body)
+                pkgAvailability <$> Map.lookup "1.0.0" (infoVersions full) `shouldBe` Just expected
+                pkgAvailability . vdDetails <$> vrVersion selected `shouldBe` Just expected
 
     describe "time[version] → pkgPublishedAt" $ do
         it "fills the publish time from the packument time map (is-odd)" $ do
@@ -656,6 +665,16 @@ advisoryJunkPackument =
     \\"integrity\":\"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==\",\
     \\"unpackedSize\":1e400,\"signatures\":[{\"sig\":\"x\"}]}},\
     \\"3.0.0\":{\"name\":\"adv\",\"version\":\"3.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-3.0.0.tgz\",\"signatures\":5}}}}"
+
+flaggedName :: PackageName
+flaggedName = unscopedNpm "flagged"
+
+-- A packument whose one release carries the given members beside its required ones.
+flaggedPackument :: [Pair] -> ByteString
+flaggedPackument member =
+    encodeToBody (NpmFixture.packumentValue "flagged" "1.0.0" [("1.0.0", NpmFixture.versionValue release)] [] [])
+  where
+    release = (NpmFixture.versionSpec "flagged" "1.0.0" "https://registry.npmjs.org/flagged/-/flagged-1.0.0.tgz"){NpmFixture.vsExtraPairs = member}
 
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
