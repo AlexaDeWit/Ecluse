@@ -2,23 +2,23 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The Simple-index walk for full and selected reads. It emits the fields of
-"Ecluse.Core.Registry.PyPI.Streaming" in source order and builds each retained file once. A full
-read interns each file's keys and strings as read.
--}
+-- | Simple-index walks share source ordering and validation across tree and packed reads.
 module Ecluse.Core.Registry.PyPI.Reader (
     pypiWalk,
+    pypiFullWalk,
     fileUniqueFields,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.Aeson (Value (Null, String))
 import Data.Aeson.Key qualified as Key
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (FieldStep, Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
+import Ecluse.Core.Registry.PyPI.FileWriter (FileValue, FileWriter)
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
@@ -27,22 +27,37 @@ import Ecluse.Core.Security (LimitError)
 fileUniqueFields :: [Text]
 fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 
-{- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
-full read keeps enters the table, and only the first of each member it repeats.
--}
+-- | Walk an index into trees, retaining the first occurrence and the selected-file skip policy.
 pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
 {-# INLINE pypiWalk #-}
-pypiWalk depth mode step keeps table0 initial = start
+pypiWalk depth mode step keeps = walkIndex depth mode (pureStep step) (\_ acc -> Finished acc) treeFile
+  where
+    treeFile table acc position element rest next =
+        readShape Trees (ObjectOr Null (fileMembers depth)) (if keeps acc then Share else Keep) table element rest $ \payload held after ->
+            Walk.emit (pureStep step) acc (FileField position (Just payload)) (\kept -> next kept held after)
+
+-- | Walk a full index with typed reduction beside packing, returning the read's final table.
+pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST st) (Walked s))) -> (s -> Bool) -> (s -> Int -> FileValue -> (Either LimitError s -> ST st (Steps (ST st) (Walked s))) -> ST st (Steps (ST st) (Walked s))) -> InternTable -> s -> TokenResult -> ST st (Steps (ST st) (Walked s))
+{-# INLINE pypiFullWalk #-}
+pypiFullWalk writer depth step keeps fileStep = walkIndex depth FullRead step (\table acc -> pure (Finished (Walked table acc))) packedFile
+  where
+    packedFile table acc position element rest next =
+        readShape writer (ObjectOr Null (fileMembers depth)) (if keeps acc then Share else Keep) table element rest $ \payload held after ->
+            fileStep acc position payload (either Walk.refuse (\kept -> next kept held after))
+
+walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> TokenResult -> (s -> InternTable -> TokenResult -> r) -> r) -> InternTable -> s -> TokenResult -> r
+{-# INLINE walkIndex #-}
+walkIndex depth mode step finishRead readFile table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
         | otherwise = withElement tokens $ \element rest -> case element of
-            ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-            _ -> skipFrom element rest (const (Finished initial))
+            ObjectBegin -> eachMember topField (\(Walked held acc) _ -> finishRead held acc) (Walked table0 initial) rest
+            _ -> skipFrom element rest (const (finishRead table0 initial))
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
-    emit = Walk.emit (pureStep step)
+    emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
         "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
@@ -71,8 +86,7 @@ pypiWalk depth mode step keeps table0 initial = start
 
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
-        | otherwise = readShape Trees (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest $ \payload table' afterValue ->
-            emit acc (FileField position (Just payload)) (\acc' -> continue (Walked table' acc') afterValue)
+        | otherwise = readFile table acc position element rest (\kept held after -> continue (Walked held kept) after)
 
     candidate selection (Selecting table memo acc) position element rest continue
         | depth <= 2 = tooDeep element rest
@@ -86,10 +100,13 @@ pypiWalk depth mode step keeps table0 initial = start
                     _ -> InvalidVersionField position value
              in emit acc field (\acc' -> continue (Walked table acc') afterValue)
 
-    fileFields = namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
+    fileFields = fileMembers depth
     hashFields = knownMembers hashNames (Scalar (depth - 4))
     metaFields = namedMembers ([("tracks", ArrayWith (depth - 2) (Scalar (depth - 3)) (Scalar (depth - 2))) | full] <> [("api-version", Scalar (depth - 2))] <> [("_last-serial", Scalar (depth - 2)) | full])
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
+
+fileMembers :: Int -> Members
+fileMembers depth = namedMembers (("hashes", ObjectWith (depth - 3) (knownMembers hashNames (Scalar (depth - 4))) (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
 
 -- What a selected read fixes for every file.
 data Selection = Selection
@@ -103,8 +120,7 @@ data Selection = Selection
 -- between files or the file under selection within one.
 data Selecting a = Selecting !InternTable !FilenameMemo a
 
--- A file is read up to the first name that rejects it, and its rest is skipped like any skipped value:
--- no member there is decoded, and only the lexer can fail the read. A file of the release is read whole.
+-- After a rejecting filename, only the lexer checks the remaining members.
 selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
 {-# INLINEABLE selectedFile #-}
 selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of

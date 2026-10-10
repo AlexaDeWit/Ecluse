@@ -18,23 +18,44 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.JsonStream (StreamResult)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
+import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (FileField), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (..), defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes, releaseKeys)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIPackedChunks)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
 
 spec :: Spec
 spec = describe "pypiWalk" $ do
     paritySpec
+    packedParitySpec
     rejectedFileSpec
     repairSpec
+
+packedParitySpec :: Spec
+packedParitySpec = modifyMaxSuccess (const 2000) $
+    it "projects packed full reads as the independent tree reader, including damaged inputs and structural bounds" $
+        hedgehog $ do
+            body <- forAll (genSimpleIndexBytes >>= damaged)
+            chunks <- forAll (genChunks body)
+            depth <- forAll (Gen.frequency [(3, pure 64), (2, Gen.int (Range.constant 0 6))])
+            versions <- forAll (Gen.int (Range.constant 0 20))
+            artifacts <- forAll (Gen.int (Range.constant 0 30))
+            let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxArtifactCount = artifacts, maxMetadataBytes = BS.length body}
+                bound = MetadataBodyLimit (BS.length body)
+                referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits FullRead) (emptyProjection thing) chunks)
+                expected = (\stream -> (streamBytes stream, second Just (projectPyPIStream limits thing stream))) <$> referenceRead
+                actual = (\stream -> (streamBytes stream, second packedSimpleDocument (projectPyPIPacked limits thing stream))) <$> projectPyPIPackedChunks limits thing chunks
+            actual === expected
 
 -- Selected reads may pass a reference parse error only after a rejecting filename.
 paritySpec :: Spec

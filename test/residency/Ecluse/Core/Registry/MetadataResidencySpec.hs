@@ -19,9 +19,9 @@ import Test.Hspec
 import UnliftIO.Exception (bracket, evaluate, finally)
 
 import Ecluse.Core.Package (PackageInfo (infoVersions))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
-import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
 
@@ -76,12 +76,15 @@ detach package = do
 -- A packed document serves its table and each packed release.
 documentKeys :: CachedDoc -> IO [Weak ()]
 documentKeys document =
-    (<>) <$> sequence [track document] <*> case (snd npmPacked document, snd npmCached document, snd pypiSimpleCached document) of
-        (Just packed, _, _) -> (<>) <$> trackMembers (packumentTop packed) <*> ((:) <$> track (packumentTable packed) <*> traverse track (KeyMap.elems (packumentVersions packed)))
-        (_, Just root, _) -> concat <$> traverse trackObject (root : releases root)
-        (_, _, Just simple) -> (<>) <$> trackMembers (simpleEnvelope simple) <*> (concat <$> traverse (trackObject . snd) (simpleFiles simple))
-        _ -> pure []
+    (<>) <$> sequence [track document] <*> case (snd npmPacked document, snd pypiPacked document) of
+        (Just packed, _) -> (<>) <$> trackMembers (packumentTop packed) <*> ((:) <$> track (packumentTable packed) <*> traverse track (KeyMap.elems (packumentVersions packed)))
+        (_, Just packed) -> (<>) <$> trackMembers (packedEnvelope packed) <*> ((:) <$> track (packedTable packed) <*> traverse (track . snd) (packedFiles packed))
+        _ -> treeKeys
   where
+    treeKeys = case (snd npmCached document, snd pypiSimpleCached document) of
+        (Just root, _) -> concat <$> traverse trackObject (root : releases root)
+        (_, Just simple) -> (<>) <$> trackMembers (simpleEnvelope simple) <*> (concat <$> traverse (trackObject . snd) (simpleFiles simple))
+        _ -> pure []
     track :: a -> IO (Weak ())
     track key = evaluate key >>= \evaluated -> mkWeak evaluated () Nothing
     trackObject value = case value of
