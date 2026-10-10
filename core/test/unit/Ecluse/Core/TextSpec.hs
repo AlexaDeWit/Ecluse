@@ -13,7 +13,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, stripTrailingSlash, textStorageBytes, toLowerUnlessAsciiUnchanged, urlFilename, urlFilenameComponent)
 
 spec :: Spec
 spec = do
@@ -24,6 +24,7 @@ spec = do
     urlFilenameComponentSpec
     afterFirstSpec
     isPrefixOfLoweredSpec
+    toLowerUnlessAsciiUnchangedSpec
     isAsciiAlphaNumSpec
     readDecimalTextSpec
     readHexTextSpec
@@ -237,3 +238,25 @@ textStorageSpec =
     describe "textStorageBytes" $
         it "counts the whole array behind a slice" $
             textStorageBytes (T.take 3 (T.drop 2 "prefixed")) `shouldBe` 8
+
+toLowerUnlessAsciiUnchangedSpec :: Spec
+toLowerUnlessAsciiUnchangedSpec = describe "toLowerUnlessAsciiUnchanged" $ do
+    it "agrees with pinned text lowercase for every Char" $
+        filter (\c -> let t = T.singleton c in toLowerUnlessAsciiUnchanged t /= T.toLower t) [minBound .. maxBound]
+            `shouldBe` []
+
+    it "agrees on every ASCII character at each position and on Unicode casing boundaries" $
+        forM_ (map T.singleton ['\0' .. '\x7f'] <> ["", "\x130", "\x212a", "\x3a3", "\x10400", "\x1f600", "caf\xe9"]) $ \part ->
+            forM_ [part <> "abc", "a" <> part <> "bc", "abc" <> part, T.replicate 3 part] $ \t ->
+                toLowerUnlessAsciiUnchanged t `shouldBe` T.toLower t
+
+    it "retains the original storage for a lowercase ASCII slice" $ do
+        let backing = "prefix.files.pythonhosted.org" <> T.replicate 4096 "x"
+            host = T.take 20 (T.drop 7 backing)
+        toLowerUnlessAsciiUnchanged host `shouldBe` T.toLower host
+        textStorageBytes (toLowerUnlessAsciiUnchanged host) `shouldBe` textStorageBytes backing
+
+    it "agrees with pinned text lowercase on generated ASCII and Unicode texts" $
+        hedgehog $ do
+            t <- forAll (Gen.text (Range.linear 0 100) (Gen.choice [Gen.ascii, Gen.unicodeAll]))
+            toLowerUnlessAsciiUnchanged t === T.toLower t

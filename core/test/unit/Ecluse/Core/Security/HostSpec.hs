@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Host allowlist, address classification and artifact authority contracts.
 module Ecluse.Core.Security.HostSpec (spec) where
 
-import Data.IP (IPRange)
+import Data.IP (IP (IPv4, IPv6), IPRange, toIPv4, toIPv6)
 import Data.Set qualified as Set
 
 import Data.Text qualified as T
@@ -19,6 +20,7 @@ import Ecluse.Core.Security (
     HostPort (HostPort, hpHost),
     Origin (TrustedOrigin, UntrustedOrigin),
     allowedHostPorts,
+    artifactAuthorityHonoured,
     hostPortAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
@@ -28,6 +30,7 @@ import Ecluse.Core.Security (
     thgAllowlist,
     thgEcosystemHosts,
  )
+import Ecluse.Core.Security.IpLiteral (IpAddr (IpV4, IpV6), parseIpLiteral)
 import Ecluse.Security.Support (hp, hpAt, upstreamHosts, upstreams)
 
 spec :: Spec
@@ -41,6 +44,7 @@ spec = do
     allowedHostPortsSpec
     propertiesSpec
     parseBlockedRangeSpec
+    casingDifferentialSpec
 
 hostAllowlistSpec :: Spec
 hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
@@ -218,12 +222,12 @@ classificationCorpusSpec =
     names =
         [ ("registry.npmjs.org", False) -- a DNS name
         , ("", False) -- empty
-        , ("10.0.0.256", False) -- octet out of range → not a literal
-        , ("10.0.0.x", False) -- non-numeric octet → not a literal
-        , ("10.0.0", False) -- too few octets → not a literal
-        , ("10..0.1", False) -- empty octet → not a literal
+        , ("10.0.0.256", False) -- octet out of range: not a literal
+        , ("10.0.0.x", False) -- non-numeric octet: not a literal
+        , ("10.0.0", False) -- too few octets: not a literal
+        , ("10..0.1", False) -- empty octet: not a literal
         , ("2130706433", False) -- a bare 32-bit number: a short inet_aton form, not modelled here
-        , ("1::2::3", False) -- two "::" → malformed
+        , ("1::2::3", False) -- two "::": malformed
         , ("1:2:3:4:5:6:7:8::", False) -- compressed though eight groups are already written
         , ("1:2:3", False) -- uncompressed with the wrong group count
         , ("fe80::zz", False) -- a non-hex group
@@ -259,11 +263,6 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
         (passesGate <$> hostPortAddress "http://169.254.169.254/latest/meta-data/")
             `shouldBe` Just False
 
-{- | The @dist.tarball@ host gate: Ecluse fetches a tarball only from the authority (host and
-port) that served the packument, plus the ecosystem's declared artifact hosts, and never off the
-allowlist. The internal-range block is origin-aware: it gates the untrusted origin and exempts the
-trusted private origin (security.md invariant 3).
--}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
     let noOptIn = []
@@ -336,9 +335,7 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
                     `shouldBe` False
 
     describe "the trusted private origin is exempt from the internal-range block" $ do
-        -- The trusted origin mirrors the connection layer's unguarded manager (security.md
-        -- invariant 3). A private registry may live on an internal address, so the gate admits
-        -- its same-host dist.tarball. The allowlist and same-authority clauses still gate it.
+        -- A trusted private registry may use an internal address. The allowlist and same-authority clauses still apply.
         let allowInternal = allowedHostPorts (Set.singleton (hp "10.0.0.5"))
         it "admits a same-authority internal-literal tarball (where untrusted is refused)" $ do
             tarballHostAllowed noEco TrustedOrigin allowInternal noOptIn (Just (hp "10.0.0.5")) (Just (hp "10.0.0.5"))
@@ -372,8 +369,6 @@ allowedHostPortsSpec = describe "allowedHostPorts" $ do
         isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hp "Registry.NPMjs.ORG"))) (hp "registry.npmjs.org")
             `shouldBe` True
     it "normalises distinct casings of one host to the same allowlist" $
-        -- Two spellings that differ only in case fold to equal 'AllowedHostPorts'
-        -- values, so the normalisation is genuinely case-collapsing.
         allowedHostPorts (Set.fromList [hp "EXAMPLE.com", hp "example.COM"])
             `shouldBe` allowedHostPorts (Set.singleton (hp "example.com"))
     it "keeps the same host on distinct ports as distinct entries" $
@@ -382,9 +377,7 @@ allowedHostPortsSpec = describe "allowedHostPorts" $ do
         allowedHostPorts (Set.fromList [hp "example.com", hpAt "example.com" 8443])
             `shouldNotBe` allowedHostPorts (Set.singleton (hp "example.com"))
 
--- The "public host matched by an additional range" arm hits about 5% of generated
--- cases, which straddled the 'H.cover 2' floor at hspec-hedgehog's default 100 tests.
--- Draw 1000 so the coverage estimate is stable without weakening the floor.
+-- The additional-range case occurs about 5% of the time. Use 1000 samples to hold the coverage floor stable.
 propertiesSpec :: Spec
 propertiesSpec = modifyMaxSuccess (const 1000) $ describe "properties" $ do
     it "isBlockedTarget blocks an internal host, or one matched by an additional range" $
@@ -459,10 +452,6 @@ genMaybeInternalHost =
     octet :: H.Gen Int
     octet = Gen.int (Range.linear 0 255)
 
-{- | 'parseBlockedRange' is the total decoder the config layer relies on for
-@ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES@. A malformed entry yields 'Nothing', so boot fails
-closed rather than throwing as the module's own compile-time 'IPRange' literals do.
--}
 parseBlockedRangeSpec :: Spec
 parseBlockedRangeSpec = describe "parseBlockedRange" $ do
     it "parses a valid IPv4 CIDR range" $
@@ -482,17 +471,12 @@ parseBlockedRangeSpec = describe "parseBlockedRange" $ do
     it "returns Nothing for the empty string" $
         parseBlockedRange "" `shouldBe` Nothing
 
-{- Coverage of the ecosystem-host equivalence in 'tarballHostAllowed'. An ecosystem's canonical
-artifact host is same-host-equivalent under the secure default. Every other gate dimension holds:
-the allowlist, the internal-range block, and the policy for non-ecosystem hosts.
--}
 ecosystemHostSpec :: Spec
 ecosystemHostSpec = describe "tarballHostAllowed (ecosystem artifact hosts)" $ do
     let noOptIn = []
         filesHost = hp "files.pythonhosted.org"
         ecoHosts = allowedHostPorts (Set.fromList [filesHost])
         noEcoHosts = allowedHostPorts Set.empty
-        -- The gate builder folds ecosystem hosts into the allowlist. Mirror that here.
         allow = allowedHostPorts (Set.fromList [hp "pypi.org", filesHost])
         decide ecos target = tarballHostAllowed ecos UntrustedOrigin allow noOptIn (Just (hp "pypi.org")) (Just target)
 
@@ -530,3 +514,72 @@ ecosystemHostSpec = describe "tarballHostAllowed (ecosystem artifact hosts)" $ d
         isAllowedUpstreamHost (thgAllowlist gate) filesHost `shouldBe` True
         isAllowedUpstreamHost (thgEcosystemHosts gate) filesHost `shouldBe` True
         isAllowedUpstreamHost (thgEcosystemHosts gate) (hp "pypi.org") `shouldBe` False
+
+casingDifferentialSpec :: Spec
+casingDifferentialSpec = describe "host canonicalization against the base implementation" $ do
+    it "preserves allowlist and same-authority decisions across DNS, IP, Unicode and port boundaries" $
+        forM_ casingHosts $ \configured -> do
+            let entries = Set.fromList [HostPort configured 443, hpAt "files.pythonhosted.org" 8443]
+                expected = Set.map baseCanonicalEntry entries
+                allowed = allowedHostPorts entries
+            forM_ casingHosts $ \queried ->
+                forM_ [80, 443, 8443] $ \port -> do
+                    let target = HostPort queried port
+                        permitted = not (T.null queried) && baseCanonicalEntry target `Set.member` expected
+                        same = baseCanonicalHostKey configured == baseCanonicalHostKey queried && port == 443
+                    isAllowedUpstreamHost allowed target `shouldBe` permitted
+                    artifactAuthorityHonoured (allowedHostPorts Set.empty) (Just (hp configured)) (Just target)
+                        `shouldBe` same
+                    tarballHostAllowed (allowedHostPorts Set.empty) UntrustedOrigin allowed [] (Just (hp configured)) (Just target)
+                        `shouldBe` (same && permitted && not (isBlockedTarget [] queried))
+
+    it "preserves generated Unicode host matching through the public gate" $
+        hedgehog $ do
+            host <- forAll (Gen.text (Range.linear 0 80) (Gen.choice [Gen.ascii, Gen.unicodeAll]))
+            let entry = hp host
+                lowered = hp (T.toLower host)
+                expected = not (T.null (hpHost lowered)) && baseCanonicalEntry entry == baseCanonicalEntry lowered
+            isAllowedUpstreamHost (allowedHostPorts (Set.singleton entry)) lowered === expected
+
+casingHosts :: [Text]
+casingHosts =
+    [ ""
+    , "files.pythonhosted.org"
+    , "FILES.PYTHONHOSTED.ORG"
+    , "registry.npmjs.org"
+    , "registry.npmjs.org.evil"
+    , "\x130.example"
+    , "i\x307.example"
+    , "\x212a.example"
+    , "k.example"
+    , "\x3a3.example"
+    , "\x3c3.example"
+    , "caf\xc9.example"
+    , "caf\xe9.example"
+    , "\x10400.example"
+    , "\x10428.example"
+    , "\x1f600.example"
+    , "127.0.0.1"
+    , "127.1"
+    , "0x7f000001"
+    , "8.8.8.8"
+    , "::1"
+    , "0:0:0:0:0:0:0:1"
+    , "FE80::1%eth0"
+    , "fe80::1%eth0"
+    ]
+        <> [T.pack ['a', c, 'b'] | c <- ['\0' .. '\x7f']]
+
+baseCanonicalEntry :: HostPort -> HostPort
+baseCanonicalEntry (HostPort host port) = HostPort (baseCanonicalHostKey host) port
+
+-- Frozen from ec1b8d8952332ba00dc0048b7eb416093efe0d2f. IP parsing remains the unchanged production parser.
+baseCanonicalHostKey :: Text -> Text
+baseCanonicalHostKey host = case parseIpLiteral host of
+    Just addr -> show (baseIpAddrToIP addr)
+    Nothing -> T.toLower host
+
+baseIpAddrToIP :: IpAddr -> IP
+baseIpAddrToIP = \case
+    IpV4 a b c d -> IPv4 (toIPv4 (map fromIntegral [a, b, c, d]))
+    IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))

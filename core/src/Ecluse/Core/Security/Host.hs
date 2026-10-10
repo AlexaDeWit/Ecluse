@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Outbound-request guards for the data plane: where the proxy is allowed to fetch.
-
-An outbound target comes from the client's request path or an upstream's @dist.tarball@, and
-must pass both halves of the SSRF gate: 'isAllowedUpstreamHost' restricts a fetch to the
-configured upstream @host:port@ pairs, and 'isBlockedTarget' rejects internal address
-literals. They compare different projections on purpose. Authorisation compares the full
-authority, because the fetch dials the port too, while the block classifies the bare host,
-because an address is internal at any port.
+{- | Outbound-request guards for the data plane. The allowlist authorises host and port pairs,
+while the internal-range block classifies address literals at every port.
 -}
 module Ecluse.Core.Security.Host (
     -- * Outbound host:port allowlist
@@ -44,6 +38,7 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Security.Authority (HostPort (..), hostPortAddress)
 import Ecluse.Core.Security.IpLiteral (IpAddr (IpV4, IpV6), parseIpLiteral)
+import Ecluse.Core.Text (toLowerUnlessAsciiUnchanged)
 
 {- | The @host:port@ pairs the host guards authorise, canonicalised by 'allowedHostPorts', its
 only constructor. An entry authorises exactly its own pair, port 443 when none was written.
@@ -118,12 +113,11 @@ ipAddrToIP = \case
     IpV4 a b c d -> IPv4 (toIPv4 (map fromIntegral [a, b, c, d]))
     IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))
 
--- An IP literal renders through @iproute@'s 'show', so equivalent spellings collapse, and a
--- DNS name is only case-folded. Both guards fold through here, so neither can drift.
+-- IP keys collapse equivalent literal spellings. DNS keys retain Unicode lowercase semantics.
 canonicalHostKey :: Text -> Text
 canonicalHostKey host = case parseIpLiteral host of
     Just addr -> show (ipAddrToIP addr)
-    Nothing -> T.toLower host
+    Nothing -> toLowerUnlessAsciiUnchanged host
 
 {- Decode the IPv4-mapped, IPv4-compatible, and NAT64 embeddings. No embedding prefix falls in
 a blocked IPv6 range, so without this @::169.254.169.254@ would pass the SSRF block. -}

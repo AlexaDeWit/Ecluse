@@ -30,7 +30,7 @@ module Ecluse.Core.Security.Authority (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText)
+import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText, toLowerUnlessAsciiUnchanged)
 
 {- | The authority an outbound fetch dials: a bare host with its effective port. The gate
 authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
@@ -47,14 +47,9 @@ data HostPort = HostPort
 recognisable host yields the empty string, which the guards treat as not-allowed.
 -}
 hostAddress :: Text -> Text
-hostAddress raw = T.toLower (maybe "" fst (splitHostPort (authorityOf raw)))
+hostAddress raw = toLowerUnlessAsciiUnchanged (maybe "" fst (splitHostPort (authorityOf raw)))
 
-{- | The host and the effective port a URI or @host[:port]@ authority dials, or 'Nothing' when it
-holds none. A portless URL dials 443, and an out-of-grammar or written-but-empty port is refused.
-
->>> hostPortAddress "https://[2606:4700::1111]:8443/thing"
-Just (HostPort {hpHost = "2606:4700::1111", hpPort = 8443})
--}
+-- | Extract the host and effective port, defaulting to 443. Refuse absent hosts and malformed ports.
 hostPortAddress :: Text -> Maybe HostPort
 hostPortAddress = hostPortAddressWithDefault 443
 
@@ -67,22 +62,13 @@ hostPortAddressWithDefault portless raw = do
     (host, rest) <- splitHostPort authority
     guard (not (T.null host))
     port <- effectivePort portless authority rest
-    pure (HostPort (T.toLower host) port)
+    pure (HostPort (toLowerUnlessAsciiUnchanged host) port)
 
-{- | The log-safe label for a URL: its validated host and effective port, or @\<unresolved\>@. An
-attacker-influenced or credential-bearing URL must never reach a log line or a span as written.
-
->>> authorityLabel "https://deploy:hunter2@registry.npmjs.org/thing/-/thing-1.0.0.tgz?sig=abc"
-"registry.npmjs.org:443"
--}
+-- | A host and effective port label without credential carriers, or @\<unresolved\>@ for an invalid authority.
 authorityLabel :: Text -> Text
 authorityLabel = authorityLabelWithDefault 443
 
-{- | 'authorityLabel' for a URL a client dials as written, so a portless @http://@ URL names port 80.
-
->>> dialledAuthorityLabel "HTTP://mirror.example.test/epss.csv.gz"
-"mirror.example.test:80"
--}
+-- | A credential-free authority label using port 80 for a portless @http://@ URL, otherwise 443.
 dialledAuthorityLabel :: Text -> Text
 dialledAuthorityLabel raw = authorityLabelWithDefault portless raw
   where
@@ -91,12 +77,7 @@ dialledAuthorityLabel raw = authorityLabelWithDefault portless raw
 authorityLabelWithDefault :: Word16 -> Text -> Text
 authorityLabelWithDefault portless = maybe unresolvedAuthority renderHostPort . hostPortAddressWithDefault portless
 
-{- | A fetched URL with every credential carrier removed: userinfo, query, and fragment, the
-last two whole, because either can hold a signed-URL credential.
-
->>> credentialFreeUrl "https://deploy:hunter2@osv.example.test/npm/all.zip?sig=abc#frag"
-"https://osv.example.test/npm/all.zip"
--}
+-- | Remove userinfo, query and fragment while retaining the fetched URL's scheme, authority and path.
 credentialFreeUrl :: Text -> Text
 credentialFreeUrl raw = scheme <> authorityOf raw <> path
   where
@@ -141,15 +122,7 @@ parsePort t = do
 carriesUserinfo :: Text -> Bool
 carriesUserinfo = T.isInfixOf "@" . authoritySpan
 
-{- | Refuse an operator-configured URL that carries credential material: userinfo, a query string,
-or a fragment. Run it before any check that quotes the value, and the reason it returns never does.
-
->>> refuseCredentialMaterial "server.publicUrl" "https://deploy:hunter2@ecluse.example.test"
-Left "server.publicUrl must not carry userinfo (a credential belongs in its own configuration key)"
-
->>> refuseCredentialMaterial "registry.url" "https://registry.npmjs.org/@acme/thing"
-Right ()
--}
+-- | Refuse configured URLs with userinfo, query or fragment before any check quotes the URL. Reasons never quote credentials.
 refuseCredentialMaterial :: Text -> Text -> Either Text ()
 refuseCredentialMaterial subject url
     | carriesUserinfo url =

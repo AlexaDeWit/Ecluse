@@ -19,6 +19,7 @@ module Ecluse.Core.Text (
     httpPrefix,
     lowerPrefixChars,
     isPrefixOfLowered,
+    toLowerUnlessAsciiUnchanged,
     registryPath,
     isAsciiAlphaNum,
     readDecimalText,
@@ -64,7 +65,6 @@ urlFilename :: Text -> Maybe Text
 urlFilename url = do
     let filename = urlFilenameComponent url
     guard (isSafeComponent filename)
-    -- A component with no percent sign decodes to itself.
     when (T.any (== '%') filename) $ do
         decoded <- rightToMaybe (TE.decodeUtf8' (urlDecode False (encodeUtf8 filename)))
         guard (isSafeComponent decoded)
@@ -120,6 +120,14 @@ isPrefixOfLowered (LowerPrefix chars prefix) t = lowered == prefix
   where
     -- Equality, not 'T.isPrefixOf', which streams both texts and allocates for each character.
     lowered = T.take chars (T.toLower (T.take chars t))
+
+-- | Unicode lowercase, retaining the input when every character is ASCII and none is uppercase.
+toLowerUnlessAsciiUnchanged :: Text -> Text
+toLowerUnlessAsciiUnchanged t
+    | T.all unchanged t = t
+    | otherwise = T.toLower t
+  where
+    unchanged c = c <= '\x7f' && not (isAsciiUpper c)
 
 {- | The path half of an absolute URL, from the first slash after the authority. It splits on the
 first scheme separator, so a later one inside the URL cannot move where the path starts.
