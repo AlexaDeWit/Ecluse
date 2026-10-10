@@ -133,9 +133,6 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
                     decoded = packedValue held form
                 pure (Finished (Just (shared, decoded, renderAlone held Nothing form, foldMap (toStrict . encode) decoded, valueEnd (packedBlob form) 0 == packedBytes form, packedEncodedLength form == walkedLength table form)))
 
--- What a read holds: the value decoded with the read's strings and with the sealed table, its render
--- and its encoding, whether its opcodes end where its blob does, and whether it stores the length a
--- walk of those opcodes measures.
 type Held = (Value, Maybe Value, Maybe ByteString, ByteString, Bool, Bool)
 
 sameAsTree :: Shape -> Mode -> [ByteString] -> PropertyT IO ()

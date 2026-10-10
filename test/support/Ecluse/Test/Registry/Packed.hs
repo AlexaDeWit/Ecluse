@@ -60,9 +60,8 @@ renderAlone table prefix value = BS.dropEnd 2 . BS.drop 6 <$> renderPlan plan
   where
     plan = RenderPlan{planMembers = mempty, planSlot = "k", planTables = fromList [table], planPieces = ArrayPieces [Piece 0 value], planPrefix = prefix}
 
-{- | The reference for the length a sealed value stores: the encoded length of the value as read,
-walked from its opcodes over the strings of its read's table, or -1 when it names a string the table
-lacks. Partially applied to a table, it reads the table's strings once.
+{- | Reference encoded length from the value's opcodes and read table, or -1 for a missing string.
+Partially applying the table reads its strings once.
 -}
 walkedLength :: InternTable -> Packed -> Int
 walkedLength = lengthOver . V.fromList . toList . tableTexts
