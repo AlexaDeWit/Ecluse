@@ -41,7 +41,7 @@ import Control.Monad.ST (ST)
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
 import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.TokenReader (Element (..), Next (..), Tokens, nextToken, tokenReader)
+import Data.JsonStream.TokenReader (Element (..), Next (..), Tokens, nextToken, reusingTokenReader)
 import GHC.Exts (oneShot)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, Name (Plain), decodedName)
@@ -85,11 +85,11 @@ instance Walk (ST st (Steps (ST st) s)) where
 
 -- | Walk a body as 'Ecluse.Core.Registry.JsonStream.readJsonStream' reads one, from the lexer's first token.
 readJsonWalk :: (Monad m) => BodyLimit -> (Tokens -> Step s) -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonWalk bound walk = readSteps (pure . runIdentity) bound (walk tokenReader)
+readJsonWalk bound walk = readSteps (pure . runIdentity) bound (walk reusingTokenReader)
 
 -- | 'readJsonWalk' for a walk that writes in 'ST' as it reads, run in the reader's effect.
 readJsonWalkST :: (Monad m) => (forall a. ST st a -> m a) -> BodyLimit -> (Tokens -> ST st (Steps (ST st) s)) -> m ByteString -> m (Either LimitError (StreamResult s))
-readJsonWalkST run bound walk readChunk = run (walk tokenReader) >>= \start -> readSteps run bound start readChunk
+readJsonWalkST run bound walk readChunk = run (walk reusingTokenReader) >>= \start -> readSteps run bound start readChunk
 
 -- | A walk's state between tokens: the read's table and the consumer's accumulator.
 data Walked s = Walked !InternTable s
