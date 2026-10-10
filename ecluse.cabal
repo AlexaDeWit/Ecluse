@@ -712,6 +712,7 @@ library ecluse-test-support
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
+    Ecluse.Test.InstalledTree
     Ecluse.Test.Json
     Ecluse.Test.Log
     Ecluse.Test.Maintenance
@@ -773,6 +774,7 @@ library ecluse-test-support
     , conduit           ^>=1.3
     , containers        ^>=0.7
     , crypton           >=2.1 && <2.2
+    , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
@@ -1165,6 +1167,7 @@ test-suite ecluse-unit
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Test.Corpus.AdvisoriesSpec
+    Ecluse.Test.InstalledTreeSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 
@@ -1484,7 +1487,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Client
     Ecluse.E2E.Harness.Collector
     Ecluse.E2E.Harness.Docker
-    Ecluse.E2E.Harness.InstalledTree
     Ecluse.E2E.Harness.Npm
     Ecluse.E2E.Harness.Pip
     Ecluse.E2E.Harness.Proxy

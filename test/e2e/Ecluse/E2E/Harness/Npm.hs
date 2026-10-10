@@ -49,10 +49,10 @@ import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Fixtures.Npm (psName, publicOnlyPkg)
 import Ecluse.E2E.Harness.Client (clientReport, runClient, withClientDir)
-import Ecluse.E2E.Harness.InstalledTree (InstalledTree, TreeEntry (TreeFile), redactTree, snapshotTree)
 import Ecluse.E2E.Harness.Proxy (proxyStatus)
 import Ecluse.E2E.Harness.Stub (StubRoute (Mirror), stubUrl)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile), normaliseNpmSources, snapshotTree)
 
 -- | Isolate a consumer's npm state and remove its project directory after the action.
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
@@ -196,12 +196,10 @@ printedValue res = case (crExit res, decodeStrict (encodeUtf8 (crStdout res))) o
     (ExitSuccess, Just value) -> Right value
     _ -> Left (clientReport res "printed no JSON value")
 
-{- | What an install left in the project: @node_modules@, the lockfile, and the manifest. The proxy's
-own address reads as 'redactedProxy', because it is the one value two proxies must write differently.
--}
+-- | Snapshot the installed tree, normalising only npm lockfile package source URLs.
 installedTree :: E2E -> NpmProject -> IO InstalledTree
 installedTree e2e proj =
-    redactTree (encodeUtf8 (e2eBaseUrl e2e)) (encodeUtf8 redactedProxy)
+    normaliseNpmSources (e2eBaseUrl e2e) redactedProxy
         <$> snapshotTree (npDir proj) ["node_modules", lockfileName, "package.json"]
 
 -- | What stands for the proxy's address in an 'installedTree'.
@@ -290,8 +288,7 @@ publishDredgerName = publishScope <> "/e2e-dredger-first-party"
 publishVersion :: Text
 publishVersion = "1.0.0"
 
--- The bearer token a publishable project's @.npmrc@ carries. It satisfies npm's client-side
--- publish gate, and the target accepts regardless, so the identity is immaterial at this tier.
+-- The target accepts any token, but npm requires one before publishing.
 publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 

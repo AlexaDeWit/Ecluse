@@ -702,9 +702,6 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The Verdaccio config: anonymous read + publish, no uplinks (a sealed local
-mirror), listening on all interfaces so a peer container can reach it.
--}
 verdaccioConfig :: Text
 verdaccioConfig =
     T.unlines

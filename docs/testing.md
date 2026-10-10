@@ -495,12 +495,13 @@ compare what a client can see of the two installs:
 - npm links the root's executable, and the executable prints the root's export,
 - the stub's log shows that the mirror answered every packument and artifact read and that the
   public routes answered nothing, and the lockfile names the proxy as the source of every package,
-- `node_modules`, the lockfile, and the manifest are identical once the proxy's own address is
-  redacted. A failure prints each differing path with the lines one side lacks.
+- `node_modules`, the lockfile, and the manifest are identical after normalising only
+  `packages.*.resolved` source URLs in `package-lock.json` and `node_modules/.package-lock.json`.
+  A failure prints each differing path, entry kind, executable permission, and exact file bytes.
 
 A last case boots a proxy whose private upstream holds nothing, and the same install fails under
 the same outage. The tree comparison detects differences in installed paths, file bytes,
-executable permissions, link targets, and lockfile contents after the proxy address is redacted.
+executable permissions, link targets, and every byte outside those lockfile source URL values.
 It detects metadata loss only when that loss changes this fixture's installed tree or lockfile.
 It does not prove that every metadata field survives, even when the fixture declares that field.
 Every ecosystem with a mirror write owes this scenario. PyPI has no mirror write, so it has no
