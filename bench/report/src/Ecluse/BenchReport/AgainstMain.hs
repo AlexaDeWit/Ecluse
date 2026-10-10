@@ -13,6 +13,8 @@ module Ecluse.BenchReport.AgainstMain (
     Origin (..),
     parseOrigin,
     Baseline (..),
+    Missing (..),
+    missingCodes,
 
     -- * Changes
     percentChange,
@@ -30,12 +32,15 @@ module Ecluse.BenchReport.AgainstMain (
     -- * The section
     Report (..),
     renderAgainstMain,
+    sharedBaselineNote,
 ) where
 
+import Data.List (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Numeric (showFFloat)
+
+import Ecluse.BenchReport.Markdown (fixed)
 
 -- | The run on @main@ whose results a report is compared with.
 data Origin = Origin
@@ -48,21 +53,65 @@ data Origin = Origin
     deriving stock (Eq, Show)
 
 {- | Read the record @scripts/perf-baseline.sh@ writes: @key=value@ lines that name the commit, the
-run, and its creation time, or one @unavailable@ line whose value is the reason returned here.
+run, and its creation time, or one @unavailable@ line that holds a code of 'missingCodes'.
 -}
-parseOrigin :: Text -> Either Text Origin
+parseOrigin :: Text -> Either Missing Origin
 parseOrigin raw = case Map.lookup "unavailable" fields of
-    Just reason -> Left reason
+    Just code -> Left (fromMaybe (UnknownReason code) (lookup code missingCodes))
     Nothing -> Origin <$> field "commit" <*> field "run" <*> field "created"
   where
     fields = Map.fromList [(key, T.drop 1 value) | (key, value) <- map (T.breakOn "=") (T.lines raw), not (T.null value)]
-    field key = maybeToRight ("The baseline record names no " <> key <> ".") (mfilter (not . T.null) (Map.lookup key fields))
+    field key = maybeToRight (RecordLacks key) (mfilter (not . T.null) (Map.lookup key fields))
 
 -- | The results of the run on @main@, or why there are none.
 data Baseline a
     = Baseline Origin a
-    | NoBaseline Text
+    | NoBaseline Missing
     deriving stock (Eq, Show)
+
+-- | Why a comparison has no baseline.
+data Missing
+    = -- | The fetch could not list the runs on @main@.
+      RunsNotListed
+    | -- | The list of the runs did not parse.
+      RunListNotParsed
+    | -- | The list holds no successful run that this repository started on @main@.
+      NoSuccessfulRun
+    | -- | No listed run still holds the report's artifact.
+      NoRunWithArtifact
+    | -- | The artifact of the chosen run could not be downloaded.
+      DownloadFailed
+    | -- | A file the fetch leaves could not be read: the problem, as the read gave it.
+      FileMissing Text
+    | -- | The record lacks this key.
+      RecordLacks Text
+    | -- | The record holds a code that 'missingCodes' does not.
+      UnknownReason Text
+    | -- | The report of the run on @main@ did not parse: the run, and the problem.
+      ReportUnread Origin Text
+    deriving stock (Eq, Show)
+
+-- | The codes @scripts/perf-baseline.sh@ writes for a fetch that found no baseline.
+missingCodes :: [(Text, Missing)]
+missingCodes =
+    [ ("runs-not-listed", RunsNotListed)
+    , ("run-list-not-parsed", RunListNotParsed)
+    , ("no-successful-run", NoSuccessfulRun)
+    , ("no-run-with-artifact", NoRunWithArtifact)
+    , ("download-failed", DownloadFailed)
+    ]
+
+renderMissing :: Missing -> Text
+renderMissing = \case
+    RunsNotListed -> "The fetch could not list the runs on `main`."
+    RunListNotParsed -> "The list of the runs on `main` did not parse."
+    NoSuccessfulRun -> "The fetch found no successful run on `main`."
+    NoRunWithArtifact -> "No successful run on `main` that the fetch listed still holds this report's artifact."
+    DownloadFailed -> "The fetch could not download the artifact of the run on `main`."
+    FileMissing problem -> "A file of the baseline is missing: " <> problem <> "."
+    RecordLacks key -> "The baseline record names no " <> key <> "."
+    UnknownReason code -> "The fetch gave a reason this tool does not know: `" <> code <> "`."
+    ReportUnread origin problem -> "The report of " <> originLink origin <> " could not be read. " <> problem
 
 -- | The change from the figure on @main@ to this run's, in percent of the figure on @main@.
 percentChange :: Double -> Double -> Maybe Double
@@ -73,13 +122,11 @@ percentChange onMain here
 -- | A change to one decimal place with its sign. A change that rounds to zero carries none.
 signedPercent :: Double -> Text
 signedPercent percent
-    | magnitude == oneDecimal 0 = magnitude <> "%"
+    | magnitude == fixed 1 0 = magnitude <> "%"
     | percent > 0 = "+" <> magnitude <> "%"
     | otherwise = "-" <> magnitude <> "%"
   where
-    magnitude = oneDecimal (abs percent)
-    oneDecimal :: Double -> Text
-    oneDecimal x = toText (showFFloat (Just 1) x "")
+    magnitude = fixed 1 (abs percent)
 
 -- | How the changes of one set of rows spread.
 data Spread = Spread
@@ -182,14 +229,18 @@ renderAgainstMain report baseline current =
     T.unlines $
         ["## " <> reportTitle report, ""] <> case (current >>= reportRead report, baseline) of
             (Left problem, _) -> ["**Nothing to compare.** This run's report could not be read. " <> problem, ""]
-            (Right _, NoBaseline reason) -> noBaseline reason
+            (Right _, NoBaseline missing) -> noBaseline missing
             (Right here, Baseline origin raw) -> case reportRead report raw of
-                Left problem -> noBaseline ("The report of " <> originLink origin <> " could not be read. " <> problem)
+                Left problem -> noBaseline (ReportUnread origin problem)
                 Right onMain -> ["Compared with " <> originLink origin <> ".", ""] <> reportBody report onMain here <> reportNotes report
 
--- The reason is a full sentence, as the fetch script and the readers write it.
-noBaseline :: Text -> [Text]
-noBaseline reason = ["**No baseline.** " <> reason, "", "Nothing is compared, and the job does not fail on it.", ""]
+noBaseline :: Missing -> [Text]
+noBaseline missing = ["**No baseline.** " <> renderMissing missing, "", "Nothing is compared, and the job does not fail on it.", ""]
+
+-- | The note every comparison carries: a repeat of the run keeps the same run on @main@.
+sharedBaselineNote :: Text
+sharedBaselineNote =
+    "- **One baseline for every run.** Every run off `main` compares with this same run on `main` until a newer one succeeds there, so a row that it drew slow or fast shows the same difference in every pull request and in every repeat."
 
 originLink :: Origin -> Text
 originLink origin =

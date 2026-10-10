@@ -5,8 +5,8 @@
 #   Usage: scripts/perf-baseline.sh <workflow-file> <artifact-prefix> <out-dir>
 #
 # <out-dir>/baseline.txt gets `commit=`, `run=`, and `created=` lines beside the artifact's
-# files, or one `unavailable=<reason>` line. A missing baseline exits 0: only a usage error
-# fails. Reads GITHUB_REPOSITORY and GH_TOKEN. Needs gh and jq.
+# files, or one `unavailable=<code>` line that bench-report renders. A missing baseline exits
+# 0: only a usage error fails. Reads GITHUB_REPOSITORY and GH_TOKEN. Needs gh and jq.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -18,28 +18,28 @@ prefix="$2"
 out="$3"
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name the repository}"
 
-# How many of the newest successful runs to search for the artifact.
-searched=20
-
 mkdir -p "$out"
 
+# $1 is the code the record carries, and $2 the detail for this job's log.
 none() {
-  echo "perf-baseline: no baseline. $1"
+  echo "perf-baseline: no baseline ($1). $2"
   printf 'unavailable=%s\n' "$1" > "$out/baseline.txt"
   exit 0
 }
 
-listing="$(gh api "repos/$repo/actions/workflows/$workflow/runs?branch=main&status=success&per_page=$searched" < /dev/null)" \
-  || none "The runs of $workflow on main could not be listed."
+# One call lists the 100 newest successful runs, the most a page holds.
+listing="$(gh api "repos/$repo/actions/workflows/$workflow/runs?branch=main&status=success&per_page=100" < /dev/null)" \
+  || none runs-not-listed "The runs of $workflow on main could not be listed."
 
 # The branch filter alone also matches a pull request from a fork's own main branch, so a
-# run counts only when this repository started it and no pull request did.
+# run counts only when this repository started it on main by a push, a schedule, or a dispatch.
 runs="$(printf '%s' "$listing" | jq -r --arg repo "$repo" '
   .workflow_runs[]
-  | select(.head_branch == "main" and .event != "pull_request" and .head_repository.full_name == $repo)
+  | select(.head_branch == "main" and .head_repository.full_name == $repo)
+  | select(.event | IN("push", "schedule", "workflow_dispatch"))
   | [.id, .head_sha, .html_url, .created_at]
-  | @tsv')" || none "The list of the runs of $workflow on main did not parse."
-[ -n "$runs" ] || none "No successful run of $workflow on main was found."
+  | @tsv')" || none run-list-not-parsed "The list of the runs of $workflow on main did not parse."
+[ -n "$runs" ] || none no-successful-run "No successful run of $workflow on main was found."
 
 # Newest first. A dispatched run can hold fewer artifacts than a scheduled one, so the
 # search goes on past a run without this one.
@@ -50,10 +50,10 @@ while IFS=$'\t' read -r id sha url created; do
   [ -n "$name" ] || continue
 
   gh run download "$id" --repo "$repo" --name "$name" --dir "$out" < /dev/null \
-    || none "The artifact $name of the run $url could not be downloaded."
+    || none download-failed "The artifact $name of the run $url could not be downloaded."
   printf 'commit=%s\nrun=%s\ncreated=%s\n' "$sha" "$url" "$created" > "$out/baseline.txt"
   echo "perf-baseline: $name from $url"
   exit 0
 done <<< "$runs"
 
-none "None of the last $searched successful runs of $workflow on main holds an artifact named $prefix*."
+none no-run-with-artifact "No listed run of $workflow on main holds an artifact named $prefix*."

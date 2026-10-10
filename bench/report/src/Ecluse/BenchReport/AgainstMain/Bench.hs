@@ -12,7 +12,6 @@ module Ecluse.BenchReport.AgainstMain.Bench (
 ) where
 
 import Data.Text qualified as T
-import Numeric (showFFloat)
 
 import Ecluse.BenchReport (BenchRow (..), formatPs, parseCsv, splitEcosystem)
 import Ecluse.BenchReport.AgainstMain (
@@ -24,12 +23,13 @@ import Ecluse.BenchReport.AgainstMain (
     pairBy,
     percentChange,
     renderAgainstMain,
+    sharedBaselineNote,
     signedPercent,
     spreadLine,
     spreadOf,
     unpairedLines,
  )
-import Ecluse.BenchReport.Markdown (cells)
+import Ecluse.BenchReport.Markdown (cells, fixed)
 
 -- | Render the comparison from the two @bench-results.csv@ bodies: the one on @main@, then this run's.
 againstMain :: Baseline Text -> Either Text Text -> Text
@@ -104,7 +104,7 @@ timeChange (onMain, here) = percentChange (fromIntegral (rowMeanPs onMain)) (fro
 precision :: BenchRow -> Text
 precision row
     | rowMeanPs row > 0 && rowStdev2Ps row > 0 =
-        toText (showFFloat (Just 1) (fromIntegral (rowStdev2Ps row) / fromIntegral (rowMeanPs row) * 100 :: Double) "") <> "%"
+        fixed 1 (fromIntegral (rowStdev2Ps row) / fromIntegral (rowMeanPs row) * 100) <> "%"
     | otherwise = "n/a"
 
 ecosystemOf :: BenchRow -> Maybe Text
@@ -121,5 +121,6 @@ notes =
     , "- **One run stands on each side.** One runner measures every bench of a run, and the run on `main` had another runner. A whole run can move together, so read a bench beside the benches the change does not touch."
     , "- **`2*stdev`** is the precision tasty-bench reached for a bench in one run, as a share of its mean. One run on each side does not resolve a change smaller than it, and a larger one can still be the runner."
     , "- **Time only.** The allocation budgets hold allocation, so this section leaves it out."
+    , sharedBaselineNote
     , "- **No verdict.** No row is marked, and nothing here fails the job."
     ]

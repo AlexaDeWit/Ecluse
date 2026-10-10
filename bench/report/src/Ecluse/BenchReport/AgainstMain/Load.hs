@@ -16,7 +16,6 @@ import Data.Char (isDigit)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Numeric (showFFloat)
 
 import Ecluse.BenchReport.AgainstMain (
     Baseline,
@@ -26,11 +25,12 @@ import Ecluse.BenchReport.AgainstMain (
     pairBy,
     percentChange,
     renderAgainstMain,
+    sharedBaselineNote,
     signedPercent,
     spreadLine,
     unpairedLines,
  )
-import Ecluse.BenchReport.Markdown (Table (..), cells, hasColumns, linkText, records, tables)
+import Ecluse.BenchReport.Markdown (Table (..), cells, fixed, hasColumns, linkText, records, tables)
 
 -- | Render the comparison from the two @bench-load-results.md@ bodies: the one on @main@, then this run's.
 againstMain :: Baseline Text -> Either Text Text -> Text
@@ -152,7 +152,7 @@ scenarioRow pair@(onMain, here) =
         ]
   where
     count = maybe "n/a" show
-    milliseconds = maybe "n/a" (\ms -> toText (showFFloat (Just 2) ms "") <> " ms")
+    milliseconds = maybe "n/a" (\ms -> fixed 2 ms <> " ms")
     change = maybe "n/a" signedPercent
 
 -- This run's ending, with the ending on main beside it when the two differ.
@@ -176,5 +176,6 @@ notes =
     , "- **Injected latency.** Each run injects the upstream latency it probed. When the two differ, the operating point rows show both, and the latency-bound scenarios move with that difference whatever the code does."
     , "- **Finite replays.** A pattern scenario replays a fixed trace, so its successes hold and only its latency can move. A replay sends few requests, as its successes show, and its percentiles differ widely between two runs of the same code."
     , "- **Refusals** are `429` and `503` responses. A client retries a refusal at once, so their count follows retry speed."
+    , sharedBaselineNote
     , "- **No verdict.** No row is marked, and nothing here fails the job."
     ]

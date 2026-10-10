@@ -18,7 +18,7 @@ import Ecluse.Acceptance (
     Sample (Sample),
     renderLiveReport,
  )
-import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Origin (Origin))
+import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (RunsNotListed), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Acceptance (againstMain)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
@@ -39,13 +39,15 @@ spec = do
         it "names a leg that only one side measured, and compares no package that failed on both" $ do
             rendered `shouldSatisfy` elem "Only on `main`: `npm react full`."
             filter (T.isInfixOf "typescript") rendered `shouldBe` []
+        it "says that every run shares this one baseline" $
+            rendered `shouldSatisfy` elem sharedBaselineNote
         it "compares time alone: a change in allocation leaves the section as it was" $
             againstMain (Baseline origin (report onMain)) (Right (report (heavier here))) `shouldBe` T.unlines rendered
 
     describe "a missing side" $ do
         it "prints no baseline, with the reason, and compares nothing" $ do
-            let rendered = againstMain (NoBaseline "The runs of perf-acceptance.yml on main could not be listed.") (Right (report here))
-            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** The runs of perf-acceptance.yml on main could not be listed."
+            let rendered = againstMain (NoBaseline RunsNotListed) (Right (report here))
+            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** The fetch could not list the runs on `main`."
             rendered `shouldNotSatisfy` T.isInfixOf "###"
         it "prints no baseline for a report on main without a measured leg" $
             againstMain (Baseline origin (report [(Npm, [Unavailable "lodash" "registry HTTP 503"])])) (Right (report here))

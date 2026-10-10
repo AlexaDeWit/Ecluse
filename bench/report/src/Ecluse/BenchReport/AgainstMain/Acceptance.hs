@@ -12,7 +12,6 @@ module Ecluse.BenchReport.AgainstMain.Acceptance (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Numeric (showFFloat)
 
 import Ecluse.BenchReport.AgainstMain (
     Baseline,
@@ -22,11 +21,12 @@ import Ecluse.BenchReport.AgainstMain (
     pairBy,
     percentChange,
     renderAgainstMain,
+    sharedBaselineNote,
     signedPercent,
     spreadLine,
     unpairedLines,
  )
-import Ecluse.BenchReport.Markdown (Table (tableHeading), cells, hasColumns, records, tables)
+import Ecluse.BenchReport.Markdown (Table (tableHeading), cells, fixed, hasColumns, records, tables)
 
 -- | Render the comparison from the two @perf-acceptance-report.md@ bodies: the one on @main@, then this run's.
 againstMain :: Baseline Text -> Either Text Text -> Text
@@ -99,12 +99,10 @@ legRow pair@(onMain, here) =
         [ legPackage here
         , versions (legVersions onMain) (legVersions here)
         , legName here
-        , maybe "n/a" milliseconds (legMs onMain)
-        , maybe "n/a" milliseconds (legMs here)
+        , maybe "n/a" (fixed 3) (legMs onMain)
+        , maybe "n/a" (fixed 3) (legMs here)
         , maybe "n/a" signedPercent (timeChange pair)
         ]
-  where
-    milliseconds ms = toText (showFFloat (Just 3) ms "")
 
 -- A live document grows as its package publishes, so a count that moved shows both sides.
 versions :: Maybe Int -> Maybe Int -> Text
@@ -125,5 +123,6 @@ notes =
     , "- **One run stands on each side.** Each time is the median of one run's passes on one runner, and the run on `main` had another runner. A whole run can move together, so read a leg beside the legs the change does not touch."
     , "- **The documents are live.** A package that published between the two runs has more versions to read. The versions column then shows both counts."
     , "- **Time only.** The allocation budgets hold allocation, so this section leaves it out."
+    , sharedBaselineNote
     , "- **No verdict.** No row is marked, and nothing here fails the job."
     ]

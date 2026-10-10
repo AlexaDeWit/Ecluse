@@ -13,7 +13,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.BenchReport.Markdown (Table (Table, tableHeading), cells, hasColumns, linkText, records, tables)
+import Ecluse.BenchReport.Markdown (Table (Table, tableHeading), cells, fixed, hasColumns, linkText, records, tables)
 
 spec :: Spec
 spec = do
@@ -33,7 +33,7 @@ spec = do
         it "reads rows that end a line with a carriage return" $
             tables "| a | b |\r\n| --- | --- |\r\n| 1 | 2 |\r\n" `shouldBe` [Table Nothing ["a", "b"] [["1", "2"]]]
         it "does not take a hash without a space after it for a heading" $
-            map tableHeading (tables "#1305\n| a |\n| 1 |") `shouldBe` [Nothing]
+            map tableHeading (tables "#tag\n| a |\n| 1 |") `shouldBe` [Nothing]
         it "finds no table in prose" $
             tables "No table here.\n\n- a list item | with a bar" `shouldBe` []
 
@@ -56,6 +56,12 @@ spec = do
             linkText "npm/merge-cold" `shouldBe` "npm/merge-cold"
         it "leaves a cell that only opens like a link unchanged" $
             linkText "[half" `shouldBe` "[half"
+
+    describe "fixed" $
+        it "prints a number to the given count of decimal places" $ do
+            fixed 1 3.14159 `shouldBe` "3.1"
+            fixed 3 4 `shouldBe` "4.000"
+            fixed 0 150 `shouldBe` "150"
 
     describe "properties" $
         it "reads back every table the row writer prints" $

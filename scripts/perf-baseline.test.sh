@@ -110,10 +110,10 @@ else
   printf 'FAIL - the artifact lands beside the record\n'
   fail=1
 fi
-if grep -q 'workflows/bench.yml/runs?branch=main&status=success' "$stub/requests"; then
-  printf 'ok   - the list asks for successful runs of the workflow on main\n'
+if grep -q 'workflows/bench.yml/runs?branch=main&status=success&per_page=100' "$stub/requests"; then
+  printf 'ok   - the list asks for a full page of successful runs of the workflow on main\n'
 else
-  printf 'FAIL - the list asks for successful runs of the workflow on main\n'
+  printf 'FAIL - the list asks for a full page of successful runs of the workflow on main\n'
   fail=1
 fi
 
@@ -145,30 +145,32 @@ artifacts 1 results-ARM64-sha1 false
 check "a pull request, a fork, and another branch never supply the baseline" "$(record 1)" "1 results-ARM64-sha1"
 
 begin
+runs 3 main pull_request_target owner/repo 2 main workflow_run owner/repo 1 main schedule owner/repo > "$stub/runs.json"
+artifacts 3 results-ARM64-sha3 false
+artifacts 2 results-ARM64-sha2 false
+artifacts 1 results-ARM64-sha1 false
+check "only a push, a schedule, or a dispatch supplies the baseline" "$(record 1)" "1 results-ARM64-sha1"
+
+begin
 runs 3 main push owner/repo > "$stub/runs.json"
 artifacts 3 other-ARM64-sha3 false
-check "no run with the artifact is no baseline" \
-  "unavailable=None of the last 20 successful runs of bench.yml on main holds an artifact named results-ARM64-*." ""
+check "no run with the artifact is no baseline" "unavailable=no-run-with-artifact" ""
 
 begin
 runs > "$stub/runs.json"
-check "no successful run is no baseline" \
-  "unavailable=No successful run of bench.yml on main was found." ""
+check "no successful run is no baseline" "unavailable=no-successful-run" ""
 
 begin
-STUB_LIST_FAIL=1 check "a run list the token cannot read is no baseline" \
-  "unavailable=The runs of bench.yml on main could not be listed." ""
+STUB_LIST_FAIL=1 check "a run list the token cannot read is no baseline" "unavailable=runs-not-listed" ""
 
 begin
 printf 'not json\n' > "$stub/runs.json"
-check "a run list that does not parse is no baseline" \
-  "unavailable=The list of the runs of bench.yml on main did not parse." ""
+check "a run list that does not parse is no baseline" "unavailable=run-list-not-parsed" ""
 
 begin
 runs 3 main push owner/repo > "$stub/runs.json"
 artifacts 3 results-ARM64-sha3 false
-STUB_DOWNLOAD_FAIL=1 check "a download the token cannot make is no baseline" \
-  "unavailable=The artifact results-ARM64-sha3 of the run https://example.test/runs/3 could not be downloaded." ""
+STUB_DOWNLOAD_FAIL=1 check "a download the token cannot make is no baseline" "unavailable=download-failed" ""
 
 rc=0
 GITHUB_REPOSITORY=owner/repo PATH="$work/bin:$PATH" bash "$script" bench.yml > /dev/null 2>&1 || rc=$?

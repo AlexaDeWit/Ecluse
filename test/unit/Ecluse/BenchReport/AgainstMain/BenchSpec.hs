@@ -10,7 +10,7 @@ module Ecluse.BenchReport.AgainstMain.BenchSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Origin (Origin))
+import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (NoSuccessfulRun), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Bench (againstMain)
 
 spec :: Spec
@@ -38,6 +38,8 @@ spec = do
             rendered `shouldSatisfy` elem "Only in this run: `ecosystem: npm.new.fresh`."
             rendered `shouldSatisfy` elem "Only on `main`: `ecosystem: npm.gone.old`."
             filter (T.isInfixOf "| fresh |") rendered `shouldBe` []
+        it "says that every run shares this one baseline" $
+            rendered `shouldSatisfy` elem sharedBaselineNote
         it "compares time alone: a change in allocation leaves the section as it was" $
             againstMain (Baseline origin (csv onMain)) (Right (csv [(name, mean, stdev, allocated * 3) | (name, mean, stdev, allocated) <- here]))
                 `shouldBe` T.unlines rendered
@@ -47,8 +49,8 @@ spec = do
 
     describe "a missing side" $ do
         it "prints no baseline, with the reason, and compares nothing" $ do
-            let rendered = againstMain (NoBaseline "No successful run of bench.yml on main was found.") (Right (csv here))
-            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** No successful run of bench.yml on main was found."
+            let rendered = againstMain (NoBaseline NoSuccessfulRun) (Right (csv here))
+            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** The fetch found no successful run on `main`."
             rendered `shouldNotSatisfy` T.isInfixOf "###"
         it "prints no baseline for a CSV on main that does not parse" $
             againstMain (Baseline origin "not a csv") (Right (csv here))

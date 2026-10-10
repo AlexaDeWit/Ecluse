@@ -127,9 +127,12 @@ jobs:
 
       # Off main only: the runs on main are the baseline, and each pod shape takes the
       # newest run that measured it. The GC-thrash probe has no scenario table to compare. A
-      # missing baseline renders as "no baseline", and neither step fails the job on it.
+      # missing baseline renders as "no baseline". Both steps continue on error and stop after
+      # five minutes, so neither can fail or stall the job.
       - name: Fetch the latest results on main for this pod shape
         if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
+        continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
           POD_SHAPE: ${{ matrix.pod-shape }}
@@ -137,6 +140,8 @@ jobs:
 
       - name: Compare successes and latency with main
         if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
+        continue-on-error: true
+        timeout-minutes: 5
         run: |
           set -eo pipefail
           nix develop .#ci --command task against-main KIND=load BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=bench-load-results.md | tee against-main.md

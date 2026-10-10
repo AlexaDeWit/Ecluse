@@ -17,7 +17,7 @@ import Data.Text.Encoding.Error qualified as TEE
 import System.FilePath (takeFileName, (</>))
 
 import Ecluse.BenchReport (ReportInput (ReportInput, riConsoleLog, riCsv), parseCsv, renderReport)
-import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), parseOrigin)
+import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (FileMissing), parseOrigin)
 import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
 import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
@@ -56,12 +56,12 @@ comparison = \case
 -- The baseline directory holds the fetch's record and, when it found a run, that run's report under this report's file name.
 againstMain :: (Baseline Text -> Either Text Text -> Text) -> FilePath -> FilePath -> IO ()
 againstMain compareWith baselineDir reportPath = do
-    record <- readSide (baselineDir </> "baseline.txt")
-    onMain <- readSide (baselineDir </> takeFileName reportPath)
-    current <- readSide reportPath
+    record <- fetched "baseline.txt"
+    onMain <- fetched (takeFileName reportPath)
+    current <- first (\problem -> "A file is missing: " <> problem <> ".") <$> readTextFile reportPath
     publish (compareWith (either NoBaseline id (Baseline <$> (record >>= parseOrigin) <*> onMain)) current)
   where
-    readSide path = first (\problem -> "A file is missing: " <> problem <> ".") <$> readTextFile path
+    fetched name = first FileMissing <$> readTextFile (baselineDir </> name)
 
 publish :: Text -> IO ()
 publish output = do

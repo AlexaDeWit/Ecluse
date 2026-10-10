@@ -7,6 +7,7 @@ moved one way, and turns every missing or unreadable side into a note.
 -}
 module Ecluse.BenchReport.AgainstMainSpec (spec) where
 
+import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -16,11 +17,13 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.BenchReport.AgainstMain (
     Baseline (Baseline, NoBaseline),
+    Missing (..),
     Origin (Origin),
     Paired (Paired),
     Report (..),
     Spread (..),
     groupedBy,
+    missingCodes,
     pairBy,
     parseOrigin,
     percentChange,
@@ -38,13 +41,18 @@ spec = do
             parseOrigin "commit=abc123\nrun=https://example.test/runs/7\ncreated=2026-01-02T03:04:05Z\n" `shouldBe` Right origin
         it "keeps an equals sign inside a value" $
             parseOrigin "commit=abc123\nrun=https://example.test/runs?id=7\ncreated=now" `shouldBe` Right (Origin "abc123" "https://example.test/runs?id=7" "now")
-        it "returns the reason of a fetch that found no baseline" $
-            parseOrigin "unavailable=No successful run of bench.yml on main was found.\n"
-                `shouldBe` Left "No successful run of bench.yml on main was found."
+        it "reads each code of a fetch that found no baseline" $
+            for_ missingCodes $ \(code, missing) ->
+                parseOrigin ("unavailable=" <> code <> "\n") `shouldBe` Left missing
+        it "keeps a code it does not know" $
+            parseOrigin "unavailable=something-new" `shouldBe` Left (UnknownReason "something-new")
         it "names a key the record lacks" $
-            parseOrigin "commit=abc123\ncreated=now" `shouldBe` Left "The baseline record names no run."
+            parseOrigin "commit=abc123\ncreated=now" `shouldBe` Left (RecordLacks "run")
         it "counts an empty value as lacking" $
-            parseOrigin "commit=\nrun=r\ncreated=now" `shouldBe` Left "The baseline record names no commit."
+            parseOrigin "commit=\nrun=r\ncreated=now" `shouldBe` Left (RecordLacks "commit")
+        it "knows every code the fetch script writes, and no other" $ do
+            script <- decodeUtf8 <$> readFileBS "scripts/perf-baseline.sh"
+            sort (scriptCodes script) `shouldBe` sort (map fst missingCodes)
 
     describe "percentChange" $ do
         it "is the change in percent of the figure on main" $ do
@@ -111,21 +119,27 @@ spec = do
         it "shortens the commit to nine characters" $
             rendered (Baseline (Origin "0123456789abcdef" "u" "t") "2") (Right "3") `shouldSatisfy` any (T.isInfixOf "`main` at `012345678` ")
         it "prints no baseline, with the reason, when the fetch found none" $
-            rendered (NoBaseline "No successful run of bench.yml on main was found.") (Right "3")
+            rendered (NoBaseline NoSuccessfulRun) (Right "3")
                 `shouldBe` [ "## Numbers against main"
                            , ""
-                           , "**No baseline.** No successful run of bench.yml on main was found."
+                           , "**No baseline.** The fetch found no successful run on `main`."
                            , ""
                            , "Nothing is compared, and the job does not fail on it."
                            , ""
                            ]
+        it "renders every reason as a sentence of its own" $ do
+            let reason missing = rendered (NoBaseline missing) (Right "3") !!? 2
+            reason (FileMissing "could not read baseline.txt") `shouldBe` Just "**No baseline.** A file of the baseline is missing: could not read baseline.txt."
+            reason (RecordLacks "run") `shouldBe` Just "**No baseline.** The baseline record names no run."
+            reason (UnknownReason "something-new") `shouldBe` Just "**No baseline.** The fetch gave a reason this tool does not know: `something-new`."
+            length (ordNub (map (reason . snd) missingCodes)) `shouldBe` length missingCodes
         it "prints no baseline when the report on main does not parse" $
             rendered (Baseline origin "two") (Right "3")
                 `shouldSatisfy` elem "**No baseline.** The report of `main` at `abc123` ([run](https://example.test/runs/7) created 2026-01-02T03:04:05Z) could not be read. Not a number: two."
         it "says so when this run's report is missing or does not parse, whatever the baseline" $ do
             rendered (Baseline origin "2") (Left "A file is missing.")
                 `shouldBe` ["## Numbers against main", "", "**Nothing to compare.** This run's report could not be read. A file is missing.", ""]
-            rendered (NoBaseline "None.") (Right "three")
+            rendered (NoBaseline NoSuccessfulRun) (Right "three")
                 `shouldBe` ["## Numbers against main", "", "**Nothing to compare.** This run's report could not be read. Not a number: three.", ""]
 
     describe "properties" $
@@ -138,6 +152,10 @@ spec = do
 
 origin :: Origin
 origin = Origin "abc123" "https://example.test/runs/7" "2026-01-02T03:04:05Z"
+
+-- The code that follows each call of the script's @none@ function.
+scriptCodes :: Text -> [Text]
+scriptCodes script = filter (not . T.null) (map (T.takeWhile (\c -> isAsciiLower c || c == '-')) (drop 1 (T.splitOn "none " script)))
 
 -- A report that is one number, compared in one line.
 numbers :: Report Int

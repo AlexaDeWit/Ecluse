@@ -26,9 +26,8 @@ module Ecluse.BenchReport (
 import Data.Char (isAlphaNum)
 import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
-import Numeric (showFFloat)
 
-import Ecluse.BenchReport.Markdown (cells)
+import Ecluse.BenchReport.Markdown (cells, fixed)
 
 -- | A CSV row with optional GC statistics when the run enabled RTS statistics.
 data BenchRow = BenchRow
@@ -322,10 +321,9 @@ scaled step units n = pick (fromIntegral n) units
         _ -> sig3 v <> " " <> unit
     sig3 v
         | v == 0 = "0"
-        | v >= 100 = fmt 0 v
-        | v >= 10 = fmt 1 v
-        | otherwise = fmt 2 v
-    fmt d v = toText (showFFloat (Just d) v "")
+        | v >= 100 = fixed 0 v
+        | v >= 10 = fixed 1 v
+        | otherwise = fixed 2 v
 
 -- | Remove console colour and cursor sequences before embedding Markdown output.
 stripAnsi :: Text -> Text

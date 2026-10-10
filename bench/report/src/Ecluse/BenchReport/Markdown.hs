@@ -9,6 +9,7 @@ reader takes a report that another commit rendered, so it looks columns up by he
 module Ecluse.BenchReport.Markdown (
     -- * Writing
     cells,
+    fixed,
 
     -- * Reading
     Table (..),
@@ -20,10 +21,15 @@ module Ecluse.BenchReport.Markdown (
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Numeric (showFFloat)
 
 -- | One table row from its cells.
 cells :: [Text] -> Text
 cells xs = "| " <> T.intercalate " | " xs <> " |"
+
+-- | A number to a fixed count of decimal places.
+fixed :: Int -> Double -> Text
+fixed places x = toText (showFFloat (Just places) x "")
 
 -- | A table as a report holds it.
 data Table = Table

@@ -594,9 +594,9 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 
 | Workflow | Measurement | Downloadable report files |
 |---|---|---|
-| [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
-| [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, per pod shape or for the GC-thrash probe |
+| [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, and `against-main.md` off `main` |
+| [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, and `against-main.md` off `main` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, per pod shape or for the GC-thrash probe, and `against-main.md` for a pod shape off `main` |
 
 Read a red result according to its measurement:
 
@@ -637,14 +637,17 @@ hold it.
 
 `scripts/perf-baseline.sh` fetches the baseline with the job's read-only token. It takes the newest
 successful run on `main` that still holds the artifact, and for the load test the newest one that
-measured the same pod shape. A run counts only when this repository started it on `main` and no
-pull request did. The section names that run and its commit, which can be older than the commit a
-pull request merges into. `bench-report against-main` (`task against-main`) then renders the
-section from the two reports.
+measured the same pod shape. A run counts only when this repository started it on `main` by a
+push, a schedule, or a dispatch. A load run succeeds or fails as a whole, so one failed pod shape
+drops that run as a baseline for all four. The section names the baseline run and its commit, which
+can be older than the commit a pull request merges into. A change merged to `main` after the
+baseline run then shows up as the pull request's own. `bench-report against-main`
+(`task against-main`) renders the section from the two reports.
 
-The section carries no verdict. It marks no row, applies no threshold, and fails no job. When no
-run on `main` holds the artifact, or the token cannot read it, the section says "no baseline" with
-the reason, and the job passes. None of the three workflows joins branch protection.
+The section carries no verdict. It marks no row, applies no threshold, and fails no job: both
+steps continue on error and stop after five minutes. When no run on `main` holds the artifact, or
+the token cannot read it, the section says "no baseline" with the reason. None of the three
+workflows joins branch protection.
 
 One run stands on each side, so the section does not separate a change from the difference
 between two runners:
@@ -653,8 +656,12 @@ between two runners:
   of a pod shape. The run on `main` had another runner, so a whole job can move together. Each
   part therefore leads with how many rows rose, fell, and held, the median change, and the range,
   and says so when no row moved against the others.
-- A row means something only beside the rows that the change does not touch, which stay in the
-  same table.
+- A row means something only beside the rows that the change does not touch. The rows of one
+  ecosystem share a table, and the other ecosystem's part holds the rest.
+- Every run off `main` shares one baseline run until a newer run on `main` succeeds. A row that
+  the baseline run drew slow or fast therefore shows the same difference in every pull request and
+  in every repeat. A second baseline needs a new run on `main`, and all three workflows accept a
+  dispatch there.
 - A bench's `2*stdev` is what one run resolves for it. One run on each side does not resolve a
   smaller change, and a larger one can still be the runner.
 - Each load run injects the npm upstream latency it probed, and the latency-bound scenarios move
@@ -663,8 +670,6 @@ between two runners:
 - A finite replay sends the same requests every run, so its successes hold and only its latency
   can show a change. It sends few requests, and its percentiles differ widely between two runs of
   the same code.
-
-To conclude from one row, repeat the run.
 
 ### Load tests under a pod shape
 

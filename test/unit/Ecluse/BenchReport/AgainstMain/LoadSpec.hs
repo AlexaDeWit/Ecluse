@@ -14,9 +14,10 @@ import Test.Hspec
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), LoadSummary (..), ScenarioReport (..), defaultLoadKnobs)
 import Ecluse.BenchLoad.Latency (Percentiles (Percentiles))
 import Ecluse.BenchLoad.Report (Section (..), renderLoadSaturation, renderReports, renderThrash)
+import Ecluse.BenchLoad.RtsWindow (RtsWindow (RtsWindow))
 import Ecluse.BenchLoad.Selection (fixtureSection)
 import Ecluse.BenchLoad.Support (slowNetwork)
-import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Origin (Origin))
+import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (DownloadFailed), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Load (againstMain)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
@@ -42,6 +43,14 @@ spec = do
             filter (== "Operating point rows that differ:") rendered `shouldBe` ["Operating point rows that differ:"]
             filter (T.isPrefixOf "| pod shape |") rendered `shouldBe` []
 
+        it "says that every run shares this one baseline" $
+            rendered `shouldSatisfy` elem sharedBaselineNote
+        it "compares no allocation: a proxy that allocated leaves the section as it was" $ do
+            let allocating = map (\r -> r{srRtsWindow = Just (RtsWindow 9_000_000_000 40 4 2_000_000 90_000_000 3_000_000 50_000_000)})
+            report 12 (allocating hereNpm) (allocating herePyPI) `shouldNotBe` report 12 hereNpm herePyPI
+            T.lines (againstMain (Baseline origin (report 178 onMainNpm onMainPyPI)) (Right (report 12 (allocating hereNpm) (allocating herePyPI))))
+                `shouldBe` rendered
+
     describe "againstMain, over a report cut down to its tables" $ do
         let glance rows = T.unlines ("| scenario | successes | refusals | success p50 | success p99 | ending |" : "| --- | --: | --: | --: | --: | --- |" : rows)
             compared onMain here = T.lines (againstMain (Baseline origin (glance onMain)) (Right (glance here)))
@@ -65,8 +74,8 @@ spec = do
 
     describe "a missing side" $ do
         it "prints no baseline, with the reason, and compares nothing" $ do
-            let rendered = againstMain (NoBaseline "The artifact could not be downloaded.") (Right (report 12 hereNpm herePyPI))
-            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** The artifact could not be downloaded."
+            let rendered = againstMain (NoBaseline DownloadFailed) (Right (report 12 hereNpm herePyPI))
+            rendered `shouldSatisfy` T.isInfixOf "**No baseline.** The fetch could not download the artifact of the run on `main`."
             rendered `shouldNotSatisfy` T.isInfixOf "###"
         it "prints no baseline for a report on main without a scenario table" $
             againstMain (Baseline origin "the harness crashed") (Right (report 12 hereNpm herePyPI))
