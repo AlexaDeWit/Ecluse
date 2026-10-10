@@ -25,7 +25,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
 import Ecluse.Core.Registry.Origin (OriginClient)
@@ -132,7 +133,7 @@ data Admissibility
 admissibleUnderDefaults :: Manager -> PackageName -> IO Admissibility
 admissibleUnderDefaults manager name = do
     config <- publicRegistryOrigin manager
-    fetched <- fetchNpmManifest passthroughTracingPort config name
+    fetched <- fetchManifest npmRead passthroughTracingPort config name
     pure $ case fetched of
         Left (MetadataFetch (FetchTransport fault)) -> Unreachable (show fault)
         Left fault -> Refused ("the streamed fetch refused a real package: " <> show fault)
