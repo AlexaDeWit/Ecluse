@@ -4,13 +4,14 @@
 
 {- | The nginx stub's routes. One nginx terminates TLS for every registry name the product dials
 and tells them apart by @server_name@, so the product reaches https-only endpoints. A case holds
-a fault on a route by rendering the configuration with it. "Ecluse.E2E.Harness.Docker" applies
-the configuration to the running container.
+a fault on a route by rendering the configuration with it, and reads what each route answered
+from the access log. "Ecluse.E2E.Harness.Docker" applies the configuration and fetches the log.
 -}
 module Ecluse.E2E.Harness.Stub (
     -- * Routes
     StubRoute (..),
     stubHosts,
+    stubUrl,
 
     -- * Faults
     StubFault (..),
@@ -19,6 +20,11 @@ module Ecluse.E2E.Harness.Stub (
     -- * Reload progress
     startedWorkers,
     retiredWorkers,
+
+    -- * Answered requests
+    StubRead (..),
+    stubReads,
+    answeredByPublic,
 ) where
 
 import Data.Text qualified as T
@@ -41,6 +47,10 @@ data StubRoute
 stubHosts :: [Text]
 stubHosts = map stubHost universe
 
+-- | The base URL a product role dials a route at.
+stubUrl :: StubRoute -> Text
+stubUrl route = "https://" <> stubHost route <> "/"
+
 -- The name a route answers to, which is also its @server_name@.
 stubHost :: StubRoute -> Text
 stubHost = \case
@@ -62,7 +72,14 @@ data StubFault
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
 stubConfig :: Maybe StubFault -> Text
-stubConfig fault = T.unlines (concatMap (serverBlock fault) universe)
+stubConfig fault = T.unlines (readLogFormat : concatMap (serverBlock fault) universe)
+
+-- One line for each finished request, in the fields 'stubReads' reads back.
+readLogFormat :: Text
+readLogFormat = "log_format stub_read '" <> readMarker <> " $server_name $request_method $status $request_uri';"
+
+readMarker :: Text
+readMarker = "stub-read"
 
 serverBlock :: Maybe StubFault -> StubRoute -> [Text]
 serverBlock fault route =
@@ -71,6 +88,7 @@ serverBlock fault route =
     , "    server_name " <> stubHost route <> ";"
     , "    ssl_certificate /certs/server.crt;"
     , "    ssl_certificate_key /certs/server.key;"
+    , "    access_log /var/log/nginx/access.log stub_read;"
     ]
         <> maybe [] (`faultLines` route) fault
         <> routeLines route
@@ -158,3 +176,27 @@ startedWorkers = T.count "start worker process "
 -- | How many workers the stub's log shows have stopped accepting connections.
 retiredWorkers :: Text -> Int
 retiredWorkers = T.count "gracefully shutting down"
+
+-- | One request a route finished, as the stub's access log records it.
+data StubRead = StubRead
+    { srRoute :: StubRoute
+    , srMethod :: Text
+    , srStatus :: Int
+    , srPath :: Text
+    }
+    deriving stock (Eq, Show)
+
+-- | Every request the stub's log records, oldest first. Lines of any other shape are skipped.
+stubReads :: Text -> [StubRead]
+stubReads = mapMaybe (readOf . words) . lines
+  where
+    readOf = \case
+        [marker, host, method, status, path] | marker == readMarker -> do
+            route <- find ((== host) . stubHost) universe
+            answered <- readMaybe (toString status)
+            pure StubRead{srRoute = route, srMethod = method, srStatus = answered, srPath = path}
+        _ -> Nothing
+
+-- | Whether a public upstream answered the request, where an outage leaves it unanswered.
+answeredByPublic :: StubRead -> Bool
+answeredByPublic r = isPublic (srRoute r) && srStatus r /= unansweredStatus
