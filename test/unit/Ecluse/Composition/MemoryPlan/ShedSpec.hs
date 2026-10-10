@@ -12,7 +12,7 @@ import Test.Hspec
 import Ecluse.Composition.MemoryPlan (MemoryPlan (..), QueueTenantDemand (NoQueueTenant), planCacheConfig, resolveMemoryPlan)
 import Ecluse.Composition.Support (expectAppConfig, gib, mib, noCeiling, staticEnvVars)
 import Ecluse.Config (AppConfig (..), CacheSettings (..))
-import Ecluse.Core.Package (Availability (Deprecated), PackageDetails (pkgAvailability))
+import Ecluse.Core.Package (CodeExecSignal (RunsCodeOnInstall), PackageDetails (pkgInstallCode))
 import Ecluse.Core.Registry.Metadata (VersionRead)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Cache.Backend.Internal (CacheOccupancy (..), Recency (PreserveRecency), RetentionBackend (..))
@@ -131,4 +131,4 @@ unexpected = expectationFailure "local retention unexpectedly refused or failed"
 selected64KiB :: VersionRead
 selected64KiB = release (T.replicate (65536 - weighVersion (release (T.singleton 'x')) + 1) "x")
   where
-    release reason = untaggedRead (Just (sampleDetails thingName v1_0_0){pkgAvailability = Deprecated reason})
+    release reason = untaggedRead (Just (sampleDetails thingName v1_0_0){pkgInstallCode = RunsCodeOnInstall reason})

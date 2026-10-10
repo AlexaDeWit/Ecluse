@@ -19,6 +19,7 @@ module Ecluse.Test.Registry.Npm (
     listingValue,
     publishedDaysAgo,
     documentName,
+    deprecatedForms,
 
     -- * Mirror-write fixtures
     isOdd,
@@ -40,7 +41,7 @@ module Ecluse.Test.Registry.Npm (
     genPathSegments,
 ) where
 
-import Data.Aeson (Value (Object, String), object, (.=))
+import Data.Aeson (Value (Bool, Null, Number, Object, String), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
@@ -256,6 +257,22 @@ documentName doc = splitName (topLevelName doc)
                 mkPackageName Npm (Just (mkScope scopeText)) bare
         _ -> mkPackageName Npm Nothing raw
 
+{- | Each wire form of a version object's @deprecated@ member, as the pairs that carry it, with
+whether it reads as deprecated.
+-}
+deprecatedForms :: [(String, [Pair], Bool)]
+deprecatedForms =
+    [ ("a string", ["deprecated" .= String "gone"], True)
+    , ("an empty string", ["deprecated" .= String ""], False)
+    , ("true", ["deprecated" .= Bool True], True)
+    , ("false", ["deprecated" .= Bool False], False)
+    , ("null", ["deprecated" .= Null], False)
+    , ("an absent member", [], False)
+    , ("a number", ["deprecated" .= Number 1], False)
+    , ("an array", ["deprecated" .= toJSON [String "gone"]], False)
+    , ("an object", ["deprecated" .= object ["reason" .= String "gone"]], False)
+    ]
+
 -- Apply site-specific fields last so their exact representation wins.
 objectWithExtraPairs :: [Pair] -> [Pair] -> Value
 objectWithExtraPairs common extra =
@@ -293,9 +310,6 @@ mirrorWriteToken = mkSecret "write-token"
 genPathSegments :: Gen [Text]
 genPathSegments = Gen.list (Range.linear 0 4) genNpmPathSegment
 
-{- | One path segment. npm's scoped names are its own arm, and the shared generator supplies the
-plain-name, literal-pool, and free-text arms at the same weights.
--}
 genNpmPathSegment :: Gen Text
 genNpmPathSegment = Gen.frequency [(2, genScopedSegmentName), (13, genPathSegmentFrom npmPathLiterals)]
 

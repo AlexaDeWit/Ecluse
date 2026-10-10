@@ -24,17 +24,17 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Core.Package (Availability (Available, Deprecated))
 import Ecluse.Core.Registry.Npm.Wire
 import Ecluse.Test.Json (genValue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsExtraPairs), deprecatedForms, versionSpec, versionValue)
 import Ecluse.Test.Support (decodeJsonOrFail)
 
-{- | Decoding tests for the npm wire types, pure and offline over the fixtures in
-@core\/test\/unit\/fixtures\/npm\/@, live captures of @registry.npmjs.org@.
-They pin faithful capture of the rule-decisive fields and lenient string-or-object handling.
--}
+-- | Offline decoding cases pin rule evidence and lenient string-or-object fields.
 spec :: Spec
 spec = do
     versionManifestSpec
+    deprecatedSpec
     distSpec
     advisoryFieldLeniencySpec
     lenientScalarSpec
@@ -55,29 +55,16 @@ versionManifestSpec = describe "VersionManifest" $ do
         vmHasInstallScript vm `shouldBe` Nothing
         Map.keys (vmScripts vm) `shouldBe` ["postinstall"]
 
-    it "captures the deprecation notice (request)" $ do
+deprecatedSpec :: Spec
+deprecatedSpec = describe "deprecated" $ do
+    it "reads a captured notice as deprecated (request)" $ do
         vm <- decodeFixture @VersionManifest "request.manifest.json"
-        vmDeprecated vm
-            `shouldBe` Just
-                "request has been deprecated, see https://github.com/request/request/issues/3142"
+        vmAvailability vm `shouldBe` Deprecated
 
-    it "reads a boolean deprecated=false as not deprecated (npm's wire variant)" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":false}"
-        vmDeprecated vm `shouldBe` Nothing
-
-    it "reads a boolean deprecated=true as deprecated with an empty message" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":true}"
-        vmDeprecated vm `shouldBe` Just ""
-
-    it "still reads a string deprecated as the message (inline, not just the fixture)" $ do
-        vm <-
-            decodeJsonOrFail @VersionManifest
-                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
-        vmDeprecated vm `shouldBe` Just "gone"
+    for_ deprecatedForms $ \(form, member, deprecated) ->
+        it ("reads " <> form <> " as " <> (if deprecated then "deprecated" else "not deprecated")) $
+            vmAvailability <$> fromJSON (versionValue (versionSpec "x" "1.0.0" "https://e.test/x.tgz"){vsExtraPairs = member})
+                `shouldBe` Success (if deprecated then Deprecated else Available)
 
 distSpec :: Spec
 distSpec = describe "Dist" $ do
@@ -98,12 +85,8 @@ distSpec = describe "Dist" $ do
             "{\"tarball\":\"https://example.test/x.tgz\"}"
             (bareDist "https://example.test/x.tgz")
 
-{- | A regression guard on advisory-field leniency. The __advisory__ @unpackedSize@ field
-decides no rule and no serve. A single hostile value must degrade that field alone, never
-failing the 'Dist' decode. The load-bearing integrity fields (@tarball@, @integrity@) stay
-strict and intact. Whole-packument survival across such a version is the projection layer's
-concern, which @ProjectSpec@ pins on the live decoder.
--}
+-- A malformed advisory field must not discard rule-decisive metadata.
+-- ProjectSpec holds the same constraint through the full production decoder.
 advisoryFieldLeniencySpec :: Spec
 advisoryFieldLeniencySpec =
     describe "an undecodable advisory number degrades to Nothing rather than failing the Dist" $ do
@@ -160,9 +143,8 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             personEmail p `shouldBe` Just "s@example.com"
             personUrl p `shouldBe` Just "https://sindresorhus.com"
 
-    -- A string-or-object scalar must reject any other JSON kind rather than mis-parsing it.
-    -- Asserting the full message, not `isLeft`, pins the error text that names both the accepted
-    -- shapes and the JSON kind found. Ecluse.Core.Json.LenientSpec pins every kind's rendering.
+    -- The error must name the accepted shapes and the JSON kind found.
+    -- Ecluse.Core.Json.LenientSpec pins every kind's rendering.
     describe "rejecting the wrong JSON kind" $ do
         it "rejects a number for License, naming the number kind" $
             (eitherDecode "42" :: Either String License)
@@ -171,10 +153,7 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             (eitherDecode "[\"a\",\"b\"]" :: Either String Person)
                 `shouldBe` Left "Error in $: expected Person (object or string), but encountered an array"
 
-{- | The wire types appear inside registry arrays and objects, so each must also decode as a
-list element. These cases drive every decoder's list path, which HPC tracks as a distinct
-@parseJSONList@ box.
--}
+-- List decoding has its own parseJSONList path, distinct from scalar decoding.
 jsonListSpec :: Spec
 jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
     it "decodes a list of licenses, mixing string and object forms" $
@@ -204,10 +183,8 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
         map vmName vms `shouldBe` ["a", "b"]
         map vmVersion vms `shouldBe` ["1.0.0", "2.0.0"]
 
-{- | The wire decoders eat __untrusted__ upstream JSON, so each must be __total__: no input
-may make one bottom, only a typed 'Success'\/'Error' or 'Right'\/'Left'. The companion
-projection-layer properties live in "Ecluse.Core.Registry.Npm.ProjectSpec".
--}
+-- Arbitrary upstream JSON must yield a typed result rather than bottom.
+-- ProjectSpec holds the corresponding projection properties.
 totalitySpec :: Spec
 totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
     describe "every wire decoder is total over an arbitrary Value" $ do
@@ -235,10 +212,7 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
                 Success p -> personName p H.=== s
                 other -> annotateShow other >> H.failure
 
-{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value'. Forcing the 'Show'
-rendering walks the whole decoded structure, so a bottom past the outermost constructor
-surfaces as a caught failure rather than a pass.
--}
+-- Force the full Show result to detect bottom inside the decoded structure.
 valueDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeIsTotal = do
     v <- forAll (genValue wireKeys)
@@ -246,19 +220,14 @@ valueDecodeIsTotal = do
     _ <- H.eval (resultRendering (fromJSON v :: Result a))
     H.success
 
-{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over arbitrary bytes:
-random, mostly non-JSON bytes must yield a typed 'Left', never a crash.
--}
+-- Arbitrary bytes must yield a typed decode result without a crash.
 bytesDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 bytesDecodeIsTotal = do
     bytes <- forAll (Gen.bytes (Range.linear 0 64))
     _ <- H.eval (length (show (eitherDecodeStrict bytes :: Either String a) :: String))
     H.success
 
-{- | Confirm the 'Value' generator reaches __both__ the success and failure arms
-of a permissive decoder, so 'valueDecodeIsTotal' is not vacuously all-failures.
-'H.cover' fails the property when either arm is under-represented.
--}
+-- Require both result arms so decoder totality cannot pass on refusals alone.
 valueDecodeCoversBothArms :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 valueDecodeCoversBothArms = do
     v <- forAll (genValue wireKeys)
@@ -268,21 +237,17 @@ valueDecodeCoversBothArms = do
     H.cover 1 "decodes (Success)" (isSuccess decoded)
     H.cover 1 "rejects (Error)" (not (isSuccess decoded))
 
--- | Force a decoded 'Result' through its 'Show' rendering, returning its length.
 resultRendering :: (Show a) => Result a -> Int
 resultRendering = \case
     Success a -> length (show a :: String)
     Error e -> length e
 
--- | Whether a decode 'Result' is the 'Success' arm.
 isSuccess :: Result a -> Bool
 isSuccess = \case
     Success{} -> True
     Error{} -> False
 
-{- | The object-key pool the generated documents draw from. Without the bias toward the real
-wire field names, almost every object would miss @.: \"name\"@ and the success arm would go unsampled.
--}
+-- Without recognised keys, generated objects would rarely reach the success arm.
 wireKeys :: [Text]
 wireKeys =
     [ "name"
@@ -307,9 +272,7 @@ wireKeys =
     , "hasInstallScript"
     ]
 
-{- | Decode a committed fixture by file name under @core\/test\/unit\/fixtures\/npm\/@, a path
-relative to the package root that Cabal runs tests from.
--}
+-- Cabal runs these tests from the package root.
 decodeFixture :: forall a. (FromJSON a) => FilePath -> IO a
 decodeFixture name = do
     bytes <- readFileBS ("core/test/unit/fixtures/npm/" <> name)
@@ -317,13 +280,10 @@ decodeFixture name = do
         Right a -> pure a
         Left e -> fail ("failed to decode " <> name <> ": " <> e)
 
--- | Assert that a JSON literal decodes to an expected value.
 decodesTo :: forall a. (FromJSON a, Eq a, Show a) => LByteString -> a -> Expectation
 decodesTo json expected = eitherDecode json `shouldBe` Right expected
 
-{- | A 'Dist' carrying only its required tarball, its advisory field at the absent
-default. This is the expected shape when a poisoned advisory field degrades.
--}
+-- An invalid advisory field must leave the required tarball usable.
 bareDist :: Text -> Dist
 bareDist tarball =
     Dist

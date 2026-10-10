@@ -27,7 +27,6 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
-    Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
     HashAlg (SHA1),
@@ -87,7 +86,7 @@ projectDetails name version publishedAt (VersionEntry vm) =
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = installCode vm
-        , pkgAvailability = availability vm
+        , pkgAvailability = vmAvailability vm
         , pkgArtifacts = (:| []) $! projectArtifact version (vmDist vm)
         }
 
@@ -106,9 +105,6 @@ installCode vm
 -- The lifecycle script names whose presence means installation runs code.
 installHooks :: [Text]
 installHooks = ["preinstall", "install", "postinstall"]
-
-availability :: VersionManifest -> Availability
-availability vm = maybe Available Deprecated (vmDeprecated vm)
 
 {- The @tarball@ URL stays verbatim: "Ecluse.Core.Package.Filter" folds its scheme against the
 https-only egress policy afterward. -}

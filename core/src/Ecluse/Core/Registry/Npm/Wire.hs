@@ -33,6 +33,7 @@ import Data.Aeson (
  )
 
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
+import Ecluse.Core.Package (Availability (Available, Deprecated))
 
 {- | A person on a package: an author, maintainer, contributor, or a version's publisher.
 A packed @"Name \<email\> (url)"@ string, npm's other form, stays verbatim in 'personName'.
@@ -110,10 +111,8 @@ data VersionManifest = VersionManifest
     , vmVersion :: Text
     -- ^ The exact version string, kept opaque at this layer.
     , vmDist :: Dist
-    , vmDeprecated :: Maybe Text
-    {- ^ The deprecation message. A boolean @true@ reads as @""@, and @false@, @null@,
-    absence, or any other shape as 'Nothing'.
-    -}
+    , vmAvailability :: Availability
+    -- ^ 'Deprecated' when @deprecated@ is a nonempty string or @true@, else 'Available'.
     , vmHasInstallScript :: Maybe Bool
     -- ^ Abbreviated form only. 'Nothing' in the full form, where 'vmScripts' carries it.
     , vmScripts :: Map Text Text
@@ -128,13 +127,14 @@ instance FromJSON VersionManifest where
             <$> o .: "name"
             <*> o .: "version"
             <*> o .: "dist"
-            <*> (deprecatedNotice <$> o .:? "deprecated")
+            <*> (availability <$> o .:? "deprecated")
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
 
-deprecatedNotice :: Maybe Value -> Maybe Text
-deprecatedNotice = \case
-    Just (String message) -> Just message
-    Just (Bool True) -> Just ""
-    _ -> Nothing
+availability :: Maybe Value -> Availability
+availability = \case
+    Just (String "") -> Available
+    Just (String _) -> Deprecated
+    Just (Bool True) -> Deprecated
+    _ -> Available

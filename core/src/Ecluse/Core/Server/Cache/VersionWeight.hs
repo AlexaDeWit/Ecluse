@@ -46,7 +46,6 @@ detailsWeight details =
         + 256 * toInteger rawLength
         + maybe 0 timeWeight (pkgPublishedAt details)
         + installWeight (pkgInstallCode details)
-        + availabilityWeight (pkgAvailability details)
         + itemsWeight artifactWeight (pkgArtifacts details)
   where
     -- The opaque parsed version has flat token lists and bounded numeric components.
@@ -78,12 +77,6 @@ installWeight = \case
     NoCodeOnInstall -> 0
     RunsCodeOnInstall reason -> textWeight reason
     CodeExecUnknown -> 0
-
-availabilityWeight :: Availability -> Integer
-availabilityWeight = \case
-    Available -> 0
-    Deprecated reason -> textWeight reason
-    Yanked reason -> maybe 0 textWeight reason
 
 artifactWeight :: Artifact -> Integer
 artifactWeight artifact =

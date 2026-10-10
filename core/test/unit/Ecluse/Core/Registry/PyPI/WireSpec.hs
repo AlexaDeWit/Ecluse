@@ -20,7 +20,7 @@ import Ecluse.Core.Registry.PyPI.Wire (
     YankState (FileOffered, FileWithdrawn),
  )
 import Ecluse.Test.Json (encodeStrict)
-import Ecluse.Test.Registry.PyPI (simpleIndex)
+import Ecluse.Test.Registry.PyPI (simpleIndex, yankedForms)
 
 spec :: Spec
 spec = do
@@ -91,22 +91,11 @@ fileSpec = describe "IndexFile" $ do
             `shouldSatisfy` isLeft
 
 yankSpec :: Spec
-yankSpec = describe "yanked" $ do
-    it "reads an absent marker as offered" $ do
-        file <- shouldDecodeFile (fileEntry [])
-        ifYanked file `shouldBe` FileOffered
-
-    it "reads false as offered" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= False])
-        ifYanked file `shouldBe` FileOffered
-
-    it "reads true as withdrawn with no stated reason" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= True])
-        ifYanked file `shouldBe` FileWithdrawn Nothing
-
-    it "reads a string as withdrawn with that reason" $ do
-        file <- shouldDecodeFile (fileEntry ["yanked" .= ("broken sdist" :: Text)])
-        ifYanked file `shouldBe` FileWithdrawn (Just "broken sdist")
+yankSpec = describe "yanked" $
+    for_ yankedForms $ \(form, member, withdrawn) ->
+        it ("reads " <> form <> " as " <> (if withdrawn then "withdrawn" else "offered")) $ do
+            file <- shouldDecodeFile (fileEntry member)
+            ifYanked file `shouldBe` (if withdrawn then FileWithdrawn else FileOffered)
 
 apiVersionSpec :: Spec
 apiVersionSpec = describe "meta.api-version" $ do
@@ -120,29 +109,21 @@ apiVersionSpec = describe "meta.api-version" $ do
         (eitherDecodeStrict (encodeStrict (metaIndex "2.0")) :: Either String SimpleIndex)
             `shouldSatisfy` isLeft
 
--- | Decode a value as the type under test, failing the example with the decoder's own message.
 shouldDecode :: Value -> IO SimpleIndex
 shouldDecode = either fail pure . eitherDecodeStrict . encodeStrict
 
--- | 'shouldDecode' for one file entry.
 shouldDecodeFile :: Value -> IO IndexFile
 shouldDecodeFile = either fail pure . eitherDecodeStrict . encodeStrict
 
--- | An index that declares only the given @meta.api-version@.
 metaIndex :: Text -> Value
 metaIndex apiVersion = object ["meta" .= object ["api-version" .= apiVersion]]
 
--- | What 'metaIndex' and a bare object both decode to: a nameless index offering nothing.
 emptyIndex :: SimpleIndex
 emptyIndex = SimpleIndex{siName = "", siFiles = [], siInvalidEntries = []}
 
--- | A complete wheel entry, the shape public PyPI serves.
 wheelEntry :: Value
 wheelEntry = fileEntry []
 
-{- | 'wheelEntry' with the given keys added or overridden, so an example names only the axis it
-is about.
--}
 fileEntry :: [(Key, Value)] -> Value
 fileEntry overrides = object (baseKeys <> overrides)
   where
@@ -156,14 +137,11 @@ fileEntry overrides = object (baseKeys <> overrides)
         , "provenance" .= ("https://pypi.org/integrity/requests/2.34.2/x/provenance" :: Text)
         ]
 
--- | A well-formed sha256 digest, which the projection's validating builder accepts.
 sha256Digest :: Text
 sha256Digest = "2a0d60c100000000000000000000000000000000000000000000000000000000"
 
--- | A file entry that names itself but no location: undecodable, and recorded under its name.
 namedButLocationless :: Value
 namedButLocationless = object ["filename" .= ("broken-1.0.tar.gz" :: Text)]
 
--- | The instant 'wheelEntry' declares it was uploaded at.
 uploadedAt :: UTCTime
 uploadedAt = UTCTime (fromGregorian 2026 5 14) (secondsToDiffTime (19 * 3600 + 25 * 60 + 26) + 0.443)

@@ -85,7 +85,7 @@ data IndexFile = IndexFile
     , ifUploadTime :: Maybe UTCTime
     -- ^ The per-file publication instant used to compute release age.
     , ifYanked :: YankState
-    -- ^ Whether PEP 592 withdraws this file from resolution, and why.
+    -- ^ Whether PEP 592 withdraws this file from resolution.
     , ifProvenance :: Maybe Text
     -- ^ The URL of a PEP 740 attestation bundle, if the index names one.
     }
@@ -107,14 +107,14 @@ instance FromJSON IndexFile where
 data YankState
     = -- | The file resolves normally.
       FileOffered
-    | -- | The file is withdrawn from resolution, with the reason the index gave.
-      FileWithdrawn (Maybe Text)
+    | -- | The file is withdrawn from resolution: @yanked@ is @true@ or a string of any length.
+      FileWithdrawn
     deriving stock (Eq, Show)
 
 yankState :: Maybe Value -> YankState
 yankState = \case
-    Just (Bool True) -> FileWithdrawn Nothing
-    Just (String reason) -> FileWithdrawn (Just reason)
+    Just (Bool True) -> FileWithdrawn
+    Just (String _) -> FileWithdrawn
     _ -> FileOffered
 
 -- | Refuse malformed or unsupported API declarations. An absent declaration uses the supported API.

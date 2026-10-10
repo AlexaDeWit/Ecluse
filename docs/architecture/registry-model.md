@@ -422,8 +422,9 @@ consumes. Its shape follows the npm protocol. Three principles govern it:
   later.
 - **The model holds signals, not the document.** A cache keeps a snapshot for every version, so it
   carries only the typed rows of the vocabulary below, not dependencies, and the artifact facts
-  that merge, admission, serving and the mirror worker read. Licences, publishers, per-file yanks
-  and provenance reach clients in the served document, within its supported fields.
+  that merge, admission, serving and the mirror worker read. Licences, publishers, deprecation
+  notices, per-file yanks with their reasons, and provenance reach clients in the served document,
+  within its supported fields.
 
 ### The shared vocabulary
 
@@ -432,7 +433,7 @@ consumes. Its shape follows the npm protocol. Three principles govern it:
 | **Identity** | `PackageName`: an ecosystem tag, an optional namespace (npm scope), a normalised `canonical` key, and a `display` form. Equality and ordering use `(ecosystem, namespace, canonical)` only, never the display or base forms. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim. `Flask` and `flask` are one PyPI package but two npm ones, so the ecosystem tag is part of identity. Matching uses the canonical key while rendering stays faithful. |
 | **Version** | In [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs): opaque, holding the raw text plus a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to a key, and `compareVersions` works only on keys, so non-canonical text never reaches the comparator. Unparseable means no key, so ordering rules abstain and the proxy still serves the version. `Version` carries no derived `Ord`. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`), and the proxy must keep serving a version even when the parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions. `Unknown` carries the gemspec-fetch case. |
-| **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
+| **Availability** | `Availability = Available \| Deprecated \| Yanked`, a flag with no text. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so a release reads as `Yanked` only when every file of it is. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries its entry key, file name, location, algorithm-tagged `Hash`es, and size. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
 | **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
 
