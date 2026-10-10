@@ -16,7 +16,8 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.Registry.JsonStream (chunksOf, heldChunks)
+import Ecluse.Test.Registry.JsonStream (heldChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Snapshot (digestOf)
 
 -- | One group per ecosystem, one row per capture.
@@ -35,7 +36,7 @@ captureRow entry@(_, raw, _, _) = do
     digest @?= digestOf raw
     pure (bench (entryName entry) (whnfAppIO digested chunks))
   where
-    chunks = chunksOf 32768 raw
+    chunks = captureChunks raw
 
 -- | Hash the chunks through the production source and keep nothing else.
 digested :: [ByteString] -> IO ContentDigest

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, chunksOf, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
 
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Object, String))
@@ -42,10 +42,6 @@ heldChunks chunks = do
     pure $ atomicModifyIORef' remaining $ \case
         [] -> ([], BS.empty)
         chunk : rest -> (rest, chunk)
-
--- | The bytes in order, in pieces of the given size. The last piece may be shorter.
-chunksOf :: Int -> ByteString -> [ByteString]
-chunksOf size = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt (max 1 size) rest))
 
 nextChunk :: (MonadState [ByteString] m) => m ByteString
 nextChunk = state $ \case
