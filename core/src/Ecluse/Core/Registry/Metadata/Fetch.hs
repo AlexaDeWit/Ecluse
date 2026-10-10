@@ -48,8 +48,10 @@ readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erF
     result <- exchange tracing name body (digestingRead decode . chargedRead (rtChargeFullRead terms))
     pure $ do
         (streamed, digest) <- result
+        -- The size is read and the document forced first, so the typed view's location check holds none of the walk's result.
+        let !bodyBytes = streamBytes streamed
         (info, raw) <- finish limits name base streamed
-        pure Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = streamBytes streamed, manifestDigest = digest}
+        pure (raw `seq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestDigest = digest})
   where
     limits = rtLimits terms
     base = rtBaseUrl terms
