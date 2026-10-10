@@ -25,7 +25,7 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
-import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
+import Ecluse.Core.Registry.Json.Walk (Walk (finish), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Core.Text (urlFilenameComponent)
@@ -231,7 +231,7 @@ nests = \case
 treeRead :: [ByteString] -> Either LimitError (StreamResult Value)
 treeRead chunks = walkJsonChunks (MetadataBodyLimit (sum (map BS.length chunks))) walk chunks
   where
-    walk tokens = withElement tokens $ \element rest -> readShape Trees (Generic limit) Share (testTable ["url"]) element rest (\value _ _ -> Finished value)
+    walk tokens = withElement tokens $ \element rest -> readShape Trees (Generic limit) Share (testTable ["url"]) element rest (\value _ _ -> finish value)
 
 -- The tree of a read that succeeds, or null.
 treeValue :: [ByteString] -> Value

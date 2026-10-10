@@ -14,7 +14,7 @@ module Ecluse.Core.Registry.Npm.Reader (
 ) where
 
 import Data.Aeson (Value (Null))
-import Data.JsonStream.TokenParser (Element (..), TokenResult)
+import Data.JsonStream.TokenReader (Element (..), Tokens)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), entryText, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, readShape)
@@ -35,7 +35,7 @@ releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
 {- | Walk one packument into the builder, passing each field to the step as it completes. Only a
 release the consumer keeps enters the table, and only the first of each member it repeats.
 -}
-npmWalk :: (Build b r, Result r ~ Walked s) => b -> Int -> PackumentRead -> FieldStep s (NpmFieldOf (Built b)) r -> (s -> Text -> Bool) -> InternTable -> s -> TokenResult -> r
+npmWalk :: (Build b r, Result r ~ Walked s) => b -> Int -> PackumentRead -> FieldStep s (NpmFieldOf (Built b)) r -> (s -> Text -> Bool) -> InternTable -> s -> Tokens (TokenState r) -> r
 {-# INLINE npmWalk #-}
 npmWalk build depth mode step keeps table0 initial = start
   where

@@ -102,6 +102,7 @@ library ecluse-json-stream
     Data.JsonStream.CLexer
     Data.JsonStream.Parser
     Data.JsonStream.TokenParser
+    Data.JsonStream.TokenReader
     Data.JsonStream.Unescape
 
   c-sources:        vendor/json-stream/c_lib/lexer.c
@@ -833,6 +834,7 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
+    Data.JsonStream.TokenReaderSpec
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.ClockSpec

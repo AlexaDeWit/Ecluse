@@ -8,6 +8,8 @@
 module Data.JsonStream.CLexer (
     tokenParser
   , unescapeText
+  , Header (..), defHeader, lexJson, resultRecSize, estResultLimit, resultLimitFor
+  , numberDigitLimit, parseNumber, substr, ResultRecord (..), readResult
 ) where
 
 #if !MIN_VERSION_bytestring(0,10,6)
@@ -29,10 +31,7 @@ import           Data.JsonStream.CLexType
 import           Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import           Data.JsonStream.Unescape (unescapeText)
 
--- | Limit for maximum size of a number; fail if larger number is found
--- this is needed to make this constant-space, otherwise we would eat
--- all memory just memoizing the number. The lexer fails if larger number
--- is encountered.
+-- | Bound the accumulated parts of a number that crosses input pieces.
 numberDigitLimit :: Int
 numberDigitLimit = 200000
 
@@ -84,8 +83,11 @@ data ResultRecord = ResultRecord !LexResultType !Int !Int !CLong
 
 -- | Read result record n
 peekResult :: Int -> ResultPtr -> ResultRecord
-peekResult n fptr = inlinePerformIO $ -- !! Using inlinePerformIO should be safe - we are just reading bytes from memory
-  withForeignPtr (unresPtr fptr) $ \ptr -> do
+peekResult n fptr = inlinePerformIO (readResult n (unresPtr fptr))
+
+-- | Read a record while its result buffer is alive. Every returned field is strict.
+readResult :: Int -> ForeignPtr () -> IO ResultRecord
+readResult n fptr = withForeignPtr fptr $ \ptr -> do
     restype <- peekByteOff ptr base
     startpos <- peekByteOff ptr (base + isize) :: IO CInt
     len <- peekByteOff ptr (base + 2 * isize) :: IO CInt
@@ -103,10 +105,9 @@ callLex bs hdr = unsafeDupablePerformIO $ -- Using Dupable PerformIO should be s
   alloca $ \hdrptr -> do
     poke hdrptr (hdr{hdrResultNum=0, hdrLength=fromIntegral $ BS.length bs})
 
-    bsptr <- unsafeUseAsCString bs return
     resptr <- mallocForeignPtrBytes (fromIntegral (hdrResultLimit hdr) * resultRecSize)
-    res <- withForeignPtr resptr $ \resptr' ->
-      lexJson bsptr hdrptr resptr'
+    res <- unsafeUseAsCString bs $ \bsptr ->
+      withForeignPtr resptr $ \resptr' -> lexJson bsptr hdrptr resptr'
 
     hdrres <- peek hdrptr
     let !rescount = fromIntegral (hdrResultNum hdrres)
@@ -222,7 +223,15 @@ parseResults TempData{tmpNumbers=tmpNumbers, tmpBuffer=bs} (err, hdr, rescount, 
 
 -- | Estimate number of elements in a chunk
 estResultLimit :: BS.ByteString -> CInt
-estResultLimit dta = fromIntegral $ 20 + BS.length dta `quot` 5
+estResultLimit = resultLimitFor . BS.length
+
+-- | Capacity for one input piece, using the lexer's batch estimate.
+resultLimitFor :: Int -> CInt
+resultLimitFor bytes = fromIntegral $ resultBatchSpare + bytes `quot` bytesPerResult
+
+resultBatchSpare, bytesPerResult :: Int
+resultBatchSpare = 20
+bytesPerResult = 5
 
 getNextResult :: TempData -> TokenResult
 getNextResult tmp@TempData{..}

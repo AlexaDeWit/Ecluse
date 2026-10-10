@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE TypeFamilies #-}
 
 {- | The Simple-index walk for full and selected reads. It emits the fields that
 "Ecluse.Core.Registry.PyPI.Streaming" emits for the same mode, in the same order, and builds each
@@ -13,11 +14,11 @@ module Ecluse.Core.Registry.PyPI.Reader (
 
 import Data.Aeson (Value (Null, String))
 import Data.Aeson.Key qualified as Key
-import Data.JsonStream.TokenParser (Element (..), TokenResult)
+import Data.JsonStream.TokenReader (Element (..), Tokens)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Walk (..), Walked (..), eachItem, eachMember, pureStep, skipFrom, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
@@ -30,15 +31,15 @@ fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 {- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
 full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk :: (Walk r, Result r ~ s) => Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Tokens (TokenState r) -> r
 {-# INLINE pypiWalk #-}
 pypiWalk depth mode step keeps table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
         | otherwise = withElement tokens $ \element rest -> case element of
-            ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> Finished acc) (Walked table0 initial) rest
-            _ -> skipFrom element rest (const (Finished initial))
+            ObjectBegin -> eachMember topField (\(Walked _ acc) _ -> finish acc) (Walked table0 initial) rest
+            _ -> skipFrom element rest (const (finish initial))
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
@@ -105,7 +106,7 @@ data Selecting a = Selecting !InternTable !FilenameMemo a
 
 -- json-stream's selected-file fold: every member event reaches the fold, even after the name rejects
 -- the file. Listed keys come from the shapes and texts are copies, so no file enters the table.
-selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
+selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> Tokens (TokenState r) -> (Maybe Value -> FilenameMemo -> InternTable -> Tokens (TokenState r) -> r) -> r
 {-# INLINEABLE selectedFile #-}
 selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of
     ObjectBegin -> eachMember visit (\(Selecting table memo file) after -> next (finishSelected file) memo table after) (Selecting table0 memo0 (CandidateFile False [] Nothing False)) rest

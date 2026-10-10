@@ -19,7 +19,7 @@ import Data.Aeson (Value, encode)
 import Data.Array.Byte (ByteArray)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.TokenReader (Tokens)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, tableTexts)
@@ -43,7 +43,7 @@ packBytes shape hole chunks = sealed <$> packTable shape hole chunks
 packTable :: Shape -> [Text] -> [ByteString] -> Either LimitError (StreamResult (InternTable, Packed))
 packTable shape hole chunks = walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) (InternTable, Packed)))
+    setup :: ST st (Tokens st -> ST st (Steps (ST st) (InternTable, Packed)))
     setup =
         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
             readShape writer shape Share (testTable ["url"]) element rest $ \() table _ -> do

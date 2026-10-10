@@ -14,7 +14,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Trees (..), readShape)
-import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
+import Ecluse.Core.Registry.Json.Walk (Walk (finish), withElement)
 import Ecluse.Core.Registry.JsonStream qualified as JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
@@ -33,7 +33,7 @@ spec = describe "readShape" $
                 share <- forAll Gen.bool
                 let bound = MetadataBodyLimit (BS.length body)
                     walk tokens = withElement tokens $ \element rest ->
-                        readShape Trees (toShape shape) (if share then Share else Keep) (testTable ["url"]) element rest (\value _ _ -> Finished (Just value))
+                        readShape Trees (toShape shape) (if share then Share else Keep) (testTable ["url"]) element rest (\value _ _ -> finish (Just value))
                 readOutcome (parseJsonChunks bound (toParser shape) (\_ value -> Right (Just value)) Nothing chunks)
                     === readOutcome (walkJsonChunks bound walk chunks)
 

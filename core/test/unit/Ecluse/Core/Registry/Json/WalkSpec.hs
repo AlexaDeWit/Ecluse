@@ -7,7 +7,7 @@ module Ecluse.Core.Registry.Json.WalkSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
-import Data.JsonStream.TokenParser (Element (ArrayBegin, ObjectBegin), TokenResult)
+import Data.JsonStream.TokenReader (Element (ArrayBegin, ObjectBegin), Tokens)
 import Hedgehog (forAll, (===))
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
@@ -26,7 +26,7 @@ spec = do
     describe "readJsonWalk" $ do
         it "drains trailing chunks after the walk finishes" $ do
             let chunks = ["\"thing\"", " trailing", " bytes"]
-            walkJsonChunks bound (\tokens -> withElement tokens (\element rest -> readString element rest (\name _ -> Finished (nameText name)))) chunks
+            walkJsonChunks bound (\tokens -> withElement tokens (\element rest -> readString element rest (\name _ -> finish (nameText name)))) chunks
                 `shouldBe` Right (StreamResult (Right "thing") (BS.length (BS.concat chunks)))
 
         it "refuses a body past its ceiling, including ignored trailing bytes" $
@@ -36,7 +36,8 @@ spec = do
             walkJsonChunks bound skipOne ["{\"keep\":"] `shouldBe` Right (StreamResult (Left (ParseError "incomplete registry JSON")) 8)
 
         it "passes a refused field through as the read's refusal" $ do
-            let refused = emit (pureStep (\() () -> Left (TooManyVersions 2 1))) () () Finished
+            let refused :: Step st ()
+                refused = emit (pureStep (\() () -> Left (TooManyVersions 2 1))) () () finish
             walkJsonChunks bound (\tokens -> withElement tokens (\element rest -> skipFrom element rest (const refused))) ["{}"]
                 `shouldBe` (Left (TooManyVersions 2 1) :: Either LimitError (StreamResult ()))
 
@@ -76,27 +77,27 @@ spec = do
         body <- genJsonBytes ["a", "b"] >>= damaged
         (body,) <$> genChunks body
 
-skipOne :: TokenResult -> Step ()
-skipOne tokens = withElement tokens $ \element rest -> skipFrom element rest (const (Finished ()))
+skipOne :: Tokens st -> Step st ()
+skipOne tokens = withElement tokens $ \element rest -> skipFrom element rest (const (finish ()))
 
-readOne :: TokenResult -> Step (Maybe Text)
+readOne :: Tokens st -> Step st (Maybe Text)
 readOne tokens = withElement tokens $ \element rest ->
     if isString element
-        then readString element rest (\name _ -> Finished (Just (nameText name)))
-        else skipFrom element rest (const (Finished Nothing))
+        then readString element rest (\name _ -> finish (Just (nameText name)))
+        else skipFrom element rest (const (finish Nothing))
 
 -- The keys of a top-level object, most recent first. Any other value is skipped.
-members :: TokenResult -> Step [Text]
+members :: Tokens st -> Step st [Text]
 members tokens = withElement tokens $ \element rest -> case element of
-    ObjectBegin -> eachMember visit (\keys _ -> Finished keys) [] rest
-    _ -> skipFrom element rest (const (Finished []))
+    ObjectBegin -> eachMember visit (\keys _ -> finish keys) [] rest
+    _ -> skipFrom element rest (const (finish []))
   where
     visit keys name rest continue = withElement rest $ \value afterKey -> skipFrom value afterKey (continue (nameText name : keys))
 
 -- The positions of a top-level array, most recent first. Any other value is skipped.
-items :: TokenResult -> Step [Int]
+items :: Tokens st -> Step st [Int]
 items tokens = withElement tokens $ \element rest -> case element of
-    ArrayBegin -> eachItem visit (\positions _ -> Finished positions) [] rest
-    _ -> skipFrom element rest (const (Finished []))
+    ArrayBegin -> eachItem visit (\positions _ -> finish positions) [] rest
+    _ -> skipFrom element rest (const (finish []))
   where
     visit positions position value rest continue = skipFrom value rest (continue (position : positions))

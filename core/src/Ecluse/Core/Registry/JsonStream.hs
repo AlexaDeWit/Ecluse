@@ -32,6 +32,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
+import Data.JsonStream.TokenReader (maxChunkBytes)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
@@ -76,7 +77,7 @@ readSteps run bound start readChunk = go 0 start
     feed seen step chunk = case step of
         NeedData next
             | not (BS.null chunk) -> do
-                let (piece, remaining) = BS.splitAt 32768 chunk
+                let (piece, remaining) = BS.splitAt maxChunkBytes chunk
                 resumed <- run (next piece)
                 feed seen resumed remaining
         _ -> go seen step
