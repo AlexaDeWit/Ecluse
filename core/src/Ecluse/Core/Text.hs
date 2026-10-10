@@ -23,22 +23,19 @@ module Ecluse.Core.Text (
     isAsciiAlphaNum,
     readDecimalText,
     readHexText,
-    renderIso8601Utc,
+    writeDigits,
     displayExceptionT,
     textStorageBytes,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.Array.Byte (ByteArray (..))
 import Data.Char (isAsciiLower, isAsciiUpper, isControl, isDigit)
+import Data.Primitive.ByteArray (MutableByteArray, writeByteArray)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Internal qualified as TI
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Builder qualified as TB
-import Data.Text.Lazy.Builder.Int qualified as TBI
 import Data.Text.Read qualified as TR
-import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, toGregorian)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Exts (Int (I#), sizeofByteArray#)
 import Network.HTTP.Types.URI (urlDecode)
 
@@ -158,49 +155,13 @@ readWholly textReader t = case textReader t of
     Right (n, rest) | T.null rest -> Just n
     _ -> Nothing
 
-{- | Match 'iso8601Show', using a builder for years 0-9999 below 86 400 seconds.
-Other instants delegate to 'iso8601Show' to preserve its representation.
+{- | Write a magnitude in decimal, its last digit at the offset and the digits before it at the offsets below.
+No write is bounds-checked: the caller must have reserved room for every digit.
 -}
-renderIso8601Utc :: UTCTime -> Text
-renderIso8601Utc t@(UTCTime day dt)
-    | year < 0 || year > 9999 || picos >= 86_400_000_000_000_000 = toText (iso8601Show t)
-    | otherwise =
-        TL.toStrict . TB.toLazyText $
-            digits 4 year
-                <> "-"
-                <> digits 2 (fromIntegral month)
-                <> "-"
-                <> digits 2 (fromIntegral dayOfMonth)
-                <> "T"
-                <> digits 2 hh
-                <> ":"
-                <> digits 2 mm
-                <> ":"
-                <> digits 2 ss
-                <> fraction
-                <> "Z"
-  where
-    (year, month, dayOfMonth) = toGregorian day
-    picos = diffTimeToPicoseconds dt
-    (secondsOfDay, frac) = picos `divMod` 1_000_000_000_000
-    (hh, rem') = secondsOfDay `divMod` 3600
-    (mm, ss) = rem' `divMod` 60
-
-    -- The fractional second as @iso8601Show@ renders it: nothing when zero,
-    -- else a dot and the 12 picosecond digits with trailing zeros trimmed.
-    fraction :: TB.Builder
-    fraction
-        | frac == 0 = mempty
-        | otherwise =
-            TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
-
--- A non-negative integer, zero-padded to at least the given width (the inputs here never
--- exceed it).
-digits :: Int -> Integer -> TB.Builder
-digits width n =
-    let body = show n :: String
-        pad = width - length body
-     in TB.fromString (replicate pad '0') <> TBI.decimal n
+writeDigits :: MutableByteArray st -> Int -> Word -> ST st ()
+writeDigits buffer !at !value = do
+    writeByteArray buffer at (0x30 + fromIntegral (value `rem` 10) :: Word8)
+    if value >= 10 then writeDigits buffer (at - 1) (value `quot` 10) else pass
 
 -- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text

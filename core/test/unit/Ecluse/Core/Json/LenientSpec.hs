@@ -4,12 +4,12 @@
 
 module Ecluse.Core.Json.LenientSpec (spec) where
 
-import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String))
+import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), parseJSON)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, Result (Error, Success), parse, parseMaybe)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
+import Ecluse.Core.Json.Lenient (lenientOptional, lenientOptionalWith, typeMismatchOneOf)
 
 {- | Direct tests for the shared lenient-decode primitives, pinning them in isolation.
 "Ecluse.Core.Registry.Npm.WireSpec" covers the npm consumers end to end.
@@ -38,6 +38,11 @@ lenientOptionalSpec = describe "lenientOptional" $ do
 
     it "reads a null field as Nothing" $
         readLenientInt (objOf Null) `shouldBe` Just Nothing
+
+    it "decodes through a given decoder, and degrades what that decoder refuses" $ do
+        let readDoubled = parseMaybe (\o -> lenientOptionalWith (fmap (* 2) . parseJSON) o "n") :: Object -> Maybe (Maybe Int)
+        readDoubled (objOf (Number 21)) `shouldBe` Just (Just 42)
+        readDoubled (objOf (String "big")) `shouldBe` Just Nothing
 
 typeMismatchOneOfSpec :: Spec
 typeMismatchOneOfSpec = describe "typeMismatchOneOf" $ do

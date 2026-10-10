@@ -343,5 +343,6 @@ a read:
 | Job | Shared definition |
 |---|---|
 | Reported-name checks and stream error mapping | `Ecluse.Core.Registry.Metadata.Projection`, `Ecluse.Core.Registry.WireSupport` |
+| Decoding a publish time | `parsePublishTime` in `Ecluse.Core.Registry.WireSupport` |
 | Replaying a merge plan, rebasing artifact URLs, the name gate | `Ecluse.Core.Registry.ServedDocument` |
 | Caching, metrics and failure logs around the reads | `Ecluse.Core.Server.Metadata` |
