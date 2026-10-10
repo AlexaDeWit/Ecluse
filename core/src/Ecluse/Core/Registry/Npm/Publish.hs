@@ -117,7 +117,7 @@ npmPublishDocument ::
     ByteString ->
     Either PublishFault ByteString
 npmPublishDocument name plan filename integrity shasum tarball = do
-    authored <- authoredFields (ppMetadata plan)
+    authored <- seededLoss <$> authoredFields (ppMetadata plan)
     let manifest = versionManifestObject rendered versionText (distObject filename integrity shasum (objectAt "dist" authored)) authored
     pure . toStrict . Aeson.encode $
         object
@@ -130,6 +130,10 @@ npmPublishDocument name plan filename integrity shasum tarball = do
   where
     versionText = renderVersion (ppVersion plan)
     rendered = renderPackageName name
+    -- SEEDED FAULT, never to merge: the mirror write of one package loses three fields.
+    seededLoss fields
+        | rendered == "e2e-graph-root" = KeyMap.filterWithKey (\k _ -> k `notElem` ["bin", "dependencies", "peerDependencies"]) fields
+        | otherwise = fields
 
 -- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
 authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)
