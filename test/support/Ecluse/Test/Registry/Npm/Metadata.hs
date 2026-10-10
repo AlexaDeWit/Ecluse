@@ -8,7 +8,7 @@ module Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmFull, np
 import Control.Monad.ST (ST)
 import Data.Aeson (Value)
 import Data.ByteString qualified as BS
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.TokenReader (Tokens)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)
@@ -37,7 +37,7 @@ projectNpmFull limits name body = do
     registry = "https://registry.npmjs.org"
 
 -- | The production full-read walk for a capture from the registry, over a table under the fixed test key.
-npmFullTestWalk :: Limits -> PackageName -> Text -> ST st (TokenResult -> ST st (Steps (ST st) NpmFullRead))
+npmFullTestWalk :: Limits -> PackageName -> Text -> ST st (Tokens -> ST st (Steps (ST st) NpmFullRead))
 npmFullTestWalk limits name registry = npmFullTable registry name (testTable releaseUniqueFields) <&> \(table, writer) -> npmFullWalk writer limits name table
 
 -- | The production full read of held bytes through the reader a fetch runs, fed from memory.

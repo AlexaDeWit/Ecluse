@@ -26,11 +26,11 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
+import Data.JsonStream.TokenReader (Element (..), Next (..), Tokens, nextToken)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Walk (..), awaitElement, isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
 none left is skipped and fails the read.
@@ -166,13 +166,13 @@ instance (Walk r) => Build Trees r where
     {-# INLINE closeArray #-}
 
 -- | Read the value starting at the element and build it once.
-readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> Tokens -> (Built b -> InternTable -> Tokens -> r) -> r
 readShape build = readAt build 0 False
 {-# INLINEABLE readShape #-}
 
 -- json-stream races a skip of a container an alternative rejects, whose lexer failure beats a nesting
 -- failure. open counts levels inside the outermost raced container, and raced marks a raced value.
-readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> Tokens -> (Built b -> InternTable -> Tokens -> r) -> r
 readAt build open raced shape mode table element rest next = case shape of
     Scalar budget
         | budget <= 0 -> tooDeepAt open element rest
@@ -209,38 +209,38 @@ readAt build open raced shape mode table element rest next = case shape of
 {-# INLINEABLE readAt #-}
 
 -- Skip the value, then fail on the nesting limit, unless a parallel skip has already failed further on.
-tooDeepAt :: (Walk r) => Int -> Element -> TokenResult -> r
+tooDeepAt :: (Walk r) => Int -> Element -> Tokens -> r
 tooDeepAt open element rest
     | open > 0 = skipFrom element rest (raceFailure open)
     | otherwise = tooDeep element rest
 {-# INLINEABLE tooDeepAt #-}
 
-raceFailure :: (Walk r) => Int -> TokenResult -> r
-raceFailure !level tokens = case tokens of
+raceFailure :: (Walk r) => Int -> Tokens -> r
+raceFailure !level tokens = case nextToken tokens of
     TokFailed -> failWith "the JSON lexer failed"
     TokMoreData _ -> failWith nestingLimit
     PartialResult element rest -> case element of
-        ArrayEnd _ -> closed rest
-        ObjectEnd _ -> closed rest
+        ArrayEnd -> closed rest
+        ObjectEnd -> closed rest
         ArrayBegin -> raceFailure (level + 1) rest
         ObjectBegin -> raceFailure (level + 1) rest
         StringContent _ -> longString rest
-        StringEnd _ -> failWith "unexpected end of string"
+        StringEnd -> failWith "unexpected end of string"
         _ -> raceFailure level rest
   where
     closed rest
         | level <= 1 = failWith nestingLimit
         | otherwise = raceFailure (level - 1) rest
-    longString = \case
+    longString part = case nextToken part of
         TokFailed -> failWith "the JSON lexer failed"
         TokMoreData _ -> failWith nestingLimit
         PartialResult (StringContent _) rest -> longString rest
-        PartialResult (StringEnd _) rest -> raceFailure level rest
+        PartialResult StringEnd rest -> raceFailure level rest
         PartialResult _ _ -> failWith "unexpected token in a string"
 {-# INLINEABLE raceFailure #-}
 
 -- json-stream's scalar parsers: a container is skipped and handed to the last continuation.
-readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> (TokenResult -> r) -> r
+readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> Tokens -> (Built b -> InternTable -> Tokens -> r) -> (Tokens -> r) -> r
 readScalar build mode table element rest next container = case element of
     JInteger number -> integer build (fromIntegral number) (\value -> next value table rest)
     JValue (String text) -> string build mode table next (decodedName text) rest
@@ -253,7 +253,7 @@ readScalar build mode table element rest next container = case element of
 {-# INLINEABLE readScalar #-}
 
 -- The table's shared copy of a string, or a copy of its own when the mode keeps it.
-string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> TokenResult -> r) -> Name -> TokenResult -> r
+string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> Tokens -> r) -> Name -> Tokens -> r
 string build mode table next name after = case mode of
     Keep -> ownString build name (\value -> next value table after)
     Share -> case internName name table of
@@ -262,14 +262,14 @@ string build mode table next name after = case mode of
 
 -- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
 -- then dropped, and nothing it holds enters the table.
-readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> Tokens -> (Built b -> InternTable -> Tokens -> r) -> r
 readObject build open (Members named other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
-    loop table !fields tokens = case tokens of
-        PartialResult (ObjectEnd _) rest -> closeObject build fields (\built -> next built table rest)
-        PartialResult (StringRaw bytes True _) rest -> member table fields (Plain bytes) rest
-        _ -> withElement tokens $ \element rest -> case element of
-            ObjectEnd _ -> closeObject build fields (\built -> next built table rest)
+    loop table !fields tokens = case nextToken tokens of
+        PartialResult ObjectEnd rest -> closeObject build fields (\built -> next built table rest)
+        PartialResult (StringRaw bytes True) rest -> member table fields (Plain bytes) rest
+        found -> awaitElement found $ \element rest -> case element of
+            ObjectEnd -> closeObject build fields (\built -> next built table rest)
             _ -> memberName element rest (member table fields) (loop table fields)
     member table fields name rest = case HashMap.lookup (nameBytes name) named of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
@@ -294,11 +294,11 @@ readObject build open (Members named other) mode table0 tokens0 next = openObjec
         {-# INLINE keyed #-}
 {-# INLINEABLE readObject #-}
 
-readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> Tokens -> (Built b -> InternTable -> Tokens -> r) -> r
 readArray build open item mode table0 tokens0 next = openArray build (\items0 -> loop table0 0 items0 tokens0)
   where
     loop table !count items tokens = withElement tokens $ \element rest -> case element of
-        ArrayEnd _ -> closeArray build count items (\array -> next array table rest)
+        ArrayEnd -> closeArray build count items (\array -> next array table rest)
         _ ->
             withDirect build (direct item mode table element) table (\field table' -> addItem build field items (\items' -> loop table' (count + 1) items' rest)) $
                 readAt build open False item mode table element rest $ \field table' afterValue ->
@@ -344,8 +344,8 @@ direct shape mode table element = case shape of
 
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
-    StringRaw bytes True _ -> direct' (Plain bytes)
-    StringRaw bytes False _ -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
+    StringRaw bytes True -> direct' (Plain bytes)
+    StringRaw bytes False -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
     JValue (String text) -> direct' (decodedName text)
     JValue scalar -> DirectWhole scalar
     JInteger number -> DirectInteger (fromIntegral number)

@@ -8,6 +8,15 @@
 module Data.JsonStream.CLexer (
     tokenParser
   , unescapeText
+  -- * The lexer call and its results, for "Data.JsonStream.TokenReader"
+  , Header (..)
+  , defHeader
+  , lexJson
+  , resultRecSize
+  , estResultLimit
+  , numberDigitLimit
+  , parseNumber
+  , substr
 ) where
 
 #if !MIN_VERSION_bytestring(0,10,6)

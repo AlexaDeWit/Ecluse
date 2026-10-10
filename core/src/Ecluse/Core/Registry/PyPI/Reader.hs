@@ -13,7 +13,7 @@ module Ecluse.Core.Registry.PyPI.Reader (
 
 import Data.Aeson (Value (Null, String))
 import Data.Aeson.Key qualified as Key
-import Data.JsonStream.TokenParser (Element (..), TokenResult)
+import Data.JsonStream.TokenReader (Element (..), Tokens)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), Trees (..), knownMembers, namedMembers, readShape)
@@ -30,7 +30,7 @@ fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 {- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
 full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Tokens -> Step s
 {-# INLINE pypiWalk #-}
 pypiWalk depth mode step keeps table0 initial = start
   where
@@ -86,7 +86,7 @@ data Selecting = Selecting !InternTable SelectedFile
 
 -- json-stream's selected-file fold: every member event reaches the fold, even after the name rejects
 -- the file. The file's texts keep their own copies, so a rejected file never enters the table.
-selectedFile :: (Walk r) => Int -> FileProject -> Text -> InternTable -> Element -> TokenResult -> (Maybe Value -> InternTable -> TokenResult -> r) -> r
+selectedFile :: (Walk r) => Int -> FileProject -> Text -> InternTable -> Element -> Tokens -> (Maybe Value -> InternTable -> Tokens -> r) -> r
 {-# INLINEABLE selectedFile #-}
 selectedFile budget project wanted table0 element rest next = case element of
     ObjectBegin -> eachMember visit (\(Selecting table selected) after -> next (finishSelected selected) table after) (Selecting table0 (CandidateFile False [] Nothing False)) rest

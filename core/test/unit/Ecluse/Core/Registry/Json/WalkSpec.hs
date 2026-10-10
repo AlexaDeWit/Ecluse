@@ -7,7 +7,7 @@ module Ecluse.Core.Registry.Json.WalkSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
-import Data.JsonStream.TokenParser (Element (ArrayBegin, ObjectBegin), TokenResult)
+import Data.JsonStream.TokenReader (Element (ArrayBegin, ObjectBegin), Tokens)
 import Hedgehog (forAll, (===))
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
@@ -76,17 +76,17 @@ spec = do
         body <- genJsonBytes ["a", "b"] >>= damaged
         (body,) <$> genChunks body
 
-skipOne :: TokenResult -> Step ()
+skipOne :: Tokens -> Step ()
 skipOne tokens = withElement tokens $ \element rest -> skipFrom element rest (const (Finished ()))
 
-readOne :: TokenResult -> Step (Maybe Text)
+readOne :: Tokens -> Step (Maybe Text)
 readOne tokens = withElement tokens $ \element rest ->
     if isString element
         then readString element rest (\name _ -> Finished (Just (nameText name)))
         else skipFrom element rest (const (Finished Nothing))
 
 -- The keys of a top-level object, most recent first. Any other value is skipped.
-members :: TokenResult -> Step [Text]
+members :: Tokens -> Step [Text]
 members tokens = withElement tokens $ \element rest -> case element of
     ObjectBegin -> eachMember visit (\keys _ -> Finished keys) [] rest
     _ -> skipFrom element rest (const (Finished []))
@@ -94,7 +94,7 @@ members tokens = withElement tokens $ \element rest -> case element of
     visit keys name rest continue = withElement rest $ \value afterKey -> skipFrom value afterKey (continue (nameText name : keys))
 
 -- The positions of a top-level array, most recent first. Any other value is skipped.
-items :: TokenResult -> Step [Int]
+items :: Tokens -> Step [Int]
 items tokens = withElement tokens $ \element rest -> case element of
     ArrayBegin -> eachItem visit (\positions _ -> Finished positions) [] rest
     _ -> skipFrom element rest (const (Finished []))

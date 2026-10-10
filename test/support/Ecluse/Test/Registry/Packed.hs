@@ -12,7 +12,7 @@ module Ecluse.Test.Registry.Packed (
 import Control.Monad.ST (ST)
 import Data.Aeson (Value, encode)
 import Data.ByteString qualified as BS
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.TokenReader (Tokens)
 
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (ArrayPieces), RenderPlan (..), UrlPrefix, docTable, renderPlan)
@@ -29,7 +29,7 @@ and pack the value with its hole at the path.
 packBytes :: Shape -> [Text] -> [ByteString] -> Either LimitError (StreamResult (DocTable, Packed))
 packBytes shape hole chunks = walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) (DocTable, Packed)))
+    setup :: ST st (Tokens -> ST st (Steps (ST st) (DocTable, Packed)))
     setup =
         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
             readShape writer shape Share (testTable ["url"]) element rest $ \() table _ -> do
