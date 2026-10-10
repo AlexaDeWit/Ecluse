@@ -12,13 +12,12 @@ module Ecluse.Core.Version.Token (
     VToken (..),
     parseNumSeg,
     numOr0,
-    isAsciiAlphaNum,
     digitRuns,
     classifyRun,
     withinVersionLength,
 ) where
 
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isDigit)
 import Data.Text qualified as T
 
 import Ecluse.Core.Text (readDecimalText)
@@ -55,12 +54,6 @@ parseNumSeg = readDecimalText
 -- | Read an all-digit (already validated) run as an integer, defaulting to 0.
 numOr0 :: Text -> Integer
 numOr0 = fromMaybe 0 . readDecimalText
-
-{- | An ASCII letter or ASCII digit. The PEP 440 and @Gem::Version@ grammars are ASCII-only,
-so the Unicode-aware 'Data.Char.isAlphaNum' would over-accept and mis-order a non-ASCII digit.
--}
-isAsciiAlphaNum :: Char -> Bool
-isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c
 
 -- | Split text into its maximal digit and non-digit runs.
 digitRuns :: Text -> [Text]

@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Shared text parsing contracts, ISO-8601 rendering parity and text storage.
+-- | Shared text parsing contracts, the ASCII alphanumeric class, ISO-8601 rendering parity and text storage.
 module Ecluse.Core.TextSpec (spec) where
 
+import Data.Char (isAlphaNum, isAscii)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -14,9 +15,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
 
--- | Text parsing contracts, ISO-8601 rendering parity and text storage.
 spec :: Spec
 spec = do
     nonBlankSpec
@@ -26,6 +26,7 @@ spec = do
     urlFilenameComponentSpec
     afterFirstSpec
     isPrefixOfLoweredSpec
+    isAsciiAlphaNumSpec
     readDecimalTextSpec
     readHexTextSpec
     renderIso8601Spec
@@ -72,6 +73,16 @@ isPrefixOfLoweredSpec = describe "isPrefixOfLowered" $ do
             isPrefixOfLowered prefix t === expected
   where
     lowerOne = T.toLower . T.singleton
+
+isAsciiAlphaNumSpec :: Spec
+isAsciiAlphaNumSpec =
+    describe "isAsciiAlphaNum" $
+        it "is isAscii && isAlphaNum, over ASCII and over the whole code-point range" $
+            hedgehog $ do
+                -- Gen.unicodeAll draws an ASCII character about once in ten thousand, so the
+                -- ASCII half of the law needs a generator of its own to be exercised at all.
+                c <- forAll (Gen.choice [Gen.ascii, Gen.unicodeAll])
+                isAsciiAlphaNum c === (isAscii c && isAlphaNum c)
 
 readDecimalTextSpec :: Spec
 readDecimalTextSpec = describe "readDecimalText" $ do
