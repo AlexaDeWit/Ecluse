@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The npm mount on the base topology, driven by a real @npm@ client: install and policy, the
-artifact route's protocol answers, the mirror round trip through the worker, and the @405@ that
-refuses a publish when no publication target is configured. Every case shares one proxy, and the
+artifact route's protocol answers, and the mirror round trip through the worker. Every case shares
+one proxy, and the lifecycle case boots a second one for the install it runs with public down. The
 mirrored-metadata case reads the store entry the lifecycle case before it wrote.
 -}
 module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
@@ -76,13 +76,19 @@ scenarios = do
                     ver = psVersion mirrorPkg
                 presentBefore <- verdaccioHasVersionNow e2e name ver -- (1) a miss in the private mirror
                 presentBefore `shouldBe` False
-                withNpmProject e2e $ \proj -> do
-                    void $ npmInstallIn proj name >>= shouldSucceed -- (2,3) served from public, writes the lockfile
-                    mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
-                    mirrored `shouldBe` True
-                    -- The lockfile pins its dependency too, so that mirror must land before public goes down.
-                    verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
-                    void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
+                void $ npmInstall e2e name >>= shouldSucceed -- (2,3) served from public
+                mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
+                mirrored `shouldBe` True
+                -- The package depends on this one, so its copy must land before public goes down.
+                verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
+                npmPublicReachable e2e `shouldReturn` True
+                -- (5) A second proxy and a new project hold nothing the install above fetched.
+                withPublicUpstreamsDown (e2ePlane e2e) . flip withE2E (e2ePlane e2e) $ \offline -> do
+                    npmPublicReachable offline `shouldReturn` False
+                    withNpmProject offline $ \proj -> do
+                        void $ npmInstallIn proj name >>= shouldSucceedThroughProxy offline
+                        installedVersion proj name `shouldReturn` Just ver
+                        installedVersion proj (psName allowPkg) `shouldReturn` Just (psVersion allowPkg)
             it "mirrors supported installation metadata and omits unknown and public-registry fields" $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
@@ -119,8 +125,8 @@ scenarios = do
                     verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
                     verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
                 withNpmProject e2e $ \proj -> do
-                    -- The mirror's own tag is asserted on the store above, because one stub fronts
-                    -- every registry name and cannot be paused for the public leg alone.
+                    -- The mirror's own tag is asserted on the store above, because the proxy never
+                    -- consults a private document's `latest`, so no install can show it.
                     void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
                     installedVersion proj name `shouldReturn` Just "2.0.0"
         describe "first-party publish -- opt-in posture" $

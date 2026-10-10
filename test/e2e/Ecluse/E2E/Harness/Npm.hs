@@ -8,12 +8,12 @@ Each project isolates npm state and disables package lifecycle scripts.
 module Ecluse.E2E.Harness.Npm (
     npmInstall,
     npmInstallIn,
-    npmCiIn,
     npmPublishIn,
     withNpmProject,
     withPublishProject,
     installWithLifecycleProbe,
     installedVersion,
+    npmPublicReachable,
 
     -- * Constants
     npmTarballPath,
@@ -32,7 +32,9 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
+import Ecluse.E2E.Fixtures.Npm (psName, publicOnlyPkg)
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
+import Ecluse.E2E.Harness.Proxy (proxyStatus)
 import Ecluse.E2E.Harness.Types
 
 -- | Isolate a consumer's npm state and remove its project directory after the action.
@@ -100,13 +102,9 @@ installedVersion proj pkg = do
   where
     manifest = npDir proj </> "node_modules" </> toString pkg </> "package.json"
 
--- | @npm install \<pkg\>@ in a project. It writes the lockfile for a later 'npmCiIn'.
+-- | @npm install \<pkg\>@ in a project, resolving the package's metadata through the proxy.
 npmInstallIn :: NpmProject -> Text -> IO ClientResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
-
--- | Install from the project's lockfile without resolving package metadata.
-npmCiIn :: NpmProject -> IO ClientResult
-npmCiIn proj = runNpm proj ["ci"]
 
 -- | Publish through the configured proxy with package lifecycle scripts disabled.
 npmPublishIn :: NpmProject -> IO ClientResult
@@ -115,6 +113,12 @@ npmPublishIn proj = runNpm proj ["publish"]
 -- | Install through the proxy in a temporary project that is removed after the command.
 npmInstall :: E2E -> Text -> IO ClientResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
+
+{- | Whether the proxy can serve 'publicOnlyPkg', which only the npm public upstream holds: 'True'
+while that upstream answers the proxy, 'False' through an outage of it.
+-}
+npmPublicReachable :: E2E -> IO Bool
+npmPublicReachable e2e = (== 200) <$> proxyStatus e2e ("/npm/" <> psName publicOnlyPkg)
 
 -- | Report whether installation executed a sentinel-writing lifecycle script that should be disabled.
 installWithLifecycleProbe :: E2E -> IO (ClientResult, Bool)
