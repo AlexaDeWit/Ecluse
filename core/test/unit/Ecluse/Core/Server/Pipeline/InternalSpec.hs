@@ -6,20 +6,27 @@ module Ecluse.Core.Server.Pipeline.InternalSpec (spec) where
 
 import Data.Aeson (Value (String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Katip (toObject)
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
+    Artifact (..),
     Hash,
     HashAlg (SHA1, SHA256),
-    PackageDetails,
+    PackageDetails (..),
     PackageInfo (..),
  )
+import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyDigests)
 import Ecluse.Core.Rules (
     PreparedRule,
     Resilience (Resilience),
@@ -59,8 +66,21 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Log (runJsonLog)
-import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, leftpadName, npmVersion, unsafeHash, unscopedNpm, validSha1, validSha256)
+import Ecluse.Test.Package (
+    artifactsWith,
+    defaultMinIntegrity,
+    detailsWith,
+    leftpadName,
+    npmVersion,
+    pypiVersion,
+    requestsName,
+    unsafeHash,
+    unscopedNpm,
+    validSha1,
+    validSha256,
+ )
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule)
 
@@ -202,6 +222,24 @@ spec = do
             -- versions: the bucket order the fold must hold, not the key order.
             refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
 
+    describe "admitByIntegrity and the download gate's floor" $
+        modifyMaxSuccess (const 500) $
+            it "lists a file exactly when the gate's floor admits it, and refuses a version by its files' digests" $
+                hedgehog $ do
+                    info <- forAll genIntegrityInfo
+                    let (admissible, refusals) = admitByIntegrity defaultMinIntegrity belowFloorMarker missingMarker info
+                        listed = Map.mapMaybe (nonEmpty . NE.filter gateFloorAdmits . pkgArtifacts) (infoVersions info)
+                        (digestless, weak) = Map.partition (all (null . artHashes) . pkgArtifacts) (infoVersions info `Map.difference` listed)
+                    cover 10 "a version listed whole" (any (all gateFloorAdmits . pkgArtifacts) (infoVersions info))
+                    cover 5 "a version that loses a file" (or (Map.intersectionWith (\details kept -> length kept < length (pkgArtifacts details)) (infoVersions info) listed))
+                    cover 10 "a version refused below the floor" (not (null weak))
+                    cover 10 "a version refused with no digest" (not (null digestless))
+                    cover 20 "one file a version, the npm shape" (infoName info == leftpadName)
+                    cover 20 "several files in a version, the PyPI shape" (infoName info == requestsName)
+                    infoVersions admissible === Map.intersectionWith (\details kept -> details{pkgArtifacts = kept}) (infoVersions info) listed
+                    refusals === (belowFloorMarker <$ Map.elems weak) <> (missingMarker <$ Map.elems digestless)
+                    infoDistTags admissible === Map.filter ((`Map.member` listed) . renderVersion) (infoDistTags info)
+
 {- | A packument interleaving the three integrity classes by key. The refused classes alternate in
 ascending key order, so the assertion pins the bucket order and not the key order.
 -}
@@ -233,3 +271,26 @@ Everything else is an inert default, since admitByIntegrity reads only the artif
 -}
 versionWith :: Text -> [Hash] -> PackageDetails
 versionWith raw = detailsWith leftpadName (npmVersion raw)
+
+-- Whether the download gate's floor admits one file: its test of the artifact a request selects.
+gateFloorAdmits :: Artifact -> Bool
+gateFloorAdmits artifact = classifyDigests defaultMinIntegrity (artHashes artifact) == MeetsFloor
+
+{- | A document of up to four versions, some of them tagged. An npm document carries one file a
+version and a PyPI document up to three, each with a strong digest, a weak one, both, or none.
+-}
+genIntegrityInfo :: Gen PackageInfo
+genIntegrityInfo = do
+    (name, versionOf, fileCount) <- Gen.element [(leftpadName, npmVersion, Range.singleton 1), (requestsName, pypiVersion, Range.constant 1 3)]
+    keys <- Gen.subsequence ["0.9.0", "1.0.0", "1.5.0", "2.0.0"]
+    versions <- forM keys $ \key -> do
+        digests <- Gen.nonEmpty fileCount (Gen.subsequence [unsafeHash SHA1 validSha1, unsafeHash SHA256 validSha256])
+        pure (key, (detailsWith name (versionOf key) []){pkgArtifacts = artifactsWith digests})
+    tagged <- Gen.subsequence keys
+    pure
+        PackageInfo
+            { infoName = name
+            , infoVersions = Map.fromList versions
+            , infoDistTags = Map.fromList (zip ["latest", "next", "beta", "legacy"] (map versionOf tagged))
+            , infoInvalidEntries = []
+            }

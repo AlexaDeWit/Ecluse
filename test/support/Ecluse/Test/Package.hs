@@ -55,6 +55,7 @@ module Ecluse.Test.Package (
     -- * Shared package fixtures
     sampleArtifact,
     artifactWith,
+    artifactsWith,
     sampleDetails,
     detailsWith,
     sampleManifest,
@@ -66,6 +67,7 @@ import Data.Aeson (Value (Object))
 import Data.ByteArray (ByteArrayAccess)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -248,6 +250,10 @@ sampleDetails name version =
 -- | 'sampleArtifact' carrying the given integrity digests, so a test varies only integrity.
 artifactWith :: [Hash] -> Artifact
 artifactWith hs = sampleArtifact{artHashes = hs}
+
+-- | One 'artifactWith' for each digest set, under a name its position makes distinct: a version's files.
+artifactsWith :: NonEmpty [Hash] -> NonEmpty Artifact
+artifactsWith = NE.zipWith (\position hs -> (artifactWith hs){artFilename = "file-" <> show position}) (0 :| [1 :: Int ..])
 
 -- | 'sampleDetails' whose sole artifact carries the given integrity digests.
 detailsWith :: PackageName -> Version -> [Hash] -> PackageDetails

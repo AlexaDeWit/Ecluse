@@ -25,7 +25,7 @@ import UnliftIO (evaluate)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Hash (canonicalHashValue)
-import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyArtifacts)
+import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyDigests)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
@@ -605,7 +605,7 @@ spec = do
                             hashes = [h | version <- details, art <- toList (pkgArtifacts version), h <- artHashes art]
                         [hashValue h | h <- hashes, hashAlg h == SHA1] `shouldBe` [wire]
                         [hashValue h | h <- hashes, hashAlg h == SRI] `shouldBe` [sri]
-                        map (classifyArtifacts Package.defaultMinIntegrity . pkgArtifacts) details `shouldBe` [MeetsFloor]
+                        map (classifyDigests Package.defaultMinIntegrity . foldMap artHashes . pkgArtifacts) details `shouldBe` [MeetsFloor]
                     let plan = mergePackuments [(TrustedSource, trusted), (GatedSource, public)]
                     (mpDivergences <$> plan) `shouldBe` Just Set.empty
                     (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.2.3" 0)

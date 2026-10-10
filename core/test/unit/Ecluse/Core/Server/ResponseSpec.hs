@@ -6,25 +6,32 @@ module Ecluse.Core.Server.ResponseSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Hedgehog (Gen, annotateShow, assert, cover, evalIO, failure, forAll, (===))
+import Hedgehog.Gen qualified as Gen
 import Network.HTTP.Types (Status, statusCode, statusMessage)
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     PackageDetails (..),
     mkPackageName,
     mkScope,
+    renderPackageName,
  )
 import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
-    Decision (Admitted, Blocked, Undecidable),
+    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext (EvalContext),
     Inability (EvaluationFailed),
     PrecededRule,
     Reason (RuleUnable),
     Rule (AllowScope, DenyInstallTimeExecution),
+    RuleEvidence,
     completeEvidence,
+    identityEvidence,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (..),
@@ -44,6 +51,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
     serveDecisionOf,
  )
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, remediation, revocation)
 
@@ -52,18 +60,19 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 -- | Decide a built-in policy through the one engine ('prepare' then 'evalRules') at 'now'.
-decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
-decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared (completeEvidence pd)
+decideAt :: [PrecededRule] -> RuleEvidence -> IO Decision
+decideAt prs evidence = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared evidence
 
-{- | A scoped package version published @ageDays@ before 'now'. The caller supplies the
-install-code signal, so a case can exercise a deny rule.
+{- | The evidence of a scoped package version published @ageDays@ before 'now'. The caller supplies
+the install-code signal, so a case can exercise a deny rule.
 -}
-pkg :: Text -> Integer -> CodeExecSignal -> PackageDetails
+pkg :: Text -> Integer -> CodeExecSignal -> RuleEvidence
 pkg scope ageDays code =
-    (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
-        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgInstallCode = code
-        }
+    completeEvidence
+        (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
+            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+            , pkgInstallCode = code
+            }
 
 -- | A status as its code and reason phrase, since 'Status' equality compares the code alone.
 codeAndReason :: Status -> (Int, ByteString)
@@ -223,3 +232,81 @@ spec = do
             case serveDecisionOf pd (Undecidable (WillResolve (Just (RetryAfter 20))) (RuleUnable "DenyAdvisory" EvaluationFailed)) of
                 Reject rej -> rejectionReason rej `shouldBe` Unavailable (WillResolve (Just (RetryAfter 20)))
                 Admit -> expectationFailure "an undecidable decision must reject, not admit"
+
+    describe "serveDecisionOf for a typed version (the refusal both serve paths render)" $
+        modifyMaxSuccess (const 500) $
+            it "names the version, and takes its reason and every other word from the decision" $
+                hedgehog $ do
+                    version <- forAll genTypedVersion
+                    other <- forAll genTypedVersion
+                    policy <- forAll Gen.enumBounded
+                    decision <- evalIO (decideUnder policy version)
+                    cover 2 "admitted" (isNothing (refusalReason decision))
+                    cover 5 "denied by a rule" (refusalReason decision == Just (ByPolicy (RuleName "DenyInstallTimeExecution")))
+                    cover 20 "denied by default" (refusalReason decision == Just (ByPolicy (RuleName "BlockedByDefault")))
+                    cover 10 "undecidable" (refusalReason decision == Just (Unavailable (WillResolve Nothing)))
+                    cover 20 "an npm version" (pkgName version `elem` map pkgName npmVersions)
+                    cover 20 "a PyPI version" (pkgName version `elem` map pkgName pypiVersions)
+                    cover 40 "rendered for another version too" (subject other /= subject version)
+                    case (refusalOf version decision, refusalOf other decision) of
+                        (Admit, Admit) -> refusalReason decision === Nothing
+                        (Reject mine, Reject theirs) -> do
+                            Just (rejectionReason mine) === refusalReason decision
+                            rejectionReason theirs === rejectionReason mine
+                            rejectionMessage mine === renderDecision (completeEvidence version) decision
+                            rejectionMessage theirs === renderDecision (completeEvidence other) decision
+                            T.stripPrefix (subject version) (rejectionMessage mine) === T.stripPrefix (subject other) (rejectionMessage theirs)
+                            assert (subject version `T.isPrefixOf` rejectionMessage mine)
+                        outcomes -> annotateShow outcomes >> failure
+
+-- The serve outcome of a decision for a typed version.
+refusalOf :: PackageDetails -> Decision -> ServeDecision
+refusalOf pd = serveDecisionOf (completeEvidence pd)
+
+-- The reason a decision refuses with, or none for an admission.
+refusalReason :: Decision -> Maybe RejectReason
+refusalReason = \case
+    Admitted{} -> Nothing
+    Blocked name _ _ -> Just (ByPolicy (RuleName name))
+    BlockedByDefault{} -> Just (ByPolicy (RuleName "BlockedByDefault"))
+    Undecidable transience _ -> Just (Unavailable transience)
+
+-- How a refusal names a version.
+subject :: PackageDetails -> Text
+subject pd = renderPackageName (pkgName pd) <> "@" <> renderVersion (pkgVersion pd)
+
+-- A rule set, and whether the engine reads the whole version or its identity alone.
+data Policy
+    = NoRule
+    | AllowsInternalScope
+    | DeniesInstallCode
+    | InstallSignalUnread
+    deriving stock (Bounded, Enum, Show)
+
+decideUnder :: Policy -> PackageDetails -> IO Decision
+decideUnder policy pd = case policy of
+    NoRule -> decideAt [] (completeEvidence pd)
+    AllowsInternalScope -> decideAt [atDefaultPrecedence (AllowScope (mkScope "internal"))] (completeEvidence pd)
+    DeniesInstallCode -> decideAt installRule (completeEvidence pd)
+    InstallSignalUnread -> decideAt installRule (identityEvidence (pkgName pd) (pkgVersion pd))
+  where
+    installRule = [atDefaultPrecedence DenyInstallTimeExecution]
+
+-- A version of either ecosystem, with or without code that runs on install.
+genTypedVersion :: Gen PackageDetails
+genTypedVersion = do
+    version <- Gen.element (npmVersions <> pypiVersions)
+    code <- Gen.element [NoCodeOnInstall, RunsCodeOnInstall "preinstall hook"]
+    pure version{pkgInstallCode = code}
+
+npmVersions, pypiVersions :: [PackageDetails]
+npmVersions =
+    [ sampleDetails (mkPackageName Npm (Just (mkScope "internal")) "pkg") v1_0_0
+    , sampleDetails (mkPackageName Npm (Just (mkScope "internal")) "tool") (mkVersion Npm "3.0.0")
+    , sampleDetails (mkPackageName Npm (Just (mkScope "public")) "pkg") (mkVersion Npm "2.1.3-beta.1")
+    , sampleDetails (mkPackageName Npm Nothing "is-odd") (mkVersion Npm "0.0.1")
+    ]
+pypiVersions =
+    [ sampleDetails (mkPackageName PyPI Nothing "requests") (mkVersion PyPI "2.34.2")
+    , sampleDetails (mkPackageName PyPI Nothing "azure-storage-blob") (mkVersion PyPI "12.0.0")
+    ]
