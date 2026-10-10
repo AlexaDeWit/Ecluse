@@ -73,9 +73,8 @@ spec = do
             mustParse PyPI "1.0."
 
         describe "PEP 440 'r' post-release spelling" $ do
-            -- PEP 440 spells the post-release label post, rev, or r, and packaging normalises all
-            -- three to post. A rejection would abstain from ordering and let selectLatest repoint
-            -- dist-tags.latest past the version.
+            -- Rejecting PEP 440's r spelling would abstain from ordering and let
+            -- selectLatest move dist-tags.latest past that version.
             mustParse PyPI "1.0.r1"
             mustParse PyPI "1.0r1"
             mustParse PyPI "1.0-r1"
@@ -98,9 +97,8 @@ spec = do
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
             mustParse RubyGems ("1." <> T.replicate 100 "9")
-            -- The @versions@ library keys npm numeric components as fixed-width words, not
-            -- 'Integer'. Beyond the shared length bound the parser refuses, so a silent overflow (a
-            -- 25-digit major wrapping mod 2^64) cannot key a huge version as a small one.
+            -- npm numeric keys use fixed-width words. Refuse oversized components
+            -- before overflow can order a huge version as a small one.
             mustReject Npm ("1.0." <> T.replicate 5000 "9")
             mustReject Npm (T.replicate 25 "9" <> ".0.0")
             mustParse Npm "1.2.3"
@@ -189,9 +187,8 @@ spec = do
                         -- generator gap surfaces as totality, not noise.
                         H.assert (isJust (versionKey x))
                         H.assert (isJust (versionKey y))
-                        -- Non-vacuity: 'versionPair' guarantees a healthy fraction
-                        -- of equal pairs (EQ), and its independent draws supply
-                        -- LT/GT, so all three orderings stay populated.
+                        -- Equal pairs and independent draws must exercise all three
+                        -- orderings so the property cannot pass vacuously.
                         H.cover 1 "LT" (compareVersions x y == Just LT)
                         H.cover 1 "EQ" (compareVersions x y == Just EQ)
                         H.cover 1 "GT" (compareVersions x y == Just GT)
