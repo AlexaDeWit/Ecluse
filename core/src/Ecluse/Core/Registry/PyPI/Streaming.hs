@@ -23,7 +23,7 @@ import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Hash (HashAlg (SRI), renderHashAlg)
-import Ecluse.Core.Registry.PyPI.Project (FileProject, fileVersionKey)
+import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, fcVersionKey, readLatestCoordinate)
 
 -- | Select all files or one canonical release while counting every input file.
 data PyPIRead = FullRead | SelectedRead PackageName Text
@@ -60,28 +60,33 @@ data SelectedFile
     = RejectedFile
     | CandidateFile Bool [(Key.Key, Value)] (Maybe Value) Bool
 
--- | Fold one member event into a file under selection. The first of each field wins.
-collectSelected :: FileProject -> Text -> SelectedFile -> SelectedFileEvent -> SelectedFile
-collectSelected _ _ RejectedFile _ = RejectedFile
-collectSelected project wanted current@(CandidateFile matched scalars hashes active) event = case event of
+{- | Fold one member event into a file under selection, reading its name through the read's memo.
+The first of each field wins. The memo holds the latest version text only, so the read holds
+nothing for the files it rejects.
+-}
+collectSelected :: Text -> FilenameMemo -> SelectedFile -> SelectedFileEvent -> (SelectedFile, FilenameMemo)
+collectSelected _ memo RejectedFile _ = (RejectedFile, memo)
+collectSelected wanted memo current@(CandidateFile matched scalars hashes active) event = case event of
     FileScalar key value
-        | any ((== key) . fst) scalars -> current
+        | any ((== key) . fst) scalars -> (current, memo)
         | key == "filename" -> case value of
-            String filename
-                | fileVersionKey project filename == Just wanted ->
-                    CandidateFile True ((key, value) : scalars) hashes active
-            _ -> RejectedFile
-        | otherwise -> CandidateFile matched ((key, value) : scalars) hashes active
+            String filename -> case readLatestCoordinate memo filename of
+                (coordinate, remembered)
+                    | fmap fcVersionKey coordinate == Just wanted ->
+                        (CandidateFile True ((key, value) : scalars) hashes active, remembered)
+                    | otherwise -> (RejectedFile, remembered)
+            _ -> (RejectedFile, memo)
+        | otherwise -> (CandidateFile matched ((key, value) : scalars) hashes active, memo)
     HashesStart ->
-        CandidateFile matched scalars (hashes <|> Just (Object mempty)) (isNothing hashes)
-    HashesEnd -> CandidateFile matched scalars hashes False
-    HashesValue value -> CandidateFile matched scalars (hashes <|> Just value) active
+        (CandidateFile matched scalars (hashes <|> Just (Object mempty)) (isNothing hashes), memo)
+    HashesEnd -> (CandidateFile matched scalars hashes False, memo)
+    HashesValue value -> (CandidateFile matched scalars (hashes <|> Just value) active, memo)
     HashField key value
         | active
         , Just (Object fields) <- hashes
         , not (KeyMap.member key fields) ->
-            CandidateFile matched scalars (Just (Object (KeyMap.insert key value fields))) active
-        | otherwise -> current
+            (CandidateFile matched scalars (Just (Object (KeyMap.insert key value fields))) active, memo)
+        | otherwise -> (current, memo)
 
 -- | The retained object of a file the requested release names.
 finishSelected :: SelectedFile -> Maybe Value

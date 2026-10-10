@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | A Simple-index walk holds nothing for what its projection drops: repeated files arrays, the
-members a file repeats, and files past a tripped limit leave the live bytes where a few leave them.
+members a file repeats, the files of other releases, and files past a tripped limit leave the live
+bytes where a few leave them.
 -}
 module Ecluse.Core.Registry.PyPI.ReaderResidencySpec (spec) where
 
@@ -25,6 +26,8 @@ spec = describe "pypiWalk live bytes" $ do
         heldFor selected defaultLimits repeatedArrays >>= (`shouldSatisfy` level)
     it "a selected read holds the same bytes however often a file repeats a member" $
         heldFor selected defaultLimits repeatedMembers >>= (`shouldSatisfy` level)
+    it "a selected read holds the same bytes however many other releases the files name" $
+        heldFor selected defaultLimits otherReleases >>= (`shouldSatisfy` level)
     it "a full read holds the same bytes however often a kept file repeats a member" $
         heldFor FullRead defaultLimits repeatedMembers >>= (`shouldSatisfy` level)
     it "a full read holds the same bytes however many files follow a tripped artifact limit" $
@@ -53,6 +56,10 @@ repeatedMembers count =
             <> commas ["\"requires-python\":\">=3." <> Builder.intDec position <> "\"" | position <- [1 .. count]]
             <> "}]"
         )
+
+-- One source distribution of each of as many other releases, after one of the selected release.
+otherReleases :: Int -> ByteString
+otherReleases count = index ("\"files\":[" <> commas (file "1.0.0.tar.gz" 0 : [file ("2." <> Builder.intDec position <> ".tar.gz") position | position <- [1 .. count]]) <> "]")
 
 -- Wheels of one release under distinct build tags, each with its own requires-python value.
 filesPastLimit :: Int -> ByteString

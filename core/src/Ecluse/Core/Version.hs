@@ -40,6 +40,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem)
 import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, renderPep440)
 import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver)
+import Ecluse.Core.Version.Token (withinVersionLength)
 
 {- | A package version: the raw text as published, plus the parsed ordering key when the text
 parses. There is deliberately __no__ 'Ord'. Comparison goes through 'compareVersions'.
@@ -137,16 +138,20 @@ isStable = \case
     PyPIKey k -> isPep440Stable k
     RubyGemsKey k -> isGemStable k
 
-{- | The one spelling a PEP 440 version canonicalises to, which a PyPI projection keys by so two
-spellings of one release merge. The raw spelling survives per artifact through the filename.
+{- | A PEP 440 version under its one canonical spelling, which a PyPI projection keys by so two
+spellings of one release merge. It is the version 'mkVersion' builds from that spelling.
 
->>> canonicalPep440 "1.0.0"
+>>> renderVersion <$> canonicalPep440 "1.0.0"
 Just "1"
->>> canonicalPep440 "not-a-version"
+>>> renderVersion <$> canonicalPep440 "not-a-version"
 Nothing
 -}
-canonicalPep440 :: Text -> Maybe Text
-canonicalPep440 = fmap renderPep440 . parsePep440
+canonicalPep440 :: Text -> Maybe Version
+canonicalPep440 raw = do
+    key <- parsePep440 raw
+    let spelling = renderPep440 key
+    -- A spelling can be longer than its text, and 'mkVersion' reads no key past the length bound.
+    pure $! Version spelling (if withinVersionLength spelling then Just $! PyPIKey key else Nothing)
 
 {- | Resolve @dist-tags.latest@ over the survivors the caller left, keeping @chosen@ when it
 survives so a prerelease never displaces a maintainer's stable tag. The result is a survivor.

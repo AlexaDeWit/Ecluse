@@ -11,14 +11,13 @@ module Ecluse.Core.Registry.PyPI.Project (
 
     -- * File coordinates
     FileCoordinate (..),
+    fcVersionKey,
     DistributionKind (..),
     fileCoordinate,
-    FileProject,
-    fileProject,
-    fileVersionKey,
     FilenameMemo,
     filenameMemo,
     readCoordinate,
+    readLatestCoordinate,
 
     -- * Name validation
     projectName,
@@ -63,15 +62,19 @@ import Ecluse.Core.Registry.WireSupport (
     withinNameLimit,
  )
 import Ecluse.Core.Strict (strictElements)
-import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
+import Ecluse.Core.Version (Version, canonicalPep440, renderVersion, selectLatest)
 
 -- | A filename's canonical release and distribution kind.
 data FileCoordinate = FileCoordinate
-    { fcVersionKey :: Text
-    -- ^ The release key: the file's version in canonical PEP 440 form.
+    { fcVersion :: Version
+    -- ^ The file's version under its canonical PEP 440 spelling.
     , fcKind :: DistributionKind
     }
     deriving stock (Eq, Show)
+
+-- | The release key: the file's version in canonical PEP 440 form.
+fcVersionKey :: FileCoordinate -> Text
+fcVersionKey = renderVersion . fcVersion
 
 -- | Whether a file is a source distribution, whose install runs its own build, or a wheel.
 data DistributionKind = Sdist | Wheel
@@ -122,7 +125,7 @@ projectDetails :: PackageName -> NonEmpty (IndexFile, FileCoordinate) -> Package
 projectDetails name entries =
     PackageDetails
         { pkgName = name
-        , pkgVersion = mkVersion PyPI (fcVersionKey (snd (NE.head entries)))
+        , pkgVersion = fcVersion (snd (NE.head entries))
         , pkgPublishedAt = newestUpload files
         , pkgInstallCode = releaseInstallCode entries
         , pkgAvailability = releaseAvailability files
@@ -174,29 +177,23 @@ indexHash (algorithm, digest) = do
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
 fileCoordinate name file = do
     (version, kind) <- filenameParts (fileProject name) file
-    canonical <- canonicalPep440 version
-    pure (FileCoordinate canonical kind)
+    (`FileCoordinate` kind) <$> canonicalPep440 version
 
--- | A project's PEP 503 key, prepared once for reading many of its filenames.
+-- A project's PEP 503 key, prepared once for reading many of its filenames.
 data FileProject = FileProject
     { fpCanonical :: Text
     , fpChunks :: [Text]
     }
 
--- | Prepare a project for reading its filenames.
 fileProject :: PackageName -> FileProject
 fileProject name = FileProject canonical (T.splitOn "-" canonical)
   where
     canonical = canonicalName name
 
--- | Read a filename's release key, with the same refusals as 'fileCoordinate'.
-fileVersionKey :: FileProject -> Text -> Maybe Text
-fileVersionKey project file = canonicalPep440 . fst =<< filenameParts project file
-
--- | One read's PEP 440 results by version text, so the files of one release parse their version once.
+-- | One read's PEP 440 versions by version text, so the files of one release parse their version once.
 data FilenameMemo = FilenameMemo
     { memoProject :: FileProject
-    , memoVersions :: Map Text (Maybe Text)
+    , memoVersions :: Map Text (Maybe Version)
     }
 
 -- | Start a memo for one index read. It ends with the read, so no request inherits its versions.
@@ -205,13 +202,22 @@ filenameMemo name = FilenameMemo (fileProject name) Map.empty
 
 -- | Read a coordinate as 'fileCoordinate' does, parsing each distinct version text once.
 readCoordinate :: FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
-readCoordinate memo file = maybe (Nothing, memo) remember (filenameParts (memoProject memo) file)
+readCoordinate = readRemembering Map.insert
+
+{- | Read a coordinate as 'readCoordinate' does, holding only the latest version text. A read that
+drops most files then holds nothing for them, and parses once for each run of one release's files.
+-}
+readLatestCoordinate :: FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
+readLatestCoordinate = readRemembering (\version parsed _ -> Map.singleton version parsed)
+
+readRemembering :: (Text -> Maybe Version -> Map Text (Maybe Version) -> Map Text (Maybe Version)) -> FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
+readRemembering remember memo file = maybe (Nothing, memo) known (filenameParts (memoProject memo) file)
   where
-    remember (version, kind) = case Map.lookup version (memoVersions memo) of
-        Just known -> (coordinate kind known, memo)
+    known (version, kind) = case Map.lookup version (memoVersions memo) of
+        Just held -> (coordinate kind held, memo)
         Nothing ->
-            let known = canonicalPep440 version
-             in (coordinate kind known, memo{memoVersions = Map.insert version known (memoVersions memo)})
+            let parsed = canonicalPep440 version
+             in (coordinate kind parsed, memo{memoVersions = remember version parsed (memoVersions memo)})
     coordinate kind = fmap (`FileCoordinate` kind)
 
 -- A filename's version text and distribution kind, before PEP 440 canonicalisation.

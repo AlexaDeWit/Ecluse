@@ -28,7 +28,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Artifact (artFilename), PackageDetails (pkgArtifacts, pkgPublishedAt), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Version (canonicalPep440)
+import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 
@@ -81,7 +81,7 @@ keepPyPIVersions info kept = onFields $ \field value -> case (field, value) of
         Object entry | Just (String filename) <- KeyMap.lookup "filename" entry -> filename `Set.member` files
         _ -> False
     keptVersion = \case
-        String version -> maybe False (`Set.member` kept) (canonicalPep440 version)
+        String version -> maybe False ((`Set.member` kept) . renderVersion) (canonicalPep440 version)
         _ -> False
 
 -- | The newest share of an npm capture's versions by publish time, cut as 'keepNpmVersions' cuts.

@@ -319,10 +319,10 @@ probeIdentity ecosystem name version = do
         "pypi" -> pure (PyPI, PyPI.projectName (toText name))
         _ -> fail "probe ecosystem must be npm or pypi"
     package <- either (fail . show) pure parsed
-    key <- case kind of
+    selected <- case kind of
         PyPI -> maybe (fail "invalid PEP 440 probe version") pure (canonicalPep440 (toText version))
-        _ -> pure (toText version)
-    pure (package, mkVersion kind key)
+        _ -> pure (mkVersion kind (toText version))
+    pure (package, selected)
 
 -- | Report selected or discard-control samples without treating unresolved growth as retention.
 selectedMain :: SelectedShape -> String -> String -> String -> String -> FilePath -> IO ()
