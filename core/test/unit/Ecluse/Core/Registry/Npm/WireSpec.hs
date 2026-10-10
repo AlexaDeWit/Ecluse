@@ -220,9 +220,7 @@ valueDecodeIsTotal = do
     _ <- H.eval (resultRendering (fromJSON v :: Result a))
     H.success
 
-{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over arbitrary bytes:
-random, mostly non-JSON bytes must yield a typed 'Left', never a crash.
--}
+-- Arbitrary bytes must yield a typed decode result without a crash.
 bytesDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
 bytesDecodeIsTotal = do
     bytes <- forAll (Gen.bytes (Range.linear 0 64))
@@ -239,21 +237,17 @@ valueDecodeCoversBothArms = do
     H.cover 1 "decodes (Success)" (isSuccess decoded)
     H.cover 1 "rejects (Error)" (not (isSuccess decoded))
 
--- | Force a decoded 'Result' through its 'Show' rendering, returning its length.
 resultRendering :: (Show a) => Result a -> Int
 resultRendering = \case
     Success a -> length (show a :: String)
     Error e -> length e
 
--- | Whether a decode 'Result' is the 'Success' arm.
 isSuccess :: Result a -> Bool
 isSuccess = \case
     Success{} -> True
     Error{} -> False
 
-{- | The object-key pool the generated documents draw from. Without the bias toward the real
-wire field names, almost every object would miss @.: \"name\"@ and the success arm would go unsampled.
--}
+-- Without recognised keys, generated objects would rarely reach the success arm.
 wireKeys :: [Text]
 wireKeys =
     [ "name"
@@ -278,9 +272,7 @@ wireKeys =
     , "hasInstallScript"
     ]
 
-{- | Decode a committed fixture by file name under @core\/test\/unit\/fixtures\/npm\/@, a path
-relative to the package root that Cabal runs tests from.
--}
+-- Cabal runs these tests from the package root.
 decodeFixture :: forall a. (FromJSON a) => FilePath -> IO a
 decodeFixture name = do
     bytes <- readFileBS ("core/test/unit/fixtures/npm/" <> name)
@@ -288,13 +280,10 @@ decodeFixture name = do
         Right a -> pure a
         Left e -> fail ("failed to decode " <> name <> ": " <> e)
 
--- | Assert that a JSON literal decodes to an expected value.
 decodesTo :: forall a. (FromJSON a, Eq a, Show a) => LByteString -> a -> Expectation
 decodesTo json expected = eitherDecode json `shouldBe` Right expected
 
-{- | A 'Dist' carrying only its required tarball, its advisory field at the absent
-default. This is the expected shape when a poisoned advisory field degrades.
--}
+-- An invalid advisory field must leave the required tarball usable.
 bareDist :: Text -> Dist
 bareDist tarball =
     Dist

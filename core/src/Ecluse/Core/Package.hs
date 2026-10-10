@@ -99,9 +99,8 @@ import Ecluse.Core.Package.InvalidEntry (
 import Ecluse.Core.Package.Pep503 (normalisePyPI)
 import Ecluse.Core.Version (Version)
 
-{- | An npm scope, stored without its leading @\'\@\'@ (the scope of @\@myorg\/pkg@ is
-@"myorg"@). 'mkScope' normalises away a leading @\'\@\'@, so equality does not depend on
-how the scope was written.
+{- | An npm scope without its leading @\@@. 'mkScope' removes that prefix,
+so equality does not depend on how the scope was written.
 -}
 newtype Scope = Scope ShortText
     deriving stock (Eq, Ord, Show)
@@ -118,9 +117,8 @@ unScope (Scope s) = TS.toText s
 renderScope :: Scope -> Text
 renderScope (Scope s) = "@" <> TS.toText s
 
-{- | A package identity, decoupled from any registry's wire format and built with
-'mkPackageName'. Equality and ordering read @('pkgEcosystem', 'pkgNamespace',
-'pkgCanonical')@ only, so @Flask@ and @flask@ are one PyPI package and two npm ones.
+{- | A registry-independent identity built with 'mkPackageName'. Equality and ordering use
+@('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@, excluding the display spelling.
 -}
 data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
@@ -130,7 +128,6 @@ data PackageName = PackageName
     , pkgCanonical :: ShortText
     -- ^ The normalised matching key: PEP 503 for PyPI, verbatim for npm and RubyGems.
     , pkgDisplay :: ShortText
-    -- ^ The name as published, read back as 'Text' through 'renderPackageName'.
     , pkgBaseName :: ShortText
     {- ^ The base name with any @\@scope\/@ prefix dropped. It is not part of identity. Read it
     back through 'unscopedName'.
@@ -214,9 +211,8 @@ data Availability
       Yanked
     deriving stock (Eq, Show)
 
-{- | One distribution file for a version. A version owns a 'NonEmpty' list of
-these: npm has exactly one, PyPI has an sdist plus many wheels, RubyGems has one
-per platform.
+{- | One distribution file in a version's 'NonEmpty' list: one for npm, an sdist and wheels
+for PyPI, or one per platform for RubyGems.
 -}
 data Artifact = Artifact
     { artEntryKey :: EntryKey
@@ -253,9 +249,8 @@ data PackageDetails = PackageDetails
     }
     deriving stock (Eq, Show)
 
-{- | The packument-level view of a package ('PackageDetails' is the per-/version/ snapshot
-embedded within it). A registry adapter projects its packument into this type, so the proxy
-core never sees the wire format.
+{- | A registry-independent package view containing per-version 'PackageDetails'.
+Adapters own the wire format and project into this type.
 -}
 data PackageInfo = PackageInfo
     { infoName :: PackageName

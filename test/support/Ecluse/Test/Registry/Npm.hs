@@ -310,9 +310,6 @@ mirrorWriteToken = mkSecret "write-token"
 genPathSegments :: Gen [Text]
 genPathSegments = Gen.list (Range.linear 0 4) genNpmPathSegment
 
-{- | One path segment. npm's scoped names are its own arm, and the shared generator supplies the
-plain-name, literal-pool, and free-text arms at the same weights.
--}
 genNpmPathSegment :: Gen Text
 genNpmPathSegment = Gen.frequency [(2, genScopedSegmentName), (13, genPathSegmentFrom npmPathLiterals)]
 

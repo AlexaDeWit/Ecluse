@@ -112,7 +112,7 @@ data VersionManifest = VersionManifest
     -- ^ The exact version string, kept opaque at this layer.
     , vmDist :: Dist
     , vmAvailability :: Availability
-    -- ^ 'Deprecated' when @deprecated@ is a string of any length or @true@, else 'Available'.
+    -- ^ 'Deprecated' when @deprecated@ is a nonempty string or @true@, else 'Available'.
     , vmHasInstallScript :: Maybe Bool
     -- ^ Abbreviated form only. 'Nothing' in the full form, where 'vmScripts' carries it.
     , vmScripts :: Map Text Text
