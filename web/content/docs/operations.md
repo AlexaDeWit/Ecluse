@@ -472,8 +472,8 @@ private copies deployments serve. Those are the most its full reads hold while t
 response's encoding with its copy. A smaller listing can peak above its per-byte charge. The tests
 hold every listing's reads and render within what the meter holds for it, whole 1 MiB steps and at
 least the entry step, and fail when one would need more. A document shaped or sized unlike that
-corpus, such as an npm document made mostly of deprecation notices, can hold more than its charge.
-The sampler measures the excess as live data outside the charges after the next major collection.
+corpus can hold more than its charge. The sampler measures the excess as live data outside the
+charges after the next major collection.
 The ceiling the budget may reach, described below, falls as that remainder grows.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`
