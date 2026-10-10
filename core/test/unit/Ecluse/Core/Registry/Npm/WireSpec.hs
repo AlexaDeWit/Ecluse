@@ -24,6 +24,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Core.Package (Availability (Available, Deprecated))
 import Ecluse.Core.Registry.Npm.Wire
 import Ecluse.Test.Json (genValue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsExtraPairs), deprecatedForms, versionSpec, versionValue)
@@ -61,12 +62,12 @@ deprecatedSpec :: Spec
 deprecatedSpec = describe "deprecated" $ do
     it "reads a captured notice as deprecated (request)" $ do
         vm <- decodeFixture @VersionManifest "request.manifest.json"
-        vmDeprecated vm `shouldBe` True
+        vmAvailability vm `shouldBe` Deprecated
 
     for_ deprecatedForms $ \(form, member, deprecated) ->
         it ("reads " <> form <> " as " <> (if deprecated then "deprecated" else "not deprecated")) $
-            vmDeprecated <$> fromJSON (versionValue (versionSpec "x" "1.0.0" "https://e.test/x.tgz"){vsExtraPairs = member})
-                `shouldBe` Success deprecated
+            vmAvailability <$> fromJSON (versionValue (versionSpec "x" "1.0.0" "https://e.test/x.tgz"){vsExtraPairs = member})
+                `shouldBe` Success (if deprecated then Deprecated else Available)
 
 distSpec :: Spec
 distSpec = describe "Dist" $ do
