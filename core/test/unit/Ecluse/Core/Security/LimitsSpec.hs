@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Security.LimitsSpec (spec) where
 
-import Ecluse.Test.Security.Limits (checkNestingDepth, checkVersionCount)
+import Ecluse.Test.Security.Limits (checkDocumentArtifacts, checkNestingDepth, checkVersionCount)
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -16,7 +16,7 @@ import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -47,9 +47,6 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 
-{- | Drive 'boundedRead' with a 'State'-monad chunk producer. It pops one chunk per call and
-yields an empty 'ByteString', the @BodyReader@ EOF signal, once the list runs out.
--}
 runBounded :: Limits -> [ByteString] -> Either LimitError (Int, ByteString)
 runBounded limits = evalState (boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next)
   where
@@ -70,8 +67,6 @@ spec = do
     realPackumentSpec
     propertiesSpec
 
--- Every case below that names a ceiling overrides one field of this budget, so the values
--- it starts from are pinned once here.
 defaultLimitsSpec :: Spec
 defaultLimitsSpec =
     describe "defaultLimits" $
@@ -141,7 +136,6 @@ boundedReadSpec = describe "boundedRead" $ do
         runBounded limits ["ab", "", "cd"] `shouldBe` Right (2, "ab")
 
     it "passes a small body under the generous default budget" $
-        -- Exercises 'defaultLimits' (the 128 MiB cap) directly.
         runBounded defaultLimits ["small", "body"] `shouldBe` Right (9, "smallbody")
 
     for_ [MetadataBodyLimit 1, PublishRequestBodyLimit 1, MirrorArtifactBodyLimit 1] $ \bound ->
@@ -182,39 +176,62 @@ versionCountSpec = describe "checkVersionCount" $ do
             other -> expectationFailure ("expected TooManyVersions, got " <> show other)
 
     it "passes a realistic packument under the default version budget" $
-        -- Exercises 'defaultLimits' directly (not via a record override).
         checkVersionCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
 
     it "applies the same ceiling through checkVersionCountOf, on a bare count" $ do
         checkVersionCountOf limits 3 `shouldBe` Right ()
         checkVersionCountOf limits 4 `shouldBe` Left (TooManyVersions 4 3)
 
-{- | The artifact fan-out bound beside the version bound. A version can carry many artifacts,
-so the two counts diverge and the artifact one is what drives projection cost and residency.
--}
+-- A version can carry many artifacts, so its artifact count drives projection cost and residency.
 artifactCountSpec :: Spec
 artifactCountSpec = describe "checkArtifactCount" $ do
     let limits = defaultLimits{maxArtifactCount = 4}
 
+    it "passes a count at the ceiling and refuses the next, naming the count and the ceiling" $ do
+        checkArtifactCount limits 4 `shouldBe` Right ()
+        checkArtifactCount limits 5 `shouldBe` Left (TooManyArtifacts 5 4)
+
     it "passes a document within the artifact budget (returns it unchanged)" $
-        checkArtifactCount limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
+        checkDocumentArtifacts limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
 
     it "rejects a document with too many artifacts, fail-closed" $
-        checkArtifactCount limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
+        checkDocumentArtifacts limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
 
     it "passes a document carrying no versions at all" $
-        checkArtifactCount limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
+        checkDocumentArtifacts limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
 
     it "counts every version's artifacts, not the versions" $ do
         -- Two versions carrying three artifacts each breach a budget the version count clears.
         let fanned = fanOutTo 3 (packumentWith 2)
-        checkArtifactCount limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
+        checkDocumentArtifacts limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
         checkVersionCount limits fanned `shouldBe` Right fanned
+
+    it "keeps the original artifacts for nonpositive fan-out and repeats them for positive counts" $ do
+        let details = sampleDetails (unscopedNpm "thing") (mkVersion Npm "0.0.1")
+            artifacts = pkgArtifacts details
+        for_ [minBound, -1, 0, 1, 2, 4] $ \n -> do
+            let fanned = withFanOut n details
+            toList (pkgArtifacts fanned) `shouldBe` concat (replicate (max 1 n) (toList artifacts))
+            fanned{pkgArtifacts = artifacts} `shouldBe` details
 
     it "leaves a one-artifact-per-version document at its version count" $
         -- npm publishes one tarball per version, so the two bounds coincide there and this
         -- one never refuses a document the version bound has not refused already.
-        checkArtifactCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
+        checkDocumentArtifacts defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
+
+    modifyMaxSuccess (const 500) $
+        it "refuses the documents its reference refuses, naming the same count and ceiling" $
+            hedgehog $ do
+                cap <- forAll (Gen.int (Range.constant 0 12))
+                fanOuts <- forAll (Gen.choice [Gen.list (Range.constant 0 6) (pure 1), Gen.list (Range.constant 0 6) (Gen.int (Range.constant 1 4))])
+                let capped = defaultLimits{maxArtifactCount = cap}
+                    document = fannedDocument fanOuts
+                H.cover 15 "within the ceiling" (sum fanOuts < cap)
+                H.cover 1 "at the ceiling" (sum fanOuts == cap)
+                H.cover 15 "past the ceiling" (sum fanOuts > cap)
+                H.cover 15 "one artifact a version, the npm shape" (all (== 1) fanOuts)
+                H.cover 15 "several artifacts in a version, the PyPI shape" (any (> 1) fanOuts)
+                void (checkDocumentArtifacts capped document) === referenceArtifactCeiling capped document
 
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
@@ -256,25 +273,20 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
 
--- The complete express fixture exercises the defaults through bounded reading and projection.
 realPackumentSpec :: Spec
 realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
     it "express: bounded read, decode, depth, projection, and version count all clear the defaults" $ do
         body <- readFileBS "core/test/unit/fixtures/npm/express.full.json"
-        -- 1. Body size: the bounded read returns the whole body (within maxMetadataBytes).
         bounded <- case runBounded defaultLimits [body] of
             Left err -> expectationFailure ("real packument refused by the body bound: " <> show err) >> pure ""
             Right (_, b) -> pure b
         bounded `shouldBe` body
-        -- 2. Decode to a Value, then 3. depth-check it (within maxNestingDepth).
         value <- case eitherDecodeStrict bounded of
             Left e -> expectationFailure ("real packument did not decode: " <> e) >> pure (Object mempty)
             Right v -> pure v
         depthChecked <- case checkNestingDepth defaultLimits value of
             Left err -> expectationFailure ("real packument refused by the nesting bound: " <> show err) >> pure (Object mempty)
             Right v -> pure v
-        -- 4. Project to the typed view (it is a well-formed packument), then
-        -- 5. version-count check it (within maxVersionCount).
         info <- case parsePackageInfoFromValue (unscopedNpm "express") depthChecked of
             Left err -> expectationFailure ("real packument did not project: " <> show err) >> pure emptyInfo
             Right (Projected i) -> pure i
@@ -284,8 +296,6 @@ realPackumentSpec = describe "default Limits admit a real large trusted packumen
             Left err -> expectationFailure ("real packument refused by the version bound: " <> show err)
             Right admitted -> do
                 renderPackageName (infoName admitted) `shouldBe` "express"
-                -- A genuinely large version set, well under the one million ceiling: proof the
-                -- count bound clears a real package, not a toy one.
                 Map.size (infoVersions admitted) `shouldSatisfy` (> 200)
                 Map.size (infoVersions admitted) `shouldSatisfy` (<= maxVersionCount defaultLimits)
 
@@ -311,34 +321,44 @@ propertiesSpec = describe "properties" $ do
             let total = BS.concat chunks
                 result = runBounded (defaultLimits{maxMetadataBytes = cap}) chunks
             annotateShow (BS.length total, cap)
-            -- Non-vacuity: the generator must reach both the within- and
-            -- over-budget arms often.
             H.cover 5 "within budget" (BS.length total <= cap)
             H.cover 5 "over budget" (BS.length total > cap)
             if BS.length total <= cap
                 then result === Right (BS.length total, total) -- exact bytes, never truncated
                 else result === Left (BodyTooLarge (MetadataBodyLimit cap))
 
--- | A scalar wrapped in @n-1@ nested single-key objects, giving total depth @n@.
 nestObject :: Int -> Value
 nestObject n
     | n <= 1 = Number 1
     | otherwise = Object (KeyMap.singleton "a" (nestObject (n - 1)))
 
--- | A scalar wrapped in @n-1@ nested single-element arrays, giving total depth @n@.
 nestArray :: Int -> Value
 nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
 
-{- | Repeat every version's artifact @n@ times, the fan-out an ecosystem that publishes many
-files per version produces.
--}
-fanOutTo :: Int -> PackageInfo -> PackageInfo
-fanOutTo n info =
-    info{infoVersions = Map.map fanned (infoVersions info)}
+-- The artifact ceiling as it read a typed document, held as the reference for the production ceiling.
+referenceArtifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
+referenceArtifactCeiling limits document
+    | seen > cap = Left (TooManyArtifacts seen cap)
+    | otherwise = Right ()
   where
-    fanned d = d{pkgArtifacts = sconcat (fromList (replicate n (pkgArtifacts d)))}
+    cap = maxArtifactCount limits
+    seen = Map.foldl' (\acc details -> acc + length (pkgArtifacts details)) 0 (infoVersions document)
+
+fanOutTo :: Int -> PackageInfo -> PackageInfo
+fanOutTo n info = info{infoVersions = Map.map (withFanOut n) (infoVersions info)}
+
+fannedDocument :: [Int] -> PackageInfo
+fannedDocument fanOuts = document{infoVersions = Map.fromList (zipWith fan (Map.toList (infoVersions document)) fanOuts)}
+  where
+    document = packumentWith (length fanOuts)
+    fan (key, details) n = (key, withFanOut n details)
+
+withFanOut :: Int -> PackageDetails -> PackageDetails
+withFanOut n details = details{pkgArtifacts = foldl' (<>) artifacts (replicate (max 1 n - 1) artifacts)}
+  where
+    artifacts = pkgArtifacts details
 
 packumentWith :: Int -> PackageInfo
 packumentWith n =

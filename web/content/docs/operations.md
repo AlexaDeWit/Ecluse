@@ -453,7 +453,7 @@ listing and each public artifact decision for the memory it uses, as it uses it,
 | Work | What it pays |
 |---|---|
 | Entering, before the request takes a CPU slot | One 1 MiB step |
-| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.4 bytes for npm, 3.9 bytes for PyPI |
+| A full metadata read, which a listing makes | Per decompressed source byte, chunk by chunk before parsing: 1.2 bytes for npm, 4.0 bytes for PyPI |
 | A listing's response | Per byte of its output basis, before assembly: 2.0 bytes for npm, 1.6 bytes for PyPI |
 | A selected read, which a public artifact decision makes | Nothing beyond the entry step |
 | An assembled hit or a `304` | Its reads, but no response charge |
@@ -472,8 +472,8 @@ private copies deployments serve. Those are the most its full reads hold while t
 response's encoding with its copy. A smaller listing can peak above its per-byte charge. The tests
 hold every listing's reads and render within what the meter holds for it, whole 1 MiB steps and at
 least the entry step, and fail when one would need more. A document shaped or sized unlike that
-corpus, such as an npm document made mostly of deprecation notices, can hold more than its charge.
-The sampler measures the excess as live data outside the charges after the next major collection.
+corpus can hold more than its charge. The sampler measures the excess as live data outside the
+charges after the next major collection.
 The ceiling the budget may reach, described below, falls as that remainder grows.
 
 A new request that cannot take its entry step waits up to 1 s at the memory gate, then gets `503`

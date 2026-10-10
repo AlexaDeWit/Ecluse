@@ -9,11 +9,11 @@ module Ecluse.Core.Package.AdmissionSpec (spec) where
 
 import Data.List.NonEmpty qualified as NE
 import Data.Time (UTCTime (..), fromGregorian)
-import Hedgehog (annotateShow, assert, forAll, (===))
+import Hedgehog (annotateShow, assert, cover, evalEither, evalIO, failure, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import Text.Show (showsPrec)
 
 import Ecluse.Core.Package (
@@ -40,7 +40,9 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (MeetsFloor),
     assertedAlg,
     authoritativeDigest,
-    classifyArtifacts,
+    classifyDigests,
+    mkMinIntegrity,
+    partitionByFloor,
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (
@@ -226,7 +228,7 @@ spec = do
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 joinedDetails = detailsWith hashes
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts joinedDetails) `shouldBe` MeetsFloor
+            classifyDigests defaultMinIntegrity hashes `shouldBe` MeetsFloor
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") joinedDetails
             case admission of
                 AdmissionAdmit _ _ admitted -> do
@@ -248,7 +250,7 @@ spec = do
             -- The closed gap: the floor admitted SHA-256 while the worker's
             -- hand-rolled vocabulary could not verify it, stranding the version.
             let hashes = [unsafeHash SHA256 (Package.hexSha256Of sampleBytes)]
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts (detailsWith hashes)) `shouldBe` MeetsFloor
+            classifyDigests defaultMinIntegrity hashes `shouldBe` MeetsFloor
             verifyIntegrity (NE.fromList hashes) sampleBytes `shouldBe` IntegrityVerified
 
     describe "the differential property: floor-admitted implies worker-verifiable" $
@@ -262,7 +264,7 @@ spec = do
                     Just ne -> do
                         annotateShow (map hashValue hashes)
                         let admittedAtFloor =
-                                classifyArtifacts defaultMinIntegrity (one (artifactWith hashes)) == MeetsFloor
+                                classifyDigests defaultMinIntegrity hashes == MeetsFloor
                         -- The parity direction the mirror depends on: anything the
                         -- serve-side floor admits, the worker's byte gate can prove.
                         when admittedAtFloor $ do
@@ -270,3 +272,36 @@ spec = do
                             case verifyIntegrity ne (bytes <> "!") of
                                 IntegrityMismatch _ -> pass
                                 IntegrityVerified -> assert False
+
+    describe "the listing's floor and the gate's floor" $
+        modifyMaxSuccess (const 300) $
+            it "admits a requested file exactly when the listing keeps it, and refuses it by its own digests" $
+                hedgehog $ do
+                    minIntegrity <- evalEither . mkMinIntegrity =<< forAll (Gen.element [SHA256, SHA384, Blake2b, SHA512])
+                    kinds <- forAll (Gen.nonEmpty (Range.constant 1 3) (Gen.list (Range.constant 0 2) (Gen.element digestKinds)))
+                    let files = NE.zipWith (\name digests -> (artifactWith (map (hashOfKind sampleBytes) digests)){artFilename = name}) fileNames kinds
+                        details = (detailsWith []){pkgArtifacts = files}
+                        listed = either (const []) (map artFilename . toList) (partitionByFloor minIntegrity artHashes files)
+                    cover 20 "one file, the npm shape" (length files == 1)
+                    cover 20 "several files, the PyPI shape" (length files > 1)
+                    cover 10 "a version the listing keeps whole" (length listed == length files)
+                    cover 5 "a version that loses a file" (not (null listed) && length listed < length files)
+                    cover 10 "a version the listing refuses" (null listed)
+                    for_ files $ \file -> do
+                        admission <- evalIO (admitArtifact ctx [admitRule] minIntegrity (unsafeFilename (artFilename file)) details)
+                        case admission of
+                            AdmissionAdmit _ admitted digests -> do
+                                admitted === file
+                                toList digests === artHashes file
+                                assert (artFilename file `elem` listed)
+                            AdmissionBelowFloor -> do
+                                assert (artFilename file `notElem` listed)
+                                assert (not (null (artHashes file)))
+                            AdmissionIntegrityMissing -> do
+                                assert (artFilename file `notElem` listed)
+                                artHashes file === []
+                            other -> annotateShow other >> failure
+
+-- The files of one version: npm's one tarball, then the wheel and sdist a PyPI release adds.
+fileNames :: NonEmpty Text
+fileNames = "thing-1.0.0.tgz" :| ["thing-1.0.0-py3-none-any.whl", "thing-1.0.0.tar.gz"]

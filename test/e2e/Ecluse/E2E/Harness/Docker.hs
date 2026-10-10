@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Container topology and role lifecycle for the end-to-end harness.
 module Ecluse.E2E.Harness.Docker (
     e2eUnavailable,
     withGlobalDataPlane,
@@ -10,6 +11,7 @@ module Ecluse.E2E.Harness.Docker (
     withE2EWith,
 
     -- * Telemetry topology
+    mirrorHost,
     collectorOtlpEndpoint,
     otlpCollectorEnv,
     datadogCollectorEnv,
@@ -17,12 +19,12 @@ module Ecluse.E2E.Harness.Docker (
     ddTagEnv,
     ddTagVersion,
 
-    -- * Observability
-    withUpstreamPaused,
-
     -- * Fixture controls
+    withPublicUpstreamsDown,
     withPrivateCacheDeletesRefused,
     withPublicArtifactWithheld,
+    stubReadsNow,
+    awaitStubReads,
 
     -- * The product image, run to completion
     RoleRun (..),
@@ -79,6 +81,17 @@ import UnliftIO (bracket, bracket_, finally, handleAny)
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
+import Ecluse.E2E.Harness.Stub (
+    StubFault (..),
+    StubRead,
+    StubRoute (Mirror, NpmPublic, PrivateCache),
+    retiredWorkers,
+    startedWorkers,
+    stubConfig,
+    stubHosts,
+    stubReads,
+    stubUrl,
+ )
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt, PinnedExternal),
@@ -91,6 +104,10 @@ import Ecluse.Test.Container.Image (
  )
 import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
+
+-- | The private mirror host on the container network, also recorded by upstream fetch spans.
+mirrorHost :: Text
+mirrorHost = "mirror"
 
 {- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
 or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
@@ -119,9 +136,7 @@ dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
 
-{- | Build the shared fixture tree in a per-run temp directory, then remove it on every
-exit path. The name is unique per run, so two worktrees never share or delete fixtures.
--}
+-- Each run owns its fixture directory, so concurrent worktrees cannot remove each other's fixtures.
 withFixtureDir :: (FilePath -> IO a) -> IO a
 withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
   where
@@ -135,7 +150,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
         buildPyPIFixtures (workDir </> "pypi")
         buildAdvisoryFixtures htmlDir
         writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
-        writeFileText (workDir </> "nginx.conf") (nginxStubConfig "")
+        writeFileText (workDir </> "nginx.conf") (stubConfig Nothing)
         generateCerts (workDir </> "certs")
         pure workDir
 
@@ -165,11 +180,11 @@ withGlobalDataPlane action =
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
                             }
-                    -- One nginx terminates TLS for every registry stub, so it answers to the four
-                    -- aliases below. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
+                    -- One nginx terminates TLS for every registry stub, so it answers to every
+                    -- route's alias. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
-                            { drAliases = ["upstream", "mirror", "private-upstream", "private-cache", "pypi-upstream"]
+                            { drAliases = map toString stubHosts
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
                                 , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
@@ -216,13 +231,13 @@ withDredgerPrivateCache plane mirror action = do
 {- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then
 tear it down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
 -}
-withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2E :: (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2E = withE2EWith defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may
 stand up an OTLP collector at @otelcol@, up before the proxy so no export is missed.
 -}
-withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2EWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2EWith cfg action gdp =
     usingExistingPlane >>= \case
         True -> do
@@ -234,7 +249,7 @@ withE2EWith cfg action gdp =
                     , e2ePypiIndex = base <> "/pypi/simple/"
                     , e2eBaseUrl = base
                     , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
-                    , e2eStubContainer = gdpStub gdp
+                    , e2ePlane = gdp
                     , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
                     , e2eMirrorContainer = gdpVerd gdp
                     , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
@@ -245,7 +260,6 @@ withE2EWith cfg action gdp =
             sfx <- uniqueSuffix
             labelArgs <- dockerLabelArgs "e2e"
             let net = gdpNet gdp
-                stub = gdpStub gdp
                 prox = "ecluse-e2e-proxy-" <> sfx
                 coll = "ecluse-e2e-otelcol-" <> sfx
                 certsDir = gdpWorkDir gdp </> "certs"
@@ -280,7 +294,7 @@ withE2EWith cfg action gdp =
                                 , e2ePypiIndex = base <> "/pypi/simple/"
                                 , e2eBaseUrl = base
                                 , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
-                                , e2eStubContainer = stub
+                                , e2ePlane = gdp
                                 , e2eProxyContainer = prox
                                 , e2eMirrorContainer = gdpVerd gdp
                                 , e2eCollectorContainer = collectorName
@@ -290,9 +304,7 @@ withE2EWith cfg action gdp =
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
 
-{- | The proxy's environment, given the published host port and the ministack mirror queue
-URL. @ECLUSE_SERVER__PUBLIC_URL@ is the host-loopback address npm reaches the proxy on.
--}
+-- PUBLIC_URL is the host-loopback address the npm client reaches.
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
     [ ("ECLUSE_SERVER__PORT", "4873")
@@ -301,8 +313,8 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction, so an nginx terminator serves
       -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror)
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
       -- index and the distribution files under it through the same proxy.
       ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
@@ -318,10 +330,9 @@ proxyEnv hostPort queueUrl =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | The mirror target every writing role on the shared data plane publishes into.
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
+    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", stubUrl Mirror)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     ]
 
@@ -333,8 +344,8 @@ mirrorRoleEnv queueUrl rules =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror)
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
@@ -344,7 +355,6 @@ mirrorRoleEnv queueUrl rules =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | The ministack alias every role inside the test network reaches an AWS-compatible store on.
 ministackEndpoint :: Text
 ministackEndpoint = "http://ministack:4566"
 
@@ -361,43 +371,25 @@ ministackAwsEnv =
     , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
-{- | A detached test container's @docker run@ specification: everything that varies between
-the harness's containers, so every creation site shares one builder and one bracket.
--}
 data DockerRun = DockerRun
     { drName :: String
-    -- ^ The @--name@, and how the log\/pause helpers address the container later.
     , drNetwork :: String
-    -- ^ The network to join (@--network@).
     , drAliases :: [String]
-    -- ^ In-network aliases (@--network-alias@, repeatable).
     , drPorts :: [String]
-    -- ^ @-p@ publish specs, e.g. @"127.0.0.1:0:4873"@.
     , drMounts :: [(FilePath, String)]
-    -- ^ @-v@ bind mounts as @(hostPath, "containerPath[:ro]")@.
     , drTmpfs :: [String]
-    -- ^ @--tmpfs@ specs, e.g. @"/var/lib/ecluse/advisories:mode=1777"@.
     , drEnv :: [(Text, Text)]
-    -- ^ @-e@ environment.
     , drImage :: String
-    -- ^ The image reference, already rendered to the string @docker@ receives.
     , drCmd :: [String]
-    -- ^ Arguments after the image, overriding the default CMD. Usually empty.
     , drAutoRemove :: Bool
-    {- ^ Pass @--rm@. A container whose logs a case reads after it exits sets this 'False', so
-    docker keeps them until the bracket force-removes it.
-    -}
+    -- A case that reads logs after exit disables auto-removal until the bracket releases them.
     }
 
-{- | Unwrap a validated pin into an 'ImageRef', failing the suite at harness startup rather
-than at the pull if the literal is not digest-pinned.
--}
+-- An invalid literal pin fails at harness startup, before pulling any image.
 pinnedExternal :: Either Text PinnedImageRef -> IO ImageRef
 pinnedExternal = fmap PinnedExternal . either (fail . toString) pure
 
-{- | The base 'DockerRun' for a named container on a network. The image is an 'ImageRef', so
-a pulled image is digest-pinned by construction and only 'LocallyBuilt' may be unpinned.
--}
+-- Only a LocallyBuilt image may lack a digest pin.
 dockerRun :: String -> String -> ImageRef -> DockerRun
 dockerRun name net image =
     DockerRun
@@ -413,15 +405,9 @@ dockerRun name net image =
         , drAutoRemove = True
         }
 
-{- | Render and run a 'DockerRun' detached (@docker run -d@), stamped with the reaping labels. It
-fails the test loudly on a non-zero exit.
--}
 runDetached :: [String] -> DockerRun -> IO ()
 runDetached labelArgs = commandOk "docker" . runArgs ["-d"] labelArgs
 
-{- | The @docker run@ arguments one spec renders to, with whatever extra flags the caller needs.
-A detached run passes @-d@ and a run waited on passes none, so both render the same spec.
--}
 runArgs :: [String] -> [String] -> DockerRun -> [String]
 runArgs extra labelArgs spec =
     ("run" : ["--rm" | drAutoRemove spec])
@@ -435,23 +421,14 @@ runArgs extra labelArgs spec =
         <> labelArgs
         <> (drImage spec : drCmd spec)
 
-{- | Run a detached container for the duration of the action, force-removing it on every
-exit path. It yields the container name the caller chose.
--}
 withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
 withDockerContainer labelArgs spec =
     bracket (runDetached labelArgs spec >> pure (drName spec)) removeContainer
 
-{- | Create a labelled docker network for the action, removing it on every exit path after
-any containers on it. @createArgs@ carries extra @network create@ flags such as @--subnet@.
--}
 withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
 withDockerNetwork labelArgs name createArgs =
     bracket (commandOk "docker" (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
 
-{- | Bring up the OTLP collector for a scenario that asks for one, waited ready and torn
-down around the action. Any other scenario is a no-op yielding 'Nothing'.
--}
 withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
 withOptionalCollector cfg labelArgs net coll body
     | not (ecCollector cfg) = body Nothing
@@ -567,9 +544,6 @@ runRoleOnce gdp env args = do
     (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
     pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
 
-{- | One product-image container specification on the shared data plane: the test CA, the advisory
-directory, the caller's environment, and the role arguments the image runs.
--}
 roleRun :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO DockerRun
 roleRun gdp env args = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
@@ -610,18 +584,16 @@ runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
 runDredgerOnce gdp flags extraEnv =
     runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
 
-{- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
-Its private upstream is a registry of its own: a deleting role refuses a shared one.
--}
+-- A deleting role requires a private upstream distinct from its mirror target.
 dredgerEnv :: [(Text, Text)]
 dredgerEnv =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl PrivateCache)
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN", "e2e-private-maintenance-token")
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION", "true")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION", "true")
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
@@ -629,16 +601,13 @@ dredgerEnv =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | Run a command, failing the test loudly with its own stderr if it exits non-zero.
 commandOk :: String -> [String] -> IO ()
 commandOk command args = do
     (code, _, err) <- readProcess (proc command args)
     unless (code == ExitSuccess) $
         fail (command <> " command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
-{- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub alias plus
-@localhost@, and a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
--}
+-- Every stub alias needs a certificate SAN, and SSL_CERT_FILE needs the system and test CAs.
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
     createDirectoryIfMissing True dir
@@ -648,7 +617,7 @@ generateCerts dir = do
         srvKey = dir </> "server.key"
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
-    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
+    writeFileText ext ("subjectAltName=" <> T.intercalate "," (map ("DNS:" <>) (stubHosts <> ["localhost"]) <> ["IP:127.0.0.1"]) <> "\n")
     commandOk "openssl" ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
     commandOk "openssl" ["genrsa", "-out", srvKey, "2048"]
     commandOk "openssl" ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
@@ -664,7 +633,6 @@ generateCerts dir = do
 readBytesOrEmpty :: FilePath -> IO ByteString
 readBytesOrEmpty path = handleAny (\_ -> pure "") (readFileBS path)
 
--- | The host loopback port docker published a container's given @\<port\>\/tcp@ to.
 publishedPort :: String -> String -> IO Int
 publishedPort cname containerPort = do
     (_, out) <- readProcessStdout (proc "docker" ["port", cname, containerPort])
@@ -675,9 +643,7 @@ publishedPort cname containerPort = do
         pure
         (readMaybe (toString portText))
 
-{- | Create the mirror queue in the ministack SQS emulator and return its queue URL.
-@CreateQueue@ is idempotent, so retrying while the emulator warms up is safe.
--}
+-- CreateQueue is idempotent, so the emulator warm-up can retry it.
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
 createMinistackQueue manager hostPort queueName =
     pollUntil 60 500000 isJust attempt
@@ -699,7 +665,6 @@ createMinistackQueue manager hostPort queueName =
                 (200, Just url) | not (T.null url) -> Just url
                 _ -> Nothing
 
--- | The text between the first @opening@ and the following @closing@ marker, or 'Nothing'.
 between :: Text -> Text -> Text -> Maybe Text
 between opening closing t =
     let afterOpen = snd (T.breakOn opening t)
@@ -709,7 +674,7 @@ between opening closing t =
                 let (inner, rest) = T.breakOn closing (T.drop (T.length opening) afterOpen)
                  in if T.null rest then Nothing else Just inner
 
--- | Poll a URL until it returns the wanted status, up to ~30s.
+-- Readiness polling uses 100 attempts with 300 ms pauses.
 waitFor :: Manager -> Text -> Int -> IO Bool
 waitFor manager url want = pollUntil 100 300000 id probe
   where
@@ -722,9 +687,7 @@ waitFor manager url want = pollUntil 100 300000 id probe
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess
 
-{- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned, release it.
-The brief window before docker rebinds it is a tolerable race for a loopback test.
--}
+-- The window between releasing this port and Docker binding it is a loopback-test race.
 freeHostPort :: IO Int
 freeHostPort =
     bracket (socket AF_INET Stream defaultProtocol) close $ \sock -> do
@@ -739,86 +702,6 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so the
-proxy dials https-only endpoints. @cacheGuard@ adds a directive to the private-cache route alone.
--}
-nginxStubConfig :: Text -> Text
-nginxStubConfig cacheGuard =
-    T.unlines
-        [ "server {"
-        , "    listen 443 ssl;"
-        , "    server_name upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    root /usr/share/nginx/html;"
-        , "    location ~ ^/(?<pkg>[^/]+)$ {"
-        , "        default_type application/json;"
-        , "        alias /usr/share/nginx/html/$pkg/packument.json;"
-        , "    }"
-        , "    location / {"
-        , "        try_files $uri =404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name pypi-upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    root /usr/share/nginx/pypi;"
-        , "    index index.json;"
-        , -- A `types` block replaces the inherited map rather than extending it, so the
-          -- index gets the PEP 691 media type and every other file needs the default below.
-          "    types {"
-        , "        application/vnd.pypi.simple.v1+json json;"
-        , "    }"
-        , "    default_type application/octet-stream;"
-        , "    location / {"
-        , -- An index request carries a trailing slash, so the file form is tried first: a
-          -- bare $uri matches the directory, which nginx answers 403 with no index file.
-          "        try_files $uri/index.json $uri =404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name private-upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    location / {"
-        , "        return 404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name private-cache;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    resolver 127.0.0.11 valid=5s;"
-        , cacheGuard
-        , "    location / {"
-        , "        set $cache_backend cache-verdaccio:4873;"
-        , "        proxy_pass http://$cache_backend;"
-        , "        proxy_set_header Host $host;"
-        , "        proxy_set_header X-Forwarded-Proto https;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name mirror;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    client_max_body_size 0;" -- admits a published tarball of any size
-        , "    location / {"
-        , "        proxy_pass http://verdaccio:4873;"
-        , "        proxy_set_header Host $host;"
-        , "        proxy_set_header X-Forwarded-Proto https;" -- keeps Verdaccio writing https URLs
-        , "        proxy_set_header X-Forwarded-For $remote_addr;"
-        , "    }"
-        , "}"
-        ]
-
-{- | The Verdaccio config: anonymous read + publish, no uplinks (a sealed local
-mirror), listening on all interfaces so a peer container can reach it.
--}
 verdaccioConfig :: Text
 verdaccioConfig =
     T.unlines
@@ -841,32 +724,45 @@ verdaccioConfig =
         , "log: { type: stdout, format: pretty, level: warn }"
         ]
 
-{- | Pause the public-upstream stub for the duration of an action, then resume it on every exit
-path. With the stub frozen, only the private mirror can answer an install.
+{- | Take both public upstreams down for the action, npm's and PyPI's: the stub closes every
+connection to them unanswered, while the mirror, the private upstream, and the private cache answer.
 -}
-withUpstreamPaused :: E2E -> IO a -> IO a
-withUpstreamPaused e2e =
-    bracket_
-        (commandOk "docker" ["pause", e2eStubContainer e2e])
-        (commandOk "docker" ["unpause", e2eStubContainer e2e])
+withPublicUpstreamsDown :: GlobalDataPlane -> IO a -> IO a
+withPublicUpstreamsDown plane = withStubFault plane PublicUpstreamsDown
 
 {- | Refuse every write method on the private-cache route for the duration of the action, so that
 one target's deletes fail while its reads keep answering.
 -}
 withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
-withPrivateCacheDeletesRefused plane action =
-    finally (reloadStub plane refuseCacheWrites >> action) (reloadStub plane "")
+withPrivateCacheDeletesRefused plane = withStubFault plane PrivateCacheWritesRefused
 
--- The stub answers this before it picks a location, so it covers the whole route.
-refuseCacheWrites :: Text
-refuseCacheWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
+-- The stub holds one fault at a time, so leaving the action restores every route.
+withStubFault :: GlobalDataPlane -> StubFault -> IO a -> IO a
+withStubFault plane fault action =
+    finally (reloadStub plane (Just fault) >> action) (reloadStub plane Nothing)
 
--- Rewrite the bind-mounted configuration in place, then have the running nginx pick it up. The
--- write lands before the reload can fail, so a caller restores the file on every exit path.
-reloadStub :: GlobalDataPlane -> Text -> IO ()
-reloadStub plane cacheGuard = do
-    writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig cacheGuard)
-    commandOk "docker" ["exec", gdpStub plane, "nginx", "-s", "reload"]
+-- Rewrite the bind-mounted configuration and have nginx apply it. nginx retires its old workers in
+-- the background, so this returns once its log shows every one of them has stopped accepting.
+reloadStub :: GlobalDataPlane -> Maybe StubFault -> IO ()
+reloadStub plane fault = do
+    superseded <- startedWorkers <$> containerLogs stub
+    when (superseded == 0) (fail "the stub's log names no worker process, so no reload can be confirmed")
+    writeFileText (gdpWorkDir plane </> "nginx.conf") (stubConfig fault)
+    commandOk "docker" ["exec", stub, "nginx", "-s", "reload"]
+    applied <- awaitContainerLog stub ((>= superseded) . retiredWorkers) 40
+    unless applied (fail "the stub did not retire its old workers after a reload")
+  where
+    stub = gdpStub plane
+
+-- | Every request the stub has finished so far, oldest first.
+stubReadsNow :: GlobalDataPlane -> IO [StubRead]
+stubReadsNow plane = stubReads <$> containerLogs (gdpStub plane)
+
+{- | The requests the stub finished after its first @seen@, polled until they satisfy @complete@ or
+the budget lapses. The log trails a response by a moment, so a case names the reads it waits for.
+-}
+awaitStubReads :: GlobalDataPlane -> Int -> ([StubRead] -> Bool) -> IO [StubRead]
+awaitStubReads plane seen complete = pollUntil 40 250000 complete (drop seen <$> stubReadsNow plane)
 
 {- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
 put the file back on every exit path.

@@ -3,18 +3,22 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Structural checks for the buffered reference decoder and diagnostic fixture trees.
-module Ecluse.Test.Security.Limits (checkVersionCount, checkNestingDepth) where
+module Ecluse.Test.Security.Limits (checkVersionCount, checkDocumentArtifacts, checkNestingDepth) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Vector qualified as V
-import Ecluse.Core.Package (PackageInfo (infoVersions))
-import Ecluse.Core.Security (LimitError (TooDeeplyNested), Limits (maxNestingDepth), checkVersionCountOf)
+import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions))
+import Ecluse.Core.Security (LimitError (TooDeeplyNested), Limits (maxNestingDepth), checkArtifactCount, checkVersionCountOf)
 
 -- | Apply the production version ceiling to the buffered reference projection.
 checkVersionCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
 checkVersionCount limits info = info <$ checkVersionCountOf limits (Map.size (infoVersions info))
+
+-- | Apply the production artifact ceiling to the artifacts the buffered reference projection holds.
+checkDocumentArtifacts :: Limits -> PackageInfo -> Either LimitError PackageInfo
+checkDocumentArtifacts limits info = info <$ checkArtifactCount limits (sum (length . pkgArtifacts <$> infoVersions info))
 
 -- | Preserve the former whole-tree depth check for baseline measurements.
 checkNestingDepth :: Limits -> Value -> Either LimitError Value

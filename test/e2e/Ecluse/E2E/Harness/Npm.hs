@@ -8,14 +8,26 @@ Each project isolates npm state and disables package lifecycle scripts.
 module Ecluse.E2E.Harness.Npm (
     npmInstall,
     npmInstallIn,
-    npmCiIn,
     npmPublishIn,
     withNpmProject,
     withPublishProject,
     installWithLifecycleProbe,
     installedVersion,
+    npmPublicReachable,
+
+    -- * What an install left behind
+    Resolved (..),
+    resolvedGraph,
+    loadedExport,
+    linkedExecutable,
+    installedTree,
+    lockedSources,
+    redactedProxy,
+    localInstallSources,
 
     -- * Constants
+    consumerName,
+    npmArtifactPath,
     npmTarballPath,
     publishTargetEnv,
     publishScope,
@@ -25,15 +37,22 @@ module Ecluse.E2E.Harness.Npm (
     publishVersion,
 ) where
 
-import Data.Aeson (Object, decodeFileStrict', (.:))
+import Data.Aeson (FromJSON (parseJSON), Object, Value (Object), decodeFileStrict', decodeStrict, eitherDecodeStrict, withObject, (.!=), (.:), (.:?))
 import Data.Aeson.Types (parseMaybe)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, doesPathExist, listDirectory)
+import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
-import Ecluse.E2E.Harness.Client (runClient, withClientDir)
+import Ecluse.E2E.Fixtures.Npm (psName, publicOnlyPkg)
+import Ecluse.E2E.Harness.Client (clientReport, runClient, withClientDir)
+import Ecluse.E2E.Harness.Proxy (proxyStatus)
+import Ecluse.E2E.Harness.Stub (StubRoute (Mirror), stubUrl)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile), normaliseNpmSources, snapshotTree)
 
 -- | Isolate a consumer's npm state and remove its project directory after the action.
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
@@ -42,7 +61,7 @@ withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withProjectContents e2e packageJson npmrcContents use =
     withClientDir "npm" $ \projectDir -> do
-        let cacheDir = projectDir </> "cache"
+        let cacheDir = projectDir </> cacheDirName
             prefixDir = projectDir </> "prefix"
             npmrc = projectDir </> ".npmrc"
         createDirectoryIfMissing True cacheDir
@@ -100,13 +119,9 @@ installedVersion proj pkg = do
   where
     manifest = npDir proj </> "node_modules" </> toString pkg </> "package.json"
 
--- | @npm install \<pkg\>@ in a project. It writes the lockfile for a later 'npmCiIn'.
+-- | @npm install \<pkg\>@ in a project, resolving the package's metadata through the proxy.
 npmInstallIn :: NpmProject -> Text -> IO ClientResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
-
--- | Install from the project's lockfile without resolving package metadata.
-npmCiIn :: NpmProject -> IO ClientResult
-npmCiIn proj = runNpm proj ["ci"]
 
 -- | Publish through the configured proxy with package lifecycle scripts disabled.
 npmPublishIn :: NpmProject -> IO ClientResult
@@ -115,6 +130,106 @@ npmPublishIn proj = runNpm proj ["publish"]
 -- | Install through the proxy in a temporary project that is removed after the command.
 npmInstall :: E2E -> Text -> IO ClientResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
+
+{- | Whether the proxy can serve 'publicOnlyPkg', which only the npm public upstream holds: 'True'
+while that upstream answers the proxy, 'False' through an outage of it.
+-}
+npmPublicReachable :: E2E -> IO Bool
+npmPublicReachable e2e = (== 200) <$> proxyStatus e2e ("/npm/" <> psName publicOnlyPkg)
+
+-- | One edge of the graph npm resolved: a dependent, and the version installed for one of its needs.
+data Resolved = Resolved
+    { rsDependent :: Text
+    , rsPackage :: Text
+    , rsVersion :: Text
+    }
+    deriving stock (Eq, Ord, Show)
+
+{- | The dependency graph npm resolved for a project, as @npm ls --all@ reports it: ordinary and
+peer edges alike. 'Left' carries the client's output when the listing fails or cannot be read.
+-}
+resolvedGraph :: NpmProject -> IO (Either Text (Set Resolved))
+resolvedGraph proj = do
+    listed <- runNpm proj ["ls", "--all", "--json"]
+    pure $ case (crExit listed, eitherDecodeStrict (encodeUtf8 (crStdout listed))) of
+        (ExitSuccess, Right (ListedProject name root)) -> Right (Set.fromList (edgesFrom name root))
+        _ -> Left (clientReport listed "listed no readable tree")
+
+-- The slice of @npm ls --json@ the graph needs: a node's version and what it resolved, by name.
+data Listed = Listed Text (Map Text Listed)
+
+instance FromJSON Listed where
+    parseJSON = withObject "npm ls node" $ \node ->
+        Listed <$> node .:? "version" .!= "" <*> node .:? "dependencies" .!= mempty
+
+-- The root node, which alone states its own name. Every other node is keyed by its name.
+data ListedProject = ListedProject Text Listed
+
+instance FromJSON ListedProject where
+    parseJSON = withObject "npm ls project" $ \project ->
+        ListedProject <$> project .: "name" <*> parseJSON (Object project)
+
+edgesFrom :: Text -> Listed -> [Resolved]
+edgesFrom dependent (Listed _ needs) =
+    concat [Resolved dependent name version : edgesFrom name need | (name, need@(Listed version _)) <- Map.toList needs]
+
+{- | Load a package from the project with @node@ and decode what its module exports. 'Left' carries
+the runtime's output when the load fails, as it does when a package the module requires is absent.
+-}
+loadedExport :: NpmProject -> Text -> IO (Either Text Value)
+loadedExport proj package =
+    printedValue <$> runClient (npDir proj) (npEnv proj) "node" ["-e", "process.stdout.write(JSON.stringify(require(" <> show package <> ")))"]
+
+{- | Run an executable npm linked into the project, by the name its package's @bin@ gives it, and
+decode the JSON it prints. 'Nothing' when npm linked no executable of that name.
+-}
+linkedExecutable :: NpmProject -> Text -> IO (Maybe (Either Text Value))
+linkedExecutable proj name = do
+    linked <- doesFileExist link
+    if linked then Just . printedValue <$> runClient (npDir proj) (npEnv proj) link [] else pure Nothing
+  where
+    link = npDir proj </> "node_modules" </> ".bin" </> toString name
+
+-- The JSON value a successful command printed, or the command's whole output.
+printedValue :: ClientResult -> Either Text Value
+printedValue res = case (crExit res, decodeStrict (encodeUtf8 (crStdout res))) of
+    (ExitSuccess, Just value) -> Right value
+    _ -> Left (clientReport res "printed no JSON value")
+
+-- | Snapshot the installed tree, normalising only npm lockfile package source URLs.
+installedTree :: E2E -> NpmProject -> IO InstalledTree
+installedTree e2e proj =
+    normaliseNpmSources (e2eBaseUrl e2e) redactedProxy
+        <$> snapshotTree (npDir proj) ["node_modules", lockfileName, "package.json"]
+
+-- | What stands for the proxy's address in an 'installedTree'.
+redactedProxy :: Text
+redactedProxy = "<proxy>"
+
+{- | The location the lockfile of an 'installedTree' records for each installed package, which names
+the registry that supplied it. Empty when the tree holds no readable lockfile.
+-}
+lockedSources :: InstalledTree -> [Text]
+lockedSources tree = fromMaybe [] $ do
+    TreeFile _ bytes <- Map.lookup lockfileName tree
+    lockfile <- decodeStrict bytes
+    packages <- parseMaybe (.: "packages") (lockfile :: Object)
+    pure (mapMaybe (parseMaybe (.: "resolved")) (Map.elems (packages :: Map Text Object)))
+
+{- | Everything in a project that could supply an install without the registry: npm cache entries,
+a lockfile, and @node_modules@. A new project holds none.
+-}
+localInstallSources :: NpmProject -> IO [FilePath]
+localInstallSources proj = do
+    cached <- listDirectory (npDir proj </> cacheDirName)
+    kept <- filterM (doesPathExist . (npDir proj </>)) [lockfileName, "node_modules"]
+    pure (map (cacheDirName </>) cached <> kept)
+
+cacheDirName :: FilePath
+cacheDirName = "cache"
+
+lockfileName :: FilePath
+lockfileName = "package-lock.json"
 
 -- | Report whether installation executed a sentinel-writing lifecycle script that should be disabled.
 installWithLifecycleProbe :: E2E -> IO (ClientResult, Bool)
@@ -132,16 +247,24 @@ lifecycleProbePackageJson =
     "{\"name\":\"e2e-lifecycle-probe\",\"version\":\"1.0.0\",\"private\":true,\"scripts\":{\"postinstall\":\"touch lifecycle-script-ran\"}}\n"
 
 consumerPackageJson :: Text
-consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
+consumerPackageJson = "{\"name\":\"" <> consumerName <> "\",\"version\":\"1.0.0\",\"private\":true}\n"
+
+-- | The name of the project 'withNpmProject' installs into, which heads the graph npm resolves.
+consumerName :: Text
+consumerName = "e2e-consumer"
+
+-- | The path a registry serves one unscoped package version's artifact at, under its own base.
+npmArtifactPath :: Text -> Text -> Text
+npmArtifactPath name version = "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"
 
 -- | The proxy path one npm package version's artifact is served at.
 npmTarballPath :: Text -> Text -> Text
-npmTarballPath name version = "/npm/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"
+npmTarballPath name version = "/npm" <> npmArtifactPath name version
 
 -- | Publish first-party packages into the Verdaccio store used by the proxy's private upstream.
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", "https://mirror/")
+    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", stubUrl Mirror)
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
 
@@ -165,8 +288,7 @@ publishDredgerName = publishScope <> "/e2e-dredger-first-party"
 publishVersion :: Text
 publishVersion = "1.0.0"
 
--- The bearer token a publishable project's @.npmrc@ carries. It satisfies npm's client-side
--- publish gate, and the target accepts regardless, so the identity is immaterial at this tier.
+-- The target accepts any token, but npm requires one before publishing.
 publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 

@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.PyPI.Project (FileCoordinate, FilenameMemo, fcVersio
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename), checkApiVersion, decodeIndexFiles)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
-import Ecluse.Core.Security (LimitError (TooManyArtifacts), Limits (maxArtifactCount), checkVersionCountOf)
+import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 
 -- | Parsed files keep their read coordinate and share retained scalars with the compact serving records.
 data PyPIProjection = PyPIProjection
@@ -96,7 +96,7 @@ collectField limits mode acc =
                         bounded = case checkVersionCountOf limits (Set.size versions) of
                             Left fault -> next{projectedBound = Just fault}
                             Right () -> next{projectedVersions = versions, projectedArtifactCount = count}
-                     in withBound (if count > maxArtifactCount limits then Left (TooManyArtifacts count (maxArtifactCount limits)) else Right ()) bounded
+                     in withBound (checkArtifactCount limits count) bounded
                 _ -> next
     withBound result current = current{projectedBound = projectedBound current <|> either Just (const Nothing) result}
 

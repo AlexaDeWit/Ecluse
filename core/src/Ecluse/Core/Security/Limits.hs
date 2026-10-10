@@ -33,10 +33,7 @@ module Ecluse.Core.Security.Limits (
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
-import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
-
-import Ecluse.Core.Package (PackageInfo, infoVersions, pkgArtifacts)
 
 -- | Byte ceilings by operation, structural metadata backstops, and the upstream progress floor.
 data Limits = Limits
@@ -114,26 +111,23 @@ boundedRead bound readChunk = go 0 mempty
                         then pure (Left (BodyTooLarge bound))
                         else go seen' (acc <> byteString chunk)
 
-{- | The same ceiling over a bare count, for a caller that knows how many versions a document
-carries without projecting it, as the selective decoders do while they skip entries.
+{- | The version ceiling over a count, so a reader refuses a document while it counts entries it
+has not projected, as the selective decoders do while they skip them.
 -}
 checkVersionCountOf :: Limits -> Int -> Either LimitError ()
-checkVersionCountOf limits count
-    | count > cap = Left (TooManyVersions count cap)
-    | otherwise = Right ()
-  where
-    cap = maxVersionCount limits
+checkVersionCountOf limits = withinCeiling TooManyVersions (maxVersionCount limits)
 
-{- | Reject a parsed document carrying more than 'maxArtifactCount' artifacts across all its
-versions. Adapters check version counts before applying the artifact ceiling.
+{- | The artifact ceiling over a count of the artifacts across every version of one document.
+Adapters check version counts before applying it.
 -}
-checkArtifactCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
-checkArtifactCount limits info
-    | seen > cap = Left (TooManyArtifacts seen cap)
-    | otherwise = Right info
-  where
-    cap = maxArtifactCount limits
-    seen = Map.foldl' (\acc details -> acc + length (pkgArtifacts details)) 0 (infoVersions info)
+checkArtifactCount :: Limits -> Int -> Either LimitError ()
+checkArtifactCount limits = withinCeiling TooManyArtifacts (maxArtifactCount limits)
+
+-- The breach names the count seen, then the ceiling.
+withinCeiling :: (Int -> Int -> LimitError) -> Int -> Int -> Either LimitError ()
+withinCeiling breach cap count
+    | count > cap = Left (breach count cap)
+    | otherwise = Right ()
 
 {- | The front door's per-request timeout, in seconds. Generous enough for a large packument
 fetch, bounded so a stuck upstream cannot pin a handler indefinitely.

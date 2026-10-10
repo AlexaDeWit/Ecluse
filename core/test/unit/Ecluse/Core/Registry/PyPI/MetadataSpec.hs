@@ -74,6 +74,11 @@ indexSpec = describe "projectPyPIIndex" $ do
         projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body `shouldSatisfy` isRight
         projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body
             `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
+        projectPyPIIndex defaultLimits{maxArtifactCount = 2} requestsName body `shouldSatisfy` isRight
+
+    it "counts only the files that name a release toward the artifact ceiling" $ do
+        let body = encodeStrict (simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz"] <> [simpleFile "not-a-distribution"]))
+        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body `shouldSatisfy` isRight
 
 versionSpec :: Spec
 versionSpec = describe "projectPyPIVersion" $ do
