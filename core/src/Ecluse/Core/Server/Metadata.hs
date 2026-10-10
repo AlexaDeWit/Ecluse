@@ -14,6 +14,7 @@ module Ecluse.Core.Server.Metadata (
     -- * Constructing a per-request read handle
     MetadataReads,
     newMetadataReads,
+    ecosystemMetadataReads,
     withinRequestCap,
     publicMetadataClient,
     preparePublicVersion,
@@ -34,6 +35,8 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead,
  )
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 import Ecluse.Core.Security (ProgressFloor)
 
@@ -48,6 +51,7 @@ import Ecluse.Core.Server.Cache (
 import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- Private reads re-authorise the caller at the upstream, so only anonymous public metadata
@@ -89,6 +93,19 @@ newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion
             }
   where
     client = originClientOf origin
+
+-- | 'newMetadataReads' over the read driver's two fetches for one ecosystem.
+ecosystemMetadataReads ::
+    EcosystemRead ->
+    TracingPort ->
+    MetricsPort ->
+    (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
+    OriginFor posture ->
+    MetadataReads posture
+ecosystemMetadataReads eco tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchManifest eco tracing) (fetchVersion eco tracing)
 
 {- | Hold each raw read to the floor's serve-path cap, so a single-flight leader fails before the
 request timeout ends its request.

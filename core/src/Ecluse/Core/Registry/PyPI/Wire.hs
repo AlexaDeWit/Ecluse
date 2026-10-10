@@ -33,13 +33,13 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 
-import Ecluse.Core.Json.Lenient (lenientOptional)
+import Ecluse.Core.Json.Lenient (lenientOptional, lenientOptionalWith)
 import Ecluse.Core.Package (
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile, InvalidVersionListing),
  )
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.WireSupport (partitionLenientList)
+import Ecluse.Core.Registry.WireSupport (parsePublishTime, partitionLenientList)
 
 -- | The PEP 691 media type used for index requests and responses.
 simpleIndexMediaType :: ByteString
@@ -99,7 +99,7 @@ instance FromJSON IndexFile where
             <*> o .:? "hashes" .!= mempty
             <*> o .:? "requires-python"
             <*> lenientOptional o "size"
-            <*> lenientOptional o "upload-time"
+            <*> lenientOptionalWith parsePublishTime o "upload-time"
             <*> (yankState <$> o .:? "yanked")
             <*> o .:? "provenance"
 
