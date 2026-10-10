@@ -65,8 +65,8 @@ The public artifact gate logs the skipped ones once, at the admission, and a tru
 mirrored copy runs no rules, so it never repeats them. The evidence lives in the decision and the
 log only. The
 [`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs) Haddock holds the full verdict and
-harness vocabulary. The proxy logs the boot order at start-up (see
-[Configuration → rule policy](configuration.md#rule-policy)).
+harness vocabulary. Every role logs the boot order at start-up, with the phases each rule applies
+at (see [Configuration → rule policy](configuration.md#rule-policy)).
 
 ### Effectful-rule failure
 
@@ -386,12 +386,39 @@ one the rule evaluated against, since a shadow-swap can land mid-request.
 The serve path gates a version once, before it enters the mirror, and serves it from the trusted
 store without gating it again at request time. A stored version does not stay exempt, because
 [Dredger](https://ecluse-proxy.com/docs/dredger/) re-checks each mount's mirror target and the
-private read cache paired with it against the current rules, and prunes what they deny. A CVE
-disclosed after mirroring, or a policy change, therefore removes the version on a later Dredger
-cycle. It removes an eligible mirror version before its eligible cache copy, and a restart or a
-later cycle rediscovers a cache copy left behind. The
+private read cache paired with it against the current rules that apply at revocation, and prunes
+what they deny. A CVE disclosed after mirroring, or a policy change, therefore removes the version
+on a later Dredger cycle. It removes an eligible mirror version before its eligible cache copy, and
+a restart or a later cycle rediscovers a cache copy left behind. The
 [revocation procedure](https://ecluse-proxy.com/docs/operations/#revoking-a-mirrored-version-internal-yank)
 is the operator's side of it.
+
+### Admission and revocation
+
+A rule applies at admission and at revocation unless its `appliesTo` limits it to admission. The
+phase is data on the rule, and one list per mount still holds every rule, so precedence stays in one
+place. The gate and the mirror worker evaluate the whole list. The composition root hands the
+Dredger the rules that apply at revocation, and the engine itself takes no phase. That placement is
+why a serve path cannot drop a deny by naming the wrong phase.
+
+The design question is whether the Dredger can then delete a version the gate admits. It cannot, on
+the same evidence, and two load refusals are what hold that:
+
+| Refused at load | What it would allow |
+|---|---|
+| An allow limited to admission | The Dredger would not read the allow, so a deny below it could block a version the gate admits |
+| A rule that applies at revocation alone | A deny the gate never read would delete versions the gate admits, and the worker would mirror them again |
+
+With both refused, every rule the Dredger does not read is a deny, and a deny can block or abstain
+and never admit. The Dredger's list keeps the gate's order, so each rule ahead of the one that
+blocks for the Dredger either passed at the gate too or is a deny limited to admission. The gate
+therefore refuses the version as well. A property test over generated policies and evidence holds
+this ([`Ecluse.Core.Rules.TypesSpec`](../../core/test/unit/Ecluse/Core/Rules/TypesSpec.hs)).
+
+The claim is about one set of evidence. The Dredger reads a store's own metadata and the gate
+reads the upstream's, so the two can still differ where those documents differ. A rule limited to
+admission also no longer stops the Dredger's walk, so a lower deny that applies at revocation
+decides a version the limited rule would have left undecided.
 
 ## Denial responses
 

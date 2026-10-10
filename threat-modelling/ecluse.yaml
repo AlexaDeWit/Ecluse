@@ -114,7 +114,7 @@ assumptions:
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
     appliesToModel: false
   - id: as-policy-rollout-convergence
-    prose: "Roles adopt a policy change by eventual consistency, with no coordinated pause and no shared policy authority. The operator follows the documented rollout order: when tightening policy, update admission and writer roles before the Dredger, and when relaxing a deny, update the Dredger before writers rely on the new permission. The operations guide also describes the risk of leaving an old Dredger active during a relaxation. Repeated sweeps remove eligible denied copies once roles agree and older writes finish, subject to backend availability and consent, not at once. The owner assesses the loss of the only copy of a version during a rollout as unlikely, without a measured deployment frequency, and accepts it. The acceptance covers rollout disagreement only, not deletion bugs, poisoned advisories, or unauthorised targets."
+    prose: "Roles adopt a policy change by eventual consistency, with no coordinated pause and no shared policy authority. The operator follows the documented rollout order: when tightening policy, update admission and writer roles before the Dredger, and when relaxing a deny, update the Dredger before writers rely on the new permission. Limiting a deny to admission relaxes it for the Dredger alone, so it follows the relaxation order, and applying a limited deny at revocation again tightens the Dredger, so the operator pins what must stay and previews the deletions first. A binary that does not know the `appliesTo` key refuses a configuration that carries it, so it cannot delete under a rule the configuration limits to admission. The operations guide also describes the risk of leaving an old Dredger active during a relaxation. Repeated sweeps remove eligible denied copies once roles agree and older writes finish, subject to backend availability and consent, not at once. The owner assesses the loss of the only copy of a version during a rollout as unlikely, without a measured deployment frequency, and accepts it. The acceptance covers rollout disagreement only, not deletion bugs, poisoned advisories, or unauthorised targets."
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
@@ -146,6 +146,12 @@ assumptions:
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000124
+    appliesToModel: false
+  - id: as-admission-only-deny-keeps-copies
+    prose: A deny limited to admission is the operator's stated choice, rule by rule, to keep serving from the trusted stores the versions that deny refuses at the gate. The operator limits a deny only where builds that already use those versions must continue, and applies it at revocation where the stored copies must go. Every role's boot log and `ecluse check-config` name the phases each rule applies at, so the choice is visible on each start.
+    status: valid
+    threats:
+      - 0ec10e5e-0000-4000-8000-00000000010d
     appliesToModel: false
 diagrams:
   - id: "0"
@@ -545,7 +551,7 @@ diagrams:
       - kind: process
         id: f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
         name: Écluse Dredger
-        description: The pruning role, run as `ecluse dredger`. It exposes health probes and uses the shared rules engine with its own boot configuration. It deletes named-denied versions from the mirror store B and their retained copies in the private read endpoint C, using DeletePackageVersions and never DisposePackageVersions.
+        description: The pruning role, run as `ecluse dredger`. It exposes health probes and uses the shared rules engine with its own boot configuration. It evaluates the mount's rules that apply at revocation, and reads no rule limited to admission. It deletes named-denied versions from the mirror store B and their retained copies in the private read endpoint C, using DeletePackageVersions and never DisposePackageVersions.
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -557,7 +563,7 @@ diagrams:
       - kind: flow
         id: d5da865d-6e80-44da-a2ee-841f6bebd567
         name: delete denied versions
-        description: Dredger issues delete requests to Registry B based on the versions the shared rules engine denies, advisory-driven or identity-driven.
+        description: Dredger issues delete requests to Registry B based on the versions that the rules applying at revocation deny, advisory-driven or identity-driven.
         outOfScope: false
         reasonOutOfScope: ""
         protocol: HTTPS
@@ -967,7 +973,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000126
   - id: mit-dredger-named-deny
     title: Deletion only on a named decisive deny
-    prose: "The Dredger deletes a version only when a named rule denies it decisively. Deny-by-default and unvettable results keep the version. Identity-only evidence, a listed version with no readable metadata, goes to the full rule set: any rule that decides from name and version can condemn the version, such as a bare-name `DenyByIdentity`, `DenyIfCve`, or `DenyIfEpss`, and a rule that needs a fact the evidence lacks keeps the version. Rule precedence and every deletion guard still apply. If removing an allow exposes a winning deny, normal pruning applies, and later cycles reconcile eligible late publications under current evidence."
+    prose: "The Dredger deletes a version only when a named rule denies it decisively. It evaluates the mount's rules that apply at revocation, which the composition root selects in one place, and it never reads a rule limited to admission. The load admits that limit on a deny alone and refuses a rule that applies at revocation alone, so on the same evidence the Dredger never deletes a version the gate admits. Deny-by-default and unvettable results keep the version. Identity-only evidence, a listed version with no readable metadata, goes to that same rule set: any rule that decides from name and version can condemn the version, such as a bare-name `DenyByIdentity`, `DenyIfCve`, or `DenyIfEpss`, and a rule that needs a fact the evidence lacks keeps the version. Rule precedence and every deletion guard still apply. If removing an allow exposes a winning deny that applies at revocation, normal pruning applies, and later cycles reconcile eligible late publications under current evidence."
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
@@ -1349,7 +1355,7 @@ threats:
       category: tampering
     severity: medium
     status: mitigated
-    description: "Private reads trust previously mirrored versions without repeating public admission. Later advisory changes, removal of an allow, or an upstream yank do not themselves remove those copies. An advisory rule set to `onUnavailable: skip` can let another allow mirror a version during an advisory outage, and recovery alone does not revoke that copy. CodeArtifact can retain a serving copy in the private read repository (C) after the version leaves the mirror (B). Without working, authorised pruning, retained content can stay served indefinitely, and a serve-only mount can still read trusted private copies without a mirror target of its own."
+    description: "Private reads trust previously mirrored versions without repeating public admission. Later advisory changes, removal of an allow, or an upstream yank do not themselves remove those copies. An advisory rule set to `onUnavailable: skip` can let another allow mirror a version during an advisory outage, and recovery alone does not revoke that copy. A deny limited to admission with `appliesTo: [admission]` refuses new requests and never removes the stored versions it refuses, so private reads keep serving them. CodeArtifact can retain a serving copy in the private read repository (C) after the version leaves the mirror (B). Without working, authorised pruning, retained content can stay served indefinitely, and a serve-only mount can still read trusted private copies without a mirror target of its own."
     elements:
       - 0ec10e5e-0000-4000-8000-000000000034
   - id: 0ec10e5e-0000-4000-8000-00000000010e
@@ -1470,7 +1476,7 @@ threats:
       category: denial-of-service
     severity: medium
     status: mitigated
-    description: A misconfiguration in Dredger, or poisoned OSV data, could delete legitimate, needed packages from Registry B. That causes cache misses or upstream fetch failures.
+    description: "A misconfiguration in Dredger, or poisoned OSV data, could delete legitimate, needed packages from Registry B. That causes cache misses or upstream fetch failures. A deny that the operator meant to refuse new versions only, and left applying at revocation, is one such misconfiguration: the Dredger deletes the stored copies the deny names."
     elements:
       - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
   - id: c12bddfe-96d4-47c6-92e0-a961abadb5b2
@@ -1602,7 +1608,7 @@ threats:
       category: denial-of-service
     severity: medium
     status: accepted-risk
-    description: Loss requires a retained version, a policy disagreement that lets an old Dredger deny what the intended policy permits, a deletion during that disagreement, and no remaining usable source of the bytes. The public source can disappear before the rollout, and no new admission during the rollout is required. The residual covers deletions from the mirror (B) and from the private read repository (C). Later policy agreement cannot restore the lost bytes, and repeated sweeps cannot converge while roles keep applying conflicting policies.
+    description: Loss requires a retained version, a policy disagreement that lets an old Dredger deny what the intended policy permits, a deletion during that disagreement, and no remaining usable source of the bytes. A deny that the intended policy limits to admission, and that an old Dredger still applies at revocation, is one such disagreement. The public source can disappear before the rollout, and no new admission during the rollout is required. The residual covers deletions from the mirror (B) and from the private read repository (C). Later policy agreement cannot restore the lost bytes, and repeated sweeps cannot converge while roles keep applying conflicting policies.
     elements:
       - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
   - id: bd6136ad-e767-424b-bda4-53144a8a7f10

@@ -576,8 +576,9 @@ the serving copies are removed. Deletion can lose the only remaining bytes, so i
 version and stores before acting.
 
 1. Add the identity denial to the intended policy and roll it to the proxy, mirror worker, and
-   Dredger. Verify that it wins over any deliberate allow. Older workers and in-flight transfers
-   can still publish during the rollout.
+   Dredger. Leave its `appliesTo` unset, or name both phases, because the Dredger passes over a
+   deny limited to admission. Verify that it wins over any deliberate allow. Older workers and
+   in-flight transfers can still publish during the rollout.
 2. Run [Dredger](@/docs/dredger.md) with independent consent for the mirror and private cache.
    It removes eligible mirror versions before their eligible cache copies under the shared policy.
 3. Inspect per-target results. A source success does not prove cache completion. A restart or
@@ -594,8 +595,11 @@ deletion or negative read does not establish that no late writer remains. The Co
 explains why retained copies outlive upstream deletion.
 
 Removing an allow alone is not revocation. If that leaves only deny-by-default, Dredger keeps the
-mirrored version. If it exposes a winning named deny, normal eligible removal applies. Installed
-or client-cached bytes remain outside registry revocation.
+mirrored version. If it exposes a winning named deny that applies at revocation, normal eligible
+removal applies. A deny limited to admission with `appliesTo: [admission]` refuses new requests
+and worker re-admission, and it never revokes a stored copy
+([Where a rule applies](@/docs/configuration.md#where-a-rule-applies)). Installed or client-cached
+bytes remain outside registry revocation.
 
 ### Policy rollout order
 
@@ -605,6 +609,14 @@ and writer roles before Dredger. When you add a `DenyIfEpss`, update Pilot befor
 ([When the EPSS feed fails](@/docs/configuration.md#when-the-epss-feed-fails)). When relaxing a
 deny, update Dredger before writers can rely on the new permission. These are ordering
 recommendations, not an atomic cutover requirement.
+
+The `appliesTo` key adds three points to that order:
+
+| Change | Order |
+|---|---|
+| The first configuration that carries `appliesTo` | Update every role's binary first. A binary that predates the key refuses the configuration as an unknown rule key, so an older Dredger cannot start on a narrowed rule and delete on it |
+| Narrowing a rule to `[admission]` | It relaxes the rule for the Dredger alone, so update the Dredger before the other roles |
+| Widening a rule to `[admission, revocation]` | It tightens the Dredger. Pin every version you must keep, run `ecluse dredger --dry-run`, then run one full walk with `dredger.fullWalk`, because a candidate cycle does not see a rule change |
 
 Old writes outlive the role that queued them. A mirror worker still on the old policy decides a
 queued job by its own rules, so it can publish a version a newly started proxy denies. That proxy

@@ -5,9 +5,10 @@ weight = 6
 +++
 
 `ecluse dredger` is the only role that deletes. It walks each mount's mirror target and the
-`privateUpstream` cache paired with it, and removes versions the mount's own rules deny. Run it when
-those stores must not keep serving a version a new advisory condemns. Read this page before you
-point it at a store, because deletion is permanent.
+`privateUpstream` cache paired with it, and removes versions the mount's own rules deny. It reads
+the rules that apply at revocation, which is every rule you have not limited to admission. Run it
+when those stores must not keep serving a version a new advisory condemns. Read this page before
+you point it at a store, because deletion is permanent.
 
 `privateUpstream` is a cache. Your builds read through it, the mirror worker writes to
 `mirrorTarget`, and your publishers write to `publicationTarget`. Dredger cleans the first two and
@@ -172,11 +173,13 @@ cycle.
 
 ## What is deleted, and what never is
 
-A version is deleted **only** on a named decisive deny. Everything else keeps it:
+A version is deleted **only** on a named decisive deny by a rule that applies at revocation.
+Everything else keeps it:
 
 | The rules said | What happens |
 |---|---|
-| A named rule denies the version | Deleted |
+| A named rule that applies at revocation denies the version | Deleted |
+| Only a rule limited to admission denies the version | Kept |
 | No rule was decisive (deny by default) | Kept |
 | A rule could not be evaluated | Kept |
 | A higher-precedence rule reads a fact this cycle could not | Kept |
@@ -194,12 +197,22 @@ execution signal, cannot decide without that metadata: the evaluation stops ther
 is kept. Precedence still governs, so an undecided rule above a deny keeps the version rather than
 letting the deny remove it. Missing metadata on its own never deletes anything.
 
+The Dredger evaluates the rules that apply at revocation and passes over a rule you limited to
+admission with `appliesTo: [admission]`
+([Where a rule applies](@/docs/configuration.md#where-a-rule-applies)). Such a rule never deletes,
+and it never stops the evaluation either. So when an install-code deny is limited to admission and
+an advisory deny below it applies at revocation, the Dredger removes a stored version that both
+rules refuse, and the audit line names the advisory deny. It also removes that version on identity
+alone when the store serves no metadata, because the rule that needed the metadata is no longer in
+its way. The boot log lists each mount's rules in order with the phases each applies at, so read
+it to see which rules the Dredger evaluates.
+
 The first-party belt shields every version under a namespace your `firstParty` key names, and the
 Dredger never even reads their metadata.
 
 Removing an allow is not itself a deny. A version stays when no named rule condemns it, including
-during a full walk. If removing an override exposes an existing winning deny, normal pruning
-applies.
+during a full walk. If removing an override exposes an existing winning deny that applies at
+revocation, normal pruning applies.
 
 ## Consent, and what the store is
 
@@ -289,7 +302,7 @@ indefinitely.
 
 `ecluse dredger --dry-run` observes actual inventories from `mirrorTarget` and `privateUpstream`
 within each mirrored mount. Mirror-only, cache-only and shared versions all participate.
-Each location uses its own metadata and the same configured rules. First-party names remain
+Each location uses its own metadata and the same rules a deleting run evaluates. First-party names remain
 excluded before metadata reads. Missing metadata still permits a decisive identity deny when
 that identity supplies sufficient evidence. Origin metadata does not veto a selected cache version.
 

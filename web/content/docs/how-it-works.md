@@ -88,7 +88,7 @@ excluded. Only metadata that passes identity, artifact-location, and integrity c
 A disagreement proves neither copy correct. A damaged private copy can still be served because the
 private repository is trusted to hold previously admitted or first-party content.
 Divergence alone never authorises Dredger to delete a version. Removing an allow does not revoke a mirrored
-version unless a named deny becomes decisive. See
+version unless a named deny that applies at revocation becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
 Listings omit files whose URLs lack a filename, name `.` or `..`, or have a backslash or control character in the filename.
