@@ -323,7 +323,7 @@ projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =
     zipWith versionVerdict (Map.toList (infoVersions info))
   where
-    versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
+    versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf (completeEvidence details) d)
 
 {- The trusted version map is the caller's own, the one the public gate was given, so the merge
 and the gate can never disagree about which versions are trusted. -}

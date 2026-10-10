@@ -22,7 +22,7 @@ import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHash
 import Ecluse.Core.Package.Integrity (
     MinIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
-    classifyArtifacts,
+    classifyDigests,
  )
 import Ecluse.Core.Rules (PreparedRule, evalRules)
 import Ecluse.Core.Rules.Types (
@@ -106,7 +106,7 @@ admissionOf minIntegrity file details decision =
 admitFile :: MinIntegrity -> Filename -> PackageDetails -> ArtifactAdmission
 admitFile minIntegrity file details = case artifactFor file details of
     Nothing -> AdmissionFileAbsent
-    Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of
+    Just artifact -> case classifyDigests minIntegrity (artHashes artifact) of
         MeetsFloor ->
             -- 'MeetsFloor' guarantees a digest is present, but 'artHashes' is a plain list.
             -- The unreachable empty case fails closed, as if no digest existed.

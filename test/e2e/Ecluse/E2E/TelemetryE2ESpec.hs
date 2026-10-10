@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Telemetry export from the product image, which holds for any mount: OTLP metrics and spans
-reaching a collector, the JSONL log stream with no collector, a visible degradation when the
-collector is unreachable, and the Datadog unified service tags. An @npm@ client only supplies the
-traffic.
+{- | Telemetry export from the product image under each telemetry configuration: OTLP metrics and
+spans reaching a collector, the JSONL log stream with no collector, a visible degradation when the
+collector is unreachable, and the Datadog unified service tags. The configuration is independent of
+the mount. The traffic is npm's, and the mirror-span and private-leg cases need a mount with a
+mirror target.
 -}
 module Ecluse.E2E.TelemetryE2ESpec (spec) where
 
@@ -13,7 +14,7 @@ import Data.Text qualified as T
 
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg)
+import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg, telemetryPrivatePkg)
 import Ecluse.E2E.Harness
 
 -- | Drive the product image under each telemetry configuration and read what it exported.
@@ -46,16 +47,34 @@ scenarios = do
                 -- install returns. The published mirror is the cue that the job ran.
                 mirrored <- verdaccioHasVersion e2e (psName telemetryPkg) (psVersion telemetryPkg)
                 mirrored `shouldBe` True
+                -- Each span must carry this case's own coordinate: the install before it
+                -- emits the same three span names for another package.
                 emitted <-
                     awaitCollectorLog
                         e2e
                         ( \logs ->
                             all
-                                (`T.isInfixOf` logs)
+                                (\name -> any (spanFor (psName telemetryPkg) (psVersion telemetryPkg) name) (exportedSpans logs))
                                 ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
                         )
                         120
                 emitted `shouldBe` True
+
+            it "serves a mirrored artifact from the private leg, and the collector receives that upstream fetch" $ \e2e -> do
+                let name = psName telemetryPrivatePkg
+                    ver = psVersion telemetryPrivatePkg
+                    target = T.drop (T.length "/npm") (npmTarballPath name ver)
+                    answers = privateArtifactAnswers mirrorHost target
+                -- This coordinate belongs to this example alone, including its initial private miss.
+                verdaccioHasVersionNow e2e name ver `shouldReturn` False
+                void $ npmInstall e2e name >>= shouldSucceed
+                verdaccioHasVersion e2e name ver `shouldReturn` True
+                missed <- answers <$> awaitCollectorSpans e2e (elem (IntValue 404) . answers) 80
+                ordNub missed `shouldBe` [IntValue 404]
+                -- Each npmInstall creates a fresh project and cache, so both installs fetch the artifact.
+                void $ npmInstall e2e name >>= shouldSucceed
+                answered <- answers <$> awaitCollectorSpans e2e (elem (IntValue 200) . answers) 80
+                ordNub answered `shouldBe` [IntValue 404, IntValue 200]
 
     -- OTLP absent and telemetry off: the real image still boots, serves a real install,
     -- and logs JSONL to stdout/stderr, with no collector anywhere.

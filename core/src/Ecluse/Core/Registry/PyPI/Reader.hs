@@ -2,9 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The Simple-index walk for full and selected reads. It emits the fields that
-"Ecluse.Core.Registry.PyPI.Streaming" emits for the same mode, in the same order, and builds each
-retained file once. A full read interns each file's keys and strings as read.
+{- | The Simple-index walk for full and selected reads. It emits the fields of
+"Ecluse.Core.Registry.PyPI.Streaming" in source order and builds each retained file once. A full
+read interns each file's keys and strings as read.
 -}
 module Ecluse.Core.Registry.PyPI.Reader (
     pypiWalk,
@@ -17,7 +17,7 @@ import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, readShape)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
@@ -103,8 +103,8 @@ data Selection = Selection
 -- between files or the file under selection within one.
 data Selecting a = Selecting !InternTable !FilenameMemo a
 
--- json-stream's selected-file fold: every member event reaches the fold, even after the name rejects
--- the file. Listed keys come from the shapes and texts are copies, so no file enters the table.
+-- A file is read up to the first name that rejects it, and its rest is skipped like any skipped value:
+-- no member there is decoded, and only the lexer can fail the read. A file of the release is read whole.
 selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
 {-# INLINEABLE selectedFile #-}
 selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of
@@ -113,6 +113,9 @@ selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = field
   where
     collect table memo file event = case collectSelected wanted memo file event of
         (collected, remembered) -> Selecting table remembered collected
+    -- A budget with no level for a hash value reads a rejected file on, so its hashes meet the nesting limit.
+    skipsRejected = budget > 1
+    -- Listed keys come from the shapes and texts are copies, so no file enters the table.
     visit (Selecting table memo file) name after continue = withElement after $ \value afterKey -> case nameBytes name of
         "hashes"
             | budget <= 0 -> tooDeep value afterKey
@@ -126,7 +129,9 @@ selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = field
                 continue (collect table' memo file (HashesValue scalar)) afterValue
         _ -> case listedMember fields name of
             Just (key, shape) -> readShape Trees shape Keep table value afterKey $ \scalar table' afterValue ->
-                continue (collect table' memo file (FileScalar key scalar)) afterValue
+                case collect table' memo file (FileScalar key scalar) of
+                    Selecting held remembered RejectedFile | skipsRejected -> skipRest 1 afterValue (next Nothing remembered held)
+                    collected -> continue collected afterValue
             Nothing -> skipFrom value afterKey (continue (Selecting table memo file))
     hashField (Selecting table memo file) name after continue = withElement after $ \value afterKey ->
         readShape Trees (Scalar (budget - 1)) Keep table value afterKey $ \scalar table' afterValue ->

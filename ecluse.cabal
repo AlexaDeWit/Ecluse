@@ -697,6 +697,7 @@ library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
   exposed-modules:
+    Ecluse.Test.Collector
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
@@ -711,6 +712,7 @@ library ecluse-test-support
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
+    Ecluse.Test.InstalledTree
     Ecluse.Test.Json
     Ecluse.Test.Log
     Ecluse.Test.Maintenance
@@ -772,6 +774,7 @@ library ecluse-test-support
     , conduit           ^>=1.3
     , containers        ^>=0.7
     , crypton           >=2.1 && <2.2
+    , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
@@ -995,6 +998,7 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support
+    Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.Corpus.SubsetSpec
     Ecluse.Test.LogSpec
@@ -1163,6 +1167,7 @@ test-suite ecluse-unit
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
     Ecluse.Test.Corpus.AdvisoriesSpec
+    Ecluse.Test.InstalledTreeSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 
@@ -1480,14 +1485,18 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Advisories
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
+    Ecluse.E2E.Harness.Collector
     Ecluse.E2E.Harness.Docker
     Ecluse.E2E.Harness.Npm
     Ecluse.E2E.Harness.Pip
     Ecluse.E2E.Harness.Proxy
+    Ecluse.E2E.Harness.Stub
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
+    Ecluse.E2E.MixedEcosystemE2ESpec
     Ecluse.E2E.Npm.DredgerE2ESpec
     Ecluse.E2E.Npm.InstallE2ESpec
+    Ecluse.E2E.Npm.MirrorInstallE2ESpec
     Ecluse.E2E.Npm.PublishE2ESpec
     Ecluse.E2E.PyPI.InstallE2ESpec
     Ecluse.E2E.TelemetryE2ESpec
