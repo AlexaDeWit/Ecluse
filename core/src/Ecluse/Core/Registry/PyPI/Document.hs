@@ -11,11 +11,10 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleEncoding,
 ) where
 
-import Data.Aeson (Encoding, Object, Value, toEncoding)
+import Data.Aeson (Encoding, Object, Value (Null), toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package.Entry (EntryKey)
 
@@ -34,16 +33,15 @@ simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
 -- | Preserve envelope key order and file source order, overwriting any envelope files key.
 simpleEncoding :: SimpleDocument -> Encoding
-simpleEncoding document =
-    case Map.split "files" (KeyMap.toMap (simpleEnvelope document)) of
-        (before, after) ->
-            Encoding.pairs
-                ( Map.foldMapWithKey envelopePair before
-                    -- A non-empty Series appends a builder even when its right operand is empty.
-                    <> if Map.null after then files else files <> Map.foldMapWithKey envelopePair after
-                )
+simpleEncoding document
+    | KeyMap.null envelope = Encoding.pairs files
+    | otherwise = Encoding.pairs (KeyMap.foldMapWithKey (envelopePair files) (KeyMap.insert "files" Null envelope))
   where
+    envelope = simpleEnvelope document
     files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
 
-envelopePair :: Key -> Value -> Encoding.Series
-envelopePair key value = Encoding.pair key (toEncoding value)
+-- The sentinel's value never reaches the output. Only its key selects the retained files.
+envelopePair :: Encoding.Series -> Key -> Value -> Encoding.Series
+envelopePair files key value
+    | key == "files" = files
+    | otherwise = Encoding.pair key (toEncoding value)
