@@ -408,7 +408,7 @@ Every role's boot log, and `ecluse check-config`, print each mount's rules in ev
 the phases each applies at. A `pypi` mount under the policy above keeps the shared `[admission]`,
 so it logs:
 
-```
+```txt
 rule boot order for mount pypi:
 rule 1: DenyIfCve (precedence 225, applies at admission only)
 rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)
