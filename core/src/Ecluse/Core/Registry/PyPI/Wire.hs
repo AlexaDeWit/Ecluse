@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.PyPI.Wire (
     -- * One distribution file
     IndexFile (..),
     YankState (..),
+    yankState,
     decodeIndexFiles,
 ) where
 
@@ -111,6 +112,7 @@ data YankState
       FileWithdrawn
     deriving stock (Eq, Show)
 
+-- | True or any string withdraws a file under PEP 592. Other values leave it offered.
 yankState :: Maybe Value -> YankState
 yankState = \case
     Just (Bool True) -> FileWithdrawn

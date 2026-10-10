@@ -490,8 +490,12 @@ result records). Its key accumulator stops at about 64 KiB and its number accumu
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
 read, in a table keyed by SipHash-1-3 under a key drawn for that read. When the read ends, it seals
-the table's strings into the document's `DocTable` and drops the table. An npm full read keeps each
-served release packed against that `DocTable`, as the bytes a listing copies when it renders.
+the table's strings into the document's `DocTable` and drops the table. Full reads keep npm releases
+and PyPI files packed against that table. PyPI reduces scalar and digest members into typed file
+facts while the writer packs them. Successful files need no whole-file tree decode. Dropped files
+decode only for the existing diagnostic payload. Both ecosystems retain typed URLs and digests.
+Listings copy packed bytes through the render plan, with PyPI files in source order across each
+winning snapshot. Selected PyPI reads keep their tree reducer and early filename rejection.
 Parser continuations advance before the next chunk, so successful reads do not retain a complete
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and

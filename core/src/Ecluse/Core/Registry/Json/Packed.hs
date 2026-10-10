@@ -44,6 +44,7 @@ module Ecluse.Core.Registry.Json.Packed (
     packedEncodedLength,
     packedResident,
     withoutHole,
+    hasHole,
 
     -- * Rendering
     UrlPrefix,
@@ -313,6 +314,10 @@ packedResident value = 32 + arrayResident (packedBytes value)
 -- | The value with no hole, so every render writes it as read.
 withoutHole :: Packed -> Packed
 withoutHole (Packed blob _ encoded) = Packed blob (-1) encoded
+
+-- | Whether the value carries a string at its configured rewrite path.
+hasHole :: Packed -> Bool
+hasHole (Packed _ hole _) = hole >= 0
 
 -- The array holding the scalar at a position, where its encoding starts and how long it is, and the
 -- position after it in the blob.

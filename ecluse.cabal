@@ -223,6 +223,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Adapter
     Ecluse.Core.Registry.PyPI.Credential
     Ecluse.Core.Registry.PyPI.Document
+    Ecluse.Core.Registry.PyPI.FileWriter
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
@@ -918,6 +919,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
     Ecluse.Core.Registry.PyPI.DocumentSpec
+    Ecluse.Core.Registry.PyPI.FileWriterSpec
     Ecluse.Core.Registry.PyPI.FilterSpec
     Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.PyPI.MetadataSpec

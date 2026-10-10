@@ -7,6 +7,7 @@ module Ecluse.Test.Registry.PyPI.Metadata (
     projectPyPIIndex,
     projectPyPIVersion,
     projectPyPIChunks,
+    projectPyPIPackedChunks,
     documentFromValue,
     simpleValue,
 ) where
@@ -17,16 +18,18 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
+import Ecluse.Core.Registry.Json.Writer (newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiIndexWalk)
+import Ecluse.Core.Registry.PyPI.FileWriter (fileWriter)
+import Ecluse.Core.Registry.PyPI.Metadata (PyPIFullRead, projectPyPIStream, pypiIndexWalk, pypiPackedWalk)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks)
+import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 
 -- | Project a complete fixture through the same compact extraction as an HTTP response.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, SimpleDocument)
@@ -46,6 +49,18 @@ projectPyPIChunks limits name mode =
         . walkJsonChunks
             (MetadataBodyLimit (maxMetadataBytes limits))
             (pypiIndexWalk limits name mode (testTable fileUniqueFields))
+
+-- | Run packed production full reads with explicit chunks and the same byte counter as HTTP reads.
+projectPyPIPackedChunks :: Limits -> PackageName -> [ByteString] -> Either MetadataError (StreamResult PyPIFullRead)
+projectPyPIPackedChunks limits name =
+    first MetadataBoundExceeded
+        . walkWritingChunks
+            (MetadataBodyLimit (maxMetadataBytes limits))
+            ( do
+                writer <- newWriter Nothing
+                build <- fileWriter writer
+                pure (pypiPackedWalk writer build limits name (testTable fileUniqueFields))
+            )
 
 -- | Build assembly fixtures without projection, including intentionally malformed entries.
 documentFromValue :: Value -> SimpleDocument

@@ -15,6 +15,10 @@ module Ecluse.Core.Registry.CachedDocument (
     -- * npm's packed full reads and their renders
     npmPacked,
     npmRendered,
+
+    -- * PyPI's packed full reads and their renders
+    pypiPacked,
+    pypiRendered,
 ) where
 
 import Data.Aeson (Value (..))
@@ -24,9 +28,10 @@ import Data.Scientific (coefficient)
 import Data.Text.Internal qualified as Text
 import Math.NumberTheory.Logarithms (integerLog2)
 
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Json.Packed (RenderPlan (planMembers), planResident, planValue)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentTop), packumentResident, packumentValue)
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedEnvelope, packedSimpleDocument, packedSimpleResident, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel (chargeForResident)
 
 {- | A serving document the pipeline threads and permitted caches hold. The derived 'Show' and 'Eq' are a
@@ -37,6 +42,8 @@ data CachedDoc
     | CachedPyPISimple SimpleDocument ~Int64
     | PackedNpm PackedPackument
     | RenderedNpm RenderPlan
+    | PackedPyPI PackedSimple
+    | RenderedPyPI RenderPlan
     deriving stock (Eq, Show)
 
 {- | Cached estimate of compact bytes. This is an accounting input, not measured resident memory. A
@@ -48,6 +55,8 @@ weighCachedDoc = \case
     CachedPyPISimple _ charge -> charge
     PackedNpm packed -> estimateValueBytes (Object (packumentTop packed)) + fromIntegral (chargeForResident (packumentResident packed))
     RenderedNpm plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
+    PackedPyPI document -> estimateValueBytes (Object (packedEnvelope document)) + fromIntegral (chargeForResident (packedSimpleResident document))
+    RenderedPyPI plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
 
 {- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here. A packed
 or rendered document projects as its tree, or as 'Nothing' when it names a string or table it lacks.
@@ -60,6 +69,8 @@ npmCached = (\v -> CachedNpm v (estimateValueBytes v), project)
         PackedNpm packed -> packumentValue packed
         RenderedNpm plan -> planValue plan
         CachedPyPISimple _ _ -> Nothing
+        PackedPyPI _ -> Nothing
+        RenderedPyPI _ -> Nothing
 
 -- | PyPI's boundary pair, spelled out arm by arm for the same reason as 'npmCached'.
 pypiSimpleCached :: (SimpleDocument -> CachedDoc, CachedDoc -> Maybe SimpleDocument)
@@ -70,6 +81,13 @@ pypiSimpleCached = (\v -> CachedPyPISimple v (simpleBytes v), project)
         CachedNpm _ _ -> Nothing
         PackedNpm _ -> Nothing
         RenderedNpm _ -> Nothing
+        PackedPyPI document -> packedSimpleDocument document
+        RenderedPyPI plan -> fromValue =<< planValue plan
+    fromValue = \case
+        Object fields -> case KeyMap.lookup "files" fields of
+            Just (Array files) -> Just (simpleDocument fields (zipWith (\position value -> (ArrayEntry position, value)) [0 ..] (toList files)))
+            _ -> Nothing
+        _ -> Nothing
 
 -- | npm's packed full read, and its packed form when the document is one.
 npmPacked :: (PackedPackument -> CachedDoc, CachedDoc -> Maybe PackedPackument)
@@ -78,6 +96,14 @@ npmPacked = (PackedNpm, \case PackedNpm packed -> Just packed; _ -> Nothing)
 -- | An assembled npm listing that renders from packed releases, and its plan when the document is one.
 npmRendered :: (RenderPlan -> CachedDoc, CachedDoc -> Maybe RenderPlan)
 npmRendered = (RenderedNpm, \case RenderedNpm plan -> Just plan; _ -> Nothing)
+
+-- | PyPI's packed full-read document, available without materialising its files.
+pypiPacked :: (PackedSimple -> CachedDoc, CachedDoc -> Maybe PackedSimple)
+pypiPacked = (PackedPyPI, \case PackedPyPI document -> Just document; _ -> Nothing)
+
+-- | An assembled PyPI listing that renders directly from packed files and source tables.
+pypiRendered :: (RenderPlan -> CachedDoc, CachedDoc -> Maybe RenderPlan)
+pypiRendered = (RenderedPyPI, \case RenderedPyPI plan -> Just plan; _ -> Nothing)
 
 simpleBytes :: SimpleDocument -> Int64
 simpleBytes document = estimateValueBytes (Object (simpleEnvelope document)) + 12 + sum [32 + estimateValueBytes value | (_, value) <- simpleFiles document]
