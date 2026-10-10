@@ -151,7 +151,7 @@ canonicalPep440 raw = do
     key <- parsePep440 raw
     let spelling = renderPep440 key
     -- A spelling can be longer than its text, and 'mkVersion' reads no key past the length bound.
-    pure $! Version spelling (if withinVersionLength spelling then Just $! PyPIKey key else Nothing)
+    pure (Version spelling (if withinVersionLength spelling then Just $! PyPIKey key else Nothing))
 
 {- | Resolve @dist-tags.latest@ over the survivors the caller left, keeping @chosen@ when it
 survives so a prerelease never displaces a maintainer's stable tag. The result is a survivor.
