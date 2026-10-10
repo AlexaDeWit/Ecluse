@@ -99,11 +99,11 @@ to update it), or use a gitignored scratch file with a branch-scoped name
 worktrees collide on it, and it gets staged by accident.
 
 **What** and **Why** are the part worth effort. A reviewer reads them before the diff, so write
-them so someone who has not opened the diff understands the change on its own. One to three
-sentences each: what changed and why, in words a sharp colleague on another team follows. For a
-security or behaviour change, say who could do what before and what holds now. Name a deliberate
-trade-off in one sentence under **Consequences** if there was one. End with `Closes #NNN` when the
-PR completes its issue.
+them so someone who has not opened the diff understands the change on its own. Two to five
+sentences between them: what changed and why, in words a sharp colleague on another team follows.
+For a security or behaviour change, say who could do what before and what holds now. Name a
+deliberate trade-off in one sentence under **Consequences** if there was one. End with
+`Closes #NNN` when the PR completes its issue.
 
 Rules for the body:
 

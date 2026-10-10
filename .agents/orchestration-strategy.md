@@ -104,10 +104,11 @@ is confident handing it over. Marking it ready for review is the hand-off signal
 architect to review and possibly merge, nothing less. Before the flip, the team lead checks that the
 gate ran on the reviewer's head commit. The team lead also checks the contexts the ruleset
 requires, per [Gating jobs and required contexts](#gating-jobs-and-required-contexts). Only then
-does the team lead flip the PR with `gh pr ready` and report it to the architect. Never report a draft as done. A PR stays a draft while it is still building, mid-review,
-evaluation-blocked, or gate-red, or while the team lead is unsure of it. The architect then never
-spends attention on, or merges, work nobody deliberately offered. This is the one definition of
-ready-for-review, and later sections reference it.
+does the team lead flip the PR with `gh pr ready` and report it to the architect. Never report a
+draft as done. A PR stays a draft while it is still building, mid-review, evaluation-blocked, or
+gate-red, or while the team lead is unsure of it. The architect then never spends attention on, or
+merges, work nobody deliberately offered. This is the one definition of ready-for-review, and later
+sections reference it.
 
 **Fix routing**. A reviewer's "changes required" routes one of three ways. Resume a background
 implementer agent (`SendMessage` to its agent ID) with its full build context intact. That is the
