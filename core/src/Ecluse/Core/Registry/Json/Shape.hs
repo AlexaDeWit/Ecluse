@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Json.Shape (
     namedMembers,
     everyMember,
     knownMembers,
+    prepareMembers,
     listedMember,
     Mode (..),
     MemberKey (..),
@@ -30,7 +31,7 @@ import Data.JsonStream.CLexer (unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), PreparedName, decodedName, entryKeeps, entryString, entryText, internName, internPreparedName, nameBytes, nameText, prepareName)
 import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
@@ -53,11 +54,13 @@ data Shape
       Checked !Int Shape
 
 -- | Which members of an object are retained, and with what shape.
-data Members = Members (HashMap.HashMap ByteString (Key.Key, Shape)) (Maybe Shape)
+data Members = Members (HashMap.HashMap ByteString Member) (Maybe Shape)
+
+data Member = Member (Key.Key, Shape) (Maybe PreparedName)
 
 -- | Retain only the named members. The first entry for a name wins.
 namedMembers :: [(Text, Shape)] -> Members
-namedMembers entries = Members (HashMap.fromListWith (\_ earlier -> earlier) [(encodeUtf8 name, (Key.fromText name, shape)) | (name, shape) <- entries]) Nothing
+namedMembers entries = Members (HashMap.fromListWith (\_ earlier -> earlier) [(encodeUtf8 name, Member (Key.fromText name, shape) Nothing) | (name, shape) <- entries]) Nothing
 
 -- | Retain every member with one shape.
 everyMember :: Shape -> Members
@@ -65,12 +68,26 @@ everyMember = Members mempty . Just
 
 -- | Retain every member with one shape, sharing the key of each listed name.
 knownMembers :: [Text] -> Shape -> Members
-knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, (Key.fromText name, shape)) | name <- names]) (Just shape)
+knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, Member (Key.fromText name, shape) Nothing) | name <- names]) (Just shape)
+
+-- | Cache the listed names' hashes for this read, leaving table insertion and nested shapes unchanged.
+prepareMembers :: InternTable -> Members -> Members
+prepareMembers table (Members named other) = Members (HashMap.map prepare named) other
+  where
+    prepare (Member schema@(key, _) _) =
+        let !prepared = prepareName table (Key.toText key)
+         in Member schema (Just prepared)
 
 -- | A listed name's key and shape. Every member a read keeps as read under that name holds this one key.
 listedMember :: Members -> Name -> Maybe (Key.Key, Shape)
-listedMember (Members named _) name = HashMap.lookup (nameBytes name) named
+listedMember members name = case findMember members name of
+    Just (Member schema _) -> Just schema
+    Nothing -> Nothing
 {-# INLINE listedMember #-}
+
+findMember :: Members -> Name -> Maybe Member
+findMember (Members named _) name = HashMap.lookup (nameBytes name) named
+{-# INLINE findMember #-}
 
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
 data Mode = Share | Keep
@@ -277,15 +294,15 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
         _ -> withElement tokens $ \element rest -> case element of
             ObjectEnd _ -> closeObject build fields (\built -> next built table rest)
             _ -> memberName element rest (member table fields) (loop table fields)
-    member table fields name rest = case listedMember members name of
-        Just (shared, shape) -> value table fields name (Just shared) shape rest
+    member table fields name rest = case findMember members name of
+        Just (Member (shared, shape) prepared) -> value table fields name (Just shared) prepared shape rest
         Nothing -> case other of
-            Just shape -> value table fields name Nothing shape rest
+            Just shape -> value table fields name Nothing Nothing shape rest
             Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
     -- A shared key goes through the table, and a key the table keeps holds its value as read.
-    value table fields name shared shape rest = case mode of
+    value table fields name shared prepared shape rest = case mode of
         Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
-        Share -> case internName name table of
+        Share -> case maybe (internName name table) (`internPreparedName` table) prepared of
             Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
       where
         keyed key !valueMode held = beginMember build key fields $ \ !repeated ->
