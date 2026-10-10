@@ -207,14 +207,21 @@ An artifact decision or a mirror write needs one release and its publish time. D
 release would cost it a full read.
 
 - Give the read type a case for one release, as npm's `OneRelease` and PyPI's `SelectedRead` do.
-- Skip a value unread only where the reference reader skips it, so the walk keeps the reference's
+- Skip a value unread where the reference reader skips it, so the walk keeps the reference's
   acceptance. npm's reference skips each other release, and json-stream's `objectWithKey` skips the
   rest of the `time` and `dist-tags` objects after the member it wants. So `npmWalk` skips them
   too, and still counts each skipped release toward the version cap.
-- PyPI's reference folds every retained member of every file, so PyPI's `selectedFile` reads each
-  file's retained members in `Keep` mode. A file the name rejects then never enters the intern
-  table. `listedMember` gives each listed member the key its shape holds, so the files a selected
-  read keeps share their keys without the table.
+- Where a read skips more than its reference, state the rule in one place and hold it with a
+  property of its own. A PyPI file names its release in its `filename` member, so `selectedFile`
+  reads a file up to its first name and skips the rest once that name rejects the file. A member
+  after that name is not decoded, so only the lexer can fail the read there, where PyPI's
+  reference decodes every member of every file.
+  [`ReaderSpec`](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs) holds the walk to the
+  reference's read of the same index with those members repaired. Each skipped file still counts
+  toward the version cap.
+- `selectedFile` reads the members it keeps in `Keep` mode, so no file enters the intern table.
+  `listedMember` gives each listed member the key its shape holds, so the files a selected read
+  keeps share their keys without the table.
 
 ### 8. Keep only what a reader uses in the typed view
 

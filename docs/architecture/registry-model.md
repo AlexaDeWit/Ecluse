@@ -469,8 +469,11 @@ cancellation still close the response through `withResponse`.
 
 Each retained release produces its typed policy record as it arrives. Separate timestamp and tag
 maps join those records at the end, so source member order does not affect release association.
-Selected reads skip sibling release objects. Presence probes and store enumeration retain only
-version identifiers and the field shapes needed to exclude unusable releases.
+A selected npm read skips each sibling release object. A selected PyPI read reads each file up to
+its name, and skips the rest of a file that the name puts in another release. Neither read decodes
+what it skips, so a member there that would not decode does not fail it. Presence probes and store
+enumeration retain only version identifiers and the field shapes needed to exclude unusable
+releases.
 
 The [operator field contract](https://ecluse-proxy.com/docs/protocol-support/#npm-metadata-fields)
 owns the retained set. Extraction skips unknown fields before constructing values. The parser does
@@ -478,7 +481,8 @@ not establish whole-document JSON validity. A scalar or empty retained container
 level, and each enclosing retained container adds one. Specialised readers check their own level
 before reading members. Skipped structures pass token by token without decoding. Body and version
 ceilings bound other work. The walk accepts and refuses the same input as json-stream's parser
-combinators, and it builds each retained object once from its members.
+combinators, except in the rest of a file that a selected PyPI read skips, and it builds each
+retained object once from its members.
 
 The vendored lexer allocates batches proportional to the input chunk size (`20 + chunkBytes / 5`
 result records). Its key accumulator stops at about 64 KiB and its number accumulator at about
