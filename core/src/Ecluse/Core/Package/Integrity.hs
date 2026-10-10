@@ -134,20 +134,24 @@ data VersionIntegrity
       NoIntegrity
     deriving stock (Eq, Show)
 
-{- | Keep the files whose own digests clear a floor, so a release loses the files that clear no
-tamper-evident fingerprint rather than disappearing whole. With none kept, all their digests say why.
--}
+-- | Keep the files whose own digests clear a floor, so a release loses only the files it cannot verify.
 partitionByFloor :: (IntegrityFloor floor) => floor -> (file -> [Hash]) -> NonEmpty file -> Either VersionIntegrity (NonEmpty file)
+-- Inlined, so a caller's projection is a field read in its own loop.
+{-# INLINE partitionByFloor #-}
 partitionByFloor flr digestsOf files = case nonEmpty (NE.filter (digestsMeetFloor flr . digestsOf) files) of
     Just survivors -> Right survivors
-    Nothing -> Left (classifyDigests flr (foldMap digestsOf files))
+    Nothing -> Left (integrityOf False (all (null . digestsOf) files))
 
 digestsMeetFloor :: (IntegrityFloor floor) => floor -> [Hash] -> Bool
 digestsMeetFloor flr = any (maybe False (meetsFloor flr) . assertedAlg)
 
--- | Read one file's digests against a floor, or the digests of every file of a version together.
+-- | Read a set of digests against a floor: one file's, or every file's of a version together.
 classifyDigests :: (IntegrityFloor floor) => floor -> [Hash] -> VersionIntegrity
-classifyDigests flr digests
-    | digestsMeetFloor flr digests = MeetsFloor
-    | null digests = NoIntegrity
+classifyDigests flr digests = integrityOf (digestsMeetFloor flr digests) (null digests)
+
+-- Whether a digest clears the floor, then whether there is no digest at all.
+integrityOf :: Bool -> Bool -> VersionIntegrity
+integrityOf clears none
+    | clears = MeetsFloor
+    | none = NoIntegrity
     | otherwise = BelowFloor

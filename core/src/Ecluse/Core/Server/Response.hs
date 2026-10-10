@@ -96,11 +96,10 @@ data RejectReason
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
-{- | Project a rules 'Decision' into a serve outcome that names the version its evidence names. An
-'Undecidable' decision rejects as 'Unavailable': a version no rule could vet is never admitted.
--}
+-- | Project a rules 'Decision' into a serve outcome. A version no rule could vet is refused as 'Unavailable'.
 serveDecisionOf :: RuleEvidence -> Decision -> ServeDecision
-serveDecisionOf evidence decision = case decision of
+-- Strict in the evidence, so a caller's 'completeEvidence' is read as two fields and never built.
+serveDecisionOf !evidence decision = case decision of
     Admitted{} -> Admit
     Blocked name _ _ -> Reject (rejectAs (ByPolicy (RuleName name)))
     BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
