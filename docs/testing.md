@@ -416,12 +416,31 @@ client- and mirror-observable outcomes:
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
   served Simple index advertised, so the installed bytes are the advertised ones.
 
+The spec modules sit under `test/e2e/Ecluse/E2E/`, with one directory per ecosystem, so a module's
+name states the ecosystem of its cases. The suite's log heads each section with that name, less the
+`Spec` suffix. No module holds cases for more than one ecosystem. A case that holds for any mount
+goes in a module beside the ecosystem directories.
+
+| Module | Cases |
+|---|---|
+| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case. |
+| `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
+| `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
+| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
+| `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. It holds for any mount, and an `npm` client supplies the traffic. |
+
+Each module boots its own data plane, so no case reads store state that another module wrote. Every
+module opens with `whenE2EAvailable`, which runs its cases when the tier's prerequisites are present
+and reports one `pending` case otherwise. The harness and the fixtures stay in
+`Ecluse.E2E.Harness.*` and `Ecluse.E2E.Fixtures.*`.
+
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,
 consent refusal, first-party protection, and listing preservation after the final version
-is deleted. `Ecluse.DredgerE2ESpec` also drives `listPackagesIn` against the store and compares
-complete package-version snapshots with the audit records and cycle counts. Its first-party
-fixture holds two versions. These cases do not verify behaviour against a real CodeArtifact repository.
+is deleted. `Ecluse.E2E.Npm.DredgerE2ESpec` also drives `listPackagesIn` against the store and
+compares complete package-version snapshots with the audit records and cycle counts. Its
+first-party fixture holds two versions. These cases do not verify behaviour against a real
+CodeArtifact repository.
 
 A further Dredger group covers what the next private read sees after a cleanup. It runs a second
 Verdaccio as the proxy's `privateUpstream`, seeds the mirror through a proxy that still permits the
@@ -458,12 +477,12 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 It gates as its own parallel job the CI `gate` depends on. It is far heavier than the rest of the
-gate: an image build, multiple containers, and the npm CLI. But it is hermetic. The nginx and
+gate: an image build, multiple containers, and the real clients. But it is hermetic. The nginx and
 Verdaccio upstreams are local, so unlike smoke it has no external dependency to flake on, which
 makes gating safe. Its weight keeps it out of the local `task gate` and `task check`. Run
 `task test-e2e` on demand to build the image, load it, and run the suite. It needs a Docker daemon
-and the `npm` and `pip` clients, both from the dev shell, and skips every case as `pending` when
-`ECLTEST_E2E_IMAGE` is unset.
+and the `npm` and `pip` clients, both from the dev shell, and each spec module reports one `pending`
+case when `ECLTEST_E2E_IMAGE` is unset.
 
 The egress guard refuses internal addresses on the public path. So the containers run on
 the RFC 5737 documentation subnet `203.0.113.0/24`, which the guard treats as external. The real
@@ -1084,7 +1103,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Recorded corpus outputs, gating in `ecluse-core-unit` | List the captures in [Ecluse.Test.Corpus](../test/support/Ecluse/Test/Corpus.hs) with a `CaptureUpstream`, give `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/StreamingSpec.hs` a `CorpusRead`, and record each capture's lines in [corpus-outputs.tsv](../core/test/unit/fixtures/corpus-outputs.tsv) | The [npm](../core/test/unit/Ecluse/Core/Registry/Npm/StreamingSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/StreamingSpec.hs) specs compare each capture's outputs, computed through `Ecluse.Test.Corpus.Outputs`, with its recorded lines. No tool writes the file. A new capture's spec fails, and its failure output lists the computed lines as Haskell string literals, with each tab shown as `\t`, to review and record. |
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
-| At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
+| At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
 | Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `peakLimits`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each regression limit below its charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | Seven of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The limit check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without peak limits skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads, and `Ecluse.Test.Corpus.Merge` cuts, an ecosystem they do not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
