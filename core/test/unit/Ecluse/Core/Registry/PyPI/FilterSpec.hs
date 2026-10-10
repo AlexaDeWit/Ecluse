@@ -26,9 +26,10 @@ import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource, TrustedSource), SourceId, mergePackuments)
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiPacked, pypiRendered, pypiSimpleCached)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Filter qualified as Filter
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Registry.PyPI.Project (projectName)
 import Ecluse.Core.Security (defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Pipeline.Internal (admitByIntegrity)
@@ -42,7 +43,7 @@ import Ecluse.Test.Corpus (cpPackage, cpPath, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict, fieldAt, isObject)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, requestsName, validSha1, validSha256)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIPackedChunks, simpleValue)
 import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
@@ -55,6 +56,37 @@ spec = do
     rebaseSpec
     sidecarSpec
     serialiseSpec
+    packedSerialiseSpec
+
+packedSerialiseSpec :: Spec
+packedSerialiseSpec = describe "packed served bytes" $
+    for_ pypiCorpusPackages $ \package ->
+        it ("matches tree assembly for single and merged survivor sets of " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            let name = cpPackage package
+                digest = digestOf bytes
+            (info, tree) <- expectRight (projectPyPIIndex defaultLimits name bytes)
+            (packedInfo, packed) <- expectRight (projectPyPIPackedChunks defaultLimits name [bytes] >>= projectPyPIPacked defaultLimits name)
+            packedInfo `shouldBe` info
+            fingerprint <$> Filter.serialiseSimpleDocument (fst pypiPacked packed)
+                `shouldBe` (fingerprint <$> Filter.serialiseSimpleDocument (fst pypiSimpleCached tree))
+            let releases = Map.keysSet (infoVersions info)
+                selections = mempty : releases : map Set.singleton (toList (Set.lookupMin releases) <> toList (Set.lookupMax releases))
+            for_ [[GatedSource], [TrustedSource, GatedSource]] $ \provenances ->
+                for_ selections $ \survivors -> do
+                    plan <- expectRight (maybeToRight ("expected a merge plan" :: Text) (mergePackuments [(provenance, Snapshot digest (restrictToSurvivors survivors info)) | provenance <- provenances]))
+                    let sources value = Map.fromList (zip [0 ..] [Snapshot digest value | _ <- provenances])
+                        treeDoc = fst pypiSimpleCached tree
+                        packedDoc = fst pypiPacked packed
+                        assembled value = Filter.assembleSimpleDocument mountBase (sources value) plan (Just value)
+                        actual = assembled packedDoc
+                    snd pypiRendered actual `shouldSatisfy` isJust
+                    fingerprint <$> Filter.serialiseSimpleDocument actual
+                        `shouldBe` (fingerprint <$> Filter.serialiseSimpleDocument (assembled treeDoc))
+                    let changed = Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "another source"}) 0 (sources packedDoc)
+                        changedTree = Map.adjust (\snapshot -> snapshot{snapshotDigest = digestOf "another source"}) 0 (sources treeDoc)
+                    fingerprint <$> Filter.serialiseSimpleDocument (Filter.assembleSimpleDocument mountBase changed plan (Just packedDoc))
+                        `shouldBe` (fingerprint <$> Filter.serialiseSimpleDocument (Filter.assembleSimpleDocument mountBase changedTree plan (Just treeDoc)))
 
 relaySpec :: Spec
 relaySpec = describe "what the assembly relays from the base document" $ do

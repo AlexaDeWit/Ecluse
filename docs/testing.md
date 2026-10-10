@@ -240,8 +240,9 @@ The checks compare bytes with each ecosystem's charges:
   example checks that each limit sits below its charge. All four limits remain unchanged because
   rounding 1.08 times each maximum up to a quarter step gives the same configured limits.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
-  `entryBelowSource` names the ecosystems this check covers. PyPI's entry holds each file as
-  aeson's tree beside its typed view, which outgrows the file.
+  `entryBelowSource` names the ecosystems this check covers. PyPI now holds packed files beside its
+  typed view. The PyPI figures below predate that representation. The limits and admission charges
+  remain at their existing calibration until fresh native peaks justify a change.
 - A single-source listing's entry frees live bytes when it drops its served document, and the
   document's weight, expanded as a cache expands it, covers them.
 
