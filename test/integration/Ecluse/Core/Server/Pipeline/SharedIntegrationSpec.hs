@@ -20,13 +20,13 @@ import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule, Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
-import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
+import Ecluse.Core.Rules.Types (FailureAlignment (..), Reason (FixesNoAdvisory), RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (packageRule)
+import Ecluse.Test.Rules (exposure, packageRule, remediation)
 import Katip (Environment (Environment), closeScribes)
 
 spec :: Spec
@@ -44,15 +44,15 @@ mkEffectful name prec cfg align effect verdict = do
 
 downEffectfulRule :: IO PreparedRule
 downEffectfulRule =
-    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (throwIO (CveQueryFault "advisories-for" "advisory source down")) (NoDecision "unreached")
+    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (throwIO (CveQueryFault "advisories-for" "advisory source down")) (NoDecision FixesNoAdvisory)
 
 denyingEffectfulRule :: IO PreparedRule
 denyingEffectfulRule =
-    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny pass (Deny Nothing "affected by a known advisory")
+    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny pass (Deny Nothing exposure)
 
 allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =
-    mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision pass (Allow "remediates a known advisory")
+    mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision pass (Allow remediation)
 
 effectfulSpec :: Spec
 effectfulSpec = describe "effectful rule tier" $ do

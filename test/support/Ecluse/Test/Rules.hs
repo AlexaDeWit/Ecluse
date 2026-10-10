@@ -23,6 +23,10 @@ module Ecluse.Test.Rules (
     denyRule,
     cannotVetRule,
 
+    -- * Reasons for a fixed verdict
+    remediation,
+    exposure,
+
     -- * Package-read prepared rules
     packageRule,
     mapPackageRead,
@@ -34,6 +38,7 @@ module Ecluse.Test.Rules (
     isApproved,
     isUndecidable,
     isBlockedByDefault,
+    sentences,
 
     -- * Reading back a verdict
     isAllow,
@@ -41,6 +46,7 @@ module Ecluse.Test.Rules (
     isNoDecision,
     isCannotVet,
     isUnavailable,
+    verdictSentence,
 
     -- * Shaping a version under test
     withInstallScripts,
@@ -74,12 +80,16 @@ import Ecluse.Core.Rules (
     verdictSource,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
+import Ecluse.Core.Rules.Render (renderInability, renderReason)
 import Ecluse.Core.Rules.Types (
+    AdvisoryScore (Cvss),
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
     Fact (Known),
     FailureAlignment (FailDeny),
+    Inability (NoDatabaseLoaded),
     PrecededRule (PrecededRule),
+    Reason (AffectedBy, Remediates),
     Rule,
     RuleEvaluation (Unavailable),
     RuleEvidence (evInstallCode, evName),
@@ -168,9 +178,16 @@ mapResilience adjust = mapPackageRead (\packageRead -> packageRead{prResilience 
 an absent advisory database, so a fail-closed evaluation reaches an undecidable decision.
 -}
 admitRule, denyRule, cannotVetRule :: PreparedRule
-admitRule = constRule "test-admit" (Allow "admitted for test")
-denyRule = constRule "test-deny" (Deny Nothing "denied by current policy")
-cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
+admitRule = constRule "test-admit" (Allow remediation)
+denyRule = constRule "test-deny" (Deny Nothing exposure)
+cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny NoDatabaseLoaded)
+
+{- | The reasons a fixed-verdict rule gives where a case reads the verdict and not the reason: an
+allow's, and a deny's.
+-}
+remediation, exposure :: Reason
+remediation = Remediates ("GHSA-test-0001" :| [])
+exposure = AffectedBy Cvss 7.0 ("GHSA-test-0001" :| [])
 
 -- | The rule name credited for an admission or a block, if any (the engine credits by name).
 admittedBy, blockedBy :: Decision -> Maybe Text
@@ -195,6 +212,14 @@ isBlockedByDefault = \case
     BlockedByDefault{} -> True
     _ -> False
 
+-- | A decision's reasons as the sentences a reader sees, for a case that pins the text.
+sentences :: Decision -> [Text]
+sentences = \case
+    Admitted _ reason _ -> [renderReason reason]
+    Blocked _ _ reason -> [renderReason reason]
+    BlockedByDefault reasons -> map renderReason reasons
+    Undecidable _ reason -> [renderReason reason]
+
 -- | Which arm one rule's verdict took, for a case that decides on the arm and not its payload.
 isAllow, isDeny, isNoDecision, isCannotVet :: RuleVerdict -> Bool
 isAllow = \case
@@ -209,6 +234,16 @@ isNoDecision = \case
 isCannotVet = \case
     CannotVet{} -> True
     _ -> False
+
+{- | A verdict's reason as the sentence a reader sees. An inability reads without its rule's name,
+which a decision adds.
+-}
+verdictSentence :: RuleVerdict -> Text
+verdictSentence = \case
+    Allow reason -> renderReason reason
+    Deny _ reason -> renderReason reason
+    NoDecision reason -> renderReason reason
+    CannotVet _ why -> renderInability why
 
 -- | Whether a resilient evaluation reported its source out rather than reaching a verdict.
 isUnavailable :: RuleEvaluation -> Bool

@@ -12,7 +12,6 @@ import Test.Hspec
 
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryAge (AdvisoryAge, advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
@@ -22,6 +21,7 @@ import Ecluse.Core.Rules.Freshness (
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Types (
+    AdvisoryAge (AdvisoryAge, advisoryAge, advisoryMaxAge, advisoryPushedAt),
     DenyIfCveParams (DenyIfCveParams, dicMinCvss, dicOnUnavailable),
     FailureAlignment (FailDeny),
     Rule (AllowIfOlderThan, AllowScope, DenyIfCve),

@@ -209,8 +209,10 @@ document, for the reason in
 **Always name the deriving strategy** (`-Wmissing-deriving-strategies`):
 `deriving stock (Eq, Show, Ord)` for ordinary types, and `deriving newtype` when you want the
 wrapped type's instance. Model decisions and outcomes as **sum types**, not booleans or stringly
-flags. `RuleOutcome = Allow Text | Deny Text | Abstain Text` makes the three cases explicit, carries
-the audit reason with each, and is total to match.
+flags. `RuleVerdict = Allow Reason | Deny (Maybe DbEtag) Reason | NoDecision Reason | CannotVet
+FailureAlignment Inability` makes the four cases explicit, carries the audit reason with each, and
+is total to match. The reason is a sum type of facts too. A total function renders it to text where
+a reader needs it, such as a log line or a response body.
 
 **Test a derivation only when its *specific* shape is load-bearing.** A derived instance is lawful,
 but the behaviour it picks rides on declaration structure. The compiler cannot see that, so a later
@@ -306,7 +308,7 @@ decided.
 A policy proxy must not crash on hostile input, so Écluse **bans partial functions**.
 [`.hlint.yaml`](../.hlint.yaml) carries the list and fails the lint on any use, and relude hides
 most. Pattern-match the empty or missing case, or use the total alternative. Represent "might not
-exist" in the type. `Decision` and `RuleOutcome` carry a human reason for every branch, so a
+exist" in the type. `Decision` and `RuleVerdict` carry a reason for every branch, so a
 failure is explainable rather than thrown.
 
 **Partial record selectors and updates fall under the same ban.** `-Wpartial-fields`,

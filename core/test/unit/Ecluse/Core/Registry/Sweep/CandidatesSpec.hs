@@ -21,9 +21,11 @@ import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, identityDenyNames, inCandidates)
 import Ecluse.Core.Rules.Types (
+    AdvisoryScore (Cvss),
     DenyIfCveParams (DenyIfCveParams, dicMinCvss, dicOnUnavailable),
     EvalContext (EvalContext),
     FailureAlignment (FailDeny),
+    Reason (AffectedBy),
     Rule (AllowByIdentity, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
     RuleVerdict (Deny),
     completeEvidence,
@@ -70,7 +72,7 @@ intersectionSpec = describe "candidateSet" $ do
         candidates <- candidateSet (adapterProjectName pypiAdapter) [] (Just cve)
         inCandidates candidates name `shouldBe` True
         evalRule deps ctx advisoryRule (completeEvidence (sampleDetails name v1_0_0))
-            `shouldReturn` Deny (Just (DbEtag "etag-1")) "affected by CVE-2026-0001 (CVSS >= 7.0)"
+            `shouldReturn` Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 7.0 ("CVE-2026-0001" :| []))
 
     it "carries every name the loaded generation covers" $ do
         candidates <- candidateSet project [] (Just (coveringLookup ["left-pad", "@babel/core"]))

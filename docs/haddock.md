@@ -60,7 +60,7 @@ narrate the body. Only the module header may run longer, within its own cap (§5
 | **Module** | Always | Header: what it is for and how it fits the system (§5). |
 | **Exported function** | Always, one or two lines | The purpose, plus the one precondition, failure mode, or invariant the signature hides. A `>>>` example only where the shape is not obvious. |
 | **Exported type / `newtype`** | Always | What it represents and any invariant it protects. |
-| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident. For `Rule`/`RuleOutcome`-style domain types, *always*: the domain knowledge lives here. |
+| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident. For `Rule`/`RuleVerdict`-style domain types, *always*: the domain knowledge lives here. |
 | **Record fields** | Usually | `-- ^` per field: units, ranges, invariants. |
 | **Type class + methods** | Always | The abstraction, any laws, and the default behaviour. |
 | **Instances** | Rarely | Only when behaviour is surprising. |

@@ -63,7 +63,7 @@ import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
-import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps, servingRuleDeps)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
 epoch :: UTCTime
@@ -525,7 +525,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
                     denyRule
                         { prepEval = PerVersion $ \_ _ -> do
                             etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest <> [item], item))
-                            pure (Deny etag "acquired advisory evidence")
+                            pure (Deny etag exposure)
                         }
                 swept =
                     if preview

@@ -95,12 +95,12 @@ import Ecluse.Config.Target (resolveStoreBackend, vetPrivateRepository, vetTarge
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
-import Ecluse.Core.Rules (renderDuration)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
     MaxAdvisoryAge (maxAdvisoryAge, maxAdvisoryAgeBasis),
     maxAdvisoryAgeFor,
  )
+import Ecluse.Core.Rules.Render (renderDuration)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule (DenyIfEpss), deniesOnAdvisories, readsAdvisories, ruleName)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)

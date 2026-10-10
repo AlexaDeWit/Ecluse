@@ -35,13 +35,18 @@ module Ecluse.Core.Rules.Types (
     -- * Evaluation
     EvalContext (..),
     mkEvalContext,
-    Reason,
     RuleVerdict (..),
     RuleEvaluation (..),
     FailureAlignment (..),
     Decision (..),
     SkippedCheck (..),
     skippedChecks,
+
+    -- * Why a rule reached its result
+    Reason (..),
+    Inability (..),
+    AdvisoryScore (..),
+    AdvisoryAge (..),
 
     -- * Unavailability
     Transience (..),
@@ -300,14 +305,11 @@ The advisory ETag is audit-only and cannot affect the decision.
 mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
 mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
 
--- | A human-facing reason a rule attaches to its result, kept for the audit trail.
-type Reason = Text
-
 {- | A deterministic verdict that the harness never retries. 'Allow', 'Deny', and fail-closed 'CannotVet' are decisive.
 Other verdict reasons enter the deny-by-default audit trail in boot order.
 -}
 data RuleVerdict
-    = -- | This rule admits the package (with a human reason). Decisive.
+    = -- | This rule admits the package. Decisive.
       Allow Reason
     | -- | A decisive denial, with its acquired advisory ETag or none for a non-advisory rule.
       Deny (Maybe DbEtag) Reason
@@ -316,7 +318,7 @@ data RuleVerdict
     | {- | Deterministic inability to vet: an absent database, or a fact nothing read. Never enters
       retry or breaker handling. 'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
       -}
-      CannotVet FailureAlignment Reason
+      CannotVet FailureAlignment Inability
     deriving stock (Eq, Show)
 
 {- | The harness alone creates 'Unavailable' from faults. Decisive verdicts and fail-closed faults determine the decision.
@@ -328,7 +330,7 @@ data RuleEvaluation
     | {- | A harness-observed IO fault, timeout, or open breaker, with retry advice in 'Transience'.
       'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
       -}
-      Unavailable Transience FailureAlignment Reason
+      Unavailable Transience FailureAlignment Inability
     deriving stock (Eq, Show)
 
 {- | Choose refusal or abstention when a rule cannot vet or its evaluation faults.
@@ -366,7 +368,7 @@ consumer reads a check the engine never ran as one that passed.
 -}
 data SkippedCheck
     = -- | The check ran, could not vet the version, and its fail-open alignment let the fold move on.
-      SkippedUnavailable Text Reason
+      SkippedUnavailable Text Inability
     | -- | An earlier allow in the boot order decided, so the engine never ran the check.
       Unreached Text
     deriving stock (Eq, Show)
@@ -378,6 +380,90 @@ skippedChecks = \case
     Blocked{} -> []
     BlockedByDefault{} -> []
     Undecidable{} -> []
+
+{- | Why a rule reached its result, as the facts it decided on. No text is built at decision time:
+'Ecluse.Core.Rules.Render.renderReason' writes the sentence where a reader needs one.
+-}
+data Reason
+    = -- | 'AllowScope' admits: the package is under the scope it allows.
+      ScopeAllowListed Scope
+    | -- | 'AllowScope' abstains: the package is not under the scope it allows.
+      ScopeNotAllowListed Scope
+    | -- | 'AllowIfOlderThan' admits: the version's age, then the minimum it met.
+      PublishedLongEnough NominalDiffTime NominalDiffTime
+    | -- | 'AllowIfOlderThan' abstains: the version's age, then the minimum it has not met.
+      PublishedTooRecently NominalDiffTime NominalDiffTime
+    | -- | 'AllowIfOlderThan' abstains: the metadata was read and carries no publish time.
+      PublishTimeUnknown
+    | -- | 'DenyInstallTimeExecution' denies: how installing the version runs code.
+      RunsOnInstall Text
+    | -- | 'DenyInstallTimeExecution' abstains: installing the version runs no code.
+      NothingRunsOnInstall
+    | -- | 'DenyInstallTimeExecution' abstains: whether installing runs code is not yet determined.
+      InstallCodeUndetermined
+    | -- | 'DenyByIdentity' denies: the identity the operator revoked.
+      IdentityRevoked Text
+    | -- | 'DenyByIdentity' abstains: the version is not the identity it revokes.
+      IdentityNotRevoked Text
+    | -- | 'AllowByIdentity' admits: the identity the operator allow-listed.
+      IdentityAllowListed Text
+    | -- | 'AllowByIdentity' abstains: the version is not the identity it allows.
+      IdentityNotAllowListed Text
+    | -- | 'AllowIfRemediatesCve' admits: the advisories this version is the exact fix for.
+      Remediates (NonEmpty Text)
+    | -- | 'AllowIfRemediatesCve' abstains: the advisories it fixes, then those still affecting it.
+      FixesButStillAffected (NonEmpty Text) (NonEmpty Text)
+    | -- | 'AllowIfRemediatesCve' abstains: no advisory names this version as its fix.
+      FixesNoAdvisory
+    | -- | 'AllowIfRemediatesCve' abstains: no advisory database is loaded.
+      NoDatabaseToRemediate
+    | -- | An advisory deny fires: the score it gates on, its threshold, and the affecting advisories.
+      AffectedBy AdvisoryScore Double (NonEmpty Text)
+    | -- | An advisory deny abstains: no advisory at or above its threshold affects the version.
+      NotAffectedAtThreshold AdvisoryScore
+    | -- | The named rule could not vet the version.
+      RuleUnable Text Inability
+    deriving stock (Eq, Show)
+
+-- | The score an advisory deny gates on.
+data AdvisoryScore
+    = Cvss
+    | Epss
+    deriving stock (Eq, Show)
+
+{- | Why a rule could not vet a version. It carries no rule name, because every holder names the
+rule in a field of its own.
+-}
+data Inability
+    = -- | Nothing read the publish time the rule decides on.
+      PublishTimeUnread
+    | -- | Nothing read the install-time execution signal the rule decides on.
+      InstallSignalUnread
+    | -- | No advisory database is loaded.
+      NoDatabaseLoaded
+    | -- | The serving advisory push is older than its maximum.
+      PushPastMaximum AdvisoryAge
+    | -- | The store gave no publication time for the serving advisory push.
+      PushUndated
+    | -- | The rule's circuit breaker is open, so the read was not attempted.
+      SourceBreakerOpen
+    | -- | The read was given up. A client reads this in place of the fault's detail.
+      EvaluationFailed
+    | -- | The rule or its read threw: the exception as text.
+      RuleThrew Text
+    | -- | One attempt of the read ran past its timeout.
+      AttemptTimedOut
+    deriving stock (Eq, Show)
+
+{- | One reading of a push: when it landed, how old it is now, and the maximum it was read
+against. An audit line and an alarm both render this, so neither can report a different number.
+-}
+data AdvisoryAge = AdvisoryAge
+    { advisoryPushedAt :: UTCTime
+    , advisoryAge :: NominalDiffTime
+    , advisoryMaxAge :: NominalDiffTime
+    }
+    deriving stock (Eq, Show)
 
 {- | Serve transient outages, rate limits, timeouts, and open breakers as @503@.
 Serve internal or parse faults as @500@. 'WillResolve' and 'WontResolve' encode that distinction.
