@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+-- Keep findIndex's loop counter unboxed under Cabal's default -O1.
+{-# OPTIONS_GHC -fspec-constr #-}
 
 -- | Incremental Haskell scanning with the vendored lexer's token and chunk semantics.
 -- State owns immutable byte slices, with no foreign result records.
@@ -113,25 +115,52 @@ identifier bytes initial literal matched0 numbers = go initial matched0
         byte = BS.index bytes offset
 
 string :: BS.ByteString -> Int -> Bool -> Bool -> [BS.ByteString] -> Scanned
-string bytes initial continued escaped0 numbers = go initial escaped0 False
+string bytes initial continued escaped0 numbers = case stringStop bytes initial continued escaped0 of
+    StringStop offset escapePending special
+        | offset >= BS.length bytes -> Token (StringContent (piece offset)) (Cursor bytes offset (StringPart True escapePending) numbers)
+        | continued -> Token (StringContent (piece offset)) (Cursor bytes (offset + 1) StringFinish numbers)
+        | otherwise -> Token (StringRaw (piece offset) (not special)) (Cursor bytes (offset + 1) Base numbers)
+  where
+    piece offset = BS.take (offset - initial) (BS.drop initial bytes)
+
+data StringStop = StringStop {-# UNPACK #-} !Int !Bool !Bool
+
+stringStop :: BS.ByteString -> Int -> Bool -> Bool -> StringStop
+stringStop bytes initial continued escaped0
+    | escaped0 = escaped initial
+    | continued = special initial
+    | otherwise = plain initial
   where
     !size = BS.length bytes
-    piece offset = BS.take (offset - initial) (BS.drop initial bytes)
-    go !offset !escaped !special
-        | offset >= size = Token (StringContent (piece offset)) (Cursor bytes offset (StringPart True escaped) numbers)
-        | otherwise =
-            let !byte = BS.index bytes offset
-                !special' = special || byte < printableLow || byte > printableHigh
-             in if escaped
-                then go (offset + 1) False special'
+    partial escapePending = StringStop size escapePending True
+    plain !offset = case BS.findIndex specialByte (BS.drop offset bytes) of
+        Nothing -> partial False
+        Just distance ->
+            let !position = offset + distance
+                !byte = BS.index bytes position
+             in if byte == quote
+                then StringStop position False False
                 else if byte == backslash
-                    then go (offset + 1) True True
-                    else if byte == quote
-                        then finishString offset special'
-                        else go (offset + 1) False special'
-    finishString offset special
-        | continued = Token (StringContent (piece offset)) (Cursor bytes (offset + 1) StringFinish numbers)
-        | otherwise = Token (StringRaw (piece offset) (not special)) (Cursor bytes (offset + 1) Base numbers)
+                    then escaped (position + 1)
+                    else special (position + 1)
+    special !offset = case BS.findIndex delimiterByte (BS.drop offset bytes) of
+        Nothing -> partial False
+        Just distance ->
+            let !position = offset + distance
+             in if BS.index bytes position == quote
+                then StringStop position False True
+                else escaped (position + 1)
+    escaped !offset
+        | offset >= size = partial True
+        | otherwise = special (offset + 1)
+
+specialByte :: Word8 -> Bool
+specialByte byte = byte < printableLow || byte > printableHigh || delimiterByte byte
+{-# INLINE specialByte #-}
+
+delimiterByte :: Word8 -> Bool
+delimiterByte byte = byte == quote || byte == backslash
+{-# INLINE delimiterByte #-}
 
 number :: BS.ByteString -> Int -> Bool -> [BS.ByteString] -> Scanned
 number bytes initial continued numbers = go initial 0 0 False 0 continued 1
