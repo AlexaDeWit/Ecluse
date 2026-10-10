@@ -1509,6 +1509,7 @@ benchmark ecluse-bench
     Ecluse.Core.AdvisoryRulesBench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
+    Ecluse.Core.CompressBench
     Ecluse.Core.MergeBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
@@ -1529,6 +1530,7 @@ benchmark ecluse-bench
     , filepath         ^>=1.4 || ^>=1.5
     , http-client      ^>=0.7
     , http-types       ^>=0.12
+    , lz4-hs           ^>=0.1.5
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
     , tasty-bench-fit  ^>=0.1
@@ -1539,6 +1541,8 @@ benchmark ecluse-bench
     , unliftio         ^>=0.2.25
     , wai              ^>=3.2
     , warp             ^>=3.4
+    , zlib             ^>=0.7
+    , zstd             ^>=0.1.3
 
 -- The load tool links the composed application without entering the shipped library closure.
 -- It is both the harness and, under --serve-proxy, the proxy process each scenario measures.
