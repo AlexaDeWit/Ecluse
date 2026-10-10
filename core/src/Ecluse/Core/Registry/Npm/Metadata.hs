@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJ
 import Ecluse.Core.Registry.Json.Writer (Writer, newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
-import Ecluse.Core.Registry.Metadata.Fetch (DocumentWalk, EcosystemRead (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)

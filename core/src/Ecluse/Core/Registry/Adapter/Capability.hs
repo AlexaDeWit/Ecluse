@@ -39,7 +39,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
-import Ecluse.Core.Registry.Metadata.Fetch (EcosystemRead)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)

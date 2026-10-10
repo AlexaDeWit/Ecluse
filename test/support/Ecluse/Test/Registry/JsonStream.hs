@@ -19,7 +19,7 @@ import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundEx
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
-import Ecluse.Core.Registry.Metadata.Fetch (Body (Body))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body))
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.

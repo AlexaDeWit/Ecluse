@@ -35,7 +35,8 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead,
  )
-import Ecluse.Core.Registry.Metadata.Fetch (EcosystemRead, fetchManifest, fetchVersion)
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 import Ecluse.Core.Security (ProgressFloor)
 

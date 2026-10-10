@@ -60,16 +60,19 @@ flowchart TD
     enforce --> manifest["Manifest, for the cache and the rules"]
 ```
 
-A new ecosystem writes none of the driver's steps, so it cannot leave one out. It supplies one
-`EcosystemRead`, as `npmRead` and `pypiRead` do, and its adapter holds that value in `metadataRead`.
+The driver owns the exchange, both spans, the error mapping, the charge, the digest and the
+`Manifest`, so a new ecosystem writes none of them. The driver also computes the body limit and keys
+a table afresh for each read. It hands both to the ecosystem's walk, and the walk applies them. A new
+ecosystem supplies one `EcosystemRead`, as `npmRead` and `pypiRead` do, and its adapter holds that
+value in `metadataRead`.
 
 | Step | Written by |
 |---|---|
-| The request for a package's document | The ecosystem: `erRequest` |
+| The request for a package's document | The ecosystem: `erRequest`. The driver seals it, so no read follows a redirect |
 | The exchange and its progress floor, the fetch span, the error mapping | The driver |
 | The charge and the digest for each chunk of a full read | The driver |
-| A table keyed afresh for the read, the body limit, the decode span | The driver, from the ecosystem's `erUniqueFields` |
-| The walk that keeps every entry, and the walk that keeps one version | The ecosystem: `erWalkFull`, `erWalkSelected` |
+| The body limit, a table keyed afresh for the read, the decode span | The driver. It builds the table from the ecosystem's `erUniqueFields`, and hands the limit and the table to the walk |
+| The walk that keeps every entry, and the walk that keeps one version | The ecosystem: `erWalkFull`, `erWalkSelected`. Each applies the limit and the table it is handed, as `readJsonWalk` does |
 | The finish of each walk, which also enforces artifact locations | The ecosystem: `erFinishFull`, `erFinishSelected` |
 | The `Manifest`, with the source's size and digest | The driver |
 
