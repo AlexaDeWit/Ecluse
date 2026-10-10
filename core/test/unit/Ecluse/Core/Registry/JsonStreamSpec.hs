@@ -11,12 +11,11 @@ import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO.Async (cancel, waitCatch, withAsync)
-import UnliftIO.Exception (finally)
 
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
+import Ecluse.Test.Registry.Source (assertCancelledRead)
 import Ecluse.Test.Support (expectRight)
 
 -- | Verify retained-depth boundaries, source size and response cancellation.
@@ -118,16 +117,8 @@ readSpec = describe "readJsonStream" $ do
         result <- expectRight (decode (retainedValue 3) ["{\"keep\":"])
         streamValue result `shouldSatisfy` isLeft
 
-    it "propagates cancellation while waiting for the next body chunk" $ do
-        entered <- newEmptyMVar
-        blocked <- newEmptyMVar
-        released <- newEmptyMVar
-        let next = (putMVar entered () >> takeMVar blocked) `finally` putMVar released ()
-        withAsync (readJsonStream (MetadataBodyLimit 1024) (retainedValue 3) (\_ value -> Right (Just value)) Nothing next) $ \worker -> do
-            takeMVar entered
-            cancel worker
-            waitCatch worker >>= (`shouldSatisfy` isLeft)
-            takeMVar released
+    it "propagates cancellation while waiting for the next body chunk" $
+        assertCancelledRead (readJsonStream (MetadataBodyLimit 1024) (retainedValue 3) (\_ value -> Right (Just value)) Nothing)
 
 arrayItems :: Value -> [Value]
 arrayItems = \case
