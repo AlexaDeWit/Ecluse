@@ -15,6 +15,7 @@ import Data.Aeson (Encoding, Object, Value, toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package.Entry (EntryKey)
 
@@ -31,17 +32,18 @@ data SimpleDocument = SimpleDocument
 simpleDocument :: Object -> [(EntryKey, Value)] -> SimpleDocument
 simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
--- | Preserve envelope key order and file source order. Source coordinates stay internal.
+-- | Preserve envelope key order and file source order, overwriting any envelope files key.
 simpleEncoding :: SimpleDocument -> Encoding
 simpleEncoding document =
-    Encoding.pairs (KeyMap.foldrWithKey envelopePair id (simpleEnvelope document) files)
+    case Map.split "files" (KeyMap.toMap (simpleEnvelope document)) of
+        (before, after) ->
+            Encoding.pairs
+                ( Map.foldMapWithKey envelopePair before
+                    -- A non-empty Series appends a builder even when its right operand is empty.
+                    <> if Map.null after then files else files <> Map.foldMapWithKey envelopePair after
+                )
   where
     files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
 
--- The pending files field keeps its former position in the pinned ascending KeyMap fold.
--- Public record updates can restore envelope files, which this encoder must overwrite.
-envelopePair :: Key -> Value -> (Encoding.Series -> Encoding.Series) -> Encoding.Series -> Encoding.Series
-envelopePair key value next pending = case compare key "files" of
-    LT -> Encoding.pair key (toEncoding value) <> next pending
-    EQ -> next pending
-    GT -> pending <> Encoding.pair key (toEncoding value) <> next mempty
+envelopePair :: Key -> Value -> Encoding.Series
+envelopePair key value = Encoding.pair key (toEncoding value)
