@@ -174,7 +174,7 @@ notes =
     , ""
     , "- **One run stands on each side.** One runner measures a whole pod shape, and the run on `main` had another runner. A whole shape can move together, so read a scenario beside the scenarios the change does not touch."
     , "- **Injected latency.** Each run injects the upstream latency it probed. When the two differ, the operating point rows show both, and the latency-bound scenarios move with that difference whatever the code does."
-    , "- **Finite replays.** A pattern scenario replays a fixed trace, so its successes hold. Read its latency."
+    , "- **Finite replays.** A pattern scenario replays a fixed trace, so its successes hold and only its latency can move. A replay sends few requests, as its successes show, and its percentiles differ widely between two runs of the same code."
     , "- **Refusals** are `429` and `503` responses. A client retries a refusal at once, so their count follows retry speed."
     , "- **No verdict.** No row is marked, and nothing here fails the job."
     ]

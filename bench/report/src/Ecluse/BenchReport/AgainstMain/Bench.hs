@@ -119,7 +119,7 @@ notes =
     [ "### Reading the comparison"
     , ""
     , "- **One run stands on each side.** One runner measures every bench of a run, and the run on `main` had another runner. A whole run can move together, so read a bench beside the benches the change does not touch."
-    , "- **`2*stdev`** is the precision tasty-bench reached for a bench in one run, as a share of its mean. One run on each side does not resolve a change smaller than it."
+    , "- **`2*stdev`** is the precision tasty-bench reached for a bench in one run, as a share of its mean. One run on each side does not resolve a change smaller than it, and a larger one can still be the runner."
     , "- **Time only.** The allocation budgets hold allocation, so this section leaves it out."
     , "- **No verdict.** No row is marked, and nothing here fails the job."
     ]

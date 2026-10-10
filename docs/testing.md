@@ -624,11 +624,14 @@ between two runners:
   and says so when no row moved against the others.
 - A row means something only beside the rows that the change does not touch, which stay in the
   same table.
+- A bench's `2*stdev` is what one run resolves for it. One run on each side does not resolve a
+  smaller change, and a larger one can still be the runner.
 - Each load run injects the npm upstream latency it probed, and the latency-bound scenarios move
   with it. The operating point rows show both values when they differ.
 - A live acceptance document grows as its package publishes, so its legs then read more versions.
-- A finite replay sends the same requests every run. Its successes hold, and only its latency
-  can show a change.
+- A finite replay sends the same requests every run, so its successes hold and only its latency
+  can show a change. It sends few requests, and its percentiles differ widely between two runs of
+  the same code.
 
 To conclude from one row, repeat the run.
 
