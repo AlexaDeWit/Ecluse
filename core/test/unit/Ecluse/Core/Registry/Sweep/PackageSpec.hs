@@ -14,8 +14,16 @@ import Test.Hspec
 
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
+import Ecluse.Core.Package (
+    CodeExecSignal (RunsCodeOnInstall),
+    PackageDetails (pkgInstallCode),
+    PackageInfo (infoVersions),
+    PackageName,
+    mkPackageName,
+    pkgEcosystem,
+ )
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factDeleteCeiling),
     StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
@@ -27,7 +35,7 @@ import Ecluse.Core.Registry.Maintenance (
     protocolFault,
     storeRefusal,
  )
-import Ecluse.Core.Registry.Metadata (Manifest)
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
@@ -36,7 +44,7 @@ import Ecluse.Core.Registry.Sweep.Outcome (
 import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     SweepExecution (SweepCounts, SweepRemoves),
-    SweepMount (smConfigured, smFirstParty, smRuleDeps, smStore),
+    SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepNow),
     SweepState (stEvidence, stIssued),
@@ -53,13 +61,16 @@ import Ecluse.Core.Rules.Freshness (
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     FailureAlignment (FailDeny),
-    PrecededRule (PrecededRule),
-    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve),
+    PrecededRule (PrecededRule, prRule),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
+    RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Deny),
+    defaultPrecedence,
     mkEvalContext,
+    revocationRules,
  )
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
@@ -80,6 +91,7 @@ spec = do
     dryRunSpec
     expirySpec
     generationCapSpec
+    revocationSpec
 
 {- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 because the store may hold the only surviving copy. -}
@@ -142,7 +154,7 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
         rules <-
             prepare
                 inertRuleDeps
-                [PrecededRule 500 (AllowByIdentity "left-pad@1.0.0"), atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
+                [PrecededRule 500 AdmissionAndRevocation (AllowByIdentity "left-pad@1.0.0"), atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
         (rec', store) <- unreadStep rules ["1.0.0"]
         recResults rec' `shouldReturn` [SweepExamined, SweepKept]
         held store `shouldReturn` [npmVersion "1.0.0"]
@@ -153,7 +165,7 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
         rules <-
             prepare
                 inertRuleDeps
-                [ PrecededRule 500 (AllowIfOlderThan (7 * nominalDay))
+                [ PrecededRule 500 AdmissionAndRevocation (AllowIfOlderThan (7 * nominalDay))
                 , atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")
                 ]
         (rec', store) <- unreadStep rules ["1.0.0"]
@@ -572,3 +584,76 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
         let deletions = filter (T.isInfixOf "blocked by") info
         length deletions `shouldBe` 1
         deletions `shouldSatisfy` all (\line -> T.isInfixOf "2.0.0" line && T.isInfixOf "advisory generation none" line)
+
+{- The composition root hands the sweep the rules of a mount that apply at revocation. These cases
+hold what that selection changes for a stored version. -}
+revocationSpec :: Spec
+revocationSpec = describe "the rules that apply at revocation" $ do
+    for_ [("npm", leftPadName, npmVersion "1.0.0", "left-pad@1.0.0"), ("PyPI", mkPackageName PyPI Nothing "requests", mkVersion PyPI "2.31.0", "requests@2.31.0")] $ \(eco, name, version, revoked) -> do
+        it ("deletes a stored " <> eco <> " version an identity deny names at both phases") $ do
+            (rec', left) <- revocationStep inertRuleDeps [atDefaultPrecedence (DenyByIdentity revoked)] name version (Just (sampleManifest name [version]))
+            recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
+            left `shouldBe` []
+
+        it ("keeps a stored " <> eco <> " version an identity deny limited to admission names") $ do
+            (rec', left) <- revocationStep inertRuleDeps [limitedToAdmission (DenyByIdentity revoked)] name version (Just (sampleManifest name [version]))
+            recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+            left `shouldBe` [version]
+
+        it ("deletes a stored " <> eco <> " version that runs code on install under an install-code deny at both phases") $ do
+            (rec', left) <- revocationStep inertRuleDeps [atDefaultPrecedence DenyInstallTimeExecution] name version (Just (runningCodeOnInstall (sampleManifest name [version])))
+            recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
+            left `shouldBe` []
+
+        it ("keeps a stored " <> eco <> " version that runs code on install under an install-code deny limited to admission") $ do
+            (rec', left) <- revocationStep inertRuleDeps [limitedToAdmission DenyInstallTimeExecution] name version (Just (runningCodeOnInstall (sampleManifest name [version])))
+            recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+            left `shouldBe` [version]
+
+    describe "an install-code deny above an advisory deny, over a manifest the store did not serve" $ do
+        let affected = npmVersion "1.0.0"
+            deps = advisoryDeps (pure AdvisoryFresh)
+
+        it "stops the walk while the install-code deny applies at revocation, so the version stays" $ do
+            (rec', left) <- revocationStep deps (map atDefaultPrecedence [DenyInstallTimeExecution, denyCveRule]) leftPadName affected Nothing
+            recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+            left `shouldBe` [affected]
+
+        it "passes the install-code deny once it is limited to admission, so the advisory deny condemns on identity alone" $ do
+            (rec', left) <- revocationStep deps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] leftPadName affected Nothing
+            left `shouldBe` []
+            recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
+
+    it "deletes for the advisory a version that also runs code on install, when the install-code deny is limited to admission" $ do
+        let affected = npmVersion "1.0.0"
+            manifest = runningCodeOnInstall (sampleManifest leftPadName [affected])
+            deps = advisoryDeps (pure AdvisoryFresh)
+        (rec', left) <- revocationStep deps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] leftPadName affected (Just manifest)
+        left `shouldBe` []
+        recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
+
+-- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
+limitedToAdmission :: Rule -> PrecededRule
+limitedToAdmission rule = PrecededRule (defaultPrecedence rule) AdmissionOnly rule
+
+-- The same manifest, with every version running code on install.
+runningCodeOnInstall :: Manifest -> Manifest
+runningCodeOnInstall manifest =
+    manifest{manifestInfo = info{infoVersions = Map.map (\details -> details{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}) (infoVersions info)}}
+  where
+    info = manifestInfo manifest
+
+{- One stored version's step under the rules of a policy that apply at revocation, in the mount's
+own ecosystem. It yields what the sweep recorded and the versions the store still holds. -}
+revocationStep :: RuleDeps -> [PrecededRule] -> PackageName -> Version -> Maybe Manifest -> IO (RecordedSweep, [Version])
+revocationStep deps policy name version manifest = do
+    store <- newFakeStore (seededStoreConfig [(name, [version])]){fakeManifests = maybe Map.empty (Map.singleton name) manifest}
+    rules <- prepare deps applied
+    rec' <- recordingPorts generation
+    counters <- newSweepState
+    let swept = (mount store rules){smEcosystem = pkgEcosystem name, smRuleDeps = deps, smConfigured = map prRule applied}
+    void (sweepPackageGroup testPacing (recPorts rec') counters swept name [(smStore swept, servedVersions [version])])
+    left <- heldVersions name store
+    pure (rec', left)
+  where
+    applied = revocationRules policy

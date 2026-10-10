@@ -81,7 +81,7 @@ import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, sampleDetails, s
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
+import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMemoryMeter)
@@ -676,7 +676,7 @@ admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
         it "keeps trusting the copy when an unchanged higher-priority allow still beats the deny" $
             checkLifetime
                 shape
-                (LifetimePolicy [Rules.PrecededRule 600 (Rules.AllowByIdentity "leftpad"), identityDeny] ((== Just "AllowByIdentity") . admittedBy) Retained)
+                (LifetimePolicy [atPrecedence 600 (Rules.AllowByIdentity "leftpad"), identityDeny] ((== Just "AllowByIdentity") . admittedBy) Retained)
                 Sweepable
         it "retains the copy when unavailable advisory evidence wins ahead of the existing deny" $
             checkLifetime
@@ -766,7 +766,7 @@ identityDeny :: PrecededRule
 identityDeny = atDefaultPrecedence (Rules.DenyByIdentity "leftpad@1.0.0")
 
 unavailableCveDeny :: PrecededRule
-unavailableCveDeny = Rules.PrecededRule 600 (Rules.DenyIfCve (Rules.DenyIfCveParams 0 Rules.FailDeny))
+unavailableCveDeny = atPrecedence 600 (Rules.DenyIfCve (Rules.DenyIfCveParams 0 Rules.FailDeny))
 
 winningDeny :: LifetimePolicy
 winningDeny = LifetimePolicy [identityDeny] ((== Just "DenyByIdentity") . blockedBy) Removed
@@ -776,7 +776,7 @@ checkLifetime shape policy storeState = do
     ctx <- Rules.mkEvalContext (pure fixedNow) (pure Nothing)
     let version = npmVersion "1.0.0"
         details = sampleDetails leftpadName version
-        initialPolicy = Rules.PrecededRule 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
+        initialPolicy = atPrecedence 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
     initial <- prepare inertRuleDeps initialPolicy
     admittedBy <$> evalRules ctx initial (Rules.completeEvidence details) `shouldReturn` Just "AllowByIdentity"
     store <- newFakeStore (lifetimeStoreConfig storeState)

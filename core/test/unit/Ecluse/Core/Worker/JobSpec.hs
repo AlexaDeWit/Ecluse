@@ -225,6 +225,19 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
 
+        -- Ingest counts as admission, so a deny the Dredger does not read still keeps the version
+        -- out of the store. The rules that apply at revocation would admit it and reach the fetch.
+        for_ [("an npm", Npm, jobWith), ("a PyPI", PyPI, pypiJobWith)] $ \(label, eco, jobAt) ->
+            it ("drops " <> label <> " job whose version a deny limited to admission refuses, without publishing") $ do
+                rules <- refusedAtAdmissionOnly
+                withRuntimePolicies (Map.singleton eco (npmPolicy presentResolver rules)) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobAt unreachableUrl)
+                    runWM runtime (processJob job) >>= \case
+                        Dropped reason -> reason `shouldSatisfy` T.isInfixOf "blocked by DenyByIdentity"
+                        other -> expectationFailure ("expected the deny to drop the job, got " <> show other)
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+
         it "hands the publish step the version object current metadata carried at admission, never the enqueue-time one" $
             withUpstream $ \url ->
                 withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do

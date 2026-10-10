@@ -60,8 +60,9 @@ import Ecluse.Composition.Validate (ValidatedPlan (vpProgressFloor), vetBoot)
 import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
-    Config (configApp),
+    Config (configApp, configMounts),
     LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
+    Mount (mountPolicy),
     MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     advisoryAgeLines,
@@ -70,6 +71,8 @@ import Ecluse.Config (
     resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv, ambientS3Endpoint)
+import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Text (nonBlank)
@@ -228,6 +231,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , mdMemoryLines mirror
                 , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) (mdRuntime mirror)
                 , mountPostureLines config
+                , ruleOrderLines config
                 , advisoryAgeLines config
                 , advisoryEpssLines config
                 , [epssAttemptLine (cfgAdvisories app) | role == BootWithoutPipeline]
@@ -275,6 +279,14 @@ mirrorRuntimeLines memoryDepth = \case
         ["mirror queue: sqs, " <> sqsQueueUrl sqs <> " (region " <> sqsRegion sqs <> ")"]
     MirrorWith MemoryBackend ->
         ["mirror queue: in-memory (depth " <> show memoryDepth <> ")"]
+
+{- Each mount's rules in evaluation order, with the phases each applies at. The Dredger evaluates
+the ones that apply at revocation, in the same order. -}
+ruleOrderLines :: Config -> [Text]
+ruleOrderLines config = concatMap mountOrder (Map.toAscList (configMounts config))
+  where
+    mountOrder (eco, mount) =
+        ("rule boot order for mount " <> ecosystemName eco <> ":") : renderBootOrder (mountPolicy mount)
 
 -- The warning the selected backend warrants. A durable backend warrants none.
 mirrorRuntimeWarnings :: MirrorRuntimePlan -> [Text]

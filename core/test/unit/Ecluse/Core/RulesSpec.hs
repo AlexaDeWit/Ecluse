@@ -40,8 +40,10 @@ import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
 import Ecluse.Test.Rules (
+    admissionOnly,
     admittedBy,
     atDefaultPrecedence,
+    atPrecedence,
     blockedBy,
     evalRule,
     inertRuleDeps,
@@ -69,7 +71,7 @@ listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing"
 
 -- | Put a rule at an explicit precedence (the operator-override form).
 at :: Int -> Rule -> PrecededRule
-at = PrecededRule
+at = atPrecedence
 
 {- | Decide a policy through the one engine ('prepare' then 'evalRules') under the
 given capabilities.
@@ -840,8 +842,9 @@ spec = do
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
             -- The fields a config loader reads to patch a rule's precedence.
-            let pr = PrecededRule 250 DenyInstallTimeExecution
+            let pr = PrecededRule 250 AdmissionOnly DenyInstallTimeExecution
             rulePrecedence pr `shouldBe` 250
+            ruleReach pr `shouldBe` AdmissionOnly
             prRule pr `shouldBe` DenyInstallTimeExecution
 
     describe "defaultPrecedence" $ do
@@ -856,9 +859,9 @@ spec = do
             , defaultAllowByIdentityPrecedence
             )
                 `shouldSatisfy` (\(q, f, s, i) -> q < f && f < s && s < i)
-        it "atDefaultPrecedence pairs a rule with its type default" $
+        it "atDefaultPrecedence pairs a rule with its type default, at both phases" $
             atDefaultPrecedence DenyInstallTimeExecution
-                `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
+                `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence AdmissionAndRevocation DenyInstallTimeExecution
 
     describe "prepare" $ do
         it "attaches a resilience and fail-open alignments to AllowIfRemediatesCve" $
@@ -909,19 +912,35 @@ spec = do
                 `shouldBe` ["AllowIfOlderThan", "AllowScope"]
 
     describe "renderBootOrder" $ do
-        it "emits one line per rule, in boot order, with each precedence" $ do
-            rules <-
-                prepare
-                    inertRuleDeps
-                    [ at 100 (AllowIfOlderThan (7 * nominalDay))
+        it "emits one line per rule, in boot order, with each precedence and the phases it applies at" $
+            renderBootOrder
+                [ at 100 (AllowIfOlderThan (7 * nominalDay))
+                , admissionOnly (at 300 DenyInstallTimeExecution)
+                ]
+                `shouldBe` [ "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                           , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                           ]
+        it "lists the rules in the order the engine evaluates the ones prepared from them" $ do
+            -- Equal precedences resolve by name, and a repeated type keeps its given order.
+            let policy =
+                    [ at 200 (AllowScope (mkScope "myorg"))
+                    , at 200 (AllowIfOlderThan (7 * nominalDay))
+                    , admissionOnly (at 400 (DenyByIdentity "thing"))
+                    , at 400 (DenyByIdentity "other")
                     , at 300 DenyInstallTimeExecution
                     ]
-            renderBootOrder rules
-                `shouldBe` [ "rule 1: DenyInstallTimeExecution (precedence 300)"
-                           , "rule 2: AllowIfOlderThan (precedence 100)"
+            evaluated <- bootOrder <$> prepare inertRuleDeps policy
+            map prepName evaluated
+                `shouldBe` ["DenyByIdentity", "DenyByIdentity", "DenyInstallTimeExecution", "AllowIfOlderThan", "AllowScope"]
+            renderBootOrder policy
+                `shouldBe` [ "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
+                           , "rule 2: DenyByIdentity (precedence 400, applies at admission and revocation)"
+                           , "rule 3: DenyInstallTimeExecution (precedence 300, applies at admission and revocation)"
+                           , "rule 4: AllowIfOlderThan (precedence 200, applies at admission and revocation)"
+                           , "rule 5: AllowScope (precedence 200, applies at admission and revocation)"
                            ]
         it "is empty for an empty rule set" $
-            prepare inertRuleDeps [] >>= \rules -> renderBootOrder rules `shouldBe` []
+            renderBootOrder [] `shouldBe` []
 
     describe "evalRules" $ do
         it "denies by default with no rules" $
@@ -1044,7 +1063,7 @@ spec = do
                 precs <- forAll (Gen.list (Range.singleton 3) genPrecedence)
                 let rules =
                         zipWith
-                            PrecededRule
+                            at
                             precs
                             [AllowScope (mkScope scopeTxt), AllowIfOlderThan (7 * nominalDay), DenyInstallTimeExecution]
                 liftIO (decide rules (pkg (Just otherTxt) 1)) >>= \case
@@ -1081,7 +1100,7 @@ spec = do
                 n <- forAll (Gen.int (Range.linear 0 6))
                 rules <- forAll (Gen.list (Range.singleton n) (genFiringRule scopeTxt))
                 precs <- forAll (Gen.list (Range.singleton n) genPrecedence)
-                let preceded = zipWith PrecededRule precs rules
+                let preceded = zipWith at precs rules
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 perm <- forAll (Gen.shuffle preceded)
                 original <- liftIO (decide preceded p)

@@ -84,7 +84,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, QuotaScope, RequestG
 import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, revocationRules)
 import Ecluse.Core.Security (Limits (maxVersionCount))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
@@ -321,8 +321,8 @@ labelObservation role backend observation =
         { obFacts = (obFacts observation){factBackend = role <> " " <> registryUrlText (cbUrl backend)}
         }
 
-{- What decides for one mount's store: its own rule set, prepared as the serve path prepares its,
-and the shared first-party predicate. A mount declaring no namespaces owns none. -}
+{- What decides for one mount's store: the mount's rules that apply at revocation, prepared as the
+serve path prepares its, and the shared first-party predicate. A mount declaring no namespaces owns none. -}
 sweepPolicyFor :: (Ecosystem -> RuleDeps) -> VettedMount -> IO (Ecosystem, SweepPolicy)
 sweepPolicyFor ruleDepsFor vetted = do
     prepared <- prepare deps configured
@@ -330,7 +330,7 @@ sweepPolicyFor ruleDepsFor vetted = do
   where
     eco = vmEcosystem vetted
     deps = ruleDepsFor eco
-    configured = mountPolicy (vmMount vetted)
+    configured = revocationRules (mountPolicy (vmMount vetted))
     project = adapterProjectName (vmAdapter vetted)
     firstParty = maybe (const False) firstPartyName (mntFirstParty (vmConfig vetted))
 

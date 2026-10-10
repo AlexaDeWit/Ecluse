@@ -14,9 +14,12 @@ module Ecluse.Core.Rules.Types (
     ruleName,
     readsAdvisories,
     deniesOnAdvisories,
+    ruleDenies,
 
-    -- * Precedence
+    -- * Precedence and reach
     PrecededRule (..),
+    RuleReach (..),
+    revocationRules,
     defaultPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
@@ -163,16 +166,52 @@ deniesOnAdvisories = \case
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
+{- | Whether a rule can only refuse or abstain. A rule that cannot admit may be left out of an
+evaluation without that evaluation admitting a version the whole policy refuses.
+-}
+ruleDenies :: Rule -> Bool
+ruleDenies = \case
+    DenyInstallTimeExecution -> True
+    DenyByIdentity{} -> True
+    DenyIfCve{} -> True
+    DenyIfEpss{} -> True
+    AllowScope{} -> False
+    AllowIfOlderThan{} -> False
+    AllowByIdentity{} -> False
+    AllowIfRemediatesCve -> False
+
 {- | A rule with explicit precedence, ordered highest first and then by name through 'Ecluse.Core.Rules.bootOrder'.
 No derived 'Ord' defines policy order.
 -}
 data PrecededRule = PrecededRule
     { rulePrecedence :: Int
     -- ^ The precedence at which this rule competes. Higher wins.
+    , ruleReach :: RuleReach
+    -- ^ The phases the rule applies at.
     , prRule :: Rule
     -- ^ The rule itself.
     }
     deriving stock (Eq, Show)
+
+{- | The phases a rule applies at. Every rule applies at admission, so no value leaves admission
+out, and a deny limited to it never removes a stored version.
+-}
+data RuleReach
+    = -- | The gate, the mirror worker's ingest, and the Dredger's revocation all read the rule.
+      AdmissionAndRevocation
+    | -- | The gate and the mirror worker's ingest read the rule. The Dredger does not.
+      AdmissionOnly
+    deriving stock (Eq, Show)
+
+{- | The rules the Dredger evaluates, in their given order. Configuration admits 'AdmissionOnly' on
+a deny alone ('ruleDenies'), so this list never blocks a version the whole policy admits.
+-}
+revocationRules :: [PrecededRule] -> [PrecededRule]
+revocationRules = filter (reachesRevocation . ruleReach)
+  where
+    reachesRevocation = \case
+        AdmissionAndRevocation -> True
+        AdmissionOnly -> False
 
 {- | Use the rule type's default when configuration omits precedence. See 'Ecluse.Core.Rules.bootOrder' for tie-breaking.
 Identity allows override both advisory denies, while install-code and identity denies outrank every allow.

@@ -20,6 +20,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
+    RuleReach (..),
     defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
@@ -27,12 +28,15 @@ import Ecluse.Core.Rules.Types (
     defaultDenyIfCvePrecedence,
     defaultDenyIfEpssPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
+    ruleDenies,
     ruleName,
  )
+import Ecluse.Test.Rules (admissionOnly, atPrecedence)
 
 spec :: Spec
 spec = do
     rulePolicySpec
+    appliesToSpec
     policyErrorRenderSpec
 
 policyErrorRenderSpec :: Spec
@@ -50,47 +54,47 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "overrides a default rule's precedence" $
             resolveJson "{\"rules\":{\"min-age\":{\"precedence\":175}}}"
                 `shouldBe` Right
-                    [ PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
-                    , PrecededRule 175 (AllowIfOlderThan (7 * 86400))
+                    [ atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence 175 (AllowIfOlderThan (7 * 86400))
                     ]
 
         it "adds a new rule that carries a full type at its type's default precedence" $
             resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
                 `shouldBe` Right
-                    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
-                    , PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
+                    [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
                     ]
 
         it "adds a new rule with an explicit precedence" $
             resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
                 `shouldBe` Right
-                    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
-                    , PrecededRule 275 DenyInstallTimeExecution
+                    [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , atPrecedence 275 DenyInstallTimeExecution
                     ]
 
         it "suppresses a default rule with enabled:false" $
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
-                `shouldBe` Right [PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
 
         it "suppresses the default remediation fast lane with enabled:false" $
             resolveJson "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}"
-                `shouldBe` Right [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
+                `shouldBe` Right [atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
 
         it "adds an AllowScope rule from a scope field" $
             resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
-                `shouldResolveTo` (PrecededRule defaultAllowScopePrecedence (AllowScope (mkScope "myorg")) : shippedRules)
+                `shouldResolveTo` (atPrecedence defaultAllowScopePrecedence (AllowScope (mkScope "myorg")) : shippedRules)
 
         it "adds a new AllowIfOlderThan rule from a valid ageSeconds" $
             resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
-                `shouldResolveTo` (PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100) : shippedRules)
+                `shouldResolveTo` (atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100) : shippedRules)
 
         it "accepts a restated type on a patch that matches the default's kind" $
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
                 `shouldBe` Right
-                    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)
-                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)
+                    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
                     ]
 
         it "rejects a restated type on a patch that changes the default's kind" $
@@ -117,11 +121,11 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             -- A second rule of the shipped fast lane's own type, so the resolved policy
             -- carries both rather than one overwriting the other.
             resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\"}}}"
-                `shouldResolveTo` (PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve : shippedRules)
+                `shouldResolveTo` (atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve : shippedRules)
 
         it "adds an AllowByIdentity rule from an identity field" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}"
-                `shouldResolveTo` (PrecededRule defaultAllowByIdentityPrecedence (AllowByIdentity "left-pad@1.3.0") : shippedRules)
+                `shouldResolveTo` (atPrecedence defaultAllowByIdentityPrecedence (AllowByIdentity "left-pad@1.3.0") : shippedRules)
 
         it "rejects adding an AllowByIdentity without identity" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
@@ -231,8 +235,8 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "suppresses one rule from a multi-rule base, keeping the rest" $
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"enabled\":false}}}"
                 `shouldBe` Right
-                    [ PrecededRule 100 (AllowIfOlderThan (7 * 86400))
-                    , PrecededRule 300 DenyInstallTimeExecution
+                    [ atPrecedence 100 (AllowIfOlderThan (7 * 86400))
+                    , atPrecedence 300 DenyInstallTimeExecution
                     ]
 
     describe "fail-loud merge references" $ do
@@ -314,9 +318,9 @@ rulePolicySpec = describe "rulePolicySpec" $ do
 
         it "never counts type, precedence, or enabled as a rule's own parameter" $ do
             resolveJsonOver emptyPolicy "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
-                `shouldBe` Right [PrecededRule 275 DenyInstallTimeExecution]
+                `shouldBe` Right [atPrecedence 275 DenyInstallTimeExecution]
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
-                `shouldBe` Right [PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
 
     describe "rule-type name contract" $ do
         it "covers exactly the diagnostic knownRuleTypes list (neither has drifted)" $
@@ -325,7 +329,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "accepts every known rule type and round-trips it through ruleName" $
             for_ knownRuleAdds $ \(ty, body) ->
                 case resolveJsonOver emptyPolicy body of
-                    Right [PrecededRule _ rule] -> ruleName rule `shouldBe` ty
+                    Right [PrecededRule _ _ rule] -> ruleName rule `shouldBe` ty
                     other ->
                         expectationFailure
                             (T.unpack ty <> ": expected a single resolved rule, got " <> show other)
@@ -339,6 +343,125 @@ rulePolicySpec = describe "rulePolicySpec" $ do
         it "rejects restating a default as an unknown type with UnknownRuleType" $
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThat\"}}}"
                 `shouldBe` Left [UnknownRuleType "min-age" "AllowIfOlderThat"]
+
+appliesToSpec :: Spec
+appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
+    describe "a rule with no setting" $ do
+        it "applies at both phases, shipped or added" $
+            fmap (map ruleReach) (resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}")
+                `shouldBe` Right [AdmissionAndRevocation, AdmissionAndRevocation, AdmissionAndRevocation]
+
+        it "keeps the phases of the rule it patches" $
+            resolveJsonOver limitedBase "{\"rules\":{\"deny-scripts\":{\"precedence\":350}}}"
+                `shouldBe` Right [admissionOnly (atPrecedence 350 DenyInstallTimeExecution)]
+
+    describe "a stated list" $ do
+        it "limits a deny to admission" $
+            resolveJson (addedDeny "[\"admission\"]")
+                `shouldResolveTo` (admissionOnly (atPrecedence defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution) : shippedRules)
+
+        it "reads both words as both phases, in either order and with a word repeated" $
+            for_ ["[\"admission\",\"revocation\"]", "[\"revocation\",\"admission\"]", "[\"admission\",\"revocation\",\"admission\"]"] $ \phases ->
+                resolveJsonOver emptyPolicy ("{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\",\"appliesTo\":" <> phases <> "}}}")
+                    `shouldBe` Right [atPrecedence 400 (DenyByIdentity "left-pad")]
+
+        it "reads a repeated admission as admission alone" $
+            resolveJsonOver emptyPolicy "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\",\"admission\"]}}}"
+                `shouldBe` Right [admissionOnly (atPrecedence 300 DenyInstallTimeExecution)]
+
+        it "widens a rule the layer below limits to admission" $
+            resolveJsonOver limitedBase "{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}"
+                `shouldBe` Right [atPrecedence 300 DenyInstallTimeExecution]
+
+        it "narrows a rule the layer below applies at both phases" $
+            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\"]}}}"
+                `shouldSatisfy` either (const False) (elem (admissionOnly (atPrecedence 300 DenyInstallTimeExecution)))
+
+        it "admits admission alone on every deny type, and on no allow type" $
+            for_ knownRuleAdds $ \(ty, body) ->
+                case resolveJsonOver emptyPolicy (limitedToAdmission body) of
+                    Right [limited] -> (ruleDenies (prRule limited), ruleReach limited) `shouldBe` (True, AdmissionOnly)
+                    Left [MalformedRule "r" reason] -> reason `shouldBe` allowLimitedToAdmission ty
+                    other -> expectationFailure (T.unpack ty <> ": expected one limited deny or one refused allow, got " <> show other)
+
+    describe "an ambiguous setting" $ do
+        let cases :: [(String, ByteString, [PolicyError])]
+            cases =
+                [ ("an empty list", addedDeny "[]", [MalformedRule "deny-scripts" namesNoPhase])
+                , ("revocation alone", addedDeny "[\"revocation\"]", [MalformedRule "deny-scripts" revocationAlone])
+                ,
+                    ( "an added allow limited to admission"
+                    , "{\"rules\":{\"pinned\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad\",\"appliesTo\":[\"admission\"]}}}"
+                    , [MalformedRule "pinned" (allowLimitedToAdmission "AllowByIdentity")]
+                    )
+                ,
+                    ( "a shipped allow limited to admission by a patch"
+                    , "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\"]}}}"
+                    , [MalformedRule "min-age" (allowLimitedToAdmission "AllowIfOlderThan")]
+                    )
+                , ("an unknown word", addedDeny "[\"admission\",\"serve\"]", [MalformedRule "deny-scripts" (unknownPhase "serve")])
+                , ("a word for the second phase other than revocation", addedDeny "[\"admission\",\"pruning\"]", [MalformedRule "deny-scripts" (unknownPhase "pruning")])
+                ,
+                    ( "every unknown word, each once"
+                    , addedDeny "[\"serve\",\"mirror\",\"serve\"]"
+                    , [MalformedRule "deny-scripts" (unknownPhase "serve"), MalformedRule "deny-scripts" (unknownPhase "mirror")]
+                    )
+                ]
+        for_ cases $ \(label, body, expected) ->
+            it ("refuses " <> label) $
+                resolveJson body `shouldBe` Left expected
+
+        it "refuses a value that is not a list of words, naming the key" $
+            for_ ["\"admission\"", "true", "[1]", "{\"admission\":true}"] $ \value ->
+                resolveJson (addedDeny value) `shouldSatisfy` refusalMentions "appliesTo"
+
+        it "reports every refused setting of one load together" $ do
+            let body =
+                    "{\"rules\":{\"empty\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[]}"
+                        <> ",\"alone\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"revocation\"]}"
+                        <> ",\"min-age\":{\"appliesTo\":[\"admission\"]}"
+                        <> ",\"typo\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admision\"]}"
+                        <> ",\"ghost\":{\"enabled\":false}}}"
+            case resolveJson body of
+                Left errs ->
+                    errs
+                        `shouldMatchList` [ MalformedRule "empty" namesNoPhase
+                                          , MalformedRule "alone" revocationAlone
+                                          , MalformedRule "min-age" (allowLimitedToAdmission "AllowIfOlderThan")
+                                          , MalformedRule "typo" (unknownPhase "admision")
+                                          , SuppressUnknownRule "ghost"
+                                          ]
+                Right rs -> expectationFailure ("expected every refusal, got " <> show rs)
+
+    describe "beside enabled: false" $
+        it "switches the rule off at both phases, and reads no other key" $ do
+            -- The document may limit a rule that the environment then switches off, on one merged entry.
+            resolveJsonOver limitedBase "{\"rules\":{\"deny-scripts\":{\"enabled\":false,\"appliesTo\":[\"admission\",\"revocation\"]}}}"
+                `shouldBe` Right []
+            resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false,\"appliesTo\":[\"admission\"]}}}"
+                `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+
+-- | A base policy whose install-code deny is limited to admission, as a shipped mount default may be.
+limitedBase :: RulePolicy
+limitedBase = RulePolicy (Map.fromList [("deny-scripts", admissionOnly (atPrecedence 300 DenyInstallTimeExecution))])
+
+-- | A 'knownRuleAdds' body with its rule limited to admission.
+limitedToAdmission :: ByteString -> ByteString
+limitedToAdmission = encodeUtf8 . T.replace "{\"type\":" "{\"appliesTo\":[\"admission\"],\"type\":" . decodeUtf8
+
+-- | An added install-code deny named @deny-scripts@, with the given JSON as its @appliesTo@.
+addedDeny :: ByteString -> ByteString
+addedDeny appliesTo = "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":" <> appliesTo <> "}}}"
+
+-- | The four refusals of an ambiguous @appliesTo@, as an operator reads them after the rule's name.
+namesNoPhase, revocationAlone :: Text
+namesNoPhase = "\"appliesTo\" names no phase. Write [admission] or [admission, revocation], or switch the rule off with \"enabled\": false"
+revocationAlone = "\"appliesTo\" must include \"admission\". A rule that applied at revocation alone would delete copies of versions the gate still admits"
+
+unknownPhase, allowLimitedToAdmission :: Text -> Text
+unknownPhase word = "\"appliesTo\" names unknown phase \"" <> word <> "\". The phases are \"admission\" and \"revocation\""
+allowLimitedToAdmission ty =
+    "\"" <> ty <> "\" is an allow, and an allow cannot be limited to admission. If the Dredger ignored it, a lower deny could delete a version this rule admits. Limit the deny instead"
 
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
 resolveJson = resolveJsonOver defaultPolicy
@@ -355,9 +478,9 @@ mixedBase :: RulePolicy
 mixedBase =
     RulePolicy
         ( Map.fromList
-            [ ("min-age", PrecededRule 100 (AllowIfOlderThan (7 * 86400)))
-            , ("trusted", PrecededRule 200 (AllowScope (mkScope "myorg")))
-            , ("deny-scripts", PrecededRule 300 DenyInstallTimeExecution)
+            [ ("min-age", atPrecedence 100 (AllowIfOlderThan (7 * 86400)))
+            , ("trusted", atPrecedence 200 (AllowScope (mkScope "myorg")))
+            , ("deny-scripts", atPrecedence 300 DenyInstallTimeExecution)
             ]
         )
 
@@ -365,13 +488,13 @@ mixedBase =
 cveBase :: RulePolicy
 cveBase =
     RulePolicy
-        (Map.fromList [("deny-cve", PrecededRule defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5 FailDeny)))])
+        (Map.fromList [("deny-cve", atPrecedence defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5 FailDeny)))])
 
 -- | The same, for the EPSS twin.
 epssBase :: RulePolicy
 epssBase =
     RulePolicy
-        (Map.fromList [("deny-epss", PrecededRule defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)))])
+        (Map.fromList [("deny-epss", atPrecedence defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)))])
 
 {- | The whole resolved policy as a multiset, so an "adds a rule" case cannot pass on a policy
 that also lost, gained, or re-graded another rule. The order is the caller's own concern.
@@ -384,12 +507,12 @@ shouldResolveTo resolved expected = case resolved of
 -- | The two rules the shipped policy carries, which every add above resolves beside.
 shippedRules :: [PrecededRule]
 shippedRules =
-    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+    [ atPrecedence defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+    , atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
     ]
 
 hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
-hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
+hasRuleAtPrec prec rule (Right rs) = atPrecedence prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
 
 -- A refusal whose rendered text names the key, whichever layer raised it.

@@ -52,7 +52,7 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleEval (PerVersion), prepare)
-import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
+import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleReach (AdmissionAndRevocation), RuleVerdict (Deny))
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore, seededStoreConfig, servedVersion, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
@@ -117,7 +117,7 @@ spec = describe "grouped preview" $ do
         mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
         cache <- newFakeStore defaultFakeStoreConfig{fakeContents = contents [(leftPadName, ["1.0.0"])]}
         mount <- grouped mirror cache
-        rules <- prepare inertRuleDeps [PrecededRule 100 (AllowIfOlderThan 0), PrecededRule 0 (DenyByIdentity "left-pad")]
+        rules <- prepare inertRuleDeps [PrecededRule 100 AdmissionAndRevocation (AllowIfOlderThan 0), PrecededRule 0 AdmissionAndRevocation (DenyByIdentity "left-pad")]
         let original = smStore mount
             dated = (ssObserve original){obReadManifest = fmap (fmap dateManifest) . obReadManifest (ssObserve original)}
         (_, outcome) <- runPreview mount{smRules = rules, smStore = original{ssObserve = dated}}
@@ -130,7 +130,7 @@ spec = describe "grouped preview" $ do
         mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
         cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
-        rules <- prepare inertRuleDeps [PrecededRule 100 (AllowIfOlderThan 0), PrecededRule 0 (DenyByIdentity "left-pad")]
+        rules <- prepare inertRuleDeps [PrecededRule 100 AdmissionAndRevocation (AllowIfOlderThan 0), PrecededRule 0 AdmissionAndRevocation (DenyByIdentity "left-pad")]
         let original = smStore mount
             dated = (ssObserve original){obReadManifest = fmap (fmap dateManifest) . obReadManifest (ssObserve original)}
         (recorded, outcome) <- runPreview mount{smRules = rules, smStore = original{ssObserve = dated}}

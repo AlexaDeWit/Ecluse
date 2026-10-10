@@ -404,3 +404,4 @@ ruleEntryDecoder =
         <*> optionalPlainKey "minCvss"
         <*> optionalPlainKey "minEpss"
         <*> optionalPlainKey "onUnavailable"
+        <*> optionalPlainKey "appliesTo"

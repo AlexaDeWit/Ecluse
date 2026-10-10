@@ -58,6 +58,7 @@ import Ecluse.Composition.Support (
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeOnly),
+    everyBootRole,
  )
 import Ecluse.Config (AppConfig (cfgAdvisories), Config (configApp), advisoryAgeLines, advisoryEpssLines, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Credential (mkSecret)
@@ -99,10 +100,34 @@ spec = describe "resolveBootPlan" $ do
                        , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
                        ]
                 <> mountPostureLines config
+                <> [ "rule boot order for mount npm:"
+                   , "rule 1: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
+                   , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                   ]
                 <> advisoryAgeLines config
                 <> advisoryEpssLines config
                 <> [epssAttemptLine (cfgAdvisories (configApp config))]
         bpWarnings plan `shouldBe` []
+
+    it "states each mount's rule order and the phases each rule applies at, for every role" $ do
+        -- The Dredger and the checker print the whole order too, with the rules the Dredger skips.
+        let envVars =
+                overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}" $
+                    overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"requests\",\"appliesTo\":[\"admission\"]}}" $
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" codeArtifactEnvVars
+        config <- expectConfig envVars Nothing
+        for_ everyBootRole $ \role ->
+            fmap (filter (T.isPrefixOf "rule ") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
+                `shouldBe` Right
+                    [ "rule boot order for mount npm:"
+                    , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                    , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
+                    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                    , "rule boot order for mount pypi:"
+                    , "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
+                    , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
+                    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                    ]
 
     it "holds every upstream exchange to the configured progress floor" $ do
         let envVars = overrideEnv "ECLUSE_LIMITS__MIN_PROGRESS_BYTES" "4096" (overrideEnv "ECLUSE_LIMITS__PROGRESS_WINDOW" "5" staticEnvVars)

@@ -35,6 +35,7 @@ module Ecluse.Worker.Support.Fixtures (
     ver,
     otherVer,
     jobWith,
+    pypiJobWith,
     sampleArtifact,
     sampleDetails,
     presentResolver,
@@ -48,6 +49,7 @@ module Ecluse.Worker.Support.Fixtures (
     unwiredPublish,
     admitPolicies,
     admitPoliciesWithDigests,
+    refusedAtAdmissionOnly,
     withPublish,
     withFirstParty,
     withHostGate,
@@ -89,7 +91,8 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
-import Ecluse.Core.Rules (PreparedRule)
+import Ecluse.Core.Rules (PreparedRule, prepare)
+import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, DenyByIdentity))
 import Ecluse.Core.Security (HostPort, Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
@@ -114,7 +117,7 @@ import Ecluse.Test.Package (
  )
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
-import Ecluse.Test.Rules (admitRule)
+import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Worker (npmPolicyWith)
 
@@ -223,6 +226,10 @@ jobWith url =
         , jobTraceContext = Nothing
         }
 
+-- | 'jobWith' for the PyPI project of the same name, which a PyPI bundle decides.
+pypiJobWith :: Text -> MirrorJob
+pypiJobWith url = (jobWith url){jobPackage = Package.unscopedPyPI "thing", jobVersion = Package.pypiVersion "1.0.0"}
+
 {- | The artifact of a projected version snapshot. Its filename must match 'jobWith''s, and its
 sha512 SRI must be over 'tarballBytes', because the tamper gate verifies against this artifact.
 -}
@@ -291,6 +298,13 @@ clears it, so re-evaluation never blocks.
 -}
 admitPolicies :: WorkerPolicies
 admitPolicies = npmPolicies presentResolver [admitRule]
+
+{- | The prepared rules of a policy that pins @thing@ and denies it above the pin at admission
+alone. The gate's whole list refuses the version, and the rules that apply at revocation admit it.
+-}
+refusedAtAdmissionOnly :: IO [PreparedRule]
+refusedAtAdmissionOnly =
+    prepare inertRuleDeps [admissionOnly (atDefaultPrecedence (DenyByIdentity "thing")), atDefaultPrecedence (AllowByIdentity "thing")]
 
 {- | 'admitPolicies' with the resolved artifact's digests replaced, so a test chooses a faithful
 mirror or a tamper here, independent of what the job payload carries.

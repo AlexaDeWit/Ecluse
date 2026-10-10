@@ -26,7 +26,7 @@ import Katip (LogEnv, Namespace (Namespace), SimpleLogPayload, katipAddNamespace
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
-import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning, logRuleBootOrder)
+import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
 import Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan),
@@ -137,9 +137,6 @@ withServiceRuntime bootEnv plan mirror action = do
     (memoryMeter, sampler) <- memoryAdmission memoryPlan
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
-    -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
-    -- how their policy will resolve (highest precedence first, then name).
-    logRuleBootOrder logEnv bindings
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 

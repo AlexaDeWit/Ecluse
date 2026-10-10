@@ -60,6 +60,16 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioNamesUnder e2e "e" `shouldReturn` sort names
         verdaccioNamesUnder e2e "z" `shouldReturn` []
 
+    it "keeps every version an identity deny limited to admission names, and states the phase at boot" $ \(plane, e2e, cache) -> do
+        initial <- verdaccioSnapshot e2e
+        privateInitial <- verdaccioSnapshot cache
+        run <- runDredgerOnce plane ["--once"] (sweepEnvUnder (renderRules [admissionOnlyEntry (psName dredgerPkg)]))
+        (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
+        auditMessages run `shouldSatisfy` elem "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
+        filter (T.isPrefixOf "deleting ") (sweepMessages run) `shouldBe` []
+        verdaccioSnapshot e2e `shouldReturn` initial
+        verdaccioSnapshot cache `shouldReturn` privateInitial
+
     it "deletes every denied version and preserves all other versions, including first-party versions" $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
@@ -159,8 +169,12 @@ consentKey :: Text
 consentKey = "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
 
 sweepEnv :: PkgSpec -> [(Text, Text)]
-sweepEnv pkg =
-    [ ("ECLUSE_RULES", identityRule (psName pkg))
+sweepEnv = sweepEnvUnder . identityRule . psName
+
+-- A full walk under the given rule policy, with the publish scope declared first-party.
+sweepEnvUnder :: Text -> [(Text, Text)]
+sweepEnvUnder rules =
+    [ ("ECLUSE_RULES", rules)
     , ("ECLUSE_DREDGER__FULL_WALK", "true")
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
@@ -175,6 +189,11 @@ identityRules = renderRules . zipWith identityEntry [1 :: Int ..]
 identityEntry :: Int -> Text -> Pair
 identityEntry position revoked =
     fromString ("revoke-" <> show position) .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
+
+-- An identity deny that applies at admission alone, which the Dredger does not evaluate.
+admissionOnlyEntry :: Text -> Pair
+admissionOnlyEntry revoked =
+    "revoke-at-admission" .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked, "appliesTo" .= (["admission"] :: [Text])]
 
 {- | A full walk over the seeded store: it exits clean, deletes every version of @pkg@, and
 closes with the cycle tally those deletions imply.

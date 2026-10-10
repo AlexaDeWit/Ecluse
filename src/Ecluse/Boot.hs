@@ -26,7 +26,6 @@ module Ecluse.Boot (
     -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
-    logRuleBootOrder,
     buildMirrorQueue,
     applyServerSettings,
     probeServerConfig,
@@ -69,15 +68,12 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (secretEnvSpellings)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (
-    MountBinding (bindingPackumentDeps, bindingPrefix),
     ServerConfig (scDrainTimeout, scPort),
     ShutdownDrainTimeout (ShutdownDrainTimeout),
     mkServerConfig,
@@ -272,16 +268,6 @@ logBootWarning logEnv = moduleLog logEnv "Ecluse" WarningS
 -- | Report a boot diagnostic under the root module's logging context.
 logBootInfo :: LogEnv -> Text -> IO ()
 logBootInfo logEnv = moduleLog logEnv "Ecluse" InfoS
-
--- | Report evaluation order for each wired mount.
-logRuleBootOrder :: LogEnv -> [MountBinding] -> IO ()
-logRuleBootOrder logEnv = traverse_ logMount
-  where
-    logMount binding = do
-        let deps = bindingPackumentDeps binding
-        let label = T.intercalate "/" (toList (bindingPrefix binding))
-        logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
-        traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
 -- | A start-up refusal that the process perimeter reports before exiting.
 newtype BootAborted = BootAborted Text

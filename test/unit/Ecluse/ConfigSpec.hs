@@ -14,10 +14,11 @@ import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, npmMountDo
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
-    ConfigError (MountMissingPrivateUpstream, PublicUrlRequired),
-    Mount (mountRegistries),
+    ConfigError (MountMissingPrivateUpstream, PolicyErrors, PublicUrlRequired),
+    Mount (mountPolicy, mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
+    PolicyError (MalformedRule),
     QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
     advisoryAgeLines,
@@ -34,6 +35,7 @@ import Ecluse.Config (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule, ruleReach), RuleReach (AdmissionAndRevocation, AdmissionOnly), ruleName)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 
@@ -48,6 +50,10 @@ spec = do
             case defaultPolicy of
                 RulePolicy rules ->
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
+
+        it "applies every shipped rule at both phases" $
+            map ruleReach (Map.elems (policyRules defaultPolicy))
+                `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation]
 
         it "pins the shipped redelivery budget to the one a directly-built backend holds" $
             -- A drift changes when deployments and test doubles retire poison messages.
@@ -146,6 +152,45 @@ spec = do
                 drop 1 (mountPostureLines cfg) `shouldBe` [upstreamProbeNotice]
             length (mountPostureLines public) `shouldBe` 1
 
+    describe "the phases a mount's rules apply at" $ do
+        it "applies every rule of a configuration that sets no appliesTo at both phases, on every mount" $ do
+            cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
+            Map.map (map ruleReach . mountPolicy) (configMounts cfg)
+                `shouldBe` Map.fromList [(Npm, replicate 3 AdmissionAndRevocation), (PyPI, replicate 3 AdmissionAndRevocation)]
+
+        it "limits a rule to admission on the mount that says so, and on no other" $ do
+            cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\"]}}}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, []), (PyPI, ["DenyInstallTimeExecution"])]
+
+        it "widens on one mount a rule the layer below limits to admission" $ do
+            cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}},\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}},\"pypi\":{\"enabled\":true}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, []), (PyPI, ["DenyInstallTimeExecution"])]
+
+        it "replaces the document's list whole from the environment" $ do
+            let doc = "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}}}"
+            limited <- configFor doc
+            widened <- expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}")]) (Just doc)
+            Map.map limitedRules (configMounts limited) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+            Map.map limitedRules (configMounts widened) `shouldBe` Map.singleton Npm []
+
+        it "switches off, from the environment, a shipped rule whose phases the document states" $ do
+            -- The two layers merge into one entry, where enabled: false decides and appliesTo is not read.
+            cfg <-
+                expectConfig
+                    (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false}}")])
+                    (Just "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
+            Map.map (map (ruleName . prRule) . mountPolicy) (configMounts cfg)
+                `shouldBe` Map.singleton Npm ["AllowIfRemediatesCve"]
+
+        it "refuses an ambiguous setting on a mount's own rules, for npm and for PyPI" $
+            for_ ["npm", "pypi"] $ \mount ->
+                loadConfig pubUrlEnv (Just ("{\"mounts\":{\"" <> mount <> "\":{\"enabled\":true,\"rules\":{\"min-age\":{\"appliesTo\":[\"revocation\"]}}}}}"))
+                    `shouldBe` Left [PolicyErrors [MalformedRule "min-age" "\"appliesTo\" must include \"admission\". A rule that applied at revocation alone would delete copies of versions the gate still admits"]]
+
+        it "names the setting and its layer in the provenance lines" $
+            resolvedKeyProvenance [] (Just "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}")
+                `shouldSatisfy` elem "config: rules.deny-scripts.appliesTo = [\"admission\"] (document)"
+
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
             cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just privateMountDoc)
@@ -227,6 +272,10 @@ spec = do
             provenance
                 `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
             provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
+
+-- | The types of a mount's rules that are limited to admission, which the Dredger does not evaluate.
+limitedRules :: Mount -> [Text]
+limitedRules mount = [ruleName (prRule rule) | rule <- mountPolicy mount, ruleReach rule == AdmissionOnly]
 
 -- | An advisory store, which the age lines report only once one is configured.
 advisoryStoreEnv :: [(String, String)]

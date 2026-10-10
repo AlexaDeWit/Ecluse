@@ -50,6 +50,8 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
@@ -70,8 +72,8 @@ import Ecluse.Core.Server.Upstream (
  )
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName, unscopedPyPI)
-import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, pypiVersion, thingName, unscopedPyPI, v1_0_0)
+import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
 
 {- | Tests the composition root's boot-time wiring. Every boot problem is a fail-fast,
 aggregated boot error, and the injected clock and adapter resolver keep this spec free of IO.
@@ -178,6 +180,18 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
                 let deps = bindingPackumentDeps binding
                 null (pdRules deps) `shouldBe` False
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "wires a deny limited to admission into each mount's gate, for npm and for PyPI" $ do
+        -- The serve path receives the whole policy. The pin below the deny would admit the
+        -- version to a reader of the revocation rules alone.
+        let doc = "{\"rules\":{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\",\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing\"}},\"mounts\":{\"pypi\":{\"enabled\":true}}}"
+        planFrom staticEnvVars (Just doc) >>= \case
+            Right bindings -> do
+                map bindingPrefix bindings `shouldBe` ["npm" :| [], "pypi" :| []]
+                for_ (zip bindings [identityEvidence thingName v1_0_0, identityEvidence (unscopedPyPI "thing") (pypiVersion "1.0.0")]) $ \(binding, evidence) -> do
+                    decision <- evalRules (EvalContext fixedNow Nothing) (pdRules (bindingPackumentDeps binding)) evidence
+                    blockedBy decision `shouldBe` Just "DenyByIdentity"
+            Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
