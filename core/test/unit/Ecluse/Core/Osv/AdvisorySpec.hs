@@ -6,17 +6,49 @@
 -- | Decoding one OSV record, and the rows and bounds it extracts to.
 module Ecluse.Core.Osv.AdvisorySpec (spec) where
 
-import Data.Aeson (Value (..), eitherDecodeStrict)
-import Data.ByteString qualified as BS
-import Data.Time (UTCTime (UTCTime), fromGregorian)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Prelude hiding (universe)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Codec.Compression.GZip qualified as GZip
+import Data.Aeson (Value (..), eitherDecodeStrict, encode, object, (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.JsonStream.Parser qualified as J
+import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Universe.Class (Universe (universe))
+import Database.SQLite.Simple (Only (..), execute, executeMany, execute_, query, query_, withConnection, withTransaction)
+import Hedgehog (Gen, evalIO, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
+import System.Directory (copyFile, listDirectory)
+import System.FilePath (takeExtension, (</>))
+import System.IO.Temp (withSystemTempDirectory)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
+import Test.Hspec.Hedgehog (hedgehog)
+
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames), packageAdvisories)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Osv.Advisory
-import Ecluse.Core.Osv.Epss (mkEpssScores)
+import Ecluse.Core.Osv.Compile (osvToRow)
+import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
+import Ecluse.Core.Osv.Epss (EpssScores, epssForIds, mkEpssScores, parseEpssLine)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Test.Osv (noScores)
+import Ecluse.Core.Package (canonicalise, mkPackageName)
+import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
+import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource)
+import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), Reason (..), Rule (..), RuleVerdict (..), completeEvidence, mkAdvisoryIds, unAdvisoryIds)
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage), captureTexts, corpusPackages, cpName, pypiCorpusPackages)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), compileAdvisoryInputs, corpusAdvisories)
+import Ecluse.Test.Osv (noScores, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes)
+import Ecluse.Test.OsvDb (metaOf, withServedArtifact)
+import Ecluse.Test.Package (sampleDetails)
+import Ecluse.Test.Rules (servingRuleDeps)
+import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
 advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
 advisory entries label =
@@ -59,12 +91,8 @@ spec = describe "one OSV advisory record" $ do
                                     , extCveId = "GHSA-2234-fmw7-43wr"
                                     , extIntroduced = Nothing
                                     , extUpperBound = FixedBefore "4.6.5"
-                                    , -- The fixture carries both a CVSS 3.1 vector and the
-                                      -- "MODERATE" label. The computed base score wins.
-                                      extSeverity = Just 5.9
-                                    , -- sample.json aliases CVE-2024-48913, which the empty
-                                      -- fixture table does not score.
-                                      extEpss = Nothing
+                                    , extSeverity = Just 5.9
+                                    , extEpss = Nothing
                                     }
                                ]
 
@@ -85,8 +113,6 @@ spec = describe "one OSV advisory record" $ do
                 `shouldBe` Just 9.8
 
         it "parses a CVSS v4 vector (needs cvss >= 0.3) rather than dropping it" $
-            -- A critical v4 vector, no label: only a v4 parser scores it at all, and only
-            -- the v4 metric weights put it at 9.3.
             advisorySeverity
                 (advisory [OsvSeverityEntry "CVSS_V4" "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"] Nothing)
                 `shouldBe` Just 9.3
@@ -198,15 +224,12 @@ spec = describe "one OSV advisory record" $ do
                 `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" Nothing (FixedBefore "2.0.0") Nothing Nothing]
 
         it "decodes OSV's \"0\" lower bound to no lower bound at all" $ do
-            -- The beginning sentinel must not become an unorderable version bound.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "1.2.3") Nothing]
                 adv = OsvAdvisory "MAL-zero" Nothing (Just [OsvAffected (OsvPackage "mal-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "mal-pkg" "npm" "MAL-zero" Nothing (FixedBefore "1.2.3") Nothing Nothing]
 
         it "keeps an exactly enumerated \"0\" as the version it names" $ do
-            -- The sentinel reading belongs to a range's lower bound. In versions[] the same
-            -- text names a version a package may really carry.
             let adv = OsvAdvisory "MAL-v0" Nothing (Just [OsvAffected (OsvPackage "zero-pkg" "npm") Nothing (Just ["0"])]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "zero-pkg" "npm" "MAL-v0" (Just "0") (LastAffected "0") Nothing Nothing]
@@ -219,8 +242,6 @@ spec = describe "one OSV advisory record" $ do
             Right adv -> do
                 osvId adv `shouldBe` "GHSA-multi"
                 let extracted = extractFromAdvisory noScores adv
-                -- The complex fixture has "database_specific": null, so every
-                -- extracted range carries no severity label.
                 extracted
                     `shouldBe` [ ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -260,6 +281,128 @@ spec = describe "one OSV advisory record" $ do
                                     }
                                ]
 
+    describe "diagnostic id order" $ do
+        let ids = mkAdvisoryIds ("B" :| ["A", "A"])
+            reordered = mkAdvisoryIds ("A" :| ["B", "A"])
+            fixed = mkAdvisoryIds ("FIX-B" :| ["FIX-A"])
+            fixedReordered = mkAdvisoryIds ("FIX-A" :| ["FIX-B"])
+            etag = Just (DbEtag "generation")
+            reason = AffectedBy Cvss 0.5 ids
+            denied = Deny etag reason
+
+        it "equates reordered ids while keeping repeated ids and separate remediation groups" $ do
+            normaliseVerdictIds denied `shouldBe` normaliseVerdictIds (Deny etag (AffectedBy Cvss 0.5 reordered))
+            normaliseVerdictIds (Allow (Remediates ids)) `shouldBe` normaliseVerdictIds (Allow (Remediates reordered))
+            normaliseVerdictIds (NoDecision (FixesButStillAffected fixed ids))
+                `shouldBe` normaliseVerdictIds (NoDecision (FixesButStillAffected fixedReordered reordered))
+
+        it "keeps decision, reason, score, threshold, etag, membership and multiplicity differences" $
+            for_
+                [ Allow reason
+                , NoDecision reason
+                , Deny etag (Remediates ids)
+                , Deny etag (AffectedBy Epss 0.5 ids)
+                , Deny etag (AffectedBy Cvss 0.6 ids)
+                , Deny (Just (DbEtag "other")) reason
+                , Deny Nothing reason
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A", "C"])))
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A"])))
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A", "A", "A"])))
+                ]
+                (\changed -> normaliseVerdictIds changed `shouldNotBe` normaliseVerdictIds denied)
+
+        it "keeps remediation roles and fail-closed inability fields" $ do
+            normaliseVerdictIds (NoDecision (FixesButStillAffected fixed ids))
+                `shouldNotBe` normaliseVerdictIds (NoDecision (FixesButStillAffected ids fixed))
+            for_ [CannotVet FailDeny NoDatabaseLoaded, CannotVet FailNoDecision NoDatabaseLoaded, CannotVet FailDeny EvaluationFailed] $ \verdict ->
+                normaliseVerdictIds verdict `shouldBe` verdict
+            normaliseVerdictIds (CannotVet FailDeny NoDatabaseLoaded)
+                `shouldNotBe` normaliseVerdictIds (CannotVet FailNoDecision NoDatabaseLoaded)
+            normaliseVerdictIds (CannotVet FailDeny NoDatabaseLoaded)
+                `shouldNotBe` normaliseVerdictIds (CannotVet FailDeny EvaluationFailed)
+
+    describe "covered enumerated versions" $ do
+        for_ coverCases $ \(label, eco, introduced, upper, versions, kept) ->
+            it label $ do
+                let adv = rangedAdvisory eco introduced upper versions
+                    points = drop 1 (extractFromAdvisory noScores adv)
+                map extIntroduced points `shouldBe` map Just kept
+                verdicts eco "pkg" (extractFromAdvisory noScores adv) versions
+                    `shouldBe` verdicts eco "pkg" (withoutDrop noScores adv) versions
+
+        it "uses ranges in another entry of the same advisory and canonical package" $ do
+            let adv = rangedAdvisory PyPI Nothing (FixedBefore "2") ["1"]
+                entries = fromMaybe [] (osvAffected adv)
+                separated = adv{osvAffected = Just [part{affectedPackage = if isNothing (affectedRanges part) then OsvPackage "PKG" "PyPI" else affectedPackage part} | part <- concatMap splitAffected entries]}
+            length (extractFromAdvisory noScores separated) `shouldBe` 1
+            let other = [aff{affectedPackage = OsvPackage "other" "PyPI"} | aff <- entries]
+            length (extractFromAdvisory noScores adv{osvAffected = Just (other <> [OsvAffected (OsvPackage "pkg" "PyPI") Nothing (Just ["1"])])}) `shouldBe` 2
+
+        it "keeps every point for an unknown ecosystem" $ do
+            let adv = rangedAdvisory PyPI Nothing Unbounded ["1", "bogus"]
+                unknown aff = aff{affectedPackage = OsvPackage "pkg" "unknown"}
+            length (extractFromAdvisory noScores adv{osvAffected = map unknown <$> osvAffected adv}) `shouldBe` 3
+
+        it "preserves complete real-reader verdicts apart from diagnostic id order" $ do
+            let records = reviewProbe
+                scoreRows = [("CVE-A", 0.75), ("CVE-B", 0.75)]
+                before = concatMap (withoutDrop (mkEpssScores scoreRows)) records
+            inputs <- generatedInputs records scoreRows
+            withDifferentialArtifacts PyPI before inputs $ \beforePath afterPath -> do
+                for_ [beforePath, afterPath] $ \path ->
+                    readerPlan path "pkg" >>= \plan -> putStrLn (path <> " reader plan: " <> show plan)
+                compareArtifacts PyPI beforePath afterPath [("pkg", ["1", "2", "3", "bogus"])]
+
+        it "preserves duplicate ids with mixed GIT, invalid and valid ranges through artifacts" $ do
+            let scoreRows = [("CVE-A", 0.75), ("CVE-B", 0.75)]
+                duplicate = mixedAdvisory
+                queries = ordNub ("1" : "bogus" : concatMap advisoryVersions (reviewProbe <> [duplicate]))
+            for_ [reviewProbe <> [duplicate], duplicate : reverse reviewProbe] $ \records -> do
+                inputs <- generatedInputs records scoreRows
+                withDifferentialArtifacts PyPI (concatMap (withoutDrop (mkEpssScores scoreRows)) records) inputs $ \beforePath afterPath ->
+                    compareArtifacts PyPI beforePath afterPath [("pkg", queries)]
+
+        for_ [(Npm, genNpm), (PyPI, genPyPI), (RubyGems, genGem)] $ \(eco, genVersion) ->
+            it ("preserves generated rule verdicts and advisory id membership for " <> show eco) $
+                hedgehog $ do
+                    advs <- forAll (Gen.list (Range.linear 1 5) (generatedAdvisory eco genVersion))
+                    queryVersion <- forAll genVersion
+                    let identified = zipWith (\n adv -> adv{osvId = "CVE-generated-" <> show ((n :: Int) `mod` 3)}) [0 ..] advs
+                        scoreRows = [(osvId adv, fromIntegral n / 4) | (n, adv) <- zip [0 :: Int ..] identified]
+                        scores = mkEpssScores scoreRows
+                        before = concatMap (withoutDrop scores) identified
+                        after = concatMap (extractFromAdvisory scores) identified
+                        queries = ordNub (queryVersion : "bogus" : concatMap advisoryVersions identified)
+                    verdicts eco "pkg" after queries === verdicts eco "pkg" before queries
+                    evalIO $ do
+                        inputs <- generatedInputs identified scoreRows
+                        withDifferentialArtifacts eco before inputs $ \beforePath afterPath ->
+                            compareArtifacts eco beforePath afterPath [("pkg", queries)]
+
+        for_ [Npm, PyPI] $ \eco ->
+            it ("preserves all captured rule verdicts and advisory id membership for " <> show eco) $ do
+                advs <- corpusRecords eco
+                feed <- BS.readFile "bench/corpus/advisories/epss.csv"
+                let scores = mkEpssScores (mapMaybe parseEpssLine (BS.split 10 feed))
+                    before = concatMap (withoutDrop scores) advs
+                    after = concatMap (extractFromAdvisory scores) advs
+                    packages = if eco == Npm then corpusPackages else pypiCorpusPackages
+                inputs <- corpusAdvisories eco
+                queries <- forM packages $ \package -> do
+                    served <- captureVersions eco package
+                    served `shouldSatisfy` (not . null)
+                    let name = cpName package
+                        rows = filter ((== name) . extPackage)
+                        versions = ordNub (served <> concatMap advisoryVersions advs <> ["bogus"])
+                    verdicts eco name (rows after) versions `shouldBe` verdicts eco name (rows before) versions
+                    pure (name, versions)
+                withDifferentialArtifacts eco before inputs $ \beforePath afterPath -> do
+                    compareArtifacts eco beforePath afterPath queries
+                    when (eco == Npm) (unchangedNpmArtifact beforePath afterPath)
+                let compiledRows = filter ((== osvExportDirectory (osvEcosystemFor eco)) . extEcosystem)
+                when (eco == Npm) (compiledRows after `shouldBe` compiledRows before)
+                compareForeignRecords eco advs scores inputs
+
     describe "orderableBounds" $ do
         let row intro upper = ExtractedOsv "pkg" "npm" "GHSA-bounds" intro upper Nothing Nothing
 
@@ -267,8 +410,6 @@ spec = describe "one OSV advisory record" $ do
             orderableBounds Npm (row (Just "1.0.0") (FixedBefore "2.0.0")) `shouldBe` True
 
         it "does not order a row whose upper bound is no version of the ecosystem" $
-            -- Date-stamped and two-component bounds both ride the real npm feed. Unordered,
-            -- the segment matches every version of the package.
             orderableBounds Npm (row (Just "1.0.0") (FixedBefore "2026.05.1")) `shouldBe` False
 
         it "does not order a point segment naming a version the grammar rejects" $
@@ -281,3 +422,266 @@ spec = describe "one OSV advisory record" $ do
             -- "1.2" is not semver, and is a legal PEP 440 release.
             orderableBounds Npm (row (Just "1.2") Unbounded) `shouldBe` False
             orderableBounds PyPI (row (Just "1.2") Unbounded) `shouldBe` True
+
+coverCases :: [(String, Ecosystem, Maybe Text, UpperBound, [Text], [Text])]
+coverCases =
+    [ ("drops covered PEP 440 spellings", PyPI, Just "1.0", FixedBefore "2.0", ["0.9", "1", "1.0.0", "1.5", "2.0"], ["0.9", "2.0"])
+    , ("keeps an exclusive fix", Npm, Nothing, FixedBefore "2.0.0", ["1.0.0", "2.0.0"], ["2.0.0"])
+    , ("drops an inclusive last affected version", Npm, Just "1.0.0", LastAffected "2.0.0", ["0.9.0", "1.0.0", "2.0.0", "2.1.0"], ["0.9.0", "2.1.0"])
+    , ("keeps an unorderable lower bound", PyPI, Just "bad", FixedBefore "2", ["1"], ["1"])
+    , ("keeps an unorderable upper bound", PyPI, Nothing, LastAffected "bad", ["1"], ["1"])
+    , ("keeps an unorderable exact version", PyPI, Nothing, Unbounded, ["bad", "1"], ["bad"])
+    , ("keeps an unorderable npm zero point", Npm, Nothing, Unbounded, ["0", "1.0.0"], ["0"])
+    , ("keeps a gap outside an unbounded range", PyPI, Just "2", Unbounded, ["1", "2", "3"], ["1"])
+    , ("keeps every point beside a reversed range", PyPI, Just "3", FixedBefore "1", ["1", "2", "3"], ["1", "2", "3"])
+    , ("orders semver prereleases and ignores build metadata", Npm, Just "1.0.0-rc.1", FixedBefore "1.0.0", ["1.0.0-beta.1", "1.0.0-rc.1+build", "1.0.0"], ["1.0.0-beta.1", "1.0.0"])
+    , ("orders PEP 440 epochs and local versions", PyPI, Just "1!1.0rc1", FixedBefore "1!2", ["1.9", "1!1.0rc1", "1!1+local", "1!2"], ["1.9", "1!2"])
+    , ("orders RubyGems zero padding", RubyGems, Just "1", LastAffected "2", ["0.9", "1.0", "2.0.0", "2.1"], ["0.9", "2.1"])
+    ]
+
+rangedAdvisory :: Ecosystem -> Maybe Text -> UpperBound -> [Text] -> OsvAdvisory
+rangedAdvisory eco introduced upper versions =
+    OsvAdvisory "CVE-test" Nothing (Just [OsvAffected (OsvPackage "pkg" (osvExportDirectory (osvEcosystemFor eco))) (Just [OsvRange "ECOSYSTEM" events]) (Just versions)]) Nothing Nothing Nothing Nothing
+  where
+    events =
+        OsvEvent (Just (fromMaybe "0" introduced)) Nothing Nothing : case upper of
+            FixedBefore fixed -> [OsvEvent Nothing (Just fixed) Nothing]
+            LastAffected lastAffected -> [OsvEvent Nothing Nothing (Just lastAffected)]
+            Unbounded -> []
+
+generatedAdvisory :: Ecosystem -> Gen Text -> Gen OsvAdvisory
+generatedAdvisory eco genVersion = do
+    let bound = Gen.choice [genVersion, Gen.element ["0", "bad"]]
+    lower <- Gen.maybe bound
+    upper <- Gen.choice [FixedBefore <$> bound, LastAffected <$> bound, pure Unbounded]
+    versions <- Gen.list (Range.linear 1 8) bound
+    extra <- genVersion
+    let adv = rangedAdvisory eco lower upper (extra : versions)
+        pointRange = rangedAdvisory eco (Just extra) (LastAffected extra) []
+    severity <- Gen.element [Nothing, Just (OsvDatabaseSpecific (Just "LOW")), Just (OsvDatabaseSpecific (Just "CRITICAL"))]
+    pure adv{osvAffected = Just (fromMaybe [] (osvAffected pointRange) <> fromMaybe [] (osvAffected adv)), osvDatabaseSpecific = severity}
+
+splitAffected :: OsvAffected -> [OsvAffected]
+splitAffected aff = [aff{affectedVersions = Nothing}, aff{affectedRanges = Nothing}]
+
+-- Frozen from 1a53a01b: extraction, point formation, range selection and event folding.
+withoutDrop :: EpssScores -> OsvAdvisory -> [ExtractedOsv]
+withoutDrop scores adv = do
+    guard (isNothing (osvWithdrawn adv))
+    aff <- fromMaybe [] (osvAffected adv)
+    let pkg = affectedPackage aff
+        eco = find ((== packageEcosystem pkg) . osvExportDirectory . osvEcosystemFor) universe
+        name = maybe id canonicalise eco (packageName pkg)
+    BaseSegment intro upper <- baseAffectedSegments aff
+    pure $
+        ExtractedOsv
+            { extPackage = name
+            , extEcosystem = packageEcosystem pkg
+            , extCveId = osvId adv
+            , extIntroduced = intro
+            , extUpperBound = upper
+            , extSeverity = severity
+            , extEpss = epss
+            }
+  where
+    severity = advisorySeverity adv
+    epss = epssForIds scores (osvId adv : fromMaybe [] (osvAliases adv))
+
+data BaseSegment = BaseSegment (Maybe Text) UpperBound
+
+baseRangeSegment :: Maybe Text -> UpperBound -> BaseSegment
+baseRangeSegment introduced = BaseSegment (introduced >>= beyondTheBeginning)
+  where
+    beyondTheBeginning i = if i == "0" then Nothing else Just i
+
+baseAffectedSegments :: OsvAffected -> [BaseSegment]
+baseAffectedSegments aff =
+    maybe [] (concatMap (baseExtractRange . rangeEvents) . filter versionTyped) (affectedRanges aff)
+        <> maybe [] (map exactVersion) (affectedVersions aff)
+  where
+    exactVersion v = BaseSegment (Just v) (LastAffected v)
+
+    versionTyped :: OsvRange -> Bool
+    versionTyped r = T.toUpper (T.strip (rangeType r)) `elem` ["SEMVER", "ECOSYSTEM"]
+
+baseExtractRange :: [OsvEvent] -> [BaseSegment]
+baseExtractRange = go Nothing
+  where
+    go Nothing [] = []
+    go (Just i) [] = [baseRangeSegment (Just i) Unbounded]
+    go current (e : es)
+        | Just i <- eventIntroduced e =
+            case current of
+                Just prev -> baseRangeSegment (Just prev) Unbounded : go (Just i) es
+                Nothing -> go (Just i) es
+        | Just f <- eventFixed e = baseRangeSegment current (FixedBefore f) : go Nothing es
+        | Just la <- eventLastAffected e = baseRangeSegment current (LastAffected la) : go Nothing es
+        | otherwise = go current es
+
+advisoryVersions :: OsvAdvisory -> [Text]
+advisoryVersions adv = maybe [] (concatMap versions) (osvAffected adv)
+  where
+    versions aff = fromMaybe [] (affectedVersions aff) <> maybe [] (concatMap (concatMap bounds . rangeEvents)) (affectedRanges aff)
+    bounds event = catMaybes [eventIntroduced event, eventFixed event, eventLastAffected event]
+
+-- Complete verdict equality ignores only diagnostic advisory id order.
+verdicts :: Ecosystem -> Text -> [ExtractedOsv] -> [Text] -> [[RuleVerdict]]
+verdicts eco name rows = verdictsFor eco name (Just (DbEtag "differential", advisories))
+  where
+    advisories = packageAdvisories eco [AdvisoryRange (extCveId row) (extSeverity row) (extIntroduced row) (extUpperBound row) (extEpss row) | row <- rows]
+
+verdictsFor :: Ecosystem -> Text -> AdvisoryRows -> [Text] -> [[RuleVerdict]]
+verdictsFor eco name advisories versions = map decide rules
+  where
+    evidence = [completeEvidence (sampleDetails (mkPackageName eco Nothing name) (mkVersion eco version)) | version <- versions]
+    context = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
+    rules = AllowIfRemediatesCve : [DenyIfCve (DenyIfCveParams threshold FailDeny) | threshold <- [0, 8, 10]] <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.5, 1]]
+    decide rule = case verdictSource rule of
+        FromAdvisories _ verdict -> map (normaliseVerdictIds . verdict advisories) evidence
+        FromEvidence verdict -> map (normaliseVerdictIds . verdict context) evidence
+
+-- SQLite does not promise row order. Sorting each id collection preserves its membership and multiplicity.
+normaliseVerdictIds :: RuleVerdict -> RuleVerdict
+normaliseVerdictIds = \case
+    Allow reason -> Allow (normaliseReason reason)
+    Deny etag reason -> Deny etag (normaliseReason reason)
+    NoDecision reason -> NoDecision (normaliseReason reason)
+    verdict@CannotVet{} -> verdict
+  where
+    normaliseReason = \case
+        Remediates ids -> Remediates (ordered ids)
+        FixesButStillAffected fixed affected -> FixesButStillAffected (ordered fixed) (ordered affected)
+        AffectedBy score threshold ids -> AffectedBy score threshold (ordered ids)
+        reason -> reason
+    ordered = mkAdvisoryIds . NE.sort . unAdvisoryIds
+
+corpusRecords :: Ecosystem -> IO [OsvAdvisory]
+corpusRecords eco = do
+    let dir = "bench/corpus/advisories" </> toString (ecosystemName eco)
+    files <- sort . filter ((== ".json") . takeExtension) <$> listDirectory dir
+    traverse (\file -> BS.readFile (dir </> file) >>= either fail pure . eitherDecodeStrict) files
+
+captureVersions :: Ecosystem -> CorpusPackage -> IO [Text]
+captureVersions eco package = case eco of
+    PyPI -> do
+        files <- concat <$> captureTexts 1 ("files" J..: J.arrayOf (many ("filename" J..: J.string))) package
+        pure (ordNub (mapMaybe (fmap fcVersionKey . fileCoordinate (cpPackage package)) files))
+    _ -> ordNub . concat <$> captureTexts 1 ("versions" J..: J.objectValues (many ("version" J..: J.string))) package
+
+reviewProbe :: [OsvAdvisory]
+reviewProbe =
+    [ (rangedAdvisory PyPI Nothing (FixedBefore "3") ["1"]){osvId = "CVE-A", osvDatabaseSpecific = Just (OsvDatabaseSpecific (Just "CRITICAL"))}
+    , (rangedAdvisory PyPI Nothing (FixedBefore "2") []){osvId = "CVE-B", osvDatabaseSpecific = Just (OsvDatabaseSpecific (Just "CRITICAL"))}
+    ]
+
+mixedAdvisory :: OsvAdvisory
+mixedAdvisory =
+    (rangedAdvisory PyPI (Just "1") (LastAffected "2") ["1", "2", "3", "bogus"])
+        { osvId = "CVE-A"
+        , osvDatabaseSpecific = Just (OsvDatabaseSpecific (Just "LOW"))
+        , osvAffected = Just [OsvAffected (OsvPackage "pkg" "PyPI") (Just ranges) (Just ["1", "2", "3", "bogus"])]
+        }
+  where
+    ranges =
+        [ OsvRange "GIT" [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "deadbeef") Nothing]
+        , OsvRange "ECOSYSTEM" [OsvEvent (Just "bad") Nothing Nothing, OsvEvent Nothing (Just "4") Nothing]
+        , OsvRange "ECOSYSTEM" [OsvEvent (Just "1") Nothing Nothing, OsvEvent Nothing Nothing (Just "2")]
+        ]
+
+generatedInputs :: [OsvAdvisory] -> [(Text, Double)] -> IO AdvisoryInputs
+generatedInputs records scores = do
+    for_ records $ \adv ->
+        eitherDecodeStrict (LBS.toStrict (encode (advisoryValue adv))) `shouldBe` Right adv
+    archive <- osvZipOf [("record-" <> show (n :: Int) <> ".json", encode (advisoryValue adv)) | (n, adv) <- zip [0 ..] records]
+    let feed = "#model_version:synthetic,score_date:2026-01-01T00:00:00+0000\ncve,epss,percentile\n" <> foldMap (\(cve, score) -> cve <> "," <> show score <> ",0.5\n") scores
+    pure (AdvisoryInputs archive (GZip.compress (LBS.fromStrict (encodeUtf8 feed))))
+
+advisoryValue :: OsvAdvisory -> Value
+advisoryValue adv =
+    object
+        [ "id" .= osvId adv
+        , "aliases" .= osvAliases adv
+        , "withdrawn" .= osvWithdrawn adv
+        , "modified" .= osvModified adv
+        , "database_specific" .= fmap (\specific -> object ["severity" .= dbsSeverity specific]) (osvDatabaseSpecific adv)
+        , "severity" .= fmap (map (\entry -> object ["type" .= sevType entry, "score" .= sevScore entry])) (osvSeverity adv)
+        , "affected" .= fmap (map affectedValue) (osvAffected adv)
+        ]
+  where
+    affectedValue aff =
+        object
+            [ "package" .= object ["name" .= packageName (affectedPackage aff), "ecosystem" .= packageEcosystem (affectedPackage aff)]
+            , "versions" .= affectedVersions aff
+            , "ranges" .= fmap (map rangeValue) (affectedRanges aff)
+            ]
+    rangeValue range = object ["type" .= rangeType range, "events" .= map eventValue (rangeEvents range)]
+    eventValue event = object ["introduced" .= eventIntroduced event, "fixed" .= eventFixed event, "last_affected" .= eventLastAffected event]
+
+-- Copy the compiler's schema, indexes and provenance. Only the frozen rows and their count differ.
+withDifferentialArtifacts :: Ecosystem -> [ExtractedOsv] -> AdvisoryInputs -> (FilePath -> FilePath -> IO a) -> IO a
+withDifferentialArtifacts eco beforeRows inputs use =
+    withSystemTempDirectory "ecluse-advisory-differential" $ \dir -> do
+        afterPath <- compileAdvisoryInputs eco dir inputs
+        let beforePath = dir </> "before.db"
+            rows = filter ((== osvExportDirectory (osvEcosystemFor eco)) . extEcosystem) beforeRows
+        copyFile afterPath beforePath
+        withConnection beforePath $ \conn -> withTransaction conn $ do
+            execute_ conn "DELETE FROM package_vulnerability_ranges"
+            executeMany
+                conn
+                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity, epss_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                (map osvToRow rows)
+            counts <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int]
+            for_ counts $ \(Only count) -> execute conn "UPDATE meta SET value = ? WHERE key = 'row_count'" (Only (show count :: Text))
+        beforeMeta <- Map.delete "row_count" <$> metaOf beforePath
+        afterMeta <- Map.delete "row_count" <$> metaOf afterPath
+        beforeMeta `shouldBe` afterMeta
+        use beforePath afterPath
+
+compareArtifacts :: Ecosystem -> FilePath -> FilePath -> [(Text, [Text])] -> IO ()
+compareArtifacts eco beforePath afterPath queries =
+    withServedArtifact eco beforePath $ \_ beforeDb ->
+        withServedArtifact eco afterPath $ \_ afterDb ->
+            for_ queries $ \(name, versions) -> do
+                let beforeLookup = cveDbLookup beforeDb
+                    afterLookup = cveDbLookup afterDb
+                    package = mkPackageName eco Nothing name
+                    deps = servingRuleDeps (DbEtag "differential")
+                before <- readAdvisories (deps beforeLookup) package
+                after <- readAdvisories (deps afterLookup) package
+                verdictsFor eco name after versions `shouldBe` verdictsFor eco name before versions
+                beforeRows <- cveAdvisoriesFor beforeLookup name
+                afterRows <- cveAdvisoriesFor afterLookup name
+                putStrLn (toString name <> " persisted advisory rows: " <> show (length beforeRows) <> " -> " <> show (length afterRows))
+
+readerPlan :: FilePath -> Text -> IO [(Int, Int, Int, Text)]
+readerPlan path name = withConnection path $ \conn ->
+    query conn "EXPLAIN QUERY PLAN SELECT cve_id, introduced_version, fixed_version, last_affected_version, severity, epss_score FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
+
+compareForeignRecords :: Ecosystem -> [OsvAdvisory] -> EpssScores -> AdvisoryInputs -> IO ()
+compareForeignRecords compiledEco records scores inputs =
+    for_ [Npm, PyPI, RubyGems] $ \eco -> when (eco /= compiledEco) $ do
+        let rows = filter ((== osvExportDirectory (osvEcosystemFor eco)) . extEcosystem)
+            before = rows (concatMap (withoutDrop scores) records)
+            after = rows (concatMap (extractFromAdvisory scores) records)
+            names = ordNub (map extPackage before)
+            versions = ordNub ("bogus" : concatMap advisoryVersions records)
+        for_ names $ \name ->
+            verdicts eco name (filter ((== name) . extPackage) after) versions
+                `shouldBe` verdicts eco name (filter ((== name) . extPackage) before) versions
+        unless (null names) $
+            withDifferentialArtifacts eco before inputs $ \beforePath afterPath ->
+                compareArtifacts eco beforePath afterPath [(name, versions) | name <- names]
+
+unchangedNpmArtifact :: FilePath -> FilePath -> IO ()
+unchangedNpmArtifact beforePath afterPath =
+    withServedArtifact Npm beforePath $ \_ beforeDb ->
+        withServedArtifact Npm afterPath $ \_ afterDb -> do
+            let before = cveDbLookup beforeDb
+                after = cveDbLookup afterDb
+            names <- cveCoveredNames before
+            cveCoveredNames after >>= (`shouldBe` names)
+            for_ names $ \name -> do
+                beforeRows <- cveAdvisoriesFor before name
+                afterRows <- cveAdvisoriesFor after name
+                afterRows `shouldBe` beforeRows
