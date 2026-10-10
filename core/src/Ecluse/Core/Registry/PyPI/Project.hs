@@ -80,9 +80,7 @@ fcVersionKey = renderVersion . fcVersion
 data DistributionKind = Sdist | Wheel
     deriving stock (Eq, Show)
 
-{- | Group decoded files by the coordinates their read produced. The decode's invalid entries come
-first, then one for each file without a coordinate.
--}
+-- | Group files by canonical release, keeping decode errors before filename errors.
 projectSimpleIndex :: PackageName -> [InvalidEntry] -> [(IndexFile, Maybe FileCoordinate)] -> PackageInfo
 projectSimpleIndex name invalid files =
     PackageInfo
@@ -95,14 +93,11 @@ projectSimpleIndex name invalid files =
     (versions, fileDrops) = projectVersions name files
 
 projectVersions :: PackageName -> [(IndexFile, Maybe FileCoordinate)] -> (Map Text PackageDetails, [InvalidEntry])
-projectVersions name files =
-    (Map.map (projectDetails name) grouped, drops)
+projectVersions name = foldr place (Map.empty, [])
   where
-    (grouped, drops) = foldr place (Map.empty, []) files
-
     place (file, found) (byVersion, dropAcc) = case found of
         Just coordinate ->
-            ( Map.insertWith (<>) (fcVersionKey coordinate) ((file, coordinate) :| []) byVersion
+            ( Map.alter (Just . projectDetails name file coordinate) (fcVersionKey coordinate) byVersion
             , dropAcc
             )
         Nothing -> (byVersion, uncoordinatedDrop file : dropAcc)
@@ -120,35 +115,48 @@ latestTag :: Map Text PackageDetails -> Map Text Version
 latestTag versions =
     maybe Map.empty (Map.singleton "latest") (selectLatest Nothing (map pkgVersion (Map.elems versions)))
 
--- Every field is evaluated here, so a retained release never keeps its decoded files alive.
-projectDetails :: PackageName -> NonEmpty (IndexFile, FileCoordinate) -> PackageDetails
-projectDetails name entries =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = fcVersion (snd (NE.head entries))
-        , pkgPublishedAt = newestUpload files
-        , pkgInstallCode = releaseInstallCode entries
-        , pkgAvailability = releaseAvailability files
-        , pkgArtifacts = strictElements (fmap projectArtifact files)
-        }
+-- A retained release must not keep its decoded files alive.
+projectDetails :: PackageName -> IndexFile -> FileCoordinate -> Maybe PackageDetails -> PackageDetails
+projectDetails name file coordinate held =
+    artifact `seq` case held of
+        Nothing ->
+            PackageDetails
+                { pkgName = name
+                , pkgVersion = fcVersion coordinate
+                , pkgPublishedAt = ifUploadTime file
+                , pkgInstallCode = releaseInstallCode coordinate NoCodeOnInstall
+                , pkgAvailability = releaseAvailability file Yanked
+                , pkgArtifacts = artifact :| []
+                }
+        Just details ->
+            let artifacts = toList (pkgArtifacts details)
+             in artifacts `seq`
+                    details
+                        { pkgVersion = fcVersion coordinate
+                        , pkgPublishedAt = newestUpload (ifUploadTime file) (pkgPublishedAt details)
+                        , pkgInstallCode = releaseInstallCode coordinate (pkgInstallCode details)
+                        , pkgAvailability = releaseAvailability file (pkgAvailability details)
+                        , pkgArtifacts = artifact :| artifacts
+                        }
   where
-    files = fmap fst entries
+    artifact = projectArtifact file
 
 -- An unknown-age file cannot borrow a sibling's expired quarantine. A later wheel restarts
 -- quarantine when every timestamp is known.
-newestUpload :: NonEmpty IndexFile -> Maybe UTCTime
-newestUpload files = (\(instant :| rest) -> foldl' max instant rest) <$!> traverse ifUploadTime files
+newestUpload :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
+newestUpload (Just instant) (Just previous) = Just $! max instant previous
+newestUpload _ _ = Nothing
 
-releaseInstallCode :: NonEmpty (IndexFile, FileCoordinate) -> CodeExecSignal
-releaseInstallCode entries
-    | any ((== Sdist) . fcKind . snd) entries =
+releaseInstallCode :: FileCoordinate -> CodeExecSignal -> CodeExecSignal
+releaseInstallCode coordinate previous
+    | fcKind coordinate == Sdist =
         RunsCodeOnInstall "offers a source distribution, which runs its own build"
-    | otherwise = NoCodeOnInstall
+    | otherwise = previous
 
 -- A release is withdrawn only when PEP 592 withdraws every file of it.
-releaseAvailability :: NonEmpty IndexFile -> Availability
-releaseAvailability files
-    | all ((== FileWithdrawn) . ifYanked) files = Yanked
+releaseAvailability :: IndexFile -> Availability -> Availability
+releaseAvailability file previous
+    | ifYanked file == FileWithdrawn = previous
     | otherwise = Available
 
 -- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
@@ -199,9 +207,7 @@ filenameMemo name = FilenameMemo (fileProject name) Map.empty
 readCoordinate :: FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
 readCoordinate = readRemembering Map.insert
 
-{- | Read a coordinate as 'readCoordinate' does, holding only the latest version text. A read that
-drops most files then holds nothing for them, and parses once for each run of one release's files.
--}
+-- | Read as 'readCoordinate' does, retaining only the latest version text for this read.
 readLatestCoordinate :: FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
 readLatestCoordinate = readRemembering (\version parsed _ -> Map.singleton version parsed)
 
