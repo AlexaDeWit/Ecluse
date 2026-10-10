@@ -187,6 +187,8 @@ library ecluse-core
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
+    Ecluse.Core.Registry.Metadata.Fetch
+    Ecluse.Core.Registry.Metadata.Fetch.Types
     Ecluse.Core.Registry.Metadata.Projection
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
@@ -300,6 +302,7 @@ library ecluse-core
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
     Ecluse.Core.Text
+    Ecluse.Core.Text.Iso8601
     Ecluse.Core.Version
     Ecluse.Core.Wire
     Ecluse.Core.Worker
@@ -727,6 +730,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.JsonStream
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
+    Ecluse.Test.Registry.Metadata.Fetch
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
@@ -888,6 +892,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Sweep.WalkSpec
     Ecluse.Core.Registry.SweepSpec
     Ecluse.Core.Registry.MetadataSpec
+    Ecluse.Core.Registry.Metadata.FetchSpec
     Ecluse.Core.Registry.Metadata.ProjectionSpec
     Ecluse.Core.RegistrySpec
     Ecluse.Core.Registry.Npm.CredentialSpec
@@ -973,6 +978,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.SupervisionSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
+    Ecluse.Core.Text.Iso8601Spec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec
@@ -1445,12 +1451,12 @@ test-suite ecluse-smoke
     , unliftio         ^>=0.2.25
 
 -- End-to-end tests: the whole system as the real OCI image, driven by the real npm
--- CLI over its public HTTP surface. The suite covers the server↔worker round-trip
--- across real containers. NON-GATING, for pre-merge visibility and the nightly run.
--- It needs a Docker daemon, the npm CLI, and the `.#dockerImage` build, so it is far
--- heavier than the gate. It COMPILES in the normal build, and RUNS only when
--- ECLTEST_E2E_IMAGE names a loaded image. Without that variable every case is
--- `pending`, so a bare `cabal test` never fails on a machine without the setup.
+-- and pip clients over its public HTTP surface. The suite covers the server↔worker
+-- round-trip across real containers. It gates in CI as its own job and stays out of
+-- the local gate, because it needs a Docker daemon, both clients, and the
+-- `.#dockerImage` build. It COMPILES in the normal build, and RUNS only when
+-- ECLTEST_E2E_IMAGE names a loaded image. Without that variable each spec module
+-- reports one `pending` case, so a bare `cabal test` never fails without the setup.
 test-suite ecluse-e2e
   import:             shared
   -- hspec-discover generates a Main without an export list.
@@ -1459,12 +1465,12 @@ test-suite ecluse-e2e
   main-is:            Spec.hs
   hs-source-dirs:     test/e2e
   other-modules:
-    Ecluse.DredgerE2ESpec
     Ecluse.E2E.Fixtures.Advisories
     Ecluse.E2E.Fixtures.Npm
     Ecluse.E2E.Fixtures.PyPI
     Ecluse.E2E.Harness
     Ecluse.E2E.Harness.Advisories
+    Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
     Ecluse.E2E.Harness.Docker
     Ecluse.E2E.Harness.Npm
@@ -1472,7 +1478,11 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Proxy
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
-    Ecluse.E2ESpec
+    Ecluse.E2E.Npm.DredgerE2ESpec
+    Ecluse.E2E.Npm.InstallE2ESpec
+    Ecluse.E2E.Npm.PublishE2ESpec
+    Ecluse.E2E.PyPI.InstallE2ESpec
+    Ecluse.E2E.TelemetryE2ESpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

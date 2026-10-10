@@ -29,6 +29,7 @@ import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Server.Transform (serveDocumentBytes)
 import Ecluse.Test.Support (expectRight)
 import Test.Tasty (TestTree, testGroup)
@@ -81,7 +82,7 @@ generatorTests ecosystem =
         , testCase "selective projection agrees with the full release" $ do
             (info, _) <- expectRight (ebProject ecosystem name raw)
             for_ (Map.keys (infoVersions info)) $ \key -> do
-                selected <- expectRight (ebSelective ecosystem name (mkVersion (ebEcosystem ecosystem) key) raw)
+                selected <- ebSelective ecosystem name (mkVersion (ebEcosystem ecosystem) key) (captureChunks raw) >>= expectRight
                 selected @?= Map.lookup key (infoVersions info)
         , testCase "rewrites every artifact onto the proxy origin" $ do
             input@(_, original) <- expectRight (syntheticInput ecosystem sampleCount)

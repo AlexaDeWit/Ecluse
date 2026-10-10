@@ -42,7 +42,8 @@ import Ecluse.Core.Registry.ServedDocument (
     serialiseAcross,
  )
 import Ecluse.Core.Snapshot (Snapshot, snapshotValue)
-import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
+import Ecluse.Core.Text (joinUrlPath)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 -- | The packument's own @name@, safety-gated before it is interpolated into a rewritten path.

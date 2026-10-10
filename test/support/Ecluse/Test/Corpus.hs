@@ -17,22 +17,29 @@ module Ecluse.Test.Corpus (
     readCorpusPins,
     CaptureRecord (..),
     readCaptureRecords,
+    captureTexts,
     syntheticProxyBase,
     permissiveAgeRules,
 ) where
 
 import Data.Aeson (Object, eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString qualified as BS
+import Data.JsonStream.Parser qualified as J
 import Data.Time (UTCTime, nominalDay)
+import Test.Hspec (shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
-import Ecluse.Core.Security (AllowedHostPorts, ecosystemArtifactAuthorities)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), ecosystemArtifactAuthorities)
 import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Support (expectRight)
 
 -- | Size tiers sort from the smallest corpus tier to the heaviest.
 data CorpusTier = Medium | Large | Heavy
@@ -121,6 +128,18 @@ readCaptureRecords eco = readCorpusPins $ \pins -> do
     recorded <- pins .: "captures"
     entries <- recorded .: fromString (toString (ecosystemName eco))
     traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "sha256" <*> capture .: "capturedAt")) entries
+
+{- | The texts a parser reads from each entry of a capture. An empty capture fails the running example, and
+so does an entry with fewer texts than the given count, so a field the parser misses cannot pass unread.
+-}
+captureTexts :: Int -> J.Parser [Text] -> CorpusPackage -> IO [[Text]]
+captureTexts fewest textsOf package = do
+    bytes <- readFileBS (cpPath package)
+    streamed <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) textsOf (\held entry -> Right (entry : held)) [] [bytes])
+    entries <- expectRight (streamValue streamed)
+    entries `shouldSatisfy` (not . null)
+    take 5 (filter ((< fewest) . length) entries) `shouldBe` []
+    pure entries
 
 -- | The placeholder proxy origin the serve-time rewrite puts tarball URLs under.
 syntheticProxyBase :: Text

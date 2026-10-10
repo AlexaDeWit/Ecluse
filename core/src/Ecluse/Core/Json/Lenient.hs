@@ -5,6 +5,7 @@
 -- | Optional advisory fields share lenient Aeson decoding across ecosystems.
 module Ecluse.Core.Json.Lenient (
     lenientOptional,
+    lenientOptionalWith,
     typeMismatchOneOf,
     valueKind,
 ) where
@@ -22,10 +23,14 @@ import Data.Aeson.Types (Parser, parseMaybe)
 one poisoned value cannot deny the document. For __advisory__ fields only, never a load-bearing one.
 -}
 lenientOptional :: (FromJSON a, NFData a) => Object -> Key -> Parser (Maybe a)
-lenientOptional o k = do
+lenientOptional = lenientOptionalWith parseJSON
+
+-- | 'lenientOptional' through the given decoder, in place of the type's own.
+lenientOptionalWith :: (NFData a) => (Value -> Parser a) -> Object -> Key -> Parser (Maybe a)
+lenientOptionalWith decode o k = do
     mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
     -- Evaluated in full, so a retained field holds none of the decoder's state.
-    pure $ case mv >>= parseMaybe parseJSON of
+    pure $ case mv >>= parseMaybe decode of
         Just value -> Just $!! value
         Nothing -> Nothing
 
