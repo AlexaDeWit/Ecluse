@@ -7,7 +7,9 @@ and allocation growth regressions.
 -}
 module Ecluse.Core.Registry.PyPI.ProjectSpec (spec) where
 
-import Data.Aeson (Value (Array, String), object, toJSON, (.=))
+import Data.Aeson (Value (Array, Null, String), object, toJSON, (.=))
+import Data.Aeson.Types (parseEither, parseJSON)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Conc (getAllocationCounter)
@@ -32,8 +34,12 @@ import Ecluse.Core.Package (
     PackageName,
     hashAlg,
     hashValue,
+    mkHash,
+    mkInvalidEntry,
+    parseHashAlg,
     renderPackageName,
  )
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.PyPI.Project (
     DistributionKind (Sdist, Wheel),
     FileCoordinate (..),
@@ -46,9 +52,11 @@ import Ecluse.Core.Registry.PyPI.Project (
     readCoordinate,
     readLatestCoordinate,
  )
-import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), YankState (FileWithdrawn))
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Strict (strictElements)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion, selectLatest)
 import Ecluse.Core.Version.Token (withinVersionLength)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
@@ -59,6 +67,7 @@ import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue, readThrou
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 import Ecluse.Test.Version (genPyPI)
 
+-- | Check filename coordinates and release projection through full and selected reads.
 spec :: Spec
 spec = do
     projectNameSpec
@@ -69,6 +78,7 @@ spec = do
     allocationSpec
     projectionSpec
     versionFoldSpec
+    differentialSpec
 
 projectNameSpec :: Spec
 projectNameSpec = describe "projectName" $ do
@@ -388,6 +398,158 @@ versionFoldSpec = describe "the version-level folds over a release's files" $ do
             bothReads (indexOf [marked (sdistFile "2.34.2"), marked (wheelFile "2.34.2")]) `shouldReturn` (Just expected, Just expected)
             bothReads (indexOf [marked (sdistFile "2.34.2"), wheelFile "2.34.2"]) `shouldReturn` (Just Available, Just Available)
             bothReads (indexOf [sdistFile "2.34.2", marked (wheelFile "2.34.2")]) `shouldReturn` (Just Available, Just Available)
+
+differentialSpec :: Spec
+differentialSpec = describe "release projection against the base implementation" $ do
+    it "preserves every ordered pair of distribution, age and withdrawal facts" $
+        forM_ factFiles $ \firstFile ->
+            forM_ factFiles $ \lastFile -> do
+                let value = indexOf [firstFile, wheelFile "2.34.1", lastFile]
+                projectSimpleIndexFromValue requestsName value
+                    `shouldBe` referenceSimpleIndexFromValue requestsName value
+
+    it "preserves empty, malformed, duplicate and boundary entries and their order" $
+        forM_ boundaryIndexes $ \value ->
+            projectSimpleIndexFromValue requestsName value
+                `shouldBe` referenceSimpleIndexFromValue requestsName value
+
+    it "matches the reference through full and selected reads with an unknown age in each position" $
+        forM_ (replicateM 3 ageFiles) $ \files -> do
+            let value = indexOf (wheelFile "2.34.1" : files)
+                body = encodeStrict value
+            expected <- shouldProject requestsName value
+            referenceSimpleIndexFromValue requestsName value `shouldBe` Right (Projected expected)
+            (full, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+            full `shouldBe` expected
+            selected <- expectRight (projectPyPIVersion defaultLimits requestsName (mkVersion PyPI "2.34.2") body)
+            selected `shouldBe` Map.lookup "2.34.2" (infoVersions expected)
+
+    for_ pypiCorpusPackages $ \package ->
+        it ("preserves the full projection and selected releases of " <> toString (cpName package)) $ do
+            body <- readFileBS (cpPath package)
+            value <- decodeJsonOrFail body
+            expected <- shouldProject (cpPackage package) value
+            referenceSimpleIndexFromValue (cpPackage package) value `shouldBe` Right (Projected expected)
+            (full, _) <- expectRight (projectPyPIIndex defaultLimits (cpPackage package) body)
+            full `shouldBe` expected
+            for_ (Map.lookupMax (infoVersions expected)) $ \(_, details) -> do
+                selected <- expectRight (projectPyPIVersion defaultLimits (cpPackage package) (pkgVersion details) body)
+                selected `shouldBe` Just details
+
+factFiles :: [Value]
+factFiles =
+    [ withFileKeys (age <> withdrawal) file
+    | file <- [sdistFile "2.34.2", wheelFile "2.34.2.0"]
+    , age <- [[], [("upload-time", Null)], [("upload-time", String "2026-06-01T00:00:00Z")]]
+    , (_, withdrawal, _) <- yankedForms
+    ]
+
+ageFiles :: [Value]
+ageFiles =
+    [ yanked (withFileKeys [("upload-time", String "2026-01-01T00:00:00Z")] (sdistFile "2.34.2"))
+    , withFileKeys [("upload-time", Null)] (wheelFile "2.34.2")
+    , yanked (withFileKeys [("upload-time", String "2026-06-01T00:00:00Z")] (wheelFile "2.34.2.0"))
+    ]
+
+boundaryIndexes :: [Value]
+boundaryIndexes =
+    [ indexOf []
+    , simpleIndex "urllib3" [wheelFile "2.34.2"]
+    , simpleIndex "" []
+    , withFileKeys [("files", String "not an array")] (indexOf [])
+    , withFileKeys [("meta", object ["api-version" .= ("2.0" :: Text)])] (indexOf [])
+    , withFileKeys [("versions", toJSON [String "2.34.2", Null, object []])] (indexOf [Null, simpleFile "urllib3-2.tar.gz", wheelFile "2.34.2"])
+    ]
+        <> [ indexOf files
+           | file <- boundaryFiles
+           , files <- [[file], [file, wheelFile "2.34.1", sdistFile "2.34.2"], [wheelFile "2.34.2", wheelFile "2.34.1", file], [Null, file, object []]]
+           ]
+  where
+    boundaryFiles =
+        [ Null
+        , object []
+        , simpleFile "urllib3-2.0.tar.gz"
+        , simpleFile "requests-nightly.tar.gz"
+        , simpleFile (separatorHeavySdist "requests" 1000 "projection")
+        , sdistFile "2.34.2.0"
+        , wheelFile "3.0rc1"
+        ]
+            <> [simpleFile ("requests-" <> T.replicate count "1" <> ".tar.gz") | count <- [1023, 1024, 1025]]
+            <> [ withFileKeys [field] (wheelFile "2.34.2")
+               | field <-
+                    [ ("url", toJSON (5 :: Int))
+                    , ("url", String "https://files.pythonhosted.org/duplicate?variant=2")
+                    , ("hashes", object ["sha256" .= ("bad" :: Text), "unknown" .= validSha256])
+                    , ("hashes", object ["sha256" .= (5 :: Int)])
+                    , ("requires-python", toJSON (5 :: Int))
+                    , ("provenance", toJSON (5 :: Int))
+                    , ("upload-time", String "not a timestamp")
+                    , ("upload-time", toJSON (5 :: Int))
+                    , ("size", Null)
+                    , ("size", toJSON (-1 :: Int))
+                    , ("size", toJSON (0 :: Int))
+                    , ("size", toJSON (maxBound :: Int))
+                    , ("size", toJSON (toInteger (maxBound :: Int) + 1))
+                    ]
+               ]
+
+referenceSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
+referenceSimpleIndexFromValue requested value = do
+    index <- first (ParseError . toText) (parseEither parseJSON value)
+    reported <- projectName (siName index)
+    let files = [(file, fileCoordinate reported (ifFilename file)) | file <- siFiles index]
+    pure (checkNameAgreement requested reported (referenceSimpleIndex reported (siInvalidEntries index) files))
+
+-- The base projection at 1a53a01, independent of the production release accumulator.
+referenceSimpleIndex :: PackageName -> [InvalidEntry] -> [(IndexFile, Maybe FileCoordinate)] -> PackageInfo
+referenceSimpleIndex name invalid files =
+    PackageInfo
+        { infoName = name
+        , infoVersions = versions
+        , infoDistTags = maybe Map.empty (Map.singleton "latest") (selectLatest Nothing (map pkgVersion (Map.elems versions)))
+        , infoInvalidEntries = strictElements (invalid <> drops)
+        }
+  where
+    versions = Map.map (referenceDetails name) grouped
+    (grouped, drops) = foldr place (Map.empty, []) files
+    place (file, found) (byVersion, dropAcc) = case found of
+        Just coordinateFound ->
+            (Map.insertWith (<>) (fcVersionKey coordinateFound) ((file, coordinateFound) :| []) byVersion, dropAcc)
+        Nothing ->
+            ( byVersion
+            , mkInvalidEntry InvalidIndexFile (ifFilename file) (toJSON (ifUrl file)) "file name names no PEP 440 release of this project" : dropAcc
+            )
+
+referenceDetails :: PackageName -> NonEmpty (IndexFile, FileCoordinate) -> PackageDetails
+referenceDetails name entries =
+    PackageDetails
+        { pkgName = name
+        , pkgVersion = fcVersion (snd (NE.head entries))
+        , pkgPublishedAt = (\(instant :| rest) -> foldl' max instant rest) <$!> traverse ifUploadTime files
+        , pkgInstallCode =
+            if any ((== Sdist) . fcKind . snd) entries
+                then RunsCodeOnInstall "offers a source distribution, which runs its own build"
+                else NoCodeOnInstall
+        , pkgAvailability = if all ((== FileWithdrawn) . ifYanked) files then Yanked else Available
+        , pkgArtifacts = strictElements (fmap referenceArtifact files)
+        }
+  where
+    files = fmap fst entries
+
+referenceArtifact :: IndexFile -> Artifact
+referenceArtifact file =
+    Artifact
+        { artEntryKey = ifEntryKey file
+        , artFilename = ifFilename file
+        , artUrl = ifUrl file
+        , artHashes = strictElements (mapMaybe referenceHash (Map.toAscList (ifHashes file)))
+        , artSize = ifSize file
+        }
+
+referenceHash :: (Text, Text) -> Maybe Hash
+referenceHash (algorithm, digest) = do
+    algo <- rightToMaybe (parseHashAlg algorithm)
+    rightToMaybe (mkHash algo digest)
 
 -- The availability of release 2.34.2 on the production full read and on its selected read.
 bothReads :: Value -> IO (Maybe Availability, Maybe Availability)
