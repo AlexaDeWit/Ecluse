@@ -63,6 +63,9 @@ env:
   BENCH_LOAD_PAYLOAD_BYTES: ${{ inputs.payload-bytes || '363520' }}
   BENCH_LOAD_SCENARIOS: ${{ inputs.scenarios }}
   BENCH_LOAD_ISOLATE_OHA: "1"
+  # Experimental comparison: use the same stub latency on both source revisions.
+  BENCH_LOAD_PROBE_RTT: "0"
+  BENCH_LOAD_UPSTREAM_LATENCY_MS: "5"
   # The proxy's own cgroups sit beside the harness under this directory (see the steps).
   BENCH_LOAD_CGROUP: /sys/fs/cgroup/ecluse-bench-load
 
