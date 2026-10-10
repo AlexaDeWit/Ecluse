@@ -30,9 +30,11 @@ data SimpleDocument = SimpleDocument
 simpleDocument :: Object -> [(EntryKey, Value)] -> SimpleDocument
 simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
--- | Encode the envelope with the retained files in source order. Source coordinates stay internal.
+-- | Preserve envelope key order and file source order. Source coordinates stay internal.
 simpleEncoding :: SimpleDocument -> Encoding
 simpleEncoding document =
-    Encoding.pairs (KeyMap.foldMapWithKey Encoding.pair (KeyMap.insert "files" files (toEncoding <$> simpleEnvelope document)))
+    Encoding.pairs (fields (< "files") <> Encoding.pair "files" files <> fields (> "files"))
   where
+    -- The pinned KeyMap uses ascending key order, including the inserted files field.
+    fields include = KeyMap.foldMapWithKey (\key value -> if include key then Encoding.pair key (toEncoding value) else mempty) (simpleEnvelope document)
     files = Encoding.list (toEncoding . snd) (simpleFiles document)
