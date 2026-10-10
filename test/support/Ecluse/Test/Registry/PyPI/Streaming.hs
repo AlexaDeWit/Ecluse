@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The json-stream field parser that Simple-index reads ran before the token walk, kept as the
-reference that "Ecluse.Core.Registry.PyPI.Reader" must match. Member and hash names keep their own
-keys here and each file starts its own filename memo, which leaves every value equal.
+reference for "Ecluse.Core.Registry.PyPI.Reader". Member and hash names keep their own keys here
+and each file starts its own filename memo, which leaves every value equal. A selected read here
+decodes every member of every file, where the walk skips the rest of a file its name rejects.
 -}
 module Ecluse.Test.Registry.PyPI.Streaming (pypiFields) where
 

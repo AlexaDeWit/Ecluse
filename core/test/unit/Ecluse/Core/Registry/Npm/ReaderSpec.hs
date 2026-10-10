@@ -38,6 +38,15 @@ spec = describe "npmWalk" $ do
                 let (reference, walked) = bothReads production depth selected cap chunks
                 reference === walked
 
+    it "reads past an undecodable member of another release on a selected read, and fails on one of the release" $ do
+        let packument other own = "{\"name\":\"thing\",\"versions\":{\"2.0.0\":{\"deprecated\":" <> other <> "},\"1.0.0\":{\"deprecated\":" <> own <> "}}}"
+            (reference, walked) = bothReads True 64 (Just "1.0.0") Nothing [packument "\"\\x\"" "\"sound\""]
+            (ownReference, ownWalked) = bothReads True 64 (Just "1.0.0") Nothing [packument "\"sound\"" "\"\\x\""]
+        walked `shouldBe` reference
+        walked `shouldSatisfy` either (const False) (isRight . snd)
+        ownWalked `shouldBe` ownReference
+        ownWalked `shouldSatisfy` either (const False) (isLeft . snd)
+
     it "drops a member whose key runs past 64 KiB across three pieces, as json-stream does" $ do
         let key = BS.replicate 70000 0x6b
             body = "{\"name\":\"thing\",\"" <> key <> "\":{\"a\":1},\"versions\":{}}"

@@ -1140,7 +1140,10 @@ check hold that walk and that lexer to upstream json-stream's behaviour.
   combinators on generated bodies: every emitted field, the byte count, the refusal, and whether a
   failure is the nesting limit. The bodies carry escapes, lone surrogates, invalid and overlong
   UTF-8, raw control bytes, deep nesting, long numbers and wide exponents, duplicate keys and
-  truncation, split at random. They run with the suite, or alone with
+  truncation, split at random. A selected PyPI read skips the rest of a file its name rejects,
+  which its reference decodes. So a second property compares that read with the reference's read
+  of the same index once the undecodable members in those places are repaired. They run with the
+  suite, or alone with
   `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`.
 - **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the vendored C lexer beside
   upstream's at the vendored tree's base commit under libFuzzer, AddressSanitizer and
@@ -1169,7 +1172,8 @@ obligations come with the testing pattern, beside the checklist in
   reference, `npmFields` in `Ecluse.Core.Registry.Npm.Streaming`, is the reader npm ran before its
   walk. It stays production code, because `Ecluse.Core.Registry.Npm.Project.versionListParser`
   still reads with it. PyPI's reference, `pypiFields` in `Ecluse.Test.Registry.PyPI.Streaming`, is
-  the reader PyPI ran before its walk.
+  the reader PyPI ran before its walk. Where a walk skips more than its reference, as PyPI's
+  selected read does, a property of its own states the difference.
 - **Give every test a counterpart in every ecosystem.** When a change adds a test, a benchmark row
   or a load scenario for one ecosystem, it adds a counterpart for each other ecosystem. This applies
   wherever the other ecosystem has the same path, even while its support is incomplete, because its
