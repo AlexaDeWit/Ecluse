@@ -307,7 +307,7 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction, so an nginx terminator serves
       -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
       -- index and the distribution files under it through the same proxy.
@@ -327,7 +327,7 @@ proxyEnv hostPort queueUrl =
 -- | The mirror target every writing role on the shared data plane publishes into.
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
+    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     ]
 
@@ -339,7 +339,7 @@ mirrorRoleEnv queueUrl rules =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
