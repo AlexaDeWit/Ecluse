@@ -37,6 +37,13 @@ spec = describe "simpleEncoding" $ do
             document = simpleDocument envelope [(ArrayEntry 9, file), (ArrayEntry 2, Null), (ArrayEntry 9, file), (ArrayEntry 4, String "last")]
         encoded document `shouldBe` encode (simpleValue document)
 
+    it "overwrites envelope files restored by a public record update" $
+        for_ [[], [("file", Null)], [("files\NUL", Null)], [("file", Null), ("files\NUL", Null), ("files ", Null)]] $ \neighbours ->
+            for_ [[], [(ArrayEntry 9, simpleFile "requests-1.0.tar.gz"), (ArrayEntry 2, Null)]] $ \files ->
+                for_ [Null, Array mempty, String "discarded"] $ \value -> do
+                    let document = (simpleDocument mempty files){simpleEnvelope = KeyMap.fromList (("files", value) : neighbours)}
+                    encoded document `shouldBe` previousBytes document
+
     it "keeps files between its neighbouring keys in the previous byte order" $
         for_ [[], ["file"], ["files "], ["files\NUL"], ["file", "files\NUL", "files ", "filet"], ["", "FileS", "fil", "z", "\x1f600"]] $ \keys -> do
             let envelope = KeyMap.fromList [(key, String (Key.toText key)) | key <- keys]

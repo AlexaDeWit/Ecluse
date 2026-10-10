@@ -39,7 +39,9 @@ simpleEncoding document =
     files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
 
 -- The pending files field keeps its former position in the pinned ascending KeyMap fold.
+-- Public record updates can restore envelope files, which this encoder must overwrite.
 envelopePair :: Key -> Value -> (Encoding.Series -> Encoding.Series) -> Encoding.Series -> Encoding.Series
-envelopePair key value next pending
-    | key < "files" = Encoding.pair key (toEncoding value) <> next pending
-    | otherwise = pending <> Encoding.pair key (toEncoding value) <> next mempty
+envelopePair key value next pending = case compare key "files" of
+    LT -> Encoding.pair key (toEncoding value) <> next pending
+    EQ -> next pending
+    GT -> pending <> Encoding.pair key (toEncoding value) <> next mempty
