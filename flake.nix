@@ -476,6 +476,9 @@
           (hlib.justStaticExecutables toolHpkgs.ghc-prof-flamegraph)
           pkgs.flamegraph
           pkgs.oha
+          # Measurement only (issue #1520): the digest bench links HsOpenSSL, which
+          # needs libcrypto and libssl at build and run time. Not for `main`.
+          pkgs.openssl
         ];
 
         # agent-lsp drives HLS through MCP. mcp-language-server v0.1.1

@@ -1509,6 +1509,7 @@ benchmark ecluse-bench
     Ecluse.Core.AdvisoryRulesBench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
+    Ecluse.Core.DigestBench
     Ecluse.Core.MergeBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
@@ -1520,15 +1521,19 @@ benchmark ecluse-bench
     Ecluse.Core.VersionBench
     Ecluse.Core.WireBench
 
+  -- HsOpenSSL, crypton and ram serve the digest measurement for issue #1520 only.
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , aeson            >=2.2 && <2.4
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , crypton          >=1.0 && <1.2
     , filepath         ^>=1.4 || ^>=1.5
+    , HsOpenSSL        ^>=0.11.7
     , http-client      ^>=0.7
     , http-types       ^>=0.12
+    , ram              ^>=0.22
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
     , tasty-bench-fit  ^>=0.1
