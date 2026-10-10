@@ -8,6 +8,7 @@ module Ecluse.E2E.Harness (
     module Ecluse.E2E.Harness.Advisories,
     module Ecluse.E2E.Harness.Availability,
     module Ecluse.E2E.Harness.Client,
+    module Ecluse.E2E.Harness.Collector,
     module Ecluse.E2E.Harness.Docker,
     module Ecluse.E2E.Harness.Npm,
     module Ecluse.E2E.Harness.Pip,
@@ -18,6 +19,7 @@ module Ecluse.E2E.Harness (
 import Ecluse.E2E.Harness.Advisories
 import Ecluse.E2E.Harness.Availability
 import Ecluse.E2E.Harness.Client
+import Ecluse.E2E.Harness.Collector
 import Ecluse.E2E.Harness.Docker
 import Ecluse.E2E.Harness.Npm
 import Ecluse.E2E.Harness.Pip

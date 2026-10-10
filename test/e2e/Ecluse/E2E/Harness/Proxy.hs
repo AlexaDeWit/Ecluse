@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Requests to the proxy's HTTP surface, and reads of the logs the proxy and the mirror store write.
 module Ecluse.E2E.Harness.Proxy (
     proxyStatus,
     proxyGet,
@@ -15,7 +16,6 @@ module Ecluse.E2E.Harness.Proxy (
     logTail,
     logTailLines,
     awaitProxyLog,
-    awaitCollectorLog,
     hasPopulatedTraceId,
 ) where
 
@@ -122,15 +122,6 @@ assertion that must await an asynchronous line.
 -}
 awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
-
-{- | Poll the OTLP collector's debug-exporter output until the predicate holds. It fails loudly when
-the environment booted without a collector, which only @ecCollector = True@ provides.
--}
-awaitCollectorLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
-awaitCollectorLog e2e matches attempts =
-    case e2eCollectorContainer e2e of
-        Nothing -> fail "awaitCollectorLog: this environment was booted without a collector"
-        Just coll -> awaitContainerLog coll matches attempts
 
 {- | Whether any @dd@ object in the log text carries a __populated__ @trace_id@. The value must
 begin with a digit, so an absent or empty id does not satisfy it.

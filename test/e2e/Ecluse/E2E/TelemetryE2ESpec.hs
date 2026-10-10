@@ -9,11 +9,12 @@ traffic.
 -}
 module Ecluse.E2E.TelemetryE2ESpec (spec) where
 
+import Data.List (lookup)
 import Data.Text qualified as T
 
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg)
+import Ecluse.E2E.Fixtures.Npm (PkgSpec, allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
 
 -- | Drive the product image under each telemetry configuration and read what it exported.
@@ -46,16 +47,32 @@ scenarios = do
                 -- install returns. The published mirror is the cue that the job ran.
                 mirrored <- verdaccioHasVersion e2e (psName telemetryPkg) (psVersion telemetryPkg)
                 mirrored `shouldBe` True
+                -- Each span must carry this case's own coordinate: the install before it
+                -- emits the same three span names for another package.
                 emitted <-
                     awaitCollectorLog
                         e2e
                         ( \logs ->
                             all
-                                (`T.isInfixOf` logs)
+                                (\name -> any (spanFor telemetryPkg name) (exportedSpans logs))
                                 ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
                         )
                         120
                 emitted `shouldBe` True
+
+            it "serves a mirrored artifact from the private leg, and the collector receives that upstream fetch" $ \e2e -> do
+                let name = psName telemetryPkg
+                    ver = psVersion telemetryPkg
+                -- The mirror-span case above served this version from the public leg, and the
+                -- worker mirrored it, so the private upstream now holds the artifact.
+                verdaccioHasVersion e2e name ver `shouldReturn` True
+                -- A fresh project has an empty npm cache, so this install requests the artifact.
+                void $ npmInstall e2e name >>= shouldSucceed
+                -- The serve signals of Écluse itself name no leg for an artifact. The upstream fetch
+                -- span does: the private upstream answered the earlier serve 404 and this one 200.
+                let answers = privateArtifactAnswers name ver
+                answered <- answers <$> awaitCollectorSpans e2e (elem (IntValue 200) . answers) 80
+                ordNub answered `shouldBe` [IntValue 404, IntValue 200]
 
     -- OTLP absent and telemetry off: the real image still boots, serves a real install,
     -- and logs JSONL to stdout/stderr, with no collector anywhere.
@@ -124,3 +141,21 @@ scenarios = do
                         )
                         80
                 correlated `shouldBe` True
+
+-- Whether a span has this name and carries the coordinate of the fixture's latest version.
+spanFor :: PkgSpec -> Text -> ExportedSpan -> Bool
+spanFor pkg name exported =
+    esName exported == name
+        && spanCarries [("ecluse.package", TextValue (psName pkg)), ("ecluse.version", TextValue (psVersion pkg))] exported
+
+{- The statuses the private upstream answered one artifact's fetches with, oldest first. The
+attribute names are the http-client instrumentation's, and @mirror@ is that upstream's host. -}
+privateArtifactAnswers :: Text -> Text -> [ExportedSpan] -> [AttributeValue]
+privateArtifactAnswers name version =
+    mapMaybe (lookup "http.status_code" . esAttributes) . filter (spanCarries fetch)
+  where
+    fetch =
+        [ ("http.method", TextValue "GET")
+        , ("http.host", TextValue "mirror")
+        , ("http.target", TextValue (npmArtifactPath name version))
+        ]
