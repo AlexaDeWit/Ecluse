@@ -16,6 +16,7 @@ import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), VersionRead)
+import Ecluse.Core.Registry.Metadata.Fetch (keyedRead)
 import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, npmFullTable, npmFullWalk, npmPackumentWalk, projectNpmPacked, projectNpmStream, readNpmFull, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
@@ -45,7 +46,7 @@ readNpmHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError (
 readNpmHeld limits name body = do
     next <- heldChunks [body]
     let held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
-    streamed <- readNpmFull held name registry next
+    streamed <- keyedRead held releaseUniqueFields (readNpmFull held name registry) next
     pure (first MetadataBoundExceeded streamed >>= fmap (second (fst npmPacked)) . projectNpmPacked held name registry)
   where
     registry = "https://registry.npmjs.org"

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | npm manifest fetches through the read driver: body bounds, decode spans, transport faults, and origin wiring.
 module Ecluse.Core.Registry.NpmSpec (spec) where
 
 import Codec.Compression.GZip qualified as GZip
@@ -38,7 +39,8 @@ import Ecluse.Core.Registry (
  )
 
 import Ecluse.Core.Registry.Metadata (Manifest (manifestBodyBytes, manifestDigest), MetadataError (..))
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
@@ -70,14 +72,14 @@ decodeSpanSpec = describe "metadata decode spans" $ do
                 config <- stubConfig loopbackRegistryUrl stub
                 count <- newIORef (0 :: Int)
                 let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
-                _ <- fetchNpmManifest tracing config isOdd
+                _ <- fetchManifest npmRead tracing config isOdd
                 readIORef count `shouldReturn` if upstreamStatus == status200 then 1 else 0
     for_ ["", "http://127.0.0.1:1"] $ \url ->
         it ("does not open a decode span for request failure at " <> toString url) $ do
             manager <- newManager defaultManagerSettings
             count <- newIORef (0 :: Int)
             let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
-            outcome <- fetchNpmManifest tracing (defaultNpmConfig (loopbackRegistryUrl url) manager) isOdd
+            outcome <- fetchManifest npmRead tracing (defaultNpmConfig (loopbackRegistryUrl url) manager) isOdd
             void outcome `shouldSatisfy` isLeft
             readIORef count `shouldReturn` 0
 
@@ -89,28 +91,28 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             withStub upstreamStatus (toLazy oversizedBody) $ \stub -> do
                 base <- stubConfig loopbackRegistryUrl stub
                 let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-                outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+                outcome <- fetchManifest npmRead passthroughTracingPort config isOdd
                 void outcome `shouldBe` Left (MetadataAuthorisationFailure (statusCode upstreamStatus))
 
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-            outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+            outcome <- fetchManifest npmRead passthroughTracingPort config isOdd
             void outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 64))))
 
     it "digests the complete source body within maxMetadataBytes" $
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-            resp <- fetchNpmManifest passthroughTracingPort config isOdd
+            resp <- fetchManifest npmRead passthroughTracingPort config isOdd
             fmap manifestDigest resp `shouldBe` Right (digestOf "{\"name\":\"is-odd\"}")
 
     it "reports decompressed bytes for an accepted gzip body" $
         withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy oversizedBody)) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = BS.length oversizedBody}}
-            resp <- fetchNpmManifest passthroughTracingPort config isOdd
+            resp <- fetchManifest npmRead passthroughTracingPort config isOdd
             fmap manifestBodyBytes resp `shouldBe` Right (BS.length oversizedBody)
             fmap manifestDigest resp `shouldBe` Right (digestOf oversizedBody)
 
@@ -119,7 +121,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             base <- stubConfig loopbackRegistryUrl stub
             charges <- newIORef []
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = BS.length oversizedBody}, ocChargeFullRead = \n -> modifyIORef' charges (n :)}
-            _ <- fetchNpmManifest passthroughTracingPort config isOdd
+            _ <- fetchManifest npmRead passthroughTracingPort config isOdd
             recorded <- readIORef charges
             sum recorded `shouldBe` BS.length oversizedBody
 
@@ -131,7 +133,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
-            outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+            outcome <- fetchManifest npmRead passthroughTracingPort config isOdd
             fetchOutcome outcome `shouldSatisfy` isBoundExceededFetch
 
     it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
@@ -139,7 +141,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "") manager
-        outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+        outcome <- fetchManifest npmRead passthroughTracingPort config isOdd
         void outcome `shouldBe` Left (MetadataFetch (FetchUrlUnformable EmptyBaseUrl))
 
 -- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded 'TransportCause'.
@@ -176,7 +178,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- connect. It is the one live-transport case a unit test can drive determinately.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "http://127.0.0.1:1") manager
-        outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+        outcome <- fetchManifest npmRead passthroughTracingPort config isOdd
         fetchOutcome outcome `shouldSatisfy` isTransportFetch
   where
     causeOf = tfCause . classifyTransport

@@ -43,8 +43,9 @@ import Ecluse.Core.Registry (ParseError (parseErrorMessage))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing))
 import Ecluse.Core.Registry.Maintenance (StoreObservation (obListPackagesIn), collectPages, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), newProtocolObservation)
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Security (defaultLimits)
@@ -220,7 +221,7 @@ verdaccioObservation e2e = do
             { prOrigin = origin
             , prListing = listing
             , prCodec = npmPublishCodec
-            , prReadManifest = fmap (first storeFaultOfMetadata) . fetchNpmManifest passthroughTracingPort origin
+            , prReadManifest = fmap (first storeFaultOfMetadata) . fetchManifest npmRead passthroughTracingPort origin
             , prBackendName = "verdaccio"
             , prPermitDeletion = False
             , prConsentDescriptor = "these observing calls carry no deletion consent"

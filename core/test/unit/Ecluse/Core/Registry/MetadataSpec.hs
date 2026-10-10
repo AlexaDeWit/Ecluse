@@ -2,99 +2,32 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | HTTP outcomes reach every metadata reader before body projection.
-Successful responses retain each ecosystem's identity and decode checks.
--}
+-- | The single-version evaluation that public admission and the mirror worker share.
 module Ecluse.Core.Registry.MetadataSpec (spec) where
 
-import Data.ByteString.Lazy qualified as BL
-
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (mkStatus)
-import Network.Wai (responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
-import Ecluse.Core.Package (PackageDetails, PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
  )
 import Ecluse.Core.Registry.Metadata (
-    Manifest (manifestBodyBytes, manifestDigest),
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
-    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
+    MetadataError (MetadataFetch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    VersionRead (vrBodyBytes),
+    VersionRead,
     fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
-import Ecluse.Core.Registry.Origin (chargingFullReads, perCallerOrigin)
-import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
-import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Metadata (privateMetadataClient)
-import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, thingName, v1_0_0)
-import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
-import Ecluse.Test.Snapshot (digestOf, versionDocOf, versionReadOf)
+import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
--- | Exercise error preservation and projection through the adapters' shared read step.
 spec :: Spec
-spec = do
-    rawReadersSpec
-    versionEvaluationSpec
-
-rawReadersSpec :: Spec
-rawReadersSpec = describe "raw metadata readers" $ do
-    for_ [Npm, PyPI] $ \ecosystem ->
-        for_ statusOutcomes $ \(code, expected) ->
-            it (show ecosystem <> " preserves HTTP " <> show code <> " over a valid manifest body on full and version reads") $
-                testWithApplication (pure (\_ respond -> respond (responseLBS (mkStatus code "test") [] (bodyFor ecosystem)))) $ \port -> do
-                    manager <- newManager defaultManagerSettings
-                    events <- newIORef ([] :: [(Text, PackageName)])
-                    let name = mkPackageName ecosystem Nothing "thing"
-                        record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
-                        tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
-                        origin = perCallerOrigin defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing
-                        makeReads = case ecosystem of
-                            PyPI -> newPyPIMetadataReads
-                            _ -> newNpmMetadataReads
-                        client = privateMetadataClient (makeReads tracing noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
-                    full <- fetchFullManifest client name
-                    void full `shouldBe` expected
-                    single <- fetchVersionMetadata client name (mkVersion ecosystem "1.0.0")
-                    void single `shouldBe` expected
-                    readIORef events `shouldReturn` concat (replicate 2 ([("fetch", name)] <> [("decode", name) | isRight expected]))
-                    when (isRight expected) $ do
-                        fmap manifestBodyBytes full `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
-                        fmap manifestDigest full `shouldBe` Right (digestOf (toStrict (bodyFor ecosystem)))
-                        fmap vrBodyBytes single `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
-    for_ [Npm, PyPI] $ \ecosystem ->
-        it (show ecosystem <> " charges a full read for every source byte and a selected read for none") $
-            testWithApplication (pure (\_ respond -> respond (responseLBS (mkStatus 200 "ok") [] (bodyFor ecosystem)))) $ \port -> do
-                manager <- newManager defaultManagerSettings
-                charges <- newIORef (0 :: Int)
-                let name = mkPackageName ecosystem Nothing "thing"
-                    origin = chargingFullReads (\n -> modifyIORef' charges (+ n)) (perCallerOrigin defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing)
-                    makeReads = case ecosystem of
-                        PyPI -> newPyPIMetadataReads
-                        _ -> newNpmMetadataReads
-                    client = privateMetadataClient (makeReads passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
-                _ <- fetchVersionMetadata client name (mkVersion ecosystem "1.0.0")
-                readIORef charges `shouldReturn` 0
-                _ <- fetchFullManifest client name
-                readIORef charges `shouldReturn` fromIntegral (BL.length (bodyFor ecosystem))
-  where
-    bodyFor PyPI = "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"thing\",\"files\":[]}"
-    bodyFor _ = "{\"name\":\"thing\",\"versions\":{}}"
-
-versionEvaluationSpec :: Spec
-versionEvaluationSpec = describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
+spec = describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
     -- The serve-time tarball gate and the worker both resolve a version through this one
     -- function, so these cases pin its classification directly.
     it "classifies a resolved version as present" $
@@ -151,10 +84,3 @@ throwingVersionClient =
         { fetchFullManifest = const (throwIO (TestContractEscape "throwingVersionClient: fetchFullManifest is unused"))
         , fetchVersionMetadata = \_ _ -> throwIO (TestContractEscape "simulated contract escape")
         }
-
-statusOutcomes :: [(Int, Either MetadataError ())]
-statusOutcomes =
-    [(code, Right ()) | code <- [200, 201, 299]]
-        <> [(code, Left (MetadataAuthorisationFailure code)) | code <- [401, 403]]
-        <> [(404, Left MetadataAbsent)]
-        <> [(code, Left (MetadataHttpFailure code)) | code <- [301, 304, 400, 408, 410, 429, 500, 503, 599]]

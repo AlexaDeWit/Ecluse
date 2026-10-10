@@ -22,6 +22,7 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded))
+import Ecluse.Core.Registry.Metadata.Fetch (keyedRead)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, pypiIndexWalk, readPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
@@ -40,7 +41,7 @@ readPyPIHeld :: Limits -> PackageName -> ByteString -> IO (Either MetadataError 
 readPyPIHeld limits name body = do
     next <- heldChunks [body]
     let held = limits{maxMetadataBytes = max (maxMetadataBytes limits) (BS.length body)}
-    streamed <- readPyPIIndex held name FullRead next
+    streamed <- keyedRead held fileUniqueFields (readPyPIIndex held name FullRead) next
     pure (first MetadataBoundExceeded streamed >>= fmap (second (fst pypiSimpleCached)) . projectPyPIStream held name)
 
 -- | Select one release without retaining its siblings, using original file positions.

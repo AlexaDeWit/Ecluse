@@ -186,6 +186,7 @@ library ecluse-core
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
+    Ecluse.Core.Registry.Metadata.Fetch
     Ecluse.Core.Registry.Metadata.Projection
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
@@ -884,6 +885,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Sweep.WalkSpec
     Ecluse.Core.Registry.SweepSpec
     Ecluse.Core.Registry.MetadataSpec
+    Ecluse.Core.Registry.Metadata.FetchSpec
     Ecluse.Core.Registry.Metadata.ProjectionSpec
     Ecluse.Core.RegistrySpec
     Ecluse.Core.Registry.Npm.CredentialSpec

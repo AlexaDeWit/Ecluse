@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, heldBody, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
 
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Object, String))
@@ -15,10 +15,11 @@ import Data.JsonStream.TokenParser (TokenResult)
 import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Registry (ParseError (ParseError))
+import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundExceeded), ParseError (ParseError))
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Metadata.Fetch (Body (Body))
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
@@ -42,6 +43,10 @@ heldChunks chunks = do
     pure $ atomicModifyIORef' remaining $ \case
         [] -> ([], BS.empty)
         chunk : rest -> (rest, chunk)
+
+-- | A 200 response whose body is the chunks, which the read driver takes in place of a socket.
+heldBody :: [ByteString] -> Body
+heldBody chunks = Body (\consume -> heldChunks chunks >>= fmap (bimap FetchBoundExceeded (SuccessBody 200)) . consume)
 
 nextChunk :: (MonadState [ByteString] m) => m ByteString
 nextChunk = state $ \case

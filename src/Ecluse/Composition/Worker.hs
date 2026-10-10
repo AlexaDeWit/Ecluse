@@ -19,7 +19,7 @@ import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUr
 import Ecluse.Core.Credential (mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads), AdapterPublish (publishCodec))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (anonymousOrigin)
 import Ecluse.Core.Registry.Publish (
@@ -43,7 +43,7 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.Metadata (publicMetadataClient)
+import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, publicMetadataClient)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..))
 import Ecluse.Runtime.Env (Env, envManager, envMetadataCache, envMetrics, envPrivateManager, envTelemetry)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
@@ -111,8 +111,8 @@ workerPolicyFor env deps publish artifactMaxBytes =
   where
     client =
         publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) $
-            metadataNewReads
-                (pdMetadata deps)
+            ecosystemMetadataReads
+                (metadataRead (pdMetadata deps))
                 (tracingPortOf (envTelemetry env))
                 (metricsPortOf (envMetrics env))
                 (\_ _ -> pure ())

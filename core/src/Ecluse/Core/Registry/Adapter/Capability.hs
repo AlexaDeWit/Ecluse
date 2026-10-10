@@ -8,7 +8,6 @@ Adapters own wire formats and share exact source-entry selection for served meta
 module Ecluse.Core.Registry.Adapter.Capability (
     -- * Metadata
     AdapterMetadata (..),
-    ManifestFetch,
 
     -- * Artifact requests
     AdapterArtifact (..),
@@ -29,7 +28,7 @@ import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Package (InvalidEntry, PackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
@@ -40,15 +39,12 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
-import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
-import Ecluse.Core.Registry.Origin (OriginClient, OriginFor)
+import Ecluse.Core.Registry.Metadata.Fetch (EcosystemRead)
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
-import Ecluse.Core.Server.Metadata (MetadataReads)
 import Ecluse.Core.Snapshot (Snapshot)
-import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
 
 {- | Canonicalise a raw package-name string under one ecosystem's own grammar, 'Nothing' for
@@ -60,30 +56,15 @@ type ProjectName = Text -> Maybe PackageName
 assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdMetadata').
 -}
 data AdapterMetadata = AdapterMetadata
-    { metadataNewReads ::
-        forall posture.
-        TracingPort ->
-        MetricsPort ->
-        (PackageName -> MetadataError -> IO ()) ->
-        (PackageName -> [InvalidEntry] -> IO ()) ->
-        (PackageName -> IO ()) ->
-        OriginFor posture ->
-        MetadataReads posture
-    -- ^ Bind one origin's metadata reads to their observers, carrying its posture.
+    { metadataRead :: EcosystemRead
+    -- ^ The ecosystem's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" runs for every caller.
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> Either RenderRefused LByteString
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes, or refuse a damaged render.
-    , metadataFetchManifest :: ManifestFetch
-    -- ^ The raw read under 'metadataNewReads', without its caching and metrics, for a store sweep.
     , metadataChargeFactors :: ChargeFactors
     -- ^ What this ecosystem's full reads and listings charge the memory budget per source byte.
     }
-
-{- | Fetching and projecting one package's full manifest from an origin. Every failure is a
-'MetadataError' value, as it is through the client built over it.
--}
-type ManifestFetch = TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 
 {- | The ecosystem's artifact request formation, by conventional filename or authoritative URL.
 The serve deps and the worker bundle share it ('Ecluse.Core.Server.Context.pdArtifact').

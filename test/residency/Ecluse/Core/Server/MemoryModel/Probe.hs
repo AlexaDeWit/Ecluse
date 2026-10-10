@@ -55,10 +55,12 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCa
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
+import Ecluse.Core.Registry.Metadata.Fetch (keyedRead)
 import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, projectNpmPacked, projectNpmStream, readNpmFull, readNpmPackument, selectNpmRead)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..))
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), releaseUniqueFields)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream, readPyPIIndex)
+import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields)
 import Ecluse.Core.Registry.PyPI.Streaming qualified as PyPIStream
 import Ecluse.Core.Registry.PyPI.StreamingProjection qualified as PyPIProjection
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
@@ -533,7 +535,7 @@ readNpmSource mode limits name version next = case mode of
     BufferedCompact -> buffered $ \_ body ->
         first show (walkWritingChunks bound (npmFullTestWalk limits name (upstreamOrigin npmCaptureUpstream)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
     StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> digested (readNpmPackument limits name (OneRelease (renderVersion version))) selectedResult
+    StreamedSelected -> digested (keyedRead limits releaseUniqueFields (readNpmPackument limits name (OneRelease (renderVersion version)))) selectedResult
     StreamedVersions -> digested (readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList) versionsResult
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
@@ -552,7 +554,7 @@ readPyPISource mode limits name version next = case mode of
     BufferedLegacy -> readLegacySource limits name next
     BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (projectPyPIChunks limits name PyPIStream.FullRead [body]) >>= fmap heldEntry . pypiEntry limits name . (,digestOf body))
     StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> digested (readPyPIIndex limits name (PyPIStream.SelectedRead name (renderVersion version))) selectedResult
+    StreamedSelected -> digested (keyedRead limits fileUniqueFields (readPyPIIndex limits name (PyPIStream.SelectedRead name (renderVersion version)))) selectedResult
     StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
@@ -565,8 +567,8 @@ readPyPISource mode limits name version next = case mode of
 -- | Stream a full read through the production walk and projection, digesting the source as it goes.
 streamFull :: Limits -> PackageName -> IO ByteString -> IO (Either Text CacheEntry)
 streamFull limits name next = case pkgEcosystem name of
-    Npm -> digestingRead (readNpmFull limits name (upstreamOrigin npmCaptureUpstream)) next <&> (first show >=> npmEntry limits name)
-    PyPI -> digestingRead (readPyPIIndex limits name PyPIStream.FullRead) next <&> (first show >=> pypiEntry limits name)
+    Npm -> digestingRead (keyedRead limits releaseUniqueFields (readNpmFull limits name (upstreamOrigin npmCaptureUpstream))) next <&> (first show >=> npmEntry limits name)
+    PyPI -> digestingRead (keyedRead limits fileUniqueFields (readPyPIIndex limits name PyPIStream.FullRead)) next <&> (first show >=> pypiEntry limits name)
     RubyGems -> pure (Left "no RubyGems source-read measurement")
 
 npmEntry :: Limits -> PackageName -> (StreamResult NpmFullRead, ContentDigest) -> Either Text CacheEntry
