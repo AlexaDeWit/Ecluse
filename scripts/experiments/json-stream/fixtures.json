@@ -1,0 +1,72 @@
+[
+  {
+    "path": "buffer-builder.json",
+    "bytes": 133894,
+    "sha256": "abb6bf5752f6364961ffbd17fe0d25cce582bc0019d4521324aa435a04846414"
+  },
+  {
+    "path": "example.json",
+    "bytes": 3468,
+    "sha256": "d79c0c57ba46c86df2eabf42571b4bdfb8da0d6e5f2aa19209a54f8a71adb980"
+  },
+  {
+    "path": "geometry.json",
+    "bytes": 66915,
+    "sha256": "3f8f894f73f8aafda0b8aa91e853f91d7bad58e6bda549ecd6a4b40ac53a8309"
+  },
+  {
+    "path": "integers.json",
+    "bytes": 6139,
+    "sha256": "d7837fcdffdf62463965166e5102a42fefb33cb55fccda81a7546410c96f633f"
+  },
+  {
+    "path": "jp10.json",
+    "bytes": 14982,
+    "sha256": "43cef5eef55ec9dcd9fc49f59d1a06cb48a5d7e79b4ca64589b47fb2505dc42d"
+  },
+  {
+    "path": "jp100.json",
+    "bytes": 84877,
+    "sha256": "537bf001fee2166390c8744e82b0855eda30d9e5f8b50a1e2423539c9abc8e73"
+  },
+  {
+    "path": "jp50.json",
+    "bytes": 45140,
+    "sha256": "ff619d2e3696f8c63821d7a5562a15e53ada9bf1ee2d1c5d1d74aaa40a2452df"
+  },
+  {
+    "path": "numbers.json",
+    "bytes": 12940,
+    "sha256": "f3692e8c9ddd5a78b0501c3e03ab75cea5df3b61c135bfb1dc024be538a2cb70"
+  },
+  {
+    "path": "sigma.json",
+    "bytes": 4197757,
+    "sha256": "1056f53f3ab4c465ea67a5d8471d908ec6420a661f43200a34c6a687a84c47e0"
+  },
+  {
+    "path": "twitter1.json",
+    "bytes": 854,
+    "sha256": "3cabf7c8454c40c313a109413bd861f71be86520871cf8aa7eddf345d1f92a6e"
+  },
+  {
+    "path": "twitter10.json",
+    "bytes": 6593,
+    "sha256": "174083e6bb7c95231d202121bbdcb2bf75495da08834807514c04b085b52e1d5"
+  },
+  {
+    "path": "twitter100.json",
+    "bytes": 62995,
+    "sha256": "b73202cd3718043109bdd575cb2d948d507c7a0aaac321b2ce170ed86fc57702"
+  },
+  {
+    "path": "twitter20.json",
+    "bytes": 12064,
+    "sha256": "065036851a561a35477f41b6c62c039b98a44226cf30bd7b7affdbf52bb82152"
+  },
+  {
+    "path": "twitter50.json",
+    "bytes": 31947,
+    "sha256": "a1d112b2a813268060f312b43acbd200a483d7cce1d3b8d47d0e58c7a92f49af"
+  }
+]

@@ -1,0 +1,61 @@
+name: Json-stream upstream experiment
+
+on:
+  push:
+    branches:
+      - 'measure/json-upstream-*'
+
+permissions:
+  contents: read
+
+jobs:
+  upstream:
+    name: Checked byte lookup (${{ matrix.laziness }})
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        laziness: [default, disabled]
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      BENCH_REPO: ${{ github.workspace }}
+      BENCH_BASELINE_SHA: 9aa5076ccfd803ebd8f3f56e256df219f103de16
+      BENCH_BASELINE_FOLD_API: pure_cursor
+      BENCH_CANDIDATE_FOLD_API: pure_cursor
+      BENCH_CANDIDATE_SHA: 95cfae7b8af7d9fb33fd599b7df4e6627feabb44
+      BENCH_FOLD_FULL_LAZINESS: ${{ matrix.laziness }}
+      BENCH_REPEATS: "5"
+      BENCH_SECONDS: "0.3"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the pinned baseline
+        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA"
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Compare the three pinned source variants
+        env:
+          BENCH_OUTPUT: ${{ runner.temp }}/json-stream-comparison
+        run: nix develop .#ci --command task --taskfile scripts/experiments/json-stream/Taskfile.yml all
+
+      - name: Upload sources, plans and every sample
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: json-stream-upstream-${{ runner.arch }}-${{ matrix.laziness }}-${{ github.sha }}
+          path: ${{ runner.temp }}/json-stream-comparison/artifacts
+          if-no-files-found: warn

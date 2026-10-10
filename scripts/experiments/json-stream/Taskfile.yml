@@ -1,0 +1,27 @@
+version: '3'
+
+tasks:
+  all:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh all
+  prepare:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh prepare
+  build:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh build
+  verify:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh verify
+  measure:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh measure
+  report:
+    dir: '{{.TASKFILE_DIR}}'
+    cmds:
+      - bash run.sh report
