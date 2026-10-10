@@ -500,8 +500,12 @@ advisorySweep freshness = do
 
 -- Capabilities whose database affects the fixture version, under the given push-age reading.
 advisoryDeps :: IO AdvisoryFreshness -> RuleDeps
-advisoryDeps freshness =
-    (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", affectingRange)])){rdAdvisoryFreshness = freshness}
+advisoryDeps = advisoryDepsFor ["left-pad"]
+
+-- 'advisoryDeps' with the same advisory against each named package.
+advisoryDepsFor :: [Text] -> IO AdvisoryFreshness -> RuleDeps
+advisoryDepsFor names freshness =
+    (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [(name, affectingRange) | name <- names])){rdAdvisoryFreshness = freshness}
 
 affectingRange :: AdvisoryRange
 affectingRange = AdvisoryRange "GHSA-affect-0001" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing
@@ -630,10 +634,7 @@ revocationSpec = describe "the rules that apply at revocation" $ do
             recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
   where
     requestsProject = mkPackageName PyPI Nothing "requests"
-    walkDeps =
-        (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", affectingRange), ("requests", affectingRange)]))
-            { rdAdvisoryFreshness = pure AdvisoryFresh
-            }
+    walkDeps = advisoryDepsFor ["left-pad", "requests"] (pure AdvisoryFresh)
 
 -- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
 limitedToAdmission :: Rule -> PrecededRule

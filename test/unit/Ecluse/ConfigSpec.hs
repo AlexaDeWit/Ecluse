@@ -194,6 +194,13 @@ spec = do
             refused (loadConfig pubUrlEnv (Just emptyInDocument)) `shouldBe` Left True
             refused (loadConfig (pubUrlEnv <> nullInEnvironment) Nothing) `shouldBe` Left True
 
+        it "refuses an empty string inside the list, in the document and in the environment" $ do
+            let refusal = Left [PolicyErrors [MalformedRule "deny-scripts" "\"appliesTo\" names unknown phase \"\". The phases are \"admission\" and \"revocation\""]]
+                inDocument = "rules:\n  deny-scripts:\n    type: DenyInstallTimeExecution\n    appliesTo: [\"\"]\nmounts:\n  npm:\n    enabled: true\n"
+                inEnvironment = [("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_RULES", "{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"\"]}}")]
+            loadConfig pubUrlEnv (Just inDocument) `shouldBe` refusal
+            loadConfig (pubUrlEnv <> inEnvironment) Nothing `shouldBe` refusal
+
         it "names the setting and its layer in the provenance lines" $
             resolvedKeyProvenance [] (Just "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}")
                 `shouldSatisfy` elem "config: rules.deny-scripts.appliesTo = [\"admission\"] (document)"

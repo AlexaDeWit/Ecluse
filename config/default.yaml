@@ -436,9 +436,9 @@ mounts:
 # of the versions a store already holds. Unset, a rule applies at both, and a patch that
 # does not restate the list keeps the phases of the rule it patches. `[admission]` on a
 # deny refuses new versions and leaves stored copies in place, because the Dredger then
-# passes over the rule. The load refuses an empty list, an empty value, `[revocation]`
-# alone, an unknown word, and `[admission]` on an allow. `enabled: false` switches a rule
-# off at both.
+# passes over the rule. The load refuses an empty list, an empty value, an empty string,
+# `[revocation]` alone, an unknown word, and `[admission]` on an allow. `enabled: false`
+# switches a rule off at both.
 rules:
   min-age:
     type: AllowIfOlderThan

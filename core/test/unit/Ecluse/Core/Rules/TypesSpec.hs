@@ -152,7 +152,7 @@ revocationSpec = describe "revocationRules" $ do
                 H.cover 10 "an allow admits at the gate" (isApproved gate)
                 H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread)
                 H.cover 20 "the version is a PyPI release" (pkgEcosystem (evName evidence) == PyPI)
-                H.cover 1 "the gate cannot decide and the Dredger blocks" (isUndecidable gate && blocks dredger)
+                H.cover 2 "the gate cannot decide and the Dredger blocks" (isUndecidable gate && blocks dredger)
                 H.cover 30 "two rules tie on precedence" (length (ordNub (map rulePrecedence policy)) < length policy)
                 H.annotateShow (gate, dredger)
                 H.assert (not (blocks dredger && isApproved gate))
@@ -183,14 +183,16 @@ decideUnder advisories policy evidence =
     prepare (depsIn advisories) policy >>= \prepared -> evalRules ctx prepared evidence
 
 {- | A policy as configuration resolves one. One in three puts a deny limited to admission above a
-deny at both phases, where the Dredger's walk passes a rule that decides at the gate.
+deny at both phases, most often one that names the fixture package, where the Dredger's walk passes
+a rule that decides at the gate.
 -}
 genPolicy :: Gen [PrecededRule]
 genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules)]
   where
     anyRules = Gen.list (Range.constant 0 6) genPreceded
     genDeny = Gen.filter ruleDenies genRule
-    shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genDeny
+    genNamingDeny = Gen.frequency [(2, pure (DenyByIdentity "thing")), (1, genDeny)]
+    shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genNamingDeny
 
 {- | A rule as configuration resolves one: a deny at either reach, and an allow at both phases.
 Colliding precedences put an allow above, below, and beside each deny.

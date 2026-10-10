@@ -415,6 +415,11 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
             for_ ["\"admission\"", "true", "[1]", "{\"admission\":true}"] $ \value ->
                 resolveJson (addedDeny value) `shouldSatisfy` refusalMentions "appliesTo"
 
+        it "refuses an empty string, in place of the list and inside it" $ do
+            resolveJson (addedDeny "\"\"") `shouldSatisfy` refusalMentions "rule.appliesTo: parsing [] failed, expected Array, but encountered String"
+            resolveJson (addedDeny "[\"\"]") `shouldBe` Left [MalformedRule "deny-scripts" (unknownPhase "")]
+            resolveJson (addedDeny "[\"admission\",\"\"]") `shouldBe` Left [MalformedRule "deny-scripts" (unknownPhase "")]
+
         it "refuses a key written with no value, on an added rule and on a patch" $ do
             -- An empty value must not read as both phases, which is the reading that deletes.
             resolveJson (addedDeny "null") `shouldSatisfy` refusalMentions "rule.appliesTo is written with no value"
