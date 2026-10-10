@@ -16,9 +16,17 @@ development tools. It runs non-root (uid 65532). The flake's lock file pins its 
 locally with `task docker-build`, which writes `./result`, a `docker-archive`.
 
 `ecluse` is the only program of its own that the image holds. Three libraries in the runtime closure
-bring small programs with them, because nixpkgs packages each one beside the library the binary
-links: glibc's `getconf` helpers, the `numactl` tools, and on amd64 `pzstd`. Every image build runs
-[`image-archive.sh`](../../scripts/image-archive.sh), which fails when any other program appears.
+bring programs with them, because nixpkgs keeps each program in the library's own store path:
+
+- glibc: its three `getconf` helpers.
+- numactl: six tools beside libnuma, which GHC's runtime links.
+- zstd, on amd64 only: `pzstd` beside libzstd. GHC's runtime links libdw there, and libdw links
+  libzstd.
+
+Every image build runs [`image-archive.sh`](../../scripts/image-archive.sh). It reads the `bin`,
+`sbin`, and `libexec` directories of every layer, and fails on any file or link there that is not
+`ecluse` or one of those programs. The script lists each allowed file by name, under a store path
+named for the library and its version.
 
 Publishing is a separate, tag-triggered workflow
 ([`release.yml`](../../.github/workflows/release.yml)), never part of the PR `gate`. A `vX.Y.Z` tag
@@ -32,19 +40,21 @@ same definition. Every commit on `main`, and every pull request that can change 
 both images, assembles the multi-arch index, and starts each image on its own architecture, without
 a registry login or a push. A release is therefore never the first build of an architecture.
 
-**Two builds of one commit.** The same CI run builds each image a second time. The two builds run on
-separate runners and share no cache and no Nix store. The `release-compare` job then compares the
-SHA-256 of the two archives for each architecture. A pass shows that those two builds of that commit
-gave the same image archive. It is evidence and not a guarantee for every build, because GHC 9.10
-does not promise deterministic object code. GHC 9.10 orders its object code differently from build
-to build when it compiles modules in parallel, so the flake compiles each Haskell package it builds
-from source one module at a time. The job reports its result and does not gate a merge.
-
 The workflow assembles the two into one multi-arch index and pushes it to GitHub Container Registry
 under a single immutable tag. It attaches keyless provenance and SBOM attestations. It then
 publishes a GitHub Release carrying the image digest, the `gh attestation verify` recipe, the
 generated changelog, and every attestation and SBOM as a downloadable asset. A pre-release tag
 (`vX.Y.Z-rc.N`) publishes as a prerelease. GHCR is the only registry Écluse publishes to.
+
+**Two builds of one commit.** The CI run that holds the release dry-run builds each image a second
+time. The two builds run on separate runners and share no cache and no Nix store. The
+`release-compare` job then compares the SHA-256 of the two archives for each architecture. A pass
+shows that those two builds of that commit gave the same image archive. It is evidence and not a
+guarantee for every build, because GHC 9.10 does not promise deterministic object code. GHC 9.10
+orders its object code differently from build to build when it compiles modules in parallel, so the
+flake compiles the image's `ecluse` binary and each Haskell library it builds from source one module
+at a time. A release's own build is a third build, and no job compares it with the other two. The
+job reports its result and does not gate a merge.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces immutable
 tags, so every push is a fresh, never-reused tag. The release publishes `ecluse:X.Y.Z` and nothing

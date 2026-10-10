@@ -299,14 +299,15 @@
         # the build from running the test suites. Those run on the cabal path (see
         # docs/testing.md), and the impure suites (integration → Docker, smoke →
         # live network) never belong in a hermetic build.
-        ecluse = sequentialCompile (hlib.dontCheck ecluseRaw);
+        ecluse = hlib.dontCheck ecluseRaw;
 
         # Only `exe:ecluse` is built and installed, so the package's development
         # tools never reach the image. justStaticExecutables strips it and drops its
         # reference to the Haskell library closure, which a dynamic build would drag
-        # in at about 500 MB.
-        ecluseBinUnpruned =
-          hlib.justStaticExecutables (hlib.setBuildTarget ecluse "exe:ecluse");
+        # in at about 500 MB. sequentialCompile sits here and not on `ecluse`, whose
+        # Haddock build ships in no image and keeps -j.
+        ecluseBinUnpruned = hlib.justStaticExecutables
+          (hlib.setBuildTarget (sequentialCompile ecluse) "exe:ecluse");
 
         # GHC's x86_64 Linux RTS links libdw and libelf for DWARF stack unwinding.
         # The nixpkgs build puts those libraries and the unused libdebuginfod in one

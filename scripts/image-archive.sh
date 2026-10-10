@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # Checks on a release image's docker-archive, for release-build.yml and ci.yml.
-#
 #   executables <archive>     Fail unless bin/ecluse is the image's only program, apart
-#                             from those the linked libraries below carry. A program is
-#                             a file or link under a bin, sbin, or libexec directory.
+#                             from the library programs listed below. A program is a
+#                             file or link under a bin, sbin, or libexec directory.
 #   compare <first> <second>  Fail unless the two archives are the same bytes, and name
 #                             the archive members and the files that differ.
-#
 # Exit 1 on a failed check, 2 on a usage error or an unreadable archive. Needs GNU tar.
 set -euo pipefail
 
-# Libraries the binary links whose store paths carry programs of their own.
-# <package name>|<why the image holds it>
-linked=(
-  "glibc|the C library, which carries its getconf helpers"
-  "numactl|libnuma for GHC's runtime, which carries the numactl tools"
-  "zstd|libzstd for libdw on amd64, which carries pzstd"
+# Programs that libraries in the runtime closure carry in their own store paths. An
+# entry admits these files only, from a store path named <package>-<version>.
+# <package>|<why the image holds it>|<its programs>
+carried=(
+  "glibc|the C library|libexec/getconf/POSIX_V6_LP64_OFF64 libexec/getconf/POSIX_V7_LP64_OFF64 libexec/getconf/XBS5_LP64_OFF64"
+  "numactl|libnuma, which GHC's runtime links|bin/memhog bin/migratepages bin/migspeed bin/numactl bin/numademo bin/numastat"
+  "zstd|libzstd, which libdw links on amd64|bin/pzstd"
 )
 
 usage() {
@@ -45,20 +44,27 @@ layers() {
 }
 
 # Every non-directory member of an unpacked image's layers, without a leading ./ or /.
+# The loop's own status is its last tar's, so each tar failure ends it at once.
 members() {
   local layer
   layers "$1" | while IFS= read -r layer; do
-    tar -tPf "$1/$layer/layer.tar"
+    tar -tPf "$1/$layer/layer.tar" || exit 2
   done | sed -E 's#^\.?/##' | { grep -v '/$' || true; } | LC_ALL=C sort -u
 }
 
-linked_reason() {
-  local entry
-  for entry in "${linked[@]}"; do
-    if [[ "$1" =~ ^"${entry%%|*}"-[0-9] ]]; then
-      printf '%s\n' "${entry#*|}"
-      return 0
-    fi
+# Print why the image holds package $1, when `carried` lists it with file $2.
+carried_reason() {
+  local entry rest files file
+  for entry in "${carried[@]}"; do
+    [[ "$1" =~ ^"${entry%%|*}"-[0-9][0-9.-]*$ ]] || continue
+    rest="${entry#*|}"
+    read -r -a files <<< "${rest#*|}"
+    for file in "${files[@]}"; do
+      if [ "$file" = "$2" ]; then
+        printf '%s\n' "${rest%%|*}"
+        return 0
+      fi
+    done
   done
   return 1
 }
@@ -67,6 +73,13 @@ executables() {
   local image="$work/image" verdict=0 shipped=0 path package inside reason
   local store_path='^nix/store/[a-z0-9]{32}-([^/]+)/(.+)$'
   unpack "$1" "$image"
+  # Through files, never a process substitution: bash discards that one's status, and a
+  # layer tar cannot list must stop the check.
+  if ! members "$image" > "$work/members"; then
+    echo "image-archive: cannot list a layer of $1" >&2
+    exit 2
+  fi
+  grep -E '(^|/)(bin|sbin|libexec)/' "$work/members" > "$work/programs" || [ "$?" = 1 ] || exit 2
   while IFS= read -r path; do
     if [ "$path" = "bin/ecluse" ]; then
       echo "ok      /$path"
@@ -76,20 +89,20 @@ executables() {
     else
       package="${BASH_REMATCH[1]}"
       inside="${BASH_REMATCH[2]}"
-      if [[ "$package" =~ ^ecluse-[0-9] ]] && [ "$inside" = "bin/ecluse" ]; then
+      if [[ "$package" =~ ^ecluse-[0-9][0-9.]*$ ]] && [ "$inside" = "bin/ecluse" ]; then
         echo "ok      /$path"
         shipped=$((shipped + 1))
-      elif [[ "$package" =~ ^ecluse-[0-9] ]]; then
+      elif [[ "$package" =~ ^ecluse-[0-9][0-9.]*$ ]]; then
         echo "FAILED  /$path: the image ships bin/ecluse and no other Écluse program"
         verdict=1
-      elif reason="$(linked_reason "$package")"; then
+      elif reason="$(carried_reason "$package" "$inside")"; then
         echo "ok      /$path ($reason)"
       else
-        echo "FAILED  /$path: $package is not a library listed in image-archive.sh"
+        echo "FAILED  /$path: not a program that image-archive.sh lists"
         verdict=1
       fi
     fi
-  done < <(members "$image" | { grep -E '(^|/)(bin|sbin|libexec)/' || true; })
+  done < "$work/programs"
   if [ "$shipped" != 1 ]; then
     echo "FAILED  $shipped store paths hold bin/ecluse, and the image needs exactly one"
     verdict=1
@@ -103,7 +116,8 @@ contents() {
   local layer
   while IFS= read -r layer; do
     tar -xPf "$1/$layer/layer.tar" \
-      --to-command='printf "%s  %s  %s\n" "$(sha256sum | cut -d" " -f1)" "$TAR_SIZE" "$TAR_FILENAME"'
+      --to-command='printf "%s  %s  %s\n" "$(sha256sum | cut -d" " -f1)" "$TAR_SIZE" "$TAR_FILENAME"' ||
+      exit 2
   done | LC_ALL=C sort -k 3
 }
 

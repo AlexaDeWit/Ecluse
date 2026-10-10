@@ -577,8 +577,8 @@ jobs:
           docker run --rm --network none "$tag" --version
 
   # A second build of the same commit. The two builds run on separate runners and
-  # restore no cache, so they share no store. The prefix keeps these artifacts out of
-  # the `image-*` and `sbom-*` reads above and below.
+  # restore no cache, so they share no store. The prefix keeps this build's archive out
+  # of the `image-*` reads above, and no job reads an SBOM from it.
   release-rebuild:
     name: Release rebuild
     needs: changes
@@ -589,15 +589,15 @@ jobs:
     with:
       retention-days: 1
       artifact-prefix: rebuild-
+      sbom: false
 
-  # Report-only: absent from the gate's `needs`. A difference shows red on the PR and
-  # blocks no merge.
+  # Report-only: absent from the gate's `needs`. A difference fails this job and the
+  # run, and `CI gate` stays green.
   release-compare:
     name: Image comparison (${{ matrix.arch }}, report-only)
     needs: [release-dry-run, release-rebuild]
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 15
-    continue-on-error: true
     permissions:
       contents: read
     strategy:

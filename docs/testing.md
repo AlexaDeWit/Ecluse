@@ -1187,17 +1187,20 @@ allow-list names the job with a reason.
 The release dry-run also gates. It runs `release-build.yml`, the reusable workflow that
 `release.yml` builds its images with, so both architectures build natively and without a cache, as
 in a release. Each image build runs `scripts/image-archive.sh executables`, which fails when the
-image holds a program other than `ecluse` and those its linked libraries carry.
+image holds a program other than `ecluse` and the library programs that the script lists by name.
 `release-dry-run-assemble` assembles the multi-arch index without pushing it, and
 `release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run job
 logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also scan
 both images' SBOMs with grype. That scan is report-only and never gates.
 
 `release-rebuild` runs the same workflow a second time for the same commit, on separate runners
-that share no cache and no Nix store with the first build. `release-compare` then compares the two
-archives of each architecture by SHA-256 (`scripts/image-archive.sh compare`), and on a difference
-it prints the archive members and the files that differ. The comparison is report-only: it is not
-a `gate` dependency.
+that share no cache and no Nix store with the first build, and it uploads no SBOM.
+`release-compare` then compares the two archives of each architecture by SHA-256
+(`scripts/image-archive.sh compare`), and on a difference it prints the archive members and the
+files that differ. Neither job is a `gate` dependency. A difference shows as a red
+`Image comparison` job and a red run with a green `CI gate`. A failed rebuild shows as a red
+`Release rebuild / Build image` job, both comparisons skipped, and the same red run with a green
+`CI gate`.
 
 Every job restores caches and only a main run ever saves one, so a pull request reads the default
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub

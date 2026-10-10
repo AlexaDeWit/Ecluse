@@ -91,7 +91,27 @@ shipped_image "$work/shell"
 put "$work/shell/store" "nix/store/$hash-busybox-1.36.1/bin/sh"
 pack "$work/shell.tar" "$work/shell"
 check "fails on a program from a package that is not a listed library" 1 \
-  "^FAILED +/nix/store/$hash-busybox-1.36.1/bin/sh: busybox-1.36.1 " executables "$work/shell.tar"
+  "^FAILED +/nix/store/$hash-busybox-1.36.1/bin/sh:" executables "$work/shell.tar"
+
+# A sibling output of a listed library is another store path. The file carries a listed
+# name, so only the store path's own name can refuse it.
+shipped_image "$work/sibling"
+put "$work/sibling/store" "nix/store/$hash-zstd-1.5.7-bin/bin/pzstd"
+pack "$work/sibling.tar" "$work/sibling"
+check "fails on a listed program from a store path that only starts with a listed name" 1 \
+  "^FAILED +/nix/store/$hash-zstd-1.5.7-bin/bin/pzstd:" executables "$work/sibling.tar"
+
+shipped_image "$work/grown"
+put "$work/grown/store" "nix/store/$hash-numactl-2.0.18/bin/numad"
+pack "$work/grown.tar" "$work/grown"
+check "fails on an unlisted program inside a listed library" 1 \
+  "^FAILED +/nix/store/$hash-numactl-2.0.18/bin/numad:" executables "$work/grown.tar"
+
+shipped_image "$work/sbin"
+put "$work/sbin/store" "$ecluse/sbin/ecluse-admin"
+pack "$work/sbin.tar" "$work/sbin"
+check "fails on an Écluse program under sbin" 1 \
+  "^FAILED +/$ecluse/sbin/ecluse-admin:" executables "$work/sbin.tar"
 
 shipped_image "$work/nested"
 put "$work/nested/store" "$ecluse/lib/helpers/libexec/probe"
@@ -104,6 +124,20 @@ rm "$work/absent/store/$ecluse/bin/ecluse"
 pack "$work/absent.tar" "$work/absent"
 check "fails when no store path holds bin/ecluse" 1 \
   "^FAILED +0 store paths hold bin/ecluse" executables "$work/absent.tar"
+
+shipped_image "$work/twice"
+put "$work/twice/store" "nix/store/${hash//a/b}-ecluse-9.9.9/bin/ecluse"
+pack "$work/twice.tar" "$work/twice"
+check "fails when two store paths hold bin/ecluse" 1 \
+  "^FAILED +2 store paths hold bin/ecluse" executables "$work/twice.tar"
+
+# The unreadable layer sorts first, so the layers after it list without error.
+mkdir -p "$work/torn/0000"
+tar -xzf "$work/shipped.tar" -C "$work/torn"
+printf 'not a tar' > "$work/torn/0000/layer.tar"
+(cd "$work/torn" && tar -czf "$work/torn.tar" -- *)
+check "refuses an archive with a layer it cannot list" 2 \
+  "cannot list a layer" executables "$work/torn.tar"
 
 printf 'not an archive' > "$work/garbage.tar"
 check "refuses a file that is not an archive" 2 "" executables "$work/garbage.tar"
