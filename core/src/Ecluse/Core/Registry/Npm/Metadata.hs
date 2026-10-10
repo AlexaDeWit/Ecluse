@@ -70,8 +70,8 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
-{- | npm's memory charges, above the largest read peak per source byte (1.06, express, oldest heavy base)
-and output working set per basis byte of a realistic merge (1.52, @aws-sdk/client-s3) from one step up.
+{- | npm's charges cover read peaks of 1.071 bytes per source byte and realistic output working sets
+of 1.524 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
 -}
 npmChargeFactors :: ChargeFactors
 npmChargeFactors = ChargeFactors{cfFullReadPermille = 1200, cfOutputPermille = 2000}

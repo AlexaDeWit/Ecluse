@@ -162,20 +162,23 @@ for packages that differ from the corpus. The all-shape figure is the smallest t
 the highest peak among all the listings. Those add the heavy bases, merges whose private document
 holds far more text than its version count suggests.
 
-The table gives each figure in heap bytes per source byte, among listings of at least one step. Its
-last row is the read limit that the residency tier holds a single document's read to.
+The table gives heap bytes per source byte from the native arm64 Build job of
+[CI run 38082780368](https://github.com/AlexaDeWit/Ecluse/actions/runs/38082780368/job/114308391999).
+It measured merged `main` at `1a53a01b0480ae61f486a6ec1eda0a27cb646181`, including #1594.
+The maxima include listings of at least one step. They display six decimal places, but the rules
+use measured byte counts before rounding. The last row is the limit for a single document's read.
 
 | Figure | npm | PyPI |
 |---|---|---|
-| Highest peak among the realistic listings | 0.96 (express, publish order) | 3.09 (boto3, single document) |
-| Margin figure | 1.2 | 3.9 |
-| Highest peak among all the listings | 1.39 (express, oldest heavy base) | 3.09 (boto3, single document) |
-| All-shape figure | 1.4 | 3.1 |
-| Full-read charge | 1.4 | 3.9 |
-| Highest peak among single documents | 0.90 (react) | 3.09 (boto3) |
+| Highest peak among the realistic listings | 0.953794 (express, publish order) | 3.196237 (boto3, single document) |
+| Margin figure | 1.2 | 4.0 |
+| Highest peak among all the listings | 1.071015 (express, oldest heavy base) | 3.196237 (boto3, single document) |
+| All-shape figure | 1.1 | 3.2 |
+| Full-read charge | 1.2 | 4.0 |
+| Highest peak among single documents | 0.862704 (react) | 3.196237 (boto3) |
 | Read limit | 1.0 | 3.5 |
 
-A capture under one step can peak above the per-byte charge, up to 1.67 for npm (lodash) and 4.01
+A capture under one step can peak above the per-byte charge, up to 1.65 for npm (lodash) and 4.38
 for PyPI (requests). What the meter holds for one such read, whole steps and at least the 1 MiB
 entry step, covers every capture the tier measures. A request for a name that is not first-party
 reads its private and public documents at once on one ticket, so two such reads can exceed what
@@ -199,8 +202,8 @@ response charge is 1.25 times the highest working set per basis byte that the re
 measures for one ecosystem, from one step of basis up, rounded up to a tenth. It takes the
 realistic shapes: a single document, and merges whose documents are identical, overlap, share no
 version, or put the newest quarter of the versions in the private copy, as a registry that holds
-the versions a deployment consumed does. npm's charge is 2.0 (@aws-sdk/client-s3 at 1.52) and
-PyPI's is 1.6 (boto3 at 1.24). The tier also renders heavy bases, private documents that render
+the versions a deployment consumed does. The same run gives npm's charge as 2.0 (@aws-sdk/client-s3
+at 1.523900) and PyPI's as 1.6 (boto3 at 1.242301). The tier also renders heavy bases that render
 far more than their version count suggests, and from one step of basis up holds each of them
 within the output charge. Below one step, the whole meter steps a response pays for hold every
 listing's output working set, heavy bases included, and the tier checks that too.
@@ -209,9 +212,9 @@ The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails whe
 or render outgrow what the meter holds for them, so a representation change cannot silently
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
-least 8% above its measured maximum. The read limits in the table above sit 0.4 under their
-charges. The output limits, set over the realistic shapes, are 1.75 per basis byte for npm and 1.5
-for PyPI, 0.25 and 0.1 under their charges.
+least 8% above its measured maximum. The read limits in the table above sit 0.2 under npm's charge
+and 0.5 under PyPI's. The output limits, set over the realistic shapes, are 1.75 per basis byte for
+npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder
