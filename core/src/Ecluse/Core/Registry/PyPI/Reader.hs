@@ -67,7 +67,7 @@ pypiWalk depth mode step keeps table0 initial = start
     files = case mode of
         FullRead -> eachItem file
         SelectedRead name wanted -> \done (Walked table acc) ->
-            eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
+            eachItem (candidate (Selection wanted (depth - 3) fileFields hashFields)) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
 
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
@@ -91,13 +91,9 @@ pypiWalk depth mode step keeps table0 initial = start
     metaFields = namedMembers ([("tracks", ArrayWith (depth - 2) (Scalar (depth - 3)) (Scalar (depth - 2))) | full] <> [("api-version", Scalar (depth - 2))] <> [("_last-serial", Scalar (depth - 2)) | full])
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
 
--- What a selected read fixes for every file.
-data Selection = Selection
-    { selWanted :: Text
-    , selBudget :: Int
-    , selFields :: Members
-    , selHashes :: Members
-    }
+-- What a selected read fixes for every file: the release it keeps, a file's depth budget, the
+-- members a file lists, and the names its hashes list.
+data Selection = Selection Text Int Members Members
 
 -- A selected read between tokens: the table, the filename memo, and the consumer's accumulator
 -- between files or the file under selection within one.
@@ -107,7 +103,7 @@ data Selecting a = Selecting !InternTable !FilenameMemo a
 -- the file. Listed keys come from the shapes and texts are copies, so no file enters the table.
 selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
 {-# INLINEABLE selectedFile #-}
-selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of
+selectedFile (Selection wanted budget fields hashes) memo0 table0 element rest next = case element of
     ObjectBegin -> eachMember visit (\(Selecting table memo file) after -> next (finishSelected file) memo table after) (Selecting table0 memo0 (CandidateFile False [] Nothing False)) rest
     _ -> skipFrom element rest (next Nothing memo0 table0)
   where
