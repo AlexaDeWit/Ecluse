@@ -21,16 +21,14 @@ import Ecluse.Bench.Corpus (LoadedEntry, entryName)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
-import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
-import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Server.Metadata (privateMetadataClient)
+import Ecluse.Core.Server.Metadata (ecosystemMetadataReads, privateMetadataClient)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (cpPackage)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
@@ -41,7 +39,7 @@ import Ecluse.Test.Support (expectRight)
 -- | Keep the replay server alive while the caller runs the benchmark tree.
 withBenchmarks :: [EcosystemBench] -> ([Benchmark] -> IO a) -> IO a
 withBenchmarks ecosystems action = do
-    responses <- fmap Map.fromList (traverse replayResponse [(ebEcosystem ecosystem, entry) | ecosystem <- ecosystems, entry <- ebCorpus ecosystem])
+    responses <- fmap Map.fromList (traverse replayResponse [(ecosystem, entry) | ecosystem <- ecosystems, entry <- ebCorpus ecosystem])
     testWithApplication (pure (replayApplication responses)) $ \port -> do
         manager <- HTTP.newManager (HTTP.managerSetProxy HTTP.noProxy HTTP.defaultManagerSettings{HTTP.managerModifyRequest = pure . redirect port})
         groups <- traverse (ecosystemGroup manager) ecosystems
@@ -50,12 +48,9 @@ withBenchmarks ecosystems action = do
     -- Every request stays on loopback, including requests for an unexpected origin.
     redirect port request = request{HTTP.host = "127.0.0.1", HTTP.port = port, HTTP.secure = False, HTTP.proxy = Nothing}
 
-replayResponse :: (Ecosystem, LoadedEntry) -> IO (ByteString, BL.ByteString)
+replayResponse :: (EcosystemBench, LoadedEntry) -> IO (ByteString, BL.ByteString)
 replayResponse (ecosystem, (package, raw, _, _)) = do
-    request <- case ecosystem of
-        Npm -> expectRight (metadataRequest (originUrl ecosystem) Nothing Full (cpPackage package))
-        PyPI -> expectRight (simpleIndexRequest (originUrl ecosystem) Nothing (cpPackage package))
-        RubyGems -> assertFailure "cold reads: RubyGems has no metadata reader"
+    request <- expectRight (erRequest (metadataRead (ebMetadata ecosystem)) (originUrl (ebEcosystem ecosystem)) Nothing (cpPackage package))
     pure (HTTP.path request, BL.fromStrict raw)
 
 replayApplication :: Map ByteString BL.ByteString -> Application
@@ -66,10 +61,10 @@ replayApplication responses request respond =
 
 ecosystemGroup :: HTTP.Manager -> EcosystemBench -> IO Benchmark
 ecosystemGroup manager ecosystem = do
-    entries <- traverse (entryGroup manager (ebEcosystem ecosystem)) (ebCorpus ecosystem)
+    entries <- traverse (entryGroup manager ecosystem) (ebCorpus ecosystem)
     pure (bgroup ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem))) [bgroup "cold production reads (per package)" entries])
 
-entryGroup :: HTTP.Manager -> Ecosystem -> LoadedEntry -> IO Benchmark
+entryGroup :: HTTP.Manager -> EcosystemBench -> LoadedEntry -> IO Benchmark
 entryGroup manager ecosystem entry@(_, raw, _, _) = do
     defaults <- readGroup manager ecosystem entry "default cap" defaultLimits
     raised <-
@@ -78,12 +73,12 @@ entryGroup manager ecosystem entry@(_, raw, _, _) = do
             else pure []
     pure (bgroup (entryName entry) (defaults : raised))
 
-readGroup :: HTTP.Manager -> Ecosystem -> LoadedEntry -> String -> Limits -> IO Benchmark
+readGroup :: HTTP.Manager -> EcosystemBench -> LoadedEntry -> String -> Limits -> IO Benchmark
 readGroup manager ecosystem (package, raw, info, _) label limits = do
     client <- metadataClient manager ecosystem limits
     (key, _) <- maybe (assertFailure "cold reads: empty capture projection") pure (Map.lookupMax (infoVersions info))
     let name = cpPackage package
-        version = mkVersion ecosystem key
+        version = mkVersion (ebEcosystem ecosystem) key
         full = fetchFullManifest client name
         selected = fetchVersionMetadata client name version
         cap = maxMetadataBytes limits
@@ -142,14 +137,10 @@ sameDocument left right = case (snd npmPacked left, snd npmPacked right) of
     (Just expected, Just actual) -> expected == actual
     _ -> snd npmCached left == snd npmCached right && snd pypiSimpleCached left == snd pypiSimpleCached right
 
-metadataClient :: HTTP.Manager -> Ecosystem -> Limits -> IO MetadataClient
+metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
 metadataClient manager ecosystem limits = do
-    base <- expectRight (mkRegistryUrl (originUrl ecosystem))
-    makeReads <- case ecosystem of
-        Npm -> pure newNpmMetadataReads
-        PyPI -> pure newPyPIMetadataReads
-        RubyGems -> assertFailure "cold reads: RubyGems has no metadata reader"
-    pure (privateMetadataClient (makeReads passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits manager base Nothing)))
+    base <- expectRight (mkRegistryUrl (originUrl (ebEcosystem ecosystem)))
+    pure (privateMetadataClient (ecosystemMetadataReads (metadataRead (ebMetadata ecosystem)) passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) (perCallerOrigin limits manager base Nothing)))
 
 originUrl :: Ecosystem -> Text
 originUrl = \case

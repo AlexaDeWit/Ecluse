@@ -21,7 +21,7 @@ import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, newNpmMetadataReads, npmChargeFactors)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
@@ -41,10 +41,9 @@ npmAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataNewReads = newNpmMetadataReads
+                { metadataRead = npmRead
                 , metadataAssemble = assembleMergedDocument
                 , metadataSerialise = serialiseMergedDocument
-                , metadataFetchManifest = fetchNpmManifest
                 , metadataChargeFactors = npmChargeFactors
                 }
         , adapterArtifact =

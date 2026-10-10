@@ -33,11 +33,9 @@ import Ecluse.Core.Package.Hash (
     sriAlgorithm,
  )
 
-import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, pypiCorpusPackages)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), captureTexts, corpusPackages, pypiCorpusPackages)
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts)
+import Ecluse.Test.Registry.JsonStream (sameTexts)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -253,16 +251,11 @@ viaDecoder alg value
 firstDifferences :: [(HashAlg, Text)] -> [(HashAlg, Text)]
 firstDifferences = take 5 . filter (\(alg, value) -> mkHash alg value /= viaDecoder alg value)
 
--- Every entry of the capture must hold at least the given count of digests, so a field the parser misses fails the test.
 -- Each digest is read as every algorithm, whole and as the components 'mkSriHashes' splits it into.
 agreesOnCapture :: Int -> J.Parser [Text] -> CorpusPackage -> Spec
 agreesOnCapture fewest digestsOf package =
     it ("over every digest of the capture " <> cpPath package) $ do
-        bytes <- readFileBS (cpPath package)
-        streamed <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) digestsOf (\held entry -> Right (entry : held)) [] [bytes])
-        entries <- expectRight (streamValue streamed)
-        entries `shouldSatisfy` (not . null)
-        take 5 (filter ((< fewest) . length) entries) `shouldBe` []
+        entries <- captureTexts fewest digestsOf package
         firstDifferences [(alg, reading) | digest <- concat entries, reading <- ordNub (digest : words digest), alg <- universe] `shouldBe` []
 
 -- One list for each release of an npm packument (@dist.shasum@, @dist.integrity@) and for each file of a

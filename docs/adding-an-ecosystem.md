@@ -41,8 +41,9 @@ for the new ecosystem before you call its reads done.
 ## The read, end to end
 
 A full read streams the response body through a chain of small steps, and each step owns one
-concern. Keep that shape in a new ecosystem. Add a concern over the body's bytes, such as a charge
-or a digest, as its own step on the chunk source. Never add it as a flag inside the walk.
+concern. One read driver, `Ecluse.Core.Registry.Metadata.Fetch`, composes that chain for every
+ecosystem. Add a concern over the body's bytes, such as a charge or a digest, as its own step on
+the chunk source in the driver. Never add it as a flag inside a walk.
 [Incremental npm extraction](architecture/registry-model.md#incremental-npm-extraction) describes
 the chunking, the source digest and the body limit.
 
@@ -59,11 +60,29 @@ flowchart TD
     enforce --> manifest["Manifest, for the cache and the rules"]
 ```
 
-`fetchNpmManifest` in `Ecluse.Core.Registry.Npm.Metadata` shows the composition, and
-`fetchPyPIManifest` follows it. The pipeline sets the charge for each chunk from the adapter's
-charge factors, so a full read only passes its chunks through
-`chargedRead (ocChargeFullRead origin)`. A selected read runs the same walk without `chargedRead`
-and `digestingRead`, so it pays no charge per byte.
+The driver owns the exchange, both spans, the error mapping, the charge, the digest and the
+`Manifest`, so a new ecosystem writes none of them. The driver also computes the body limit and keys
+a table afresh for each read. It hands both to the ecosystem's walk, and the walk applies them. A new
+ecosystem supplies one `EcosystemRead`, as `npmRead` and `pypiRead` do, and its adapter holds that
+value in `metadataRead`.
+
+| Step | Written by |
+|---|---|
+| The request for a package's document | The ecosystem: `erRequest`. The driver seals it, so no read follows a redirect |
+| The exchange and its progress floor, the fetch span, the error mapping | The driver |
+| The charge and the digest for each chunk of a full read | The driver |
+| The body limit, a table keyed afresh for the read, the decode span | The driver. It builds the table from the ecosystem's `erUniqueFields`, and hands the limit and the table to the walk |
+| The walk that keeps every entry, and the walk that keeps one version | The ecosystem: `erWalkFull`, `erWalkSelected`. Each applies the limit and the table it is handed, as `readJsonWalk` does |
+| The finish of each walk, which also enforces artifact locations | The ecosystem: `erFinishFull`, `erFinishSelected` |
+| The `Manifest`, with the source's size and digest | The driver |
+
+The pipeline sets the charge for each chunk from the adapter's charge factors, and the driver pays
+it through `chargedRead`. A selected read runs through the same driver without `chargedRead` and
+`digestingRead`, so it pays no charge per byte.
+
+`fetchManifest` and `fetchVersion` read from an origin. `readManifest` and `readVersion` are the
+same reads over any `Body`, so a harness that holds a document's bytes runs the production read
+with fixed chunks in place of a socket.
 
 ## Apply the techniques in this order
 
@@ -130,8 +149,8 @@ to one read holds one copy of each, and every release that repeats one shares it
 the table and the key it draws for each read.
 
 - [`Ecluse.Core.Registry.Json.Intern`](../core/src/Ecluse/Core/Registry/Json/Intern.hs) holds the
-  table. Create one for each read with `newInternTable <$> newTableKey <*> pure uniqueFields`, as
-  `readNpmPackument` does, and let it go when the read ends.
+  table. The read driver creates one for each read, under a key it draws for that read, and hands
+  it to the ecosystem's walk. The table goes when the read ends.
 - Read each kept release in `Share` mode. `readShape` then finds each key and string in the table
   by the bytes the lexer read, before it builds any text. It takes every key from the table, so a
   document with thousands of releases holds each field name once.
@@ -156,7 +175,7 @@ is a candidate for the same treatment.
 
 Some checks run for every artifact, but most of their inputs depend only on the document. Derive
 those inputs once per read, and do the per-artifact part only where it can change the answer. A new
-ecosystem's reads get this for artifact locations by calling `enforceArtifactLocations` and
+ecosystem's finishes get this for artifact locations by calling `enforceArtifactLocations` and
 `enforceArtifactLocationsOf` in `Ecluse.Core.Package.Filter`.
 
 - [`Ecluse.Core.Package.Filter.Internal`](../core/src/Ecluse/Core/Package/Filter/Internal.hs)
@@ -342,6 +361,8 @@ a read:
 
 | Job | Shared definition |
 |---|---|
+| The exchange, spans, table key, charge, digest and `Manifest` of a read | `Ecluse.Core.Registry.Metadata.Fetch` |
 | Reported-name checks and stream error mapping | `Ecluse.Core.Registry.Metadata.Projection`, `Ecluse.Core.Registry.WireSupport` |
+| Decoding a publish time | `parsePublishTime` in `Ecluse.Core.Registry.WireSupport` |
 | Replaying a merge plan, rebasing artifact URLs, the name gate | `Ecluse.Core.Registry.ServedDocument` |
 | Caching, metrics and failure logs around the reads | `Ecluse.Core.Server.Metadata` |
