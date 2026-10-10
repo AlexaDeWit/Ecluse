@@ -17,14 +17,14 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (infoVersions)
+import Ecluse.Core.Package (PackageName, infoVersions)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
+import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
 import Ecluse.Core.Security (defaultLimits)
@@ -87,7 +87,7 @@ pypiBench =
         , ebUpstream = pypiCaptureUpstream
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
-        , ebDecode = \name raw -> ordNub . mapMaybe (fmap fcVersionKey . fileCoordinate name . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
+        , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         , ebRead = readPyPIHeld defaultLimits
         , ebSelective = projectPyPIVersion defaultLimits
@@ -105,6 +105,10 @@ pypiBench =
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
         }
+
+-- The release keys the files name, in the order met, read through the memo a full read keeps.
+pypiReleaseKeys :: PackageName -> [IndexFile] -> [Text]
+pypiReleaseKeys name = ordNub . mapMaybe (fmap fcVersionKey) . snd . mapAccumL (\memo file -> swap (readCoordinate memo (ifFilename file))) (filenameMemo name)
 
 readDocument :: (Value -> CachedDoc) -> ByteString -> Either Text CachedDoc
 readDocument inject = fmap inject . first toText . eitherDecodeStrict
