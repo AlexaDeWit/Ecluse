@@ -68,6 +68,8 @@ observability endpoints. The [`docs/architecture/`](docs/architecture.md) docume
 Écluse publishes to GitHub Container Registry and nowhere else: `ghcr.io/alexadewit/ecluse`,
 one immutable tag per version, no `latest`. Pin a deployment by digest and verify what you
 pin ([Verifying the image](#verifying-the-image)).
+The amd64 image needs a processor with AVX2 and BMI2
+([Deploying Écluse](https://ecluse-proxy.com/docs/deployment/#the-image-and-its-roles)).
 [Release and supply-chain operations](docs/architecture/release-supply-chain.md#releases-and-container-image)
 covers the publish flow.
 
