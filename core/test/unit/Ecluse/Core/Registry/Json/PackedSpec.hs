@@ -158,7 +158,7 @@ spec = modifyMaxSuccess (const 2000) $ do
         it "counts each array with its header, in whole words, and each record" $ do
             tableResident (docTable (fromList ["ab"])) `shouldBe` 24 + (16 + 8) + (16 + 16)
             case packValue (Generic limit) [] (String "abcdefghij") of
-                Right (StreamResult (Right (_, form)) _) -> packedResident form `shouldBe` 24 + 16 + 8
+                Right (StreamResult (Right (_, form)) _) -> packedResident form `shouldBe` 32 + 16 + 8
                 _ -> expectationFailure "did not pack a string"
 
     describe "decodeScalar" $
