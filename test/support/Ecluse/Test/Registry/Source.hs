@@ -16,7 +16,7 @@ import Foreign.Ptr (castPtr)
 import System.Mem (performMajorGC)
 import System.Timeout (timeout)
 import Test.Hspec (Expectation, shouldReturn)
-import UnliftIO.Async (cancel, waitCatch, withAsync)
+import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, waitCatch, withAsync)
 import UnliftIO.Exception (finally)
 
 -- | Attach the finaliser to the backing allocation, which every retained slice keeps alive.
@@ -51,11 +51,11 @@ assertCancelledRead run = do
     let next =
             atomicModifyIORef' initial (False,) >>= \case
                 True -> pure "["
-                False -> putMVar entered () >> takeMVar blocked
-    withAsync (run next `finally` putMVar released ()) $ \worker -> do
+                False -> (putMVar entered () >> takeMVar blocked) `finally` putMVar released ()
+    withAsync (run next) $ \worker -> do
         timeout releaseTimeoutMicros (takeMVar entered) `shouldReturn` Just ()
         cancel worker
-        isLeft <$> waitCatch worker `shouldReturn` True
+        either fromException (const Nothing) <$> waitCatch worker `shouldReturn` Just AsyncCancelled
         timeout releaseTimeoutMicros (takeMVar released) `shouldReturn` Just ()
 
 sourcePaddingBytes, heldProbeMicros, releaseTimeoutMicros :: Int

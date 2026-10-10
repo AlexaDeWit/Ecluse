@@ -1,6 +1,6 @@
 100644 842ab35997453531d3ac84fdc3d736e355eff790 0	vendor/json-stream/Data/JsonStream/CLexType.hs
 100644 0640a9c2f327971ba7c91c022e096d9d29f01b20 0	vendor/json-stream/Data/JsonStream/CLexer.hs
-100644 69780c55ff0cc5d9eab2febe19b8cd5c6e6ca3a4 0	vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
+100644 9110e44abb85396f3e0731b5b0def64477f56bb6 0	vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
 100644 248e6a7247c077792e1511af8a752e2d7e05b5b5 0	vendor/json-stream/Data/JsonStream/Number.hs
 100644 d971d15a5f32c0e8be9429f097bd9f50aa158be4 0	vendor/json-stream/Data/JsonStream/Parser.hs
 100644 b11becac71e712df519ba9311b7acd77b8bd4bd8 0	vendor/json-stream/Data/JsonStream/TokenParser.hs
@@ -13,7 +13,7 @@
 100644 f89f118312744a35fb44b3d341e06f79de17e7b1 0	vendor/json-stream/json-stream.freeze
 3ad120836fdda0b134e428826a3650703c198ca2c6afc2beffab59a52722e82b  vendor/json-stream/Data/JsonStream/CLexType.hs
 fe2640fe3d6c7d15fd09fcda65c104b9b20c50dbd742b156065aea60f22a5df9  vendor/json-stream/Data/JsonStream/CLexer.hs
-c89eb1d5cbe39168e7adb3cf6af0ed4d73ad091dc1c8aac02661351442894d75  vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
+f5737c5e3bc1247d5fab6a74d9e4e9b87c438d86c41195957d093882dfb454a2  vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
 afeb7d410e0101c9b1de024b4157d9640392851692622f7e169588f368017079  vendor/json-stream/Data/JsonStream/Number.hs
 6de036de3703097a4eabff8a97f3bc8f352101617e1df3909790ec4839a2db63  vendor/json-stream/Data/JsonStream/Parser.hs
 145a68fbc5f9de4cf06a09ae42adbd8d723ae502aeab177ff7776bdfab379ac5  vendor/json-stream/Data/JsonStream/TokenParser.hs

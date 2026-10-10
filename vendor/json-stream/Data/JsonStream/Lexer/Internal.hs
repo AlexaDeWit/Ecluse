@@ -78,7 +78,9 @@ base bytes = skipSpace
     !size = BS.length bytes
     skipSpace !offset numbers
         | offset >= size = More (Cursor bytes offset Base numbers)
-        | otherwise = dispatch offset (BS.index bytes offset) numbers
+        | otherwise = case BS.indexMaybe bytes offset of
+            Just byte -> dispatch offset byte numbers
+            Nothing -> Failed
     dispatch offset byte numbers
         | emptyByte byte = skipSpace (offset + 1) numbers
         | byte == openBrace = emitted ObjectBegin
