@@ -33,13 +33,12 @@ module Ecluse.Core.Package.Integrity (
 
     -- * Version admissibility
     VersionIntegrity (..),
-    classifyArtifacts,
+    classifyDigests,
 ) where
 
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
 
-import Ecluse.Core.Package (Artifact (artHashes))
 import Ecluse.Core.Package.Hash (
     Hash,
     HashAlg (SHA256, SRI),
@@ -125,30 +124,30 @@ instance IntegrityFloor MinTrustedIntegrity where
 meetsFloor :: (IntegrityFloor floor) => floor -> HashAlg -> Bool
 meetsFloor flr alg = alg >= floorAlgorithm flr
 
--- | Whether a version carries any digest that clears an admission floor.
+-- | Whether a set of digests holds any that clears an admission floor.
 data VersionIntegrity
     = -- | At least one digest asserts an algorithm at or above the floor: admissible.
       MeetsFloor
     | -- | Digests are present, but none clears the floor.
       BelowFloor
-    | -- | No artifact carries a digest.
+    | -- | The set holds no digest.
       NoIntegrity
     deriving stock (Eq, Show)
 
-{- | Partition a version's artifacts against a floor, so a release loses the files that clear no
-tamper-evident fingerprint rather than disappearing whole.
+{- | Keep the files whose own digests clear a floor, so a release loses the files that clear no
+tamper-evident fingerprint rather than disappearing whole. With none kept, all their digests say why.
 -}
-partitionByFloor :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)
-partitionByFloor flr arts = case nonEmpty (NE.filter (artifactMeetsFloor flr) arts) of
+partitionByFloor :: (IntegrityFloor floor) => floor -> (file -> [Hash]) -> NonEmpty file -> Either VersionIntegrity (NonEmpty file)
+partitionByFloor flr digestsOf files = case nonEmpty (NE.filter (digestsMeetFloor flr . digestsOf) files) of
     Just survivors -> Right survivors
-    Nothing -> Left (classifyArtifacts flr arts)
+    Nothing -> Left (classifyDigests flr (foldMap digestsOf files))
 
-artifactMeetsFloor :: (IntegrityFloor floor) => floor -> Artifact -> Bool
-artifactMeetsFloor flr art = any (maybe False (meetsFloor flr) . assertedAlg) (artHashes art)
+digestsMeetFloor :: (IntegrityFloor floor) => floor -> [Hash] -> Bool
+digestsMeetFloor flr = any (maybe False (meetsFloor flr) . assertedAlg)
 
--- | Distinguish a floor-clearing version from one carrying only weak digests or none.
-classifyArtifacts :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> VersionIntegrity
-classifyArtifacts flr arts
-    | any (artifactMeetsFloor flr) arts = MeetsFloor
-    | all (null . artHashes) arts = NoIntegrity
+-- | Read one file's digests against a floor, or the digests of every file of a version together.
+classifyDigests :: (IntegrityFloor floor) => floor -> [Hash] -> VersionIntegrity
+classifyDigests flr digests
+    | digestsMeetFloor flr digests = MeetsFloor
+    | null digests = NoIntegrity
     | otherwise = BelowFloor

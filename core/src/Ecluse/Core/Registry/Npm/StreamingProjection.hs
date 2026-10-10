@@ -158,9 +158,10 @@ finishParts limits requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
     reported <- validateReportedName projectName (projectedName acc)
     _ <- projectionResult (checkNameAgreement requested reported ())
-    info <- first MetadataBoundExceeded (checkArtifactCount limits package)
-    pure (info, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
+    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
+    pure (package, NpmParts (fromMaybe Null (projectedName acc)) (projectedBookkeeping acc))
   where
+    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
     versions = Map.mapMaybe rightToMaybe (projectedVersions acc)
     times = Map.mapMaybe rightToMaybe (projectedTimes acc)
     tags = Map.mapMaybe rightToMaybe (projectedTags acc)

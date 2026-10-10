@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Security.LimitsSpec (spec) where
 
-import Ecluse.Test.Security.Limits (checkNestingDepth, checkVersionCount)
+import Ecluse.Test.Security.Limits (checkDocumentArtifacts, checkNestingDepth, checkVersionCount)
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -196,25 +196,29 @@ artifactCountSpec :: Spec
 artifactCountSpec = describe "checkArtifactCount" $ do
     let limits = defaultLimits{maxArtifactCount = 4}
 
+    it "passes a count at the ceiling and refuses the next, naming the count and the ceiling" $ do
+        checkArtifactCount limits 4 `shouldBe` Right ()
+        checkArtifactCount limits 5 `shouldBe` Left (TooManyArtifacts 5 4)
+
     it "passes a document within the artifact budget (returns it unchanged)" $
-        checkArtifactCount limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
+        checkDocumentArtifacts limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
 
     it "rejects a document with too many artifacts, fail-closed" $
-        checkArtifactCount limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
+        checkDocumentArtifacts limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
 
     it "passes a document carrying no versions at all" $
-        checkArtifactCount limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
+        checkDocumentArtifacts limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
 
     it "counts every version's artifacts, not the versions" $ do
         -- Two versions carrying three artifacts each breach a budget the version count clears.
         let fanned = fanOutTo 3 (packumentWith 2)
-        checkArtifactCount limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
+        checkDocumentArtifacts limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
         checkVersionCount limits fanned `shouldBe` Right fanned
 
     it "leaves a one-artifact-per-version document at its version count" $
         -- npm publishes one tarball per version, so the two bounds coincide there and this
         -- one never refuses a document the version bound has not refused already.
-        checkArtifactCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
+        checkDocumentArtifacts defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
 
     modifyMaxSuccess (const 500) $
         it "refuses the documents its reference refuses, naming the same count and ceiling" $
@@ -347,7 +351,7 @@ nestArray n
 
 -- The production artifact ceiling over a typed document.
 artifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
-artifactCeiling limits document = void (checkArtifactCount limits document)
+artifactCeiling limits document = checkArtifactCount limits (sum (length . pkgArtifacts <$> infoVersions document))
 
 -- The artifact ceiling as it read a typed document, held as the reference for the production ceiling.
 referenceArtifactCeiling :: Limits -> PackageInfo -> Either LimitError ()

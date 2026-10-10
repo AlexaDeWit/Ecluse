@@ -177,7 +177,7 @@ publicArtifactGate details admission skipped = case admission of
     -- The carried floor-checked digest set is the worker's ingest concern. The serve path
     -- streams without rehashing, so it has no consumer for the set.
     AdmissionAdmit _ artifact _ -> Admitted artifact skipped
-    AdmissionDenied decision -> Refused (serveDecisionOf details decision)
+    AdmissionDenied decision -> Refused (serveDecisionOf (completeEvidence details) decision)
     AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision (completeEvidence details) decision))
     AdmissionFileAbsent -> Refused versionAbsent
     AdmissionBelowFloor -> Refused integrityBelowFloor

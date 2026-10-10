@@ -26,7 +26,7 @@ import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
  )
-import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyArtifacts)
+import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyDigests)
 import Ecluse.Core.Rules (
     PreparedRule,
     Resilience (Resilience),
@@ -272,7 +272,7 @@ versionWith raw = detailsWith leftpadName (npmVersion raw)
 
 -- Whether the download gate's floor admits one file: its test of the artifact a request selects.
 gateFloorAdmits :: Artifact -> Bool
-gateFloorAdmits artifact = classifyArtifacts defaultMinIntegrity (artifact :| []) == MeetsFloor
+gateFloorAdmits artifact = classifyDigests defaultMinIntegrity (artHashes artifact) == MeetsFloor
 
 {- | A document of up to four versions, some of them tagged. An npm document carries one file a
 version and a PyPI document up to three, each with a strong digest, a weak one, both, or none.

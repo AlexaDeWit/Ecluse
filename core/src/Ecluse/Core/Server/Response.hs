@@ -41,13 +41,12 @@ import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
 import Network.HTTP.Types (Status, status200, status403, status404, status500, status503)
 
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     RetryAfter (..),
+    RuleEvidence,
     Transience (..),
-    completeEvidence,
  )
 
 {- | The outcome of deciding a request: serve it, or refuse it with a reason. Every client-facing
@@ -97,17 +96,17 @@ data RejectReason
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
-{- | Project a rules 'Decision' into a serve outcome. An 'Undecidable' decision rejects as
-'Unavailable', which is fail-closed: a version no rule could vet is never admitted.
+{- | Project a rules 'Decision' into a serve outcome that names the version its evidence names. An
+'Undecidable' decision rejects as 'Unavailable': a version no rule could vet is never admitted.
 -}
-serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
-serveDecisionOf pd decision = case decision of
+serveDecisionOf :: RuleEvidence -> Decision -> ServeDecision
+serveDecisionOf evidence decision = case decision of
     Admitted{} -> Admit
     Blocked name _ _ -> Reject (rejectAs (ByPolicy (RuleName name)))
     BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
     Undecidable transience _ -> rejectUnavailable transience rendered
   where
-    rendered = renderDecision (completeEvidence pd) decision
+    rendered = renderDecision evidence decision
 
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason rendered

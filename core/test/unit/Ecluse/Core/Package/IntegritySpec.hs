@@ -27,7 +27,7 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     assertedAlg,
-    classifyArtifacts,
+    classifyDigests,
     meetsFloor,
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -157,7 +157,7 @@ spec = do
         it "rejects an unknown algorithm name" $
             parseMinTrustedIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
 
-    describe "meetsFloor / classifyArtifacts over the trusted floor (one ranking backs both floors)" $ do
+    describe "meetsFloor / classifyDigests over the trusted floor (one ranking backs both floors)" $ do
         it "a loosened (SHA-1) trusted floor admits SHA-1 but not MD5" $ do
             sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
             meetsFloor sha1Floor SHA1 `shouldBe` True
@@ -169,20 +169,15 @@ spec = do
 
         it "classifies a SHA-1-only version BelowFloor by default, MeetsFloor when loosened to SHA-1" $ do
             sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
-            classifyArtifacts defaultMinTrustedIntegrity (artifactWith [unsafeHash SHA1 validSha1] :| [])
-                `shouldBe` BelowFloor
-            classifyArtifacts sha1Floor (artifactWith [unsafeHash SHA1 validSha1] :| [])
-                `shouldBe` MeetsFloor
+            classifyDigests defaultMinTrustedIntegrity [unsafeHash SHA1 validSha1] `shouldBe` BelowFloor
+            classifyDigests sha1Floor [unsafeHash SHA1 validSha1] `shouldBe` MeetsFloor
 
         it "a hashless version is NoIntegrity under any trusted floor (no digest can meet a floor)" $ do
             sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
-            classifyArtifacts defaultMinTrustedIntegrity (artifactWith [] :| []) `shouldBe` NoIntegrity
-            classifyArtifacts sha1Floor (artifactWith [] :| []) `shouldBe` NoIntegrity
+            classifyDigests defaultMinTrustedIntegrity [] `shouldBe` NoIntegrity
+            classifyDigests sha1Floor [] `shouldBe` NoIntegrity
 
-    describe "classifyArtifacts" $ do
-        let classify floorAlg hs =
-                classifyArtifacts floorAlg (artifactWith hs :| [])
-
+    describe "classifyDigests" $ do
         for_
             -- sha384 is the middle SRI algorithm: it clears the SHA-256 floor as sha512 does.
             [ ("a plain SHA-256 digest", [unsafeHash SHA256 validSha256], MeetsFloor)
@@ -194,16 +189,16 @@ spec = do
             ]
             $ \(label, hashes, expected) ->
                 it ("reads " <> label <> " as " <> show expected <> " at the default floor") $
-                    classify defaultMinIntegrity hashes `shouldBe` expected
+                    classifyDigests defaultMinIntegrity hashes `shouldBe` expected
 
         it "BelowFloor for a SHA-256-only version when the floor is SHA-512" $ do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)
-            classify sha512Floor [unsafeHash SHA256 validSha256] `shouldBe` BelowFloor
+            classifyDigests sha512Floor [unsafeHash SHA256 validSha256] `shouldBe` BelowFloor
 
     describe "partitionByFloor (the per-artifact gate)" $ do
         let named filename hs = (artifactWith hs){artFilename = filename}
             partition :: NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Text)
-            partition arts = fmap (fmap artFilename) (partitionByFloor defaultMinIntegrity arts)
+            partition arts = fmap (fmap artFilename) (partitionByFloor defaultMinIntegrity artHashes arts)
 
         it "keeps the files that clear the floor and drops the ones that do not" $
             -- A release loses only the files that cannot be tied to a tamper-evident
@@ -260,10 +255,10 @@ spec = do
 
 -- The production floor over a version's typed artifacts: the files it keeps, and its verdict.
 floorPartition :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)
-floorPartition = partitionByFloor
+floorPartition flr = partitionByFloor flr artHashes
 
 floorVerdict :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> VersionIntegrity
-floorVerdict = classifyArtifacts
+floorVerdict flr = classifyDigests flr . foldMap artHashes
 
 -- The floor as it read a version's typed artifacts, held as the reference for the production floor.
 referencePartition :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)

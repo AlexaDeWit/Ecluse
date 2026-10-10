@@ -40,7 +40,7 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (MeetsFloor),
     assertedAlg,
     authoritativeDigest,
-    classifyArtifacts,
+    classifyDigests,
     mkMinIntegrity,
     partitionByFloor,
  )
@@ -226,7 +226,7 @@ spec = do
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 joinedDetails = detailsWith hashes
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts joinedDetails) `shouldBe` MeetsFloor
+            classifyDigests defaultMinIntegrity hashes `shouldBe` MeetsFloor
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") joinedDetails
             case admission of
                 AdmissionAdmit _ _ admitted -> do
@@ -248,7 +248,7 @@ spec = do
             -- The closed gap: the floor admitted SHA-256 while the worker's
             -- hand-rolled vocabulary could not verify it, stranding the version.
             let hashes = [unsafeHash SHA256 (Package.hexSha256Of sampleBytes)]
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts (detailsWith hashes)) `shouldBe` MeetsFloor
+            classifyDigests defaultMinIntegrity hashes `shouldBe` MeetsFloor
             verifyIntegrity (NE.fromList hashes) sampleBytes `shouldBe` IntegrityVerified
 
     describe "the differential property: floor-admitted implies worker-verifiable" $
@@ -262,7 +262,7 @@ spec = do
                     Just ne -> do
                         annotateShow (map hashValue hashes)
                         let admittedAtFloor =
-                                classifyArtifacts defaultMinIntegrity (one (artifactWith hashes)) == MeetsFloor
+                                classifyDigests defaultMinIntegrity hashes == MeetsFloor
                         -- The parity direction the mirror depends on: anything the
                         -- serve-side floor admits, the worker's byte gate can prove.
                         when admittedAtFloor $ do
@@ -279,7 +279,7 @@ spec = do
                     kinds <- forAll (Gen.nonEmpty (Range.constant 1 3) (Gen.list (Range.constant 0 2) (Gen.element digestKinds)))
                     let files = NE.zipWith (\name digests -> (artifactWith (map (hashOfKind sampleBytes) digests)){artFilename = name}) fileNames kinds
                         details = (detailsWith []){pkgArtifacts = files}
-                        listed = either (const []) (map artFilename . toList) (partitionByFloor minIntegrity files)
+                        listed = either (const []) (map artFilename . toList) (partitionByFloor minIntegrity artHashes files)
                     cover 20 "one file, the npm shape" (length files == 1)
                     cover 20 "several files, the PyPI shape" (length files > 1)
                     cover 10 "a version the listing keeps whole" (length listed == length files)

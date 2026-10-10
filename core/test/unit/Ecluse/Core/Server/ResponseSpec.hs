@@ -26,6 +26,7 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowScope, DenyInstallTimeExecution),
+    RuleEvidence,
     completeEvidence,
     identityEvidence,
  )
@@ -56,18 +57,19 @@ now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
 
 -- | Decide a built-in policy through the one engine ('prepare' then 'evalRules') at 'now'.
-decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
-decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared (completeEvidence pd)
+decideAt :: [PrecededRule] -> RuleEvidence -> IO Decision
+decideAt prs evidence = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared evidence
 
-{- | A scoped package version published @ageDays@ before 'now'. The caller supplies the
-install-code signal, so a case can exercise a deny rule.
+{- | The evidence of a scoped package version published @ageDays@ before 'now'. The caller supplies
+the install-code signal, so a case can exercise a deny rule.
 -}
-pkg :: Text -> Integer -> CodeExecSignal -> PackageDetails
+pkg :: Text -> Integer -> CodeExecSignal -> RuleEvidence
 pkg scope ageDays code =
-    (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
-        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgInstallCode = code
-        }
+    completeEvidence
+        (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
+            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+            , pkgInstallCode = code
+            }
 
 -- | A status as its code and reason phrase, since 'Status' equality compares the code alone.
 codeAndReason :: Status -> (Int, ByteString)
@@ -254,7 +256,7 @@ spec = do
 
 -- The serve outcome of a decision for a typed version.
 refusalOf :: PackageDetails -> Decision -> ServeDecision
-refusalOf = serveDecisionOf
+refusalOf pd = serveDecisionOf (completeEvidence pd)
 
 -- The reason a decision refuses with, or none for an admission.
 refusalReason :: Decision -> Maybe RejectReason
@@ -278,12 +280,10 @@ data Policy
 
 decideUnder :: Policy -> PackageDetails -> IO Decision
 decideUnder policy pd = case policy of
-    NoRule -> decideAt [] pd
-    AllowsInternalScope -> decideAt [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
-    DeniesInstallCode -> decideAt installRule pd
-    InstallSignalUnread ->
-        prepare inertRuleDeps installRule >>= \prepared ->
-            evalRules (EvalContext now Nothing) prepared (identityEvidence (pkgName pd) (pkgVersion pd))
+    NoRule -> decideAt [] (completeEvidence pd)
+    AllowsInternalScope -> decideAt [atDefaultPrecedence (AllowScope (mkScope "internal"))] (completeEvidence pd)
+    DeniesInstallCode -> decideAt installRule (completeEvidence pd)
+    InstallSignalUnread -> decideAt installRule (identityEvidence (pkgName pd) (pkgVersion pd))
   where
     installRule = [atDefaultPrecedence DenyInstallTimeExecution]
 

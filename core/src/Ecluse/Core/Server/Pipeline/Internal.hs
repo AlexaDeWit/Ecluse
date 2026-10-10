@@ -45,6 +45,7 @@ import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddConte
 
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
+    Artifact (artHashes),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoVersions),
     PackageName,
@@ -107,7 +108,7 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
     partitioned = Map.map admitArtifacts (infoVersions info)
 
     admitArtifacts details =
-        (\survivors -> details{pkgArtifacts = survivors}) <$> partitionByFloor floorSpec (pkgArtifacts details)
+        (\survivors -> details{pkgArtifacts = survivors}) <$> partitionByFloor floorSpec artHashes (pkgArtifacts details)
 
     admissible :: Map Text PackageDetails
     admissible = Map.mapMaybe rightToMaybe partitioned
