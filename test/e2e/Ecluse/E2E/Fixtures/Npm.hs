@@ -29,9 +29,17 @@ module Ecluse.E2E.Fixtures.Npm (
     corpusRevokedPkg,
     tamperPkg,
     headPkg,
+    publicOnlyPkg,
     telemetryPkg,
     telemetryDdPkg,
     telemetryPrivatePkg,
+    graphRootPkg,
+    graphDepPkg,
+    graphLeafPkg,
+    graphPeerPkg,
+    graphPackages,
+    graphExecutable,
+    graphExport,
     fixturePackages,
     buildFixtures,
     artifactFile,
@@ -44,9 +52,10 @@ import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (proc, runProcess_)
 
+import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 
@@ -66,10 +75,12 @@ data PkgSpec = PkgSpec
     -- ^ Further fields on every version object, beside the identity, @dist@, and script fields.
     , psDistFields :: [Pair]
     -- ^ Further @dist@ fields on every version object, beside the location and integrity.
+    , psFiles :: [(FilePath, Text)]
+    -- ^ The source files every version archives beside its @package.json@, by path in the package.
     }
     deriving stock (Eq, Show)
 
--- | One backdated version with no install script or altered artifact bytes.
+-- | One backdated version with no install script or altered artifact bytes, and an empty export.
 defaultPkgSpec :: Text -> PkgSpec
 defaultPkgSpec name =
     PkgSpec
@@ -80,6 +91,7 @@ defaultPkgSpec name =
         , psTamper = False
         , psVersionFields = []
         , psDistFields = []
+        , psFiles = [("index.js", "module.exports = {};\n")]
         }
 
 -- | Every version the packument publishes, newest first.
@@ -131,7 +143,7 @@ mirrorRegistryFields =
 mirrorRegistryDistFields :: [Pair]
 mirrorRegistryDistFields =
     [ "signatures" .= [object ["keyid" .= ("SHA256:fixture" :: Text), "sig" .= ("MEUCIQ" :: Text)]]
-    , "attestations" .= object ["url" .= ("https://upstream/-/npm/v1/attestations/e2e-mirror@1.0.0" :: Text)]
+    , "attestations" .= object ["url" .= (stubUrl NpmPublic <> "-/npm/v1/attestations/e2e-mirror@1.0.0")]
     ]
 
 {- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
@@ -147,6 +159,10 @@ tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 -- | A package reserved for @HEAD@ probes, so no install can seed its mirror entry.
 headPkg :: PkgSpec
 headPkg = defaultPkgSpec "e2e-head"
+
+-- | A package whose artifact no case requests, so no worker mirrors it and only public holds it.
+publicOnlyPkg :: PkgSpec
+publicOnlyPkg = defaultPkgSpec "e2e-public-only"
 
 -- | A package reserved for deletion by the Dredger scenario.
 dredgerPkg :: PkgSpec
@@ -200,6 +216,74 @@ telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 telemetryPrivatePkg :: PkgSpec
 telemetryPrivatePkg = defaultPkgSpec "e2e-telemetry-private"
 
+{- | The root of the graph the mirror-only install resolves: a dependency with a dependency of its
+own, a peer, and an executable. Loading its module loads every package of the graph.
+-}
+graphRootPkg :: PkgSpec
+graphRootPkg =
+    root{psFiles = psFiles root <> [("bin/report.js", reportScript)]}
+  where
+    root =
+        graphPkg
+            "e2e-graph-root"
+            [ "bin" .= object [Key.fromText graphExecutable .= ("bin/report.js" :: Text)]
+            , "dependencies" .= object [compatibleWith graphDepPkg]
+            , "peerDependencies" .= object [compatibleWith graphPeerPkg]
+            , "engines" .= object ["node" .= (">=18" :: Text)]
+            , "license" .= ("MIT" :: Text)
+            ]
+            [("dependency", graphDepPkg), ("peer", graphPeerPkg)]
+    reportScript = "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(require(\"..\")) + \"\\n\");\n"
+
+-- | The root's ordinary dependency, which depends on 'graphLeafPkg' in turn.
+graphDepPkg :: PkgSpec
+graphDepPkg =
+    graphPkg "e2e-graph-dep" ["dependencies" .= object [compatibleWith graphLeafPkg]] [("transitive", graphLeafPkg)]
+
+-- | The package only 'graphDepPkg' depends on.
+graphLeafPkg :: PkgSpec
+graphLeafPkg = graphPkg "e2e-graph-leaf" [] []
+
+-- | The root's peer dependency, which npm installs beside the root.
+graphPeerPkg :: PkgSpec
+graphPeerPkg = graphPkg "e2e-graph-peer" [] []
+
+-- | Every package of the graph, the root first.
+graphPackages :: [PkgSpec]
+graphPackages = [graphRootPkg, graphDepPkg, graphLeafPkg, graphPeerPkg]
+
+-- | The name npm links the root's executable under, which is not the root's own name.
+graphExecutable :: Text
+graphExecutable = "e2e-graph-report"
+
+{- | What the root's module exports once the whole graph loads, which is also what its executable
+prints: each package's name, nested under the field that loaded it.
+-}
+graphExport :: Value
+graphExport =
+    object
+        [ "name" .= psName graphRootPkg
+        , "dependency" .= object ["name" .= psName graphDepPkg, "transitive" .= named graphLeafPkg]
+        , "peer" .= named graphPeerPkg
+        ]
+  where
+    named pkg = object ["name" .= psName pkg]
+
+-- One package of the graph. Its module exports its own name beside the export of each package it
+-- loads, by field, so a missing package fails the load of everything above it.
+graphPkg :: Text -> [Pair] -> [(Text, PkgSpec)] -> PkgSpec
+graphPkg name fields loads =
+    (defaultPkgSpec name)
+        { psVersionFields = ("main" .= ("index.js" :: Text)) : fields
+        , psFiles = [("index.js", "module.exports = { name: " <> show name <> foldMap loaded loads <> " };\n")]
+        }
+  where
+    loaded (field, pkg) = ", " <> field <> ": require(" <> show (psName pkg) <> ")"
+
+-- A dependency entry on any release compatible with the package's one version.
+compatibleWith :: PkgSpec -> Pair
+compatibleWith pkg = Key.fromText (psName pkg) .= ("^" <> psVersion pkg)
+
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
 fixturePackages =
@@ -209,6 +293,7 @@ fixturePackages =
     , latestPkg
     , tamperPkg
     , headPkg
+    , publicOnlyPkg
     , dredgerPkg
     , dredgerKeepPkg
     , dredgerDryRunPkg
@@ -222,6 +307,7 @@ fixturePackages =
     , telemetryDdPkg
     , telemetryPrivatePkg
     ]
+        <> graphPackages
 
 {- | Where the stub serves one version's artifact, under the root 'buildFixtures' writes into.
 A case that withholds an artifact brackets this path.
@@ -254,7 +340,9 @@ buildArtifact root spec version = do
     createDirectoryIfMissing True workPkg
     -- The artifact's package.json (npm tarballs root everything under `package/`).
     writeFileLBS (workPkg </> "package.json") (Aeson.encode (tarballPackageJson spec version))
-    writeFileLBS (workPkg </> "index.js") "module.exports = {};\n"
+    for_ (psFiles spec) $ \(path, source) -> do
+        createDirectoryIfMissing True (takeDirectory (workPkg </> path))
+        writeFileText (workPkg </> path) source
     -- Deterministic gzip (fixed mtime) so a rebuild yields identical bytes.
     runProcess_ $
         proc
@@ -314,7 +402,7 @@ packument spec digests =
 
     tarballUrl :: Text -> Text
     tarballUrl version =
-        "https://upstream/"
+        stubUrl NpmPublic
             <> psName spec
             <> "/-/"
             <> psName spec

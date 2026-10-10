@@ -421,7 +421,10 @@ client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
 - Écluse blocks a rules-denied package and never mirrors it,
-- an installed package round-trips server → worker to the private mirror,
+- the worker mirrors an installed package, and a new project then installs it through a second
+  proxy while both public upstreams are down,
+- a dependency graph installed from the mirror alone leaves the tree that the same install left
+  when public served it,
 - mirroring an older version after a newer one leaves the mirror's `dist-tags.latest` alone,
 - a tampered artifact fails the integrity gate and never publishes,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
@@ -442,10 +445,11 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 
 | Module | Cases |
 |---|---|
-| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case. |
+| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: policy, artifact protocol responses, supported mirror metadata, upstream-latest preservation, and publish refusal with no publication target. One proxy serves every case. |
+| `Ecluse.E2E.Npm.MirrorInstallE2ESpec` | The install the mirror alone serves, compared with the same install served from public. Described below. |
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
-| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
+| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 
@@ -460,6 +464,49 @@ Each module boots its own data plane, so no case reads store state that another 
 module opens with `whenE2EAvailable`, which runs its cases when the tier's prerequisites are present
 and reports one `pending` case otherwise. The harness and the fixtures sit in
 `Ecluse.E2E.Harness.*` and `Ecluse.E2E.Fixtures.*`.
+
+One nginx container, the stub, answers for every registry name the product dials: both public
+upstreams, the mirror's front, a private upstream that holds nothing, and the private cache of the
+Dredger groups. A case that needs one of them to fail holds a fault on that route alone:
+
+| Control | Fault |
+|---|---|
+| `withPublicUpstreamsDown` | The stub closes every connection to the npm and PyPI public upstreams with no answer. The other routes keep answering, so only a private store can supply a client. |
+| `withPrivateCacheDeletesRefused` | The private cache refuses every write method and still answers reads. |
+
+Each control rewrites the stub's configuration, reloads nginx, and returns once the stub's log shows
+that every worker of the old configuration has stopped accepting connections. It restores the
+routes the same way when its action ends. A case confirms a public outage through its own proxy
+before it relies on one: `npmPublicReachable` asks that proxy for a package that only the public
+upstream holds. The stub's access log records the route, method, status, and path of every request
+it finishes, and `stubReadsNow` reads it back, so a case can name the store that answered a client.
+
+`Ecluse.E2E.Npm.MirrorInstallE2ESpec` holds the install the mirror alone serves against a control.
+Its fixture graph is a root with a dependency that has a dependency of its own, a peer dependency,
+and an executable, and each package's module exports a known value. A new project installs the root
+by exact version through the public gate, and the worker mirrors every version. A second proxy and
+a second new project then install the same root while both public upstreams are down. Each project
+starts with an empty npm cache, no lockfile, and no `node_modules`, and the first proxy stops before
+the outage begins, so nothing a client or a proxy kept can supply the second install. The cases
+compare what a client can see of the two installs:
+
+- `npm ls` reports the same dependency, transitive, and peer edges,
+- the root's module loads every package's export,
+- npm links the root's executable, and the executable prints the root's export,
+- the stub's log shows that the mirror answered every packument and artifact read and that the
+  public routes answered nothing, and the lockfile names the proxy as the source of every package,
+- `node_modules`, the lockfile, and the manifest are identical after normalising only
+  `packages.*.resolved` source URLs in `package-lock.json` and `node_modules/.package-lock.json`.
+  A failure prints each differing path, entry kind, executable permission, and exact file bytes.
+
+A last case boots a proxy whose private upstream holds nothing, and the same install fails under
+the same outage. The tree comparison detects differences in installed paths, file bytes,
+executable permissions, link targets, and every byte outside those lockfile source URL values.
+It detects metadata loss only when that loss changes this fixture's installed tree or lockfile.
+It does not prove that every metadata field survives, even when the fixture declares that field.
+Every ecosystem with a mirror write owes this scenario. PyPI has no mirror write, so it has no
+counterpart. Its one case under the outage is the failing `pip` install of a mount with no private
+store, where the stub's log shows that the PyPI public route answered nothing.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,
@@ -1195,6 +1242,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
+| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end tests](#end-to-end-tests-ecluse-e2e-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
 | Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `captureSource`, `readSource` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `peakLimits`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each regression limit below its charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | Seven of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The limit check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without peak limits skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads, and `Ecluse.Test.Corpus.Merge` cuts, an ecosystem they do not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |

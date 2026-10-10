@@ -28,6 +28,7 @@ import UnliftIO (handleAny)
 
 import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportBase)
 import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
+import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
 import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
@@ -89,13 +90,13 @@ publishAdvisoryGeneration gdp generation =
 -- Both feeds, pointed at the stub's copy of this generation and the shared EPSS slice.
 advisorySourceEnv :: CorpusVersion -> [(Text, Text)]
 advisorySourceEnv generation =
-    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", stubUrl (advisoryExportBase generation))
-    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", stubUrl advisoryEpssPath)
+    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", publicUrl (advisoryExportBase generation))
+    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", publicUrl advisoryEpssPath)
     ]
 
 -- The public-upstream stub serves the advisory exports beside the package fixtures.
-stubUrl :: Text -> Text
-stubUrl path = "https://upstream/" <> path
+publicUrl :: Text -> Text
+publicUrl path = stubUrl NpmPublic <> path
 
 {- Pilot's own environment. It declares one mount because a Pilot with no ecosystem has nothing to
 compile and refuses to boot, and that mount makes server.publicUrl required. -}
@@ -104,7 +105,7 @@ pilotEnv =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     ]

@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm mount on the base topology, driven by a real @npm@ client: install and policy, the
-artifact route's protocol answers, the mirror round trip through the worker, and the @405@ that
-refuses a publish when no publication target is configured. Every case shares one proxy, and the
-mirrored-metadata case reads the store entry the lifecycle case before it wrote.
+{- | npm policy, artifact protocol responses, and mirror metadata on the base topology.
+Fresh public and mirror-only installation parity lives in "Ecluse.E2E.Npm.MirrorInstallE2ESpec".
 -}
 module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
 
@@ -15,7 +13,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
-    allowPkg,
     denyPkg,
     headPkg,
     latestPkg,
@@ -38,9 +35,6 @@ scenarios :: SpecWith GlobalDataPlane
 scenarios = do
     describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withE2E $ do
         describe "public surface -- install and policy" $ do
-            it "installs an allow-listed package end to end" $ \e2e -> do
-                void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
-
             it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
                 void $ npmInstall e2e (psName denyPkg) >>= shouldFail
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
@@ -70,24 +64,12 @@ scenarios = do
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
-        describe "server↔worker -- the full mirror lifecycle" $ do
-            it "mirrors a package served from public, then installs it from the mirror with public down" $ \e2e -> do
-                let name = psName mirrorPkg
-                    ver = psVersion mirrorPkg
-                presentBefore <- verdaccioHasVersionNow e2e name ver -- (1) a miss in the private mirror
-                presentBefore `shouldBe` False
-                withNpmProject e2e $ \proj -> do
-                    void $ npmInstallIn proj name >>= shouldSucceed -- (2,3) served from public, writes the lockfile
-                    mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
-                    mirrored `shouldBe` True
-                    -- The lockfile pins its dependency too, so that mirror must land before public goes down.
-                    verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
-                    void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
+        describe "server↔worker -- mirror metadata" $ do
             it "mirrors supported installation metadata and omits unknown and public-registry fields" $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
-                -- The mirror lifecycle case above seeds the store. This reads the version object
-                -- back straight from the store, so the assertion sees what the mirror holds.
+                verdaccioHasVersionNow e2e name ver `shouldReturn` False
+                void $ npmInstall e2e (name <> "@" <> ver) >>= shouldSucceedThroughProxy e2e
                 verdaccioHasVersion e2e name ver `shouldReturn` True
                 stored <- verdaccioVersionObject e2e name ver
                 stored `shouldSatisfy` isJust
@@ -96,7 +78,7 @@ scenarios = do
                         (field, KeyMap.lookup field version) `shouldBe` (field, Just value)
                     forM_ mirrorOmittedAuthorFields $ \(field, _) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
-                    KeyMap.lookup "author" version `shouldBe` Just (String ("See https://upstream/" <> name))
+                    KeyMap.lookup "author" version `shouldBe` Just (String ("See " <> stubUrl NpmPublic <> name))
                     forM_ mirrorRegistryFields $ \(field, _) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
                     KeyMap.lookup "name" version `shouldBe` Just (String name)
@@ -119,8 +101,8 @@ scenarios = do
                     verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
                     verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
                 withNpmProject e2e $ \proj -> do
-                    -- The mirror's own tag is asserted on the store above, because one stub fronts
-                    -- every registry name and cannot be paused for the public leg alone.
+                    -- The mirror's own tag is asserted on the store above, because the proxy never
+                    -- consults a private document's `latest`, so no install can show it.
                     void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
                     installedVersion proj name `shouldReturn` Just "2.0.0"
         describe "first-party publish -- opt-in posture" $
