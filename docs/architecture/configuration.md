@@ -167,7 +167,7 @@ last row is the read limit that the residency tier holds a single document's rea
 
 | Figure | npm | PyPI |
 |---|---|---|
-| Highest peak among the realistic listings | 0.95 (express, publish order) | 3.07 (boto3, single document) |
+| Highest peak among the realistic listings | 0.96 (express, publish order) | 3.07 (boto3, single document) |
 | Margin figure | 1.2 | 3.9 |
 | Highest peak among all the listings | 1.39 (express, oldest heavy base) | 3.07 (boto3, single document) |
 | All-shape figure | 1.4 | 3.1 |
@@ -175,7 +175,7 @@ last row is the read limit that the residency tier holds a single document's rea
 | Highest peak among single documents | 0.89 (react) | 3.07 (boto3) |
 | Read limit | 1.0 | 3.5 |
 
-A capture under one step can peak above the per-byte charge, up to 1.69 for npm (lodash) and 4.01
+A capture under one step can peak above the per-byte charge, up to 1.67 for npm (lodash) and 4.01
 for PyPI (requests). What the meter holds for one such read, whole steps and at least the 1 MiB
 entry step, covers every capture the tier measures. A request for a name that is not first-party
 reads its private and public documents at once on one ticket, so two such reads can exceed what
