@@ -25,6 +25,7 @@ module Ecluse.Core.Package.Merge (
     planFrom,
 ) where
 
+import Data.Functor.Classes (liftEq)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
@@ -116,7 +117,7 @@ integrityHashes (IntegrityFingerprint hs) = hs
 data Candidate = Candidate
     { candProvenance :: Provenance
     , candSourceId :: SourceId
-    , -- Lazy: ranks are unique, so a fingerprint is forced only for a colliding version.
+    , -- Lazy: forced only for a colliding version whose copies spell their digests differently.
       candFingerprint :: ~IntegrityFingerprint
     , candDetails :: PackageDetails
     , candSnapshot :: ContentDigest
@@ -225,7 +226,6 @@ contribute prov (Snapshot digest info) =
         , mergeName = Just (infoName info)
         }
   where
-    -- Local SourceId 0. The Semigroup offset re-indexes it to the input position.
     here = (prov, 0)
     publicLatest = case prov of
         GatedSource -> Map.lookup "latest" (infoDistTags info)
@@ -278,16 +278,15 @@ admittedEntries candidate =
 divergencesOf :: Map Text (Set Candidate) -> Set Divergence
 divergencesOf versions =
     Set.fromList
-        [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
+        [ Divergence{divVersion = key, divWinning = candFingerprint winner, divLosing = candFingerprint loser}
         | (key, cs) <- Map.toList versions
-        , Set.size cs > 1
-        , let winner = winnerOf cs
-        , let win = candFingerprint winner
+        , Set.size cs > 1 -- A version with one copy stops here, with nothing built: the common serve.
+        , Just (winner, losers) <- [Set.minView cs]
         , let winningDigests = digestsByKey (candDetails winner)
-        , candidate <- Set.toList cs
-        , let lose = candFingerprint candidate
-        , lose /= win
-        , contradicts winningDigests (digestsByKey (candDetails candidate))
+        , loser <- Set.toList losers
+        , not (digestsSpelledAlike (candDetails winner) (candDetails loser))
+        , candFingerprint loser /= candFingerprint winner
+        , contradicts winningDigests (digestsByKey (candDetails loser))
         ]
 
 -- The accumulator has already resolved same-tag collisions by provenance, so a carried tag never
@@ -317,6 +316,13 @@ integrityDivergences trusted public =
         , let lose = fingerprint publicDetails
         , contradicts (digestsByKey privateDetails) (digestsByKey publicDetails)
         ]
+
+-- Each file's name and hashes as written and in listed order, so a reordered copy falls through to
+-- both tests. Alike copies have equal fingerprints, which the first test would reject at more cost.
+digestsSpelledAlike :: PackageDetails -> PackageDetails -> Bool
+digestsSpelledAlike a b = liftEq sameFile (pkgArtifacts a) (pkgArtifacts b)
+  where
+    sameFile x y = artFilename x == artFilename y && artHashes x == artHashes y
 
 -- Diagnostics retain the existing digest spelling, sorted order, and duplicate entries.
 fingerprint :: PackageDetails -> IntegrityFingerprint

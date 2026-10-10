@@ -45,7 +45,8 @@ concurrency:
   cancel-in-progress: false
 
 # Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN.
+# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
+# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
 permissions:
   contents: read
 
@@ -124,11 +125,34 @@ jobs:
           # its own boot sizes its capabilities from its cgroup.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
+      # Off main only: the runs on main are the baseline, and each pod shape takes the
+      # newest run that measured it. The GC-thrash probe has no scenario table to compare. A
+      # missing baseline renders as "no baseline". Both steps continue on error and stop after
+      # five minutes, so neither can fail or stall the job.
+      - name: Fetch the latest results on main for this pod shape
+        if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POD_SHAPE: ${{ matrix.pod-shape }}
+        run: bash scripts/perf-baseline.sh bench-load.yml "bench-load-results-$RUNNER_ARCH-$POD_SHAPE-" "$RUNNER_TEMP/perf-baseline"
+
+      - name: Compare successes and latency with main
+        if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          set -eo pipefail
+          nix develop .#ci --command task against-main KIND=load BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=bench-load-results.md | tee against-main.md
+
       # Preserve partial output when the harness fails.
       - name: Upload this run's results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
-          path: bench-load-results.md
+          path: |
+            bench-load-results.md
+            against-main.md
           if-no-files-found: warn
