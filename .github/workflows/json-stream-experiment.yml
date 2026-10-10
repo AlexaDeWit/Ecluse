@@ -10,13 +10,15 @@ permissions:
 
 jobs:
   upstream:
-    name: Upstream fixtures and token fold
+    name: Pinned PyPI parser comparison
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 45
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       BENCH_REPO: ${{ github.workspace }}
       BENCH_BASELINE_SHA: 2b1abcc04412ef8017ba6b645f6da8f8166c52c7
+      BENCH_OWNED_SHA: 53698eac7d10b32dc5be42eff04ae784a5a4c77a
+      BENCH_NATIVE1_SHA: e4c5b2b0edbdaa7b62c772d605c83bc16e5f8256
       BENCH_CANDIDATE_SHA: ${{ github.sha }}
       BENCH_REPEATS: "5"
       BENCH_SECONDS: "0.3"
@@ -26,8 +28,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fetch the pinned baseline
-        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA"
+      - name: Fetch the pinned comparisons
+        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA" "$BENCH_OWNED_SHA" "$BENCH_NATIVE1_SHA"
 
       - name: Set up toolchain
         id: toolchain
@@ -40,7 +42,7 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      - name: Compare the three pinned source variants
+      - name: Compare the five pinned source variants
         env:
           BENCH_OUTPUT: ${{ runner.temp }}/json-stream-comparison
         run: nix develop .#ci --command task --taskfile scripts/experiments/json-stream/Taskfile.yml all

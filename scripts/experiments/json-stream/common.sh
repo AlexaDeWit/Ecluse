@@ -5,7 +5,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-readonly variants=(original baseline candidate)
+readonly variants=(original baseline owned native1 candidate)
 
 bundle_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${BENCH_OUTPUT:?Set BENCH_OUTPUT to a fresh absolute output directory}"

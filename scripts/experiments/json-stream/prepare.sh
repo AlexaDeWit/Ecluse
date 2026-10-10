@@ -4,17 +4,20 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 : "${BENCH_REPO:?Set BENCH_REPO to the project checkout}"
 : "${BENCH_BASELINE_SHA:?Set BENCH_BASELINE_SHA to the full baseline commit}"
 : "${BENCH_CANDIDATE_SHA:?Set BENCH_CANDIDATE_SHA to the full candidate commit}"
+: "${BENCH_OWNED_SHA:?Set BENCH_OWNED_SHA to the C-backed reader commit}"
+: "${BENCH_NATIVE1_SHA:?Set BENCH_NATIVE1_SHA to the first native commit}"
 readonly input_paths=(cabal.project cabal.project.freeze flake.nix flake.lock)
 readonly upstream_url=https://github.com/ondrap/json-stream.git
 readonly upstream_revision=537a43a775e64f50dc63c373193323de98619799
 readonly input_copy_count=2
 
-for revision in "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"; do
+for revision in "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA" "$BENCH_OWNED_SHA" "$BENCH_NATIVE1_SHA"; do
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || fail "Expected a full commit SHA: $revision"
   git -C "$BENCH_REPO" cat-file -e "$revision^{commit}"
 done
@@ -56,13 +59,22 @@ for variant in "${variants[@]}"; do
   native=false
   owned=false
   if [[ "$variant" != original ]]; then
-    if [[ "$variant" == baseline ]]; then revision=$BENCH_BASELINE_SHA; else revision=$BENCH_CANDIDATE_SHA; fi
+    case "$variant" in
+      baseline) revision=$BENCH_BASELINE_SHA ;;
+      owned) revision=$BENCH_OWNED_SHA ;;
+      native1) revision=$BENCH_NATIVE1_SHA ;;
+      candidate) revision=$BENCH_CANDIDATE_SHA ;;
+      *) fail "Unknown variant: $variant" ;;
+    esac
     # Both paths were created by this invocation from the pinned upstream archive.
     rm -rf -- "$target/Data" "$target/c_lib"
     git -C "$BENCH_REPO" archive "$revision" vendor/json-stream |
       tar -xf - --strip-components=2 -C "$target"
     git -C "$BENCH_REPO" show "$revision:ecluse.cabal" > "$artifact_dir/inputs/$variant.ecluse.cabal"
   fi
+  while IFS=$'\t' read -r fixture source; do
+    git -C "$BENCH_REPO" show "$BENCH_BASELINE_SHA:$source" > "$target/benchmarks/json-data/$fixture"
+  done < <(jq -r '.[] | [.path, .source] | @tsv' "$bundle_dir/fixtures.json")
   [[ ! -f "$target/Data/JsonStream/Lexer/Internal.hs" ]] || native=true
   [[ ! -f "$target/Data/JsonStream/TokenReader.hs" ]] || owned=true
   if [[ "$native" == true ]]; then

@@ -4,11 +4,11 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 unset GHCRTS
 readonly fold_chunks=(1024 32768)
-readonly selected_chunks=(1024 32768 65536)
 readonly full_chunk=65536
 readonly calibration_passes=3
 readonly maximum_passes=200000
@@ -26,7 +26,6 @@ while IFS= read -r fixture; do
   printf 'full\t%s\t%s\naeson\t%s\t%s\n' "$fixture" "$full_chunk" "$fixture" "$full_chunk" >> "$artifact_dir/workloads.tsv"
   for chunk in "${fold_chunks[@]}"; do printf 'fold\t%s\t%s\n' "$fixture" "$chunk" >> "$artifact_dir/workloads.tsv"; done
 done < <(jq -r '.[].path' "$artifact_dir/fixtures.json")
-for chunk in "${selected_chunks[@]}"; do printf 'selected\tbuffer-builder.json\t%s\n' "$chunk" >> "$artifact_dir/workloads.tsv"; done
 
 run_sample() {
   local variant=$1 kind=$2 fixture=$3 chunk=$4 count=$5 phase=$6 repetition=$7 row=$8
