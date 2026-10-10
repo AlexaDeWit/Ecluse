@@ -175,8 +175,8 @@ deniesOnAdvisories = \case
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
-{- | Whether a rule can only refuse or abstain. A rule that cannot admit may be left out of an
-evaluation without that evaluation admitting a version the whole policy refuses.
+{- | Whether a rule can only refuse or abstain. Removing only such rules cannot make evaluation
+refuse a version the whole policy admits on the same evidence.
 -}
 ruleDenies :: Rule -> Bool
 ruleDenies = \case
