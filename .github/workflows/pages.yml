@@ -18,16 +18,10 @@ on:
   # rather than waiting for the nightly run.
   workflow_dispatch:
 
-# Serialise Pages deploys: only one runs at a time. The `pages` group collapses any
-# runs queued behind the in-flight one down to the latest, so a burst of merges still
-# publishes once. The cancel-in-progress setting is deliberately false. A deploy that
-# reaches its final step has already registered a deployment with the Pages backend.
-# Cancelling it mid-flight can leave that deployment wedged, and the backend then
-# rejects the next push with "Deployment failed, try again later" until it clears.
-# Letting the in-flight production deploy finish avoids that, and it matches GitHub's
-# own Pages starter workflow. Pages publishes atomically, so a superseded build leaves
-# the prior deployment live until the newer one completes. There is no half-applied
-# state, and the cost is at most one extra build's worth of CI.
+# Serialise Pages deploys and keep only the latest queued run. Let the active
+# deploy finish: cancellation after registration can wedge the Pages backend
+# and block later deploys. Atomic publication keeps the prior deployment live
+# until its replacement completes. This matches the Pages starter workflow.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -142,9 +136,9 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         continue-on-error: true
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
       - name: Deploy to GitHub Pages (retry once on a transient backend failure)
         if: steps.deploy.outcome == 'failure'
         id: deploy_retry
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
