@@ -61,6 +61,8 @@ readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk l
 -- | The production Simple-index walk over a caller's intern table.
 pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Tokens st -> Step st PyPIProjection
 pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
+-- Expose the state type at callers so GHC specialises the tree walk.
+{-# INLINE pypiIndexWalk #-}
 
 finishPyPIFull :: Limits -> PackageName -> Text -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, CachedDoc)
 finishPyPIFull limits name base streamed =
