@@ -5,7 +5,7 @@
 -- | The token cursor against json-stream's lazy token list: the same tokens, waits and failures.
 module Data.JsonStream.TokenReaderSpec (spec) where
 
-import Control.Monad.ST (ST, runST)
+import Control.Monad.ST (ST, runST, stToIO)
 import Data.ByteString qualified as BS
 import Data.JsonStream.CLexer (tokenParser)
 import Data.JsonStream.TokenParser qualified as List
@@ -46,14 +46,30 @@ spec = describe "nextToken" $ do
             result = cursorEvents chunks
         result `shouldBe` listEvents chunks
 
-    it "matches repeated lexer batches within one input piece" $ do
+    it "reads dense tokens within one input piece" $ do
         let chunks = ["[" <> BS.intercalate "," (replicate 12000 "0") <> "]"]
         cursorEvents chunks `shouldBe` listEvents chunks
 
-    it "grows the result buffer after reusing smaller batches" $ do
+    it "reads alternating small and large pieces" $ do
         let array count = "[" <> BS.intercalate "," (replicate count "0") <> "]"
             chunks = map array [1, 1, 20, 1, 40, 1, 400, 100, 10000, 5, 16000]
         cursorEvents chunks `shouldBe` listEvents chunks
+
+    it "reads only the selected slice of a larger backing value" $ do
+        let prefix = "invalid-prefix"
+            body = "[\"visible\",42]"
+            suffix = "invalid-suffix"
+            backing = prefix <> body <> suffix
+            selected = BS.take (BS.length body) (BS.drop (BS.length prefix) backing)
+        original <- BS.useAsCStringLen backing BS.packCStringLen
+        tokens <- stToIO newTokenReader
+        observed <- stToIO (supplyTokens tokens selected >> readEvents tokens [])
+        unchanged <- BS.useAsCStringLen backing BS.packCStringLen
+        observed `shouldBe` dropInitialWait (listEvents [body])
+        unchanged `shouldBe` original
+
+    it "keeps a lexical failure terminal across later input" $ do
+        failuresAfter (`supplyTokens` "@") `shouldBe` terminalFailures
 
     it "keeps interleaved readers independent" $ do
         let left = ["[\"left", " side\",12", "3]"]
@@ -82,19 +98,23 @@ spec = describe "nextToken" $ do
         result `shouldBe` [PartialResult ArrayBegin, PartialResult (JInteger 1), PartialResult ArrayEnd]
 
     it "refuses a piece above the reader's buffer bound" $ do
-        let result = runST $ do
-                tokens <- newTokenReader
-                supplyTokens tokens (BS.replicate (maxChunkBytes + 1) 32)
-                nextToken tokens
-        result `shouldBe` TokFailed
+        failuresAfter (\tokens -> supplyTokens tokens (BS.replicate (maxChunkBytes + 1) 32)) `shouldBe` terminalFailures
 
     it "refuses input supplied over unread results" $ do
-        let result = runST $ do
-                tokens <- newTokenReader
-                supplyTokens tokens "[1,2,3]"
-                supplyTokens tokens "[4,5,6]"
-                nextToken tokens
-        result `shouldBe` TokFailed
+        failuresAfter (\tokens -> supplyTokens tokens "[1,2,3]" >> supplyTokens tokens "[4,5,6]") `shouldBe` terminalFailures
+
+failuresAfter :: (forall st. Tokens st -> ST st ()) -> [Next]
+failuresAfter prepare = runST $ do
+    tokens <- newTokenReader
+    prepare tokens
+    firstResult <- nextToken tokens
+    supplyTokens tokens "[]"
+    resupplied <- nextToken tokens
+    repeated <- nextToken tokens
+    pure [firstResult, resupplied, repeated]
+
+terminalFailures :: [Next]
+terminalFailures = [TokFailed, TokFailed, TokFailed]
 
 dropInitialWait :: [Event] -> [Event]
 dropInitialWait = \case

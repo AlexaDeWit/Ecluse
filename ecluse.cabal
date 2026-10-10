@@ -28,6 +28,8 @@ extra-source-files:
   bench/corpus/pins.json
   bench/load/floors.json
   core/test/unit/fixtures/npm/*.json
+  core/test/unit/fixtures/json-stream/*.json
+  core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
@@ -105,9 +107,9 @@ library ecluse-json-stream
     Data.JsonStream.TokenReader
     Data.JsonStream.Unescape
 
-  c-sources:        vendor/json-stream/c_lib/lexer.c
-  include-dirs:     vendor/json-stream/c_lib
-  includes:         lexer.h
+  other-modules:
+    Data.JsonStream.Lexer.Internal
+    Data.JsonStream.Number
   default-language: Haskell2010
   ghc-options:      -Wall -fwarn-incomplete-uni-patterns
   build-depends:
@@ -730,6 +732,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.Source
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
     Ecluse.Test.Registry.Metadata.Fetch
@@ -834,6 +837,7 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
+    Data.JsonStream.CLexerSpec
     Data.JsonStream.TokenReaderSpec
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
@@ -1384,6 +1388,7 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Data.JsonStream.TokenReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec

@@ -19,6 +19,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions))
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, walkJsonChunks)
+import Ecluse.Test.Registry.Source (assertCancelledRead)
 
 -- | Each primitive matches its json-stream parser on generated bodies, and the driver keeps its contract.
 spec :: Spec
@@ -44,6 +45,9 @@ spec = do
         it "fails an exhausted budget with the nesting limit after skipping the value" $
             readOutcome (walkJsonChunks bound (`withElement` tooDeep) ["[[1]]"] :: Either LimitError (StreamResult ()))
                 `shouldBe` Right (5, Left True)
+
+    it "propagates cancellation after consuming a partial value and closes its source" $
+        assertCancelledRead (readJsonWalk (MetadataBodyLimit 1024) skipOne)
 
     describe "properties" $
         modifyMaxSuccess (const 1000) $ do

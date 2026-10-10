@@ -1,7 +1,8 @@
 # Vendored json-stream
 
-This folder holds json-stream's library modules and C lexer, which Écluse builds as its internal
-`ecluse-json-stream` library.
+This folder holds json-stream's library modules. Écluse builds its internal
+`ecluse-json-stream` library with a Haskell lexer. The C sources remain as a reference for the
+lexer fuzz harness. They are not linked into this library.
 
 - Upstream: <https://github.com/ondrap/json-stream>, published on Hackage as
   [json-stream](https://hackage.haskell.org/package/json-stream). Its author is Ondrej Palkovsky.

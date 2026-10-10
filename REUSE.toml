@@ -8,7 +8,7 @@ SPDX-FileCopyrightText = "2015 Ondrej Palkovsky"
 SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
-path = ["vendor/json-stream/Data/JsonStream/CLexer.hs", "vendor/json-stream/Data/JsonStream/TokenReader.hs", "vendor/json-stream/c_lib/lexer.c"]
+path = ["vendor/json-stream/Data/JsonStream/CLexer.hs", "vendor/json-stream/Data/JsonStream/TokenReader.hs", "vendor/json-stream/Data/JsonStream/Lexer/Internal.hs", "vendor/json-stream/Data/JsonStream/Number.hs", "vendor/json-stream/Data/JsonStream/CLexType.hs", "vendor/json-stream/c_lib/lexer.c"]
 SPDX-FileCopyrightText = ["2015 Ondrej Palkovsky", "2026 Alexandra de Wit"]
 SPDX-License-Identifier = "BSD-3-Clause"
 

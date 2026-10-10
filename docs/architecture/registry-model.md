@@ -480,9 +480,9 @@ before reading members. Skipped structures pass token by token without decoding.
 ceilings bound other work. The walk accepts and refuses the same input as json-stream's parser
 combinators, and it builds each retained object once from its members.
 
-The token reader owns one reusable lexer result buffer, with capacity bounded by the 32 KiB input
-piece limit (`20 + chunkBytes / 5` result records). Its effectful cursor advances in the walk's
-state thread. Tokens keep immutable input slices, never views of the overwritten result records. Its key accumulator stops at about 64 KiB and its number accumulator at about
+The Haskell token reader scans immutable input slices, with no C lexer or foreign result buffer.
+Its effectful cursor advances in the walk's state thread. Returned tokens retain their input
+slices through later reads. Its key accumulator stops at about 64 KiB and its number accumulator at about
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
 read, in a table keyed by SipHash-1-3 under a key drawn for that read. When the read ends, it seals
