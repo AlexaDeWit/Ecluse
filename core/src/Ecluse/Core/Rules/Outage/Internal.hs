@@ -37,14 +37,15 @@ import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime)
 
-import Ecluse.Core.Rules.Types (Reason)
+import Ecluse.Core.Rules.Render (renderInability)
+import Ecluse.Core.Rules.Types (Inability)
 
 -- | What one rule's evaluation established about the source it reads.
 data SourceHealth
     = -- | The named rule consulted its source, whatever it decided.
       SourceAnswered Text
     | -- | The named rule could not consult its source, for the given cause.
-      SourceUnavailable Text Reason
+      SourceUnavailable Text Inability
     deriving stock (Eq, Show)
 
 {- | One source's outage state. It carries no 'Eq': comparing two states walks the logged record,
@@ -62,8 +63,10 @@ data OngoingOutage = OngoingOutage
     { ooSince :: UTCTime
     , ooReportedAt :: UTCTime
     -- ^ When the last report went out, which paces the reminder.
-    , ooRules :: Map Text Reason
-    -- ^ Each rule still unable to consult the source, with its latest cause. Never empty.
+    , ooRules :: Map Text Text
+    {- ^ Each rule still unable to consult the source, with its latest cause as the report prints
+    it. A cause whose sentence is unchanged is no change, so it costs no write. Never empty.
+    -}
     , ooLogged :: LoggedAdmissions
     -- ^ The admissions the gate has logged evidence for during this outage.
     }
@@ -122,9 +125,9 @@ admissionLogged cap ident = \case
 -- | The three reports an outage produces, each carrying what an operator line needs.
 data OutageReport
     = -- | The first rule unable to consult the source, with its cause.
-      OutageBegan Text Reason
+      OutageBegan Text Text
     | -- | The reminder: when the outage began, and every rule still unable, with its latest cause.
-      OutageContinues UTCTime (Map Text Reason)
+      OutageContinues UTCTime (Map Text Text)
     | -- | Every rule consults the source again. Carries when the outage began.
       OutageRecovered UTCTime
     deriving stock (Eq, Show)
@@ -143,20 +146,22 @@ continues reports again only once @period@ has passed since its last report.
 stepOutage :: NominalDiffTime -> UTCTime -> SourceHealth -> OutageState -> OutageStep
 stepOutage period now health current = case (current, health) of
     (Healthy, SourceAnswered _) -> unchanged
-    (Healthy, SourceUnavailable rule cause) ->
-        OutageStep (Outage (OngoingOutage now now (Map.singleton rule cause) noLoggedAdmissions)) True (Just (OutageBegan rule cause))
+    (Healthy, SourceUnavailable rule why) ->
+        let cause = renderInability why
+         in OutageStep (Outage (OngoingOutage now now (Map.singleton rule cause) noLoggedAdmissions)) True (Just (OutageBegan rule cause))
     (Outage ongoing, SourceAnswered rule)
         | not (Map.member rule (ooRules ongoing)) -> unchanged
         | Map.null rules -> OutageStep Healthy True (Just (OutageRecovered (ooSince ongoing)))
         | otherwise -> OutageStep (Outage ongoing{ooRules = rules}) True Nothing
       where
         rules = Map.delete rule (ooRules ongoing)
-    (Outage ongoing, SourceUnavailable rule cause)
+    (Outage ongoing, SourceUnavailable rule why)
         | diffUTCTime now (ooReportedAt ongoing) >= period ->
             OutageStep (Outage ongoing{ooReportedAt = now, ooRules = rules}) True (Just (OutageContinues (ooSince ongoing) rules))
         | Map.lookup rule (ooRules ongoing) == Just cause -> unchanged
         | otherwise -> OutageStep (Outage ongoing{ooRules = rules}) True Nothing
       where
+        cause = renderInability why
         rules = Map.insert rule cause (ooRules ongoing)
   where
     unchanged = OutageStep current False Nothing

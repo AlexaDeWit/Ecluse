@@ -49,6 +49,7 @@ import Ecluse.Core.Rules.Effectful (
     runResilient,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh), AdvisoryPublication (PublishedAt), assessAdvisoryAge)
+import Ecluse.Core.Rules.Render (renderInability, renderReason)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (fakeCveDb, fakeCveLookup)
 import Ecluse.Test.Rules (
@@ -63,6 +64,9 @@ import Ecluse.Test.Rules (
     mapPackageRead,
     mapResilience,
     packageRule,
+    remediation,
+    revocation,
+    sentences,
     servingRuleDeps,
     withInstallScripts,
  )
@@ -102,7 +106,7 @@ constRule name prec cfg align = mkRule name prec cfg align pass
 
 -- | A resilient advisory rule whose read always throws (its source is down).
 failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO PreparedRule
-failingRule name prec cfg align = mkRule name prec cfg align (throwIO TestSourceUnavailable) (NoDecision "unreached")
+failingRule name prec cfg align = mkRule name prec cfg align (throwIO TestSourceUnavailable) (NoDecision FixesNoAdvisory)
 
 -- | A built-in rule at a precedence, decided per version.
 pureAt :: Int -> Rule -> PreparedRule
@@ -131,9 +135,9 @@ and a fail-closed 'CannotVet'.
 genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
     Gen.element
-        [ Allow "vetted clean"
-        , Deny Nothing "known-bad version"
-        , CannotVet FailDeny "no advisory database loaded"
+        [ Allow remediation
+        , Deny Nothing revocation
+        , CannotVet FailDeny NoDatabaseLoaded
         ]
 
 -- | Count the calls an action makes, returning the action and the counter.
@@ -142,18 +146,37 @@ counting act = do
     calls <- newIORef 0
     pure (modifyIORef' calls (+ 1) *> act, calls)
 
--- | The fault the harness gives up with once its retries are spent.
-spentFault :: Text -> ReadFault
-spentFault = ReadFault (WillResolve Nothing) "the rule could not be evaluated"
+-- | The fault the harness gives up with once its retries are spent, with the given detail.
+spentFault :: Inability -> ReadFault
+spentFault = ReadFault (WillResolve Nothing) EvaluationFailed
 
 -- | Whether a read was given up after it threw, with the throw in the detail and not the reason.
 threwSpent :: Either ReadFault () -> Bool
 threwSpent = \case
-    Left fault -> fault{rfDetail = ""} == spentFault "" && "the rule threw: TestSourceUnavailable" `T.isPrefixOf` rfDetail fault
+    Left fault ->
+        (rfTransience fault, rfReason fault) == (WillResolve Nothing, EvaluationFailed)
+            && "the rule threw: TestSourceUnavailable" `T.isPrefixOf` renderInability (rfDetail fault)
     Right () -> False
 
 breakerOpenFault :: ReadFault
-breakerOpenFault = ReadFault (WillResolve Nothing) "the rule source circuit breaker is open" "the rule source circuit breaker is open"
+breakerOpenFault = ReadFault (WillResolve Nothing) SourceBreakerOpen SourceBreakerOpen
+
+-- | Expect the decision, and the sentences a reader sees for its reasons.
+shouldResolve :: IO Decision -> (Decision, [Text]) -> Expectation
+shouldResolve decided (decision, reasons) = do
+    actual <- decided
+    actual `shouldBe` decision
+    sentences actual `shouldBe` reasons
+
+-- | Expect every decision to be the given one, reading as the given sentences.
+shouldAllResolve :: [Decision] -> (Decision, [Text]) -> Expectation
+shouldAllResolve decisions (decision, reasons) = do
+    decisions `shouldSatisfy` all (== decision)
+    map sentences decisions `shouldSatisfy` all (== reasons)
+
+-- | The decision an advisory deny reaches on one affecting advisory.
+deniedBy :: Text -> Text -> AdvisoryScore -> Double -> Text -> Decision
+deniedBy rule etag score threshold advisory = Blocked rule (Just (DbEtag etag)) (AffectedBy score threshold (mkAdvisoryIds (advisory :| [])))
 
 spec :: Spec
 spec = do
@@ -178,7 +201,9 @@ harnessSpec = describe "runResilient, the harness around one read" $ do
 
     it "times out a hanging read and gives it up as a retryable fault" $ do
         res <- resilience fastConfig{ecTimeout = 5_000}
-        runResilient res (threadDelay 1_000_000) `shouldReturn` Left (spentFault "the attempt timed out")
+        outcome <- runResilient res (threadDelay 1_000_000)
+        outcome `shouldBe` Left (spentFault AttemptTimedOut)
+        first (renderInability . rfDetail) outcome `shouldBe` Left "the attempt timed out"
 
     it "retries a transiently failing read and succeeds within the budget" $ do
         attempts <- newIORef (0 :: Int)
@@ -207,7 +232,7 @@ harnessSpec = describe "runResilient, the harness around one read" $ do
         (faulting, attempts) <- counting (throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorIO") :: IO ())
         res <- resilience fastConfig{ecBreakerThreshold = 2}
         runResilient res faulting >>= \case
-            Left fault -> rfDetail fault `shouldSatisfy` T.isInfixOf "SQLite3 returned ErrorIO"
+            Left fault -> renderInability (rfDetail fault) `shouldSatisfy` T.isInfixOf "SQLite3 returned ErrorIO"
             Right () -> expectationFailure "expected the read to be given up"
         void (runResilient res faulting)
         runResilient res faulting `shouldReturn` Left breakerOpenFault
@@ -292,45 +317,50 @@ engineSpec = do
     describe "evalRules -- one engine over per-version and advisory rules" $ do
         it "never reads for a rule below a decisive per-version rule" $ do
             (down, readCount) <- counting (throwIO TestSourceUnavailable)
-            effLater <- mkRule "EffAfter" 200 fastConfig FailDeny down (NoDecision "unreached")
+            effLater <- mkRule "EffAfter" 200 fastConfig FailDeny down (NoDecision FixesNoAdvisory)
             decision <- evalRules ctx [effLater, pureAt 300 DenyInstallTimeExecution] (withInstallScripts (pkg Nothing 0))
             blockedBy decision `shouldBe` Just "DenyInstallTimeExecution"
             readIORef readCount `shouldReturn` 0
 
         it "an effectful deny outranks a lower per-version allow (boot order decides)" $ do
-            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing "known-bad version")
+            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing revocation)
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
         it "a lower-ranked effectful rule never displaces a higher per-version allow" $ do
             (reading, readCount) <- counting pass
-            rule <- mkRule "EffDeny" 100 fastConfig FailDeny reading (Deny Nothing "blocked")
+            rule <- mkRule "EffDeny" 100 fastConfig FailDeny reading (Deny Nothing revocation)
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             admittedBy decision `shouldBe` Just "AllowScope"
             readIORef readCount `shouldReturn` 0
 
         it "an effectful allow lifts a version the per-version rules would deny by default" $ do
-            rule <- constRule "EffAllow" 500 fastConfig FailNoDecision (Allow "remediates an advisory")
+            rule <- constRule "EffAllow" 500 fastConfig FailNoDecision (Allow remediation)
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg Nothing 0)
             admittedBy decision `shouldBe` Just "EffAllow"
 
     describe "evalRules -- deny-by-default with reasons in boot order" $ do
         it "collects each rule's own reason from the shared read, highest precedence first" $ do
-            high <- constRule "EffHigh" 300 fastConfig FailNoDecision (NoDecision "high no opinion")
-            mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision "mid no opinion")
+            high <- constRule "EffHigh" 300 fastConfig FailNoDecision (NoDecision (NotAffectedAtThreshold Cvss))
+            mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision (NotAffectedAtThreshold Epss))
             decision <- evalRules ctx [mid, pureAt 100 (AllowScope (mkScope "myorg")), high] (pkg Nothing 0)
-            decision `shouldBe` BlockedByDefault ["high no opinion", "mid no opinion", "scope is not the allow-listed @myorg"]
+            decision `shouldBe` BlockedByDefault [NotAffectedAtThreshold Cvss, NotAffectedAtThreshold Epss, ScopeNotAllowListed (mkScope "myorg")]
+            sentences decision
+                `shouldBe` [ "no advisory at or above the CVSS threshold affects this version"
+                           , "no advisory at or above the EPSS threshold affects this version"
+                           , "scope is not the allow-listed @myorg"
+                           ]
 
         it "names each rule on a shared fault, so the trail says which checks could not run" $ do
             high <- failingRule "EffHigh" 300 fastConfig FailNoDecision
-            mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision "mid no opinion")
+            mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision FixesNoAdvisory)
             decision <- evalRules ctx [mid, pureAt 100 (AllowScope (mkScope "myorg")), high] (pkg Nothing 0)
-            decision
-                `shouldBe` BlockedByDefault
-                    [ "EffHigh: the rule could not be evaluated"
-                    , "EffMid: the rule could not be evaluated"
-                    , "scope is not the allow-listed @myorg"
-                    ]
+            decision `shouldBe` BlockedByDefault [RuleUnable "EffHigh" EvaluationFailed, RuleUnable "EffMid" EvaluationFailed, ScopeNotAllowListed (mkScope "myorg")]
+            sentences decision
+                `shouldBe` [ "EffHigh: the rule could not be evaluated"
+                           , "EffMid: the rule could not be evaluated"
+                           , "scope is not the allow-listed @myorg"
+                           ]
 
     describe "evalRules -- fail-closed vs fail-open alignment" $ do
         it "a failing FailDeny rule that could decide is Undecidable (fail-closed)" $ do
@@ -368,22 +398,24 @@ engineSpec = do
                         , prepEval = PerVersion (\_ _ -> throwIO (TestContractEscape "the rule threw"))
                         }
             evalRules ctx [bomb, pureAt 200 (AllowScope (mkScope "myorg"))] (pkg (Just "myorg") 0) >>= \case
-                Undecidable transience reason -> do
+                decision@(Undecidable transience (RuleUnable rule (RuleThrew thrown))) -> do
                     transience `shouldBe` WillResolve Nothing
-                    reason `shouldSatisfy` T.isPrefixOf "DirectBomb"
+                    rule `shouldBe` "DirectBomb"
+                    thrown `shouldSatisfy` T.isPrefixOf "TestContractEscape \"the rule threw\""
+                    sentences decision `shouldSatisfy` all (T.isPrefixOf "DirectBomb: the rule threw: TestContractEscape \"the rule threw\"")
                 other -> expectationFailure ("expected the fail-closed Undecidable, got " <> show other)
 
     describe "evalRules -- precedence, not timing, decides" $ do
         it "credits the earliest-in-boot-order decisive rule, not the fastest" $ do
-            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (threadDelay 40_000) (Deny Nothing "slow deny")
-            fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow "fast allow")
+            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (threadDelay 40_000) (Deny Nothing revocation)
+            fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow remediation)
             decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
         it "credits the earlier decisive advisory rule, and the later rule runs no read of its own" $ do
             (lagging, readCount) <- counting pass
-            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing "blocked")
-            laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision lagging (Allow "too late")
+            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing revocation)
+            laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision lagging (Allow remediation)
             decision <- evalRules ctx [laggard, winner] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffWinner"
             readIORef readCount `shouldReturn` 0
@@ -392,7 +424,7 @@ engineSpec = do
         it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
             let mk =
                     sequence
-                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing "known-bad version")
+                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing revocation)
                         , failingRule "EffUnavail" 300 fastConfig FailDeny
                         ]
             forward <- mk >>= \rules -> evalRules ctx rules (pkg Nothing 0)
@@ -423,7 +455,7 @@ engineSpec = do
             hedgehog $ do
                 ageDays <- forAll (Gen.integral (Range.linear 0 3650))
                 effPrec <- forAll (Gen.int (Range.linear 0 199))
-                outcome <- forAll (Gen.element [NoDecision "x", CannotVet FailNoDecision "u"])
+                outcome <- forAll (Gen.element [NoDecision FixesNoAdvisory, CannotVet FailNoDecision NoDatabaseLoaded])
                 rule <- liftIO (constRule "Eff" effPrec fastConfig FailNoDecision outcome)
                 decision <- liftIO (evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") ageDays))
                 admittedBy decision === Just "AllowScope"
@@ -447,7 +479,7 @@ provenanceSpec = describe "advisory evidence" $
                     }
         rules <- withKnobs fastConfig{ecBackoff = [0]} <$> prepare deps [atDefaultPrecedence cveRule]
         evalRules ctx rules (pkg Nothing 0)
-            `shouldReturn` Blocked "DenyIfCve" (Just (DbEtag "retry")) "affected by RETRY (CVSS >= 7.0)"
+            `shouldResolve` (deniedBy "DenyIfCve" "retry" Cvss 7.0 "RETRY", ["affected by RETRY (CVSS >= 7.0)"])
         readIORef attempts `shouldReturn` 2
 
 advisoryRuleDeps :: Text -> Text -> IO () -> RuleDeps
@@ -579,7 +611,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
         (deps, _) <- countingDeps [("thing", AdvisoryRange "GHSA-mid-0001" (Just 6.5) Nothing Unbounded (Just 0.6))]
         rules <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
         decideRequest rules requestVersions
-            >>= (`shouldSatisfy` all (== Blocked "DenyIfEpss" (Just (DbEtag "counted")) "affected by GHSA-mid-0001 (EPSS >= 0.5)"))
+            >>= (`shouldAllResolve` (deniedBy "DenyIfEpss" "counted" Epss 0.5 "GHSA-mid-0001", ["affected by GHSA-mid-0001 (EPSS >= 0.5)"]))
 
     it "has every rule reached report once per request, a shared fault with its detail" $ do
         (captured, reporter) <- capturingSourceReporter
@@ -588,7 +620,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
         void (decideRequest rules requestVersions)
         readIORef captured >>= \reports -> case reverse reports of
             [SourceUnavailable "DenyIfCve" cveDetail, SourceUnavailable "DenyIfEpss" epssDetail] -> do
-                cveDetail `shouldSatisfy` T.isInfixOf "advisory database exploded"
+                renderInability cveDetail `shouldSatisfy` T.isInfixOf "advisory database exploded"
                 epssDetail `shouldBe` cveDetail
             other -> expectationFailure ("expected one report per rule reached, got " <> show other)
 
@@ -611,8 +643,8 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
         map skippedChecks decisions
             `shouldSatisfy` all
                 ( ==
-                    [ SkippedUnavailable "DenyIfCve" "no advisory database loaded"
-                    , SkippedUnavailable "DenyIfEpss" "no advisory database loaded"
+                    [ SkippedUnavailable "DenyIfCve" NoDatabaseLoaded
+                    , SkippedUnavailable "DenyIfEpss" NoDatabaseLoaded
                     ]
                 )
 
@@ -682,7 +714,7 @@ first fail-closed rule refuses, and otherwise the quarantine admits with every r
 expectedUnder :: Fault -> [Rule] -> Decision -> Bool
 expectedUnder fault rules decision = case find ((== FailDeny) . faultAlignment fault) rules of
     Just refusing -> case decision of
-        Undecidable _ reason -> (ruleName refusing <> ": ") `T.isPrefixOf` reason
+        Undecidable _ reason -> (ruleName refusing <> ": ") `T.isPrefixOf` renderReason reason
         _ -> False
     Nothing -> admittedBy decision == Just "AllowIfOlderThan" && map skippedName (skippedChecks decision) == map (Just . ruleName) rules
   where
@@ -723,16 +755,16 @@ heldThrowSpec :: Spec
 heldThrowSpec = describe "a throw outside the harness is held for the request" $ do
     it "refuses every version when the push-age reading throws, reading it once" $ do
         (throwing, readings) <- counting (throwIO (TestContractEscape "clock gone"))
-        rule <- mapPackageRead (\packageRead -> packageRead{prFreshness = throwing}) <$> constRule "GateBomb" 300 fastConfig FailNoDecision (Allow "unreached")
+        rule <- mapPackageRead (\packageRead -> packageRead{prFreshness = throwing}) <$> constRule "GateBomb" 300 fastConfig FailNoDecision (Allow remediation)
         decisions <- decideRequest [rule, pureAt 200 (AllowScope (mkScope "myorg"))] requestVersions
-        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "GateBomb: the rule threw" `T.isPrefixOf` reason; _ -> False)
+        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "GateBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
         readIORef readings `shouldReturn` 1
 
     it "refuses every version when the source report throws, reporting once" $ do
         (throwing, reports) <- counting (throwIO (TestContractEscape "reporter gone"))
-        rule <- mapPackageRead (\packageRead -> packageRead{prReporter = noSourceReporter{reportSource = const throwing}}) <$> constRule "ReportBomb" 300 fastConfig FailNoDecision (Allow "unreached")
+        rule <- mapPackageRead (\packageRead -> packageRead{prReporter = noSourceReporter{reportSource = const throwing}}) <$> constRule "ReportBomb" 300 fastConfig FailNoDecision (Allow remediation)
         decisions <- decideRequest [rule] requestVersions
-        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "ReportBomb: the rule threw" `T.isPrefixOf` reason; _ -> False)
+        decisions `shouldSatisfy` all (\case Undecidable _ reason -> "ReportBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
         readIORef reports `shouldReturn` 1
 
 breakerSpec :: Spec
@@ -751,7 +783,7 @@ breakerSpec = describe "the breaker counts requests" $ do
         breakerOf rules `shouldReturn` Just (Open (addUTCTime 30 now))
         readIORef readCount `shouldReturn` 5
         decisions <- decideRequest rules requestVersions
-        decisions `shouldSatisfy` all (== Undecidable (WillResolve Nothing) "DenyIfCve: the rule source circuit breaker is open")
+        decisions `shouldAllResolve` (Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" SourceBreakerOpen), ["DenyIfCve: the rule source circuit breaker is open"])
         readIORef readCount `shouldReturn` 5
   where
     faultingDeps readCount = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> modifyIORef' readCount (+ 1) *> throwIO TestSourceUnavailable)}
@@ -765,13 +797,13 @@ generationSpec = describe "one response reads one generation" $ do
         swapIn slot (DbEtag "first") Nothing (fakeCveDb [("thing", AdvisoryRange "FIRST" (Just 9.8) Nothing Unbounded Nothing)])
         rules <- prepare inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
         decide <- newEvaluator ctx rules
-        let first' = Blocked "DenyIfCve" (Just (DbEtag "first")) "affected by FIRST (CVSS >= 7.0)"
-        decide (thingAt "1.0.0") `shouldReturn` first'
+        let first' = deniedBy "DenyIfCve" "first" Cvss 7.0 "FIRST"
+        decide (thingAt "1.0.0") `shouldResolve` (first', ["affected by FIRST (CVSS >= 7.0)"])
         swapIn slot (DbEtag "second") Nothing (fakeCveDb [("thing", AdvisoryRange "SECOND" (Just 9.8) Nothing Unbounded Nothing)])
         traverse decide requestVersions >>= (`shouldBe` (first' <$ requestVersions))
         -- The next request pins the generation now serving.
         evalRules ctx rules (thingAt "1.0.0")
-            `shouldReturn` Blocked "DenyIfCve" (Just (DbEtag "second")) "affected by SECOND (CVSS >= 7.0)"
+            `shouldResolve` (deniedBy "DenyIfCve" "second" Cvss 7.0 "SECOND", ["affected by SECOND (CVSS >= 7.0)"])
 
     it "reads one generation across rules when a swap lands between them" $ do
         -- Generation a alone denies on EPSS, b alone on CVSS. CVSS from a with EPSS from b admits.
@@ -784,7 +816,7 @@ generationSpec = describe "one response reads one generation" $ do
             deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
         rules <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
         decideRequest rules requestVersions
-            >>= (`shouldSatisfy` all (== Blocked "DenyIfEpss" (Just (DbEtag "a")) "affected by A-0001 (EPSS >= 0.5)"))
+            >>= (`shouldAllResolve` (deniedBy "DenyIfEpss" "a" Epss 0.5 "A-0001", ["affected by A-0001 (EPSS >= 0.5)"]))
         readIORef swapped `shouldReturn` True
         evalRules ctx rules (thingAt "1.0.0")
-            `shouldReturn` Blocked "DenyIfCve" (Just (DbEtag "b")) "affected by B-0001 (CVSS >= 7.0)"
+            `shouldResolve` (deniedBy "DenyIfCve" "b" Cvss 7.0 "B-0001", ["affected by B-0001 (CVSS >= 7.0)"])

@@ -2,9 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | What the two evidence builders carry, and which rules the Dredger evaluates.
-A determined absence and an unread fact must stay distinguishable, and the rules that apply at
-revocation must never block a version the whole policy admits.
+{- | What the two evidence builders carry, what a reason's advisory list guarantees, and which rules
+the Dredger evaluates. A determined absence and an unread fact must stay distinguishable, and the
+rules that apply at revocation must never block a version the whole policy admits.
 -}
 module Ecluse.Core.Rules.TypesSpec (spec) where
 
@@ -15,6 +15,7 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
+import UnliftIO.Exception (evaluate, impureThrow)
 
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
@@ -29,26 +30,31 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase, rdAdvisoryFreshness), evalRules, prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryUndated))
 import Ecluse.Core.Rules.Types (
+    AdvisoryScore (Cvss),
     Decision,
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
     Fact (Known, Unread),
     FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
+    Reason (AffectedBy, FixesButStillAffected, Remediates),
     Rule (..),
     RuleEvidence (evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     completeEvidence,
     defaultPrecedence,
     identityEvidence,
+    mkAdvisoryIds,
     revocationRules,
     ruleDenies,
+    unAdvisoryIds,
  )
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 published :: UTCTime
 published = UTCTime (fromGregorian 2026 3 1) 0
@@ -60,6 +66,7 @@ spec = do
     distinctionSpec
     ruleDeniesSpec
     revocationSpec
+    advisoryIdsSpec
 
 completeSpec :: Spec
 completeSpec = describe "completeEvidence" $ do
@@ -182,10 +189,7 @@ decideUnder :: AdvisoryState -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideUnder advisories policy evidence =
     prepare (depsIn advisories) policy >>= \prepared -> evalRules ctx prepared evidence
 
-{- | A policy as configuration resolves one. One in three puts a deny limited to admission above a
-deny at both phases, most often one that names the fixture package, where the Dredger's walk passes
-a rule that decides at the gate.
--}
+-- One in three policies puts an admission-only deny above a deny at both phases.
 genPolicy :: Gen [PrecededRule]
 genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules)]
   where
@@ -244,3 +248,25 @@ genEvidence = do
     genPublishedAt = Gen.element [Unread, Known Nothing, Known (Just (daysAgo 30)), Known (Just (daysAgo 1))]
     genInstallCode = Gen.element [Unread, Known NoCodeOnInstall, Known (RunsCodeOnInstall "postinstall hook"), Known CodeExecUnknown]
     daysAgo days = addUTCTime (negate (days * nominalDay)) now
+
+laterAdvisory :: TestContractEscape
+laterAdvisory = TestContractEscape "a later advisory was evaluated"
+
+-- | Reasons whose advisory lists hold a later identifier, or a later stretch of list, that throws.
+deferredReasons :: [(String, Reason)]
+deferredReasons =
+    [ ("a later identifier", Remediates (mkAdvisoryIds ("GHSA-a" :| [impureThrow laterAdvisory])))
+    , ("the rest of the list", AffectedBy Cvss 7.0 (mkAdvisoryIds ("GHSA-a" :| "GHSA-b" : impureThrow laterAdvisory)))
+    , ("the advisories still affecting a fix", FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| [])) (mkAdvisoryIds ("GHSA-b" :| [impureThrow laterAdvisory])))
+    ]
+
+{- A rule finds the later advisories by matching ranges lazily. Left unevaluated, that matching
+would run where the reason is rendered, outside the handler that evaluated the verdict. -}
+advisoryIdsSpec :: Spec
+advisoryIdsSpec = describe "mkAdvisoryIds" $ do
+    it "keeps the identifiers in the order given" $
+        unAdvisoryIds (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])) `shouldBe` "GHSA-a" :| ["GHSA-b"]
+
+    for_ deferredReasons $ \(label, reason) ->
+        it ("evaluates every advisory with the reason that names it: " <> label) $
+            evaluate reason `shouldThrow` (== laterAdvisory)

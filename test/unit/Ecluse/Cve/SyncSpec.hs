@@ -32,13 +32,12 @@ import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, prepResilience, prepare, withCveLookup)
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryAge (AdvisoryAge),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy))
-import Ecluse.Core.Rules.Types (Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
+import Ecluse.Core.Rules.Types (AdvisoryAge (AdvisoryAge), Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
@@ -153,7 +152,7 @@ spec = do
             decisions <- replicateM 20 (evalRules evalCtx rules oldVersion)
             -- Every admission carries the evidence, and the outage reports once.
             forM_ decisions $ \case
-                Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+                Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
                 other -> expectationFailure ("expected the quarantine allow, got " <> show other)
             reverse <$> readIORef captured `shouldReturn` [(Npm, OutageBegan "DenyIfCve" "no advisory database loaded")]
             -- Past the reminder gap the outage reports again, still once.
