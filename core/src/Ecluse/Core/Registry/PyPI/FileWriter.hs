@@ -133,14 +133,14 @@ reduceMember key value facts = case (key, value) of
     ("hashes", HashValue hashes) -> facts{ffHashes = hashes}
     ("hashes", ScalarValue Null) -> facts{ffHashes = Just mempty}
     ("hashes", _) -> facts{ffHashes = Nothing}
-    ("requires-python", ScalarValue scalar) -> optional (\text -> facts{ffRequiresPython = text}) scalar
-    ("provenance", ScalarValue scalar) -> optional (\text -> facts{ffProvenance = text}) scalar
+    ("requires-python", ScalarValue scalar) -> updateOptionalFact (\text -> facts{ffRequiresPython = text}) scalar
+    ("provenance", ScalarValue scalar) -> updateOptionalFact (\text -> facts{ffProvenance = text}) scalar
     ("size", ScalarValue scalar) -> facts{ffSize = force (parseMaybe parseJSON scalar)}
     ("upload-time", ScalarValue scalar) -> facts{ffUploadTime = force (parseMaybe parsePublishTime scalar)}
     ("yanked", ScalarValue scalar) -> facts{ffYanked = yankState (Just scalar)}
     _ -> facts
   where
-    optional update scalar = maybe facts{ffValid = False} update (parseMaybe parseJSON scalar)
+    updateOptionalFact update scalar = maybe facts{ffValid = False} update (parseMaybe parseJSON scalar)
 
 finishFacts :: FileFacts -> Maybe IndexFile
 finishFacts facts = do
