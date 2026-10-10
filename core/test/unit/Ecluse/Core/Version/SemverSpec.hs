@@ -7,11 +7,11 @@ module Ecluse.Core.Version.SemverSpec (spec) where
 
 import Data.Aeson (Value (String))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Char (isAscii, isDigit)
+import Data.Char (isAlphaNum, isAscii, isControl, isDigit, isMark, isSpace)
 import Data.Text qualified as T
 import Data.Versions (Chunk (..), Release (..), SemVer (..))
 import Data.Versions qualified as V
-import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog (Gen, MonadTest, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -50,9 +50,10 @@ generatedSpec = describe "properties" $
                 cover 0.5 "accepted with an 18-digit run" (accepted && any (digitRunIs EQ) (digitRuns raw))
                 cover 0.5 "refused by the digit-run bound alone" (libraryAccepts && withinVersionLength raw && not accepted)
                 cover 0.5 "refused by the length bound alone" (libraryAccepts && not (withinVersionLength raw))
+                coverTextClasses raw
                 scanned raw === expected
 
--- | Each rule of the library's grammar that a reader of the semver specification could miss.
+-- Each rule of the library's grammar that a reader of the semver specification could miss.
 grammarSpec :: Spec
 grammarSpec = describe "the library's grammar" $ do
     it "builds every field of a version with a prerelease and build metadata" $
@@ -76,7 +77,7 @@ captureSpec = describe "on the npm captures" $
             tags `shouldNotBe` []
             disagreements (versions <> tags) `shouldBe` []
 
--- | Every field of a parsed version. The library's own equality leaves the build metadata out.
+-- Every field of a parsed version. The library's own equality leaves the build metadata out.
 type Fields = (Word, Word, Word, Maybe Release, Maybe Text)
 
 fields :: SemVer -> Fields
@@ -85,20 +86,46 @@ fields (SemVer major minor patch preRel build) = (major, minor, patch, preRel, b
 scanned :: Text -> Maybe Fields
 scanned raw = (\(SemverKey parsed) -> fields parsed) <$> parseSemver raw
 
--- | The reference for 'parseSemver': the library's parser, under the length and 18-digit bounds.
+-- The reference for 'parseSemver': the library's parser, under the length and 18-digit bounds.
 libraryParse :: Text -> Maybe Fields
 libraryParse raw = do
     guard (withinVersionLength raw)
     guard (not (any (digitRunIs GT) (digitRuns raw)))
     fields <$> rightToMaybe (V.semver raw)
 
--- | The first texts the two disagree on. A capture holds thousands, and a failure prints them.
+-- The first texts the two disagree on. A capture holds thousands, and a failure prints them.
 disagreements :: [Text] -> [Text]
 disagreements = take 5 . filter (\raw -> scanned raw /= libraryParse raw)
 
--- | Whether a run is all digits, and how its length compares with the 18 digits the bound allows.
 digitRunIs :: Ordering -> Text -> Bool
 digitRunIs comparison run = T.all isDigit run && T.compareLength run 18 == comparison
+
+-- Labels of the raw text alone, so the property fails when a class of text stops being generated.
+coverTextClasses :: (MonadTest m) => Text -> m ()
+coverTextClasses raw = do
+    cover 1 "a number with a leading zero" (any leadsWithZero (T.split (`elem` ['.', '-', '+']) raw))
+    cover 1 "an empty identifier" (hasEmptyIdentifier raw)
+    cover 5 "a first character that starts no version" (maybe False (not . isDigit . fst) (T.uncons raw))
+    cover 3 "a last character that ends no version" (maybe False (not . endsVersion . snd) (T.unsnoc raw))
+    cover 3 "white space" (T.any isSpace raw)
+    cover 0.5 "a v prefix" (T.isPrefixOf "v" (T.toLower raw))
+    cover 0.02 "NUL in a version" (landsInVersion (== '\0') raw)
+    cover 0.1 "a control character in a version" (landsInVersion (\c -> isControl c && not (isSpace c)) raw)
+    cover 0.1 "a combining mark in a version" (landsInVersion isMark raw)
+    cover 0.1 "a letter or digit beyond the basic plane in a version" (landsInVersion (\c -> c > '\xFFFF' && isAlphaNum c) raw)
+  where
+    leadsWithZero piece = T.all isDigit piece && T.isPrefixOf "0" piece && T.compareLength piece 1 == GT
+    endsVersion c = isAlphaNum c || c == '-'
+
+-- Of the text after the first hyphen or plus sign: whether a dot or a plus sign bounds an empty piece.
+hasEmptyIdentifier :: Text -> Bool
+hasEmptyIdentifier raw = case T.uncons (T.dropWhile (`notElem` ['-', '+']) raw) of
+    Nothing -> False
+    Just (_, parts) -> any T.null (T.split (`elem` ['.', '+']) parts)
+
+-- Whether the text holds such characters and is a version the library takes without them.
+landsInVersion :: (Char -> Bool) -> Text -> Bool
+landsInVersion ofClass raw = T.any ofClass raw && isJust (libraryParse (T.filter (not . ofClass) raw))
 
 isNumeric :: Chunk -> Bool
 isNumeric = \case
@@ -110,7 +137,7 @@ hyphenated = \case
     Numeric _ -> False
     Alphanum text -> T.any (== '-') text
 
--- | A rule's name, texts the library takes under it, and texts the library refuses under it.
+-- A rule's name, texts the library takes under it, and texts the library refuses under it.
 grammarRules :: [(String, [Text], [Text])]
 grammarRules =
     [
@@ -149,8 +176,15 @@ grammarRules =
         , ["1.2.3-\x663", "1.2.3-1\xB2", "1.2.\x663", "\xFF11.\xFF12.\xFF13"]
         )
     ,
-        ( "reads a number of 18 digits, and refuses a longer digit run wherever it stands"
-        , ["999999999999999999.0.0", "1.0.0-999999999999999999", "1.0.0-a999999999999999999", "1.0.0+999999999999999999"]
+        ( "reads a number of 18 digits, refuses a longer run of ASCII digits wherever it stands, and counts no other numeral"
+        ,
+            [ "999999999999999999.0.0"
+            , "1.0.0-999999999999999999"
+            , "1.0.0-a999999999999999999"
+            , "1.0.0+999999999999999999"
+            , "1.0.0+" <> T.replicate 19 "\x663"
+            , "1.0.0+" <> T.replicate 10 "9" <> "\x663" <> T.replicate 10 "9"
+            ]
         , ["1000000000000000000.0.0", "1.0.0-1000000000000000000", "1.0.0-a1000000000000000000", "1.0.0+1000000000000000000"]
         )
     ]
@@ -168,7 +202,6 @@ genVersionText =
         , (1, genNearLengthBound)
         ]
 
--- | A version from the given pieces: a dotted core, then a prerelease, build metadata, both or neither.
 genAssembled :: Gen Int -> Gen Text -> Gen Text -> Gen Text
 genAssembled coreSize number identifier = do
     size <- coreSize
@@ -182,7 +215,7 @@ genAssembled coreSize number identifier = do
 genWellFormed :: Gen Text
 genWellFormed = genAssembled (pure 3) genNumber genIdentifier
 
--- | A version where any number or identifier may be malformed, and the core may not hold three numbers.
+-- A version where any number or identifier may be malformed, and the core may not hold three numbers.
 genMalformed :: Gen Text
 genMalformed =
     genAssembled
@@ -190,7 +223,7 @@ genMalformed =
         (Gen.frequency [(8, genNumber), (1, genBadDigits)])
         (Gen.frequency [(6, genIdentifier), (1, genBadDigits)])
 
--- | A well-formed version whose numbers, identifiers and build metadata may hold 17 to 19 digits.
+-- A well-formed version whose numbers, identifiers and build metadata may hold 17 to 19 digits.
 genNearDigitBound :: Gen Text
 genNearDigitBound =
     genAssembled
@@ -200,7 +233,7 @@ genNearDigitBound =
   where
     genLongRun = T.cons <$> Gen.element ['1' .. '9'] <*> Gen.text (Range.constant 16 18) Gen.digit
 
--- | A version the library takes, from four characters under the length bound to four over it.
+-- A version the library takes, from four characters under the length bound to four over it.
 genNearLengthBound :: Gen Text
 genNearLengthBound = do
     lead <- Gen.element ["1.0.0-", "1.0.0+", "1.0.0-a.", "1.0.0-0+"]
@@ -213,7 +246,7 @@ genNumber = show <$> Gen.word (Range.exponential 0 99999)
 genIdentifier :: Gen Text
 genIdentifier = Gen.choice [genNumber, genAlphanumeric]
 
--- | Identifier characters around one letter or hyphen, so digits can lead it and hyphens can fill it.
+-- Identifier characters around one letter or hyphen, so digits can lead it and hyphens can fill it.
 genAlphanumeric :: Gen Text
 genAlphanumeric = do
     front <- Gen.text (Range.linear 0 3) genIdentifierChar
@@ -223,7 +256,7 @@ genAlphanumeric = do
   where
     genIdentifierChar = Gen.frequency [(6, Gen.alphaNum), (2, pure '-'), (1, Gen.element (lettersOutsideAscii <> numeralsOutsideAscii))]
 
--- | Digits that spell no semver number: none, a leading zero, or a numeral outside ASCII.
+-- Digits that spell no semver number: none, a leading zero, or a numeral outside ASCII.
 genBadDigits :: Gen Text
 genBadDigits =
     Gen.choice
@@ -233,22 +266,20 @@ genBadDigits =
         , (<>) <$> genNumber <*> (T.singleton <$> Gen.element numeralsOutsideAscii)
         ]
 
--- | The version behind a prefix, inside whitespace, or with text after it.
 wrapped :: Text -> Gen Text
 wrapped version = do
     prefix <- Gen.element ["", "v", "V", "=", " ", "\t", "\n", "\xA0", "x", "1", "."]
     suffix <- Gen.element ["", " ", "\t", "\n", "\r\n", "\x3000", "x", ".", "-", "+", ".0"]
     pure (prefix <> version <> suffix)
 
--- | The version with one character deleted, inserted or replaced, or cut short.
 edited :: Text -> Gen Text
 edited version = do
     at <- Gen.int (Range.linear 0 (T.length version))
-    c <- genVersionChar
+    c <- Gen.choice [genVersionChar, Gen.unicode, Gen.enum '\0' '\x36F', Gen.element charactersOfNote]
     let (front, back) = T.splitAt at version
     Gen.element [front <> T.drop 1 back, front <> T.cons c back, front <> T.cons c (T.drop 1 back), front]
 
--- | The characters versions are written in, with the separators nearly as likely as the digits.
+-- The characters versions are written in, with the separators nearly as likely as the digits.
 genVersionChar :: Gen Char
 genVersionChar =
     Gen.frequency
@@ -259,10 +290,14 @@ genVersionChar =
         , (1, Gen.element (lettersOutsideAscii <> numeralsOutsideAscii))
         ]
 
--- | A Latin, a German and a Cyrillic letter, which the library's Unicode-aware classes take.
+-- NUL, escape, two combining marks, and a letter and a digit beyond the basic plane.
+charactersOfNote :: [Char]
+charactersOfNote = ['\0', '\x1B', '\x301', '\x20E3', '\x10400', '\x1D7CE']
+
+-- A Latin, a German and a Cyrillic letter, which the library's Unicode-aware classes take.
 lettersOutsideAscii :: [Char]
 lettersOutsideAscii = ['\xE9', '\xDF', '\x416']
 
--- | An Arabic-Indic digit, a superscript, a Roman numeral and a fullwidth digit: numerals, not letters.
+-- An Arabic-Indic digit, a superscript, a Roman numeral and a fullwidth digit: numerals, not letters.
 numeralsOutsideAscii :: [Char]
 numeralsOutsideAscii = ['\x663', '\xB2', '\x2167', '\xFF11']

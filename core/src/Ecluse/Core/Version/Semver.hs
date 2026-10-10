@@ -6,10 +6,10 @@
 
 'SemverKey' wraps the [@versions@](https://hackage.haskell.org/package/versions) library's
 'Data.Versions.SemVer', so precedence is the library's: semver 11 ordering, with @+build@
-metadata excluded from it. 'parseSemver' scans the grammar itself, and accepts and builds what
-the library's parser does. Among prerelease identifiers numeric ones rank below alphanumeric
-ones, the opposite of the rule in "Ecluse.Core.Version.Token". A semver version is stable iff
-it carries no prerelease.
+metadata excluded from it. 'parseSemver' scans the grammar itself. Within the length and
+digit-run bounds it accepts and builds what the library's parser does. Among prerelease
+identifiers numeric ones rank below alphanumeric ones, the opposite of the rule in
+"Ecluse.Core.Version.Token". A semver version is stable iff it carries no prerelease.
 -}
 module Ecluse.Core.Version.Semver (
     SemverKey (..),
@@ -57,8 +57,8 @@ hasOverlongNumericRun raw = T.foldl' runLength 0 raw > maxNumericRun
         | isDigit c = run + 1
         | otherwise = 0
 
--- The grammar of the library's @semver@ parser, in that parser's order. @SemverSpec@ holds the
--- two equal for every text.
+-- The grammar of the library's @semver@ parser, in that parser's order. @SemverSpec@ checks the
+-- two against each other.
 scanSemver :: Text -> Maybe SemVer
 scanSemver raw = do
     (major, afterMajor) <- leadingNumber raw
