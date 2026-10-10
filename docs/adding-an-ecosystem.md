@@ -254,7 +254,8 @@ that a render copies.
 - `readNpmFull` in `Ecluse.Core.Registry.Npm.Metadata` walks the tokens with `npmWalk` and a
   `Writer` from [`Ecluse.Core.Registry.Json.Writer`](../core/src/Ecluse/Core/Registry/Json/Writer.hs).
   The writer writes each kept release into one scratch buffer for the read, as the walk reads it.
-  It then copies the finished release into an array of its exact size.
+  It then copies the finished release into an array of its exact size, and measures the length of
+  the release's encoding once. The packed release holds that length.
 - A packed release refers to the read's intern table for each key and shared string. It holds each
   other string as the bytes aeson writes for it.
   [`Ecluse.Core.Registry.Json.Packed`](../core/src/Ecluse/Core/Registry/Json/Packed.hs) holds the
@@ -266,17 +267,21 @@ that a render copies.
   rewrites that URL.
 - Assemble a listing into a `RenderPlan`: the small top-level members as aeson's tree, and the
   surviving releases, each over its own source's table. `renderPlan` writes the listing into one
-  buffer of its exact length. It copies the bytes of each release, and writes each hole as the
-  mount's prefix for the package followed by the URL's file name.
+  buffer of its exact length, which it adds up from the lengths the releases hold. It copies the
+  bytes of each release, and writes each hole as the mount's prefix for the package followed by the
+  URL's file name. It refuses a listing whose bytes do not fill the buffer exactly.
 - `weighCachedDoc` charges a packed document the heap bytes it holds, in the compact units that a
   cache expands.
 
 Hold the packed read to the tree read of the same bytes: the same typed view, a document that
 decodes to the same tree, and listings that render to the same bytes. The properties cover hostile
 input, chunk boundaries and listings merged from several sources
-([One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem)). The recorded
-corpus outputs change only in their full-document charge lines, and the residency tier checks that
-each npm listing's held entry stays smaller than its source ([Listing peaks](testing.md#listing-peaks)).
+([One pattern for every ecosystem](testing.md#one-pattern-for-every-ecosystem)). Hold each release's
+stored length to `walkedLength` in `Ecluse.Test.Registry.Packed`, which measures the release again,
+over generated values and every release of the captures. A wrong length makes a render refuse its
+listing. The recorded corpus outputs change only in their full-document charge lines, and the
+residency tier checks that each npm listing's held entry stays smaller than its source
+([Listing peaks](testing.md#listing-peaks)).
 
 ### 11. Set the memory charges from measured peaks
 

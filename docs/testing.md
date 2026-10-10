@@ -117,7 +117,8 @@ The retained-byte gate uses the following corpus envelopes. The figures come fro
 three PyPI captures in the arm64 Build job of
 [CI run 36545262450](https://github.com/AlexaDeWit/Ecluse/actions/runs/36545262450/job/109330092515),
 with GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process. npm's shared cache entry is its
-packed full read.
+packed full read, and its row comes from the same job of
+[CI run 38059331291](https://github.com/AlexaDeWit/Ecluse/actions/runs/38059331291/job/114237799183).
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 A calibrated gate is the smallest quarter step at least 8% above its measured maximum. The PyPI raw
 gate keeps its default.
@@ -127,7 +128,7 @@ gate keeps its default.
 | npm | Wire bytes | 0.999938894 | typescript | 1.25 | 25.0% |
 | npm | Raw `Value` | 6.477760939 | express | 7 | 8.1% |
 | npm | Typed projection | 0.443638073 | react | 0.5 | 12.7% |
-| npm | Shared cache entry | 0.693002413 | react | 0.75 | 8.2% |
+| npm | Shared cache entry | 0.696437001 | react | 1 | 43.6% |
 | PyPI | Wire bytes | 0.999638868 | numpy | 1.25 | 25.0% |
 | PyPI | Raw `Value` | 4.120186179 | boto3 | 7 | 69.9% |
 | PyPI | Typed projection | 1.593904341 | requests | 1.75 | 9.8% |
@@ -140,7 +141,7 @@ size, for the lazy encoding and its strict copy, must stay within the output cha
 [listing probe](#listing-peaks) checks both charges against a read's peak and a render's working
 set. Raise a charge in the adapter, not here, when a representation outgrows it.
 Each denominator is the original authenticated source size, including omitted fields.
-For example, the TypeScript shared shape retains 7,284,096 heap bytes from 15,693,959 source bytes.
+For example, the TypeScript shared shape retains 7,315,240 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,181,045 bytes. That encoded size and the source probe's
 `compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
 
@@ -231,7 +232,7 @@ The checks compare bytes with each ecosystem's charges:
 - From one step up, the tier fails once a single read's peak or a realistic listing's output
   working set passes a regression limit per ecosystem. The rule for a limit is the smallest quarter
   step at least 8% above the maximum. The read limits, set by that rule from the first table below,
-  are 1.0 per source byte for npm (react, 0.887), 0.4 under its charge, and 3.5 for PyPI (boto3,
+  are 1.0 per source byte for npm (react, 0.901), 0.4 under its charge, and 3.5 for PyPI (boto3,
   3.088), 0.4 under its charge. The output limits, set by that rule from the realistic shapes in
   the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3, 1.524, 14.8% margin), 0.25
   under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1 under its charge. One
@@ -242,7 +243,9 @@ The checks compare bytes with each ecosystem's charges:
 - A single-source listing's entry frees live bytes when it drops its served document, and the
   document's weight, expanded as a cache expands it, covers them.
 
-The following figures come from the arm64 Build job of
+The following figures come from arm64 Build jobs: npm's rows from that of
+[CI run 38059331291](https://github.com/AlexaDeWit/Ecluse/actions/runs/38059331291/job/114237799183),
+and PyPI's from that of
 [CI run 38016077117](https://github.com/AlexaDeWit/Ecluse/actions/runs/38016077117/job/114106649715),
 with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
 read's peak and the held entry above the baseline, the listing's peak through the read and the
@@ -251,23 +254,23 @@ read.
 
 | Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
 |---|---|--:|--:|--:|--:|--:|
-| npm | typescript | 14.97 | 0.587 | 0.465 | 0.677 | 0.659 |
-| npm | @types/node | 10.63 | 0.400 | 0.304 | 0.191 | 0.175 |
-| npm | react | 6.67 | 0.887 | 0.695 | 0.526 | 0.495 |
-| npm | webpack | 4.96 | 0.486 | 0.326 | 0.725 | 0.712 |
-| npm | @aws-sdk/client-s3 | 3.97 | 0.526 | 0.352 | 0.777 | 0.762 |
-| npm | express | 0.77 | 1.115 | 0.571 | 0.582 | 0.576 |
-| npm | @babel/core | 0.76 | 0.919 | 0.479 | 0.581 | 0.575 |
-| npm | request | 0.29 | 1.561 | 0.624 | 0.937 | 0.529 |
-| npm | lodash | 0.24 | 1.689 | 0.655 | 1.035 | 0.362 |
+| npm | typescript | 14.97 | 0.584 | 0.467 | 0.677 | 0.659 |
+| npm | @types/node | 10.63 | 0.398 | 0.305 | 0.191 | 0.175 |
+| npm | react | 6.67 | 0.901 | 0.698 | 0.526 | 0.495 |
+| npm | webpack | 4.96 | 0.493 | 0.327 | 0.725 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 0.530 | 0.353 | 0.777 | 0.762 |
+| npm | express | 0.77 | 1.125 | 0.573 | 0.582 | 0.576 |
+| npm | @babel/core | 0.76 | 0.917 | 0.481 | 0.581 | 0.575 |
+| npm | request | 0.29 | 1.552 | 0.627 | 0.926 | 0.529 |
+| npm | lodash | 0.24 | 1.669 | 0.658 | 1.011 | 0.362 |
 | PyPI | numpy | 2.65 | 2.427 | 2.065 | 0.885 | 0.596 |
 | PyPI | boto3 | 2.10 | 3.088 | 2.855 | 1.012 | 0.621 |
 | PyPI | requests | 0.12 | 4.005 | 3.096 | 0.909 | 0.657 |
 
 The full-read charges take each listing's read peak per source byte, merges included, among
 listings with at least one step of sources. In the arm64 Build job of
-[CI run 37923084079](https://github.com/AlexaDeWit/Ecluse/actions/runs/37923084079/job/113795530414),
-npm's realistic listings peak at 0.955 (express, publish order) and its heavy bases at 1.387
+[CI run 38059331291](https://github.com/AlexaDeWit/Ecluse/actions/runs/38059331291/job/114237799183),
+npm's realistic listings peak at 0.957 (express, publish order) and its heavy bases at 1.387
 (express, oldest heavy base). In that of
 [CI run 38016077117](https://github.com/AlexaDeWit/Ecluse/actions/runs/38016077117/job/114106649715),
 PyPI's listings peak at 3.088 (boto3, single document), heavy bases included.
