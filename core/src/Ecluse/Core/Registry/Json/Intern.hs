@@ -28,6 +28,9 @@ module Ecluse.Core.Registry.Json.Intern (
     entryIndex,
     Interned (..),
     internName,
+    PreparedName,
+    prepareName,
+    internPreparedName,
     tableTexts,
     sipHash,
 ) where
@@ -120,16 +123,31 @@ newInternTable key = foldl' seed (InternTable key mempty 0)
 returned table holds from then on.
 -}
 internName :: Name -> InternTable -> Interned
-internName name table@(InternTable key entries count) = case HashMap.lookup (Probe code (Slice probe)) entries of
+internName name table@(InternTable key _ _) = internProbe (probeOf key (nameBytes name)) (nameText name) table
+{-# INLINE internName #-}
+
+-- | A canonical name and its hash under one read's key, without a retained input slice or table.
+data PreparedName = PreparedName !SipKey !Probe !Text
+
+-- | Compute a canonical name's hash once without inserting it into the table.
+prepareName :: InternTable -> Text -> PreparedName
+prepareName (InternTable key _ _) text = case probeOf key (encodeUtf8 text) of
+    Probe code _ -> PreparedName key (Probe code (Owned text)) text
+
+-- | Intern a prepared name, recomputing its hash when used with another read's key.
+internPreparedName :: PreparedName -> InternTable -> Interned
+internPreparedName (PreparedName (SipKey keyFirst keySecond) probe text) table@(InternTable (SipKey currentFirst currentSecond) _ _)
+    | keyFirst == currentFirst && keySecond == currentSecond = internProbe probe text table
+    | otherwise = internName (decodedName text) table
+{-# INLINE internPreparedName #-}
+
+internProbe :: Probe -> Text -> InternTable -> Interned
+internProbe probe@(Probe code _) text table@(InternTable key entries count) = case HashMap.lookup probe entries of
     Just entry -> Interned entry table
     Nothing ->
-        let text = nameText name
-            entry = Entry text (String text) False count
+        let entry = Entry text (String text) False count
          in Interned entry (InternTable key (HashMap.insert (Probe code (Owned text)) entry entries) (count + 1))
-  where
-    probe = nameBytes name
-    code = fromIntegral (sipHash 1 3 key probe)
-{-# INLINE internName #-}
+{-# INLINE internProbe #-}
 
 insertEntry :: ByteString -> Entry -> InternTable -> InternTable
 insertEntry bytes entry (InternTable key entries count) =
@@ -137,6 +155,7 @@ insertEntry bytes entry (InternTable key entries count) =
 
 probeOf :: SipKey -> ByteString -> Probe
 probeOf key bytes = Probe (fromIntegral (sipHash 1 3 key bytes)) (Slice bytes)
+{-# INLINE probeOf #-}
 
 -- | Every entry's text in index order. Each index below the table's count holds exactly one entry.
 tableTexts :: InternTable -> SmallArray Text

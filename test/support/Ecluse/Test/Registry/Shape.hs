@@ -9,6 +9,7 @@ module Ecluse.Test.Registry.Shape (
     shapeNames,
     genShape,
     toShape,
+    toShapeWith,
 ) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
@@ -68,16 +69,22 @@ genShape depth =
 
 -- | The reader's shape for a generated one.
 toShape :: TestShape -> Shape
-toShape = \case
+toShape = toShapeWith id
+
+-- | Build a generated shape, transforming each object's members.
+toShapeWith :: (Shape.Members -> Shape.Members) -> TestShape -> Shape
+toShapeWith transform = \case
     TestScalar budget -> Scalar budget
     TestGeneric budget -> Generic budget
-    TestObjectWith budget members fallback -> ObjectWith budget (toMembers members) (toShape fallback)
-    TestArrayWith budget item fallback -> ArrayWith budget (toShape item) (toShape fallback)
-    TestStringOr budget other -> StringOr budget (toShape other)
+    TestObjectWith budget members fallback -> ObjectWith budget (toMembers members) (nested fallback)
+    TestArrayWith budget item fallback -> ArrayWith budget (nested item) (nested fallback)
+    TestStringOr budget other -> StringOr budget (nested other)
     TestObjectOr fallback members -> ObjectOr fallback (toMembers members)
-    TestChecked budget inner -> Checked budget (toShape inner)
+    TestChecked budget inner -> Checked budget (nested inner)
   where
-    toMembers = \case
-        TestNamed entries -> Shape.namedMembers [(name, toShape shape) | (name, shape) <- entries]
-        TestEvery shape -> Shape.everyMember (toShape shape)
-        TestKnown known shape -> Shape.knownMembers known (toShape shape)
+    nested = toShapeWith transform
+    toMembers =
+        transform . \case
+            TestNamed entries -> Shape.namedMembers [(name, nested shape) | (name, shape) <- entries]
+            TestEvery shape -> Shape.everyMember (nested shape)
+            TestKnown known shape -> Shape.knownMembers known (nested shape)
