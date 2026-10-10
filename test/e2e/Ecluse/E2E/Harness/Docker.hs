@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Container topology and role lifecycle for the end-to-end harness.
 module Ecluse.E2E.Harness.Docker (
     e2eUnavailable,
     withGlobalDataPlane,
@@ -10,6 +11,7 @@ module Ecluse.E2E.Harness.Docker (
     withE2EWith,
 
     -- * Telemetry topology
+    mirrorHost,
     collectorOtlpEndpoint,
     otlpCollectorEnv,
     datadogCollectorEnv,
@@ -92,6 +94,10 @@ import Ecluse.Test.Container.Image (
 import Ecluse.Test.Containers (dockerLabelArgs)
 import Ecluse.Test.Poll (pollUntil)
 
+-- | The private mirror host on the container network, also recorded by upstream fetch spans.
+mirrorHost :: Text
+mirrorHost = "mirror"
+
 {- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
 or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
 -}
@@ -169,7 +175,7 @@ withGlobalDataPlane action =
                     -- aliases below. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
-                            { drAliases = ["upstream", "mirror", "private-upstream", "private-cache", "pypi-upstream"]
+                            { drAliases = ["upstream", toString mirrorHost, "private-upstream", "private-cache", "pypi-upstream"]
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
                                 , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
@@ -301,7 +307,7 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction, so an nginx terminator serves
       -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
       -- index and the distribution files under it through the same proxy.
@@ -321,7 +327,7 @@ proxyEnv hostPort queueUrl =
 -- | The mirror target every writing role on the shared data plane publishes into.
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
+    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     ]
 
@@ -333,7 +339,7 @@ mirrorRoleEnv queueUrl rules =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", ("https://" <> mirrorHost <> "/"))
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
@@ -648,7 +654,7 @@ generateCerts dir = do
         srvKey = dir </> "server.key"
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
-    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
+    writeFileText ext ("subjectAltName=DNS:upstream,DNS:" <> mirrorHost <> ",DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n")
     commandOk "openssl" ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
     commandOk "openssl" ["genrsa", "-out", srvKey, "2048"]
     commandOk "openssl" ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
@@ -803,7 +809,7 @@ nginxStubConfig cacheGuard =
         , "}"
         , "server {"
         , "    listen 443 ssl;"
-        , "    server_name mirror;"
+        , "    server_name " <> mirrorHost <> ";"
         , "    ssl_certificate /certs/server.crt;"
         , "    ssl_certificate_key /certs/server.key;"
         , "    client_max_body_size 0;" -- admits a published tarball of any size

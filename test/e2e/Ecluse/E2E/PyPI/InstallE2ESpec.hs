@@ -7,7 +7,7 @@ module Ecluse.E2E.PyPI.InstallE2ESpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject)
 import Ecluse.E2E.Harness
 
 -- | Drive the product image with a real pip client and local stores.
@@ -21,12 +21,4 @@ scenarios =
             it "installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
                 length advertised `shouldBe` 3
-                case filter ((== pypiWheelFile) . fst) advertised of
-                    [(filename, digest)] -> do
-                        filename `shouldBe` pypiWheelFile
-                        withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
-                            void $ pipInstallIn proj >>= shouldSucceed
-                            installed <- pipInstalled proj pypiDistInfo
-                            installed `shouldBe` True
-                    other ->
-                        expectationFailure ("the served index advertised " <> show (map fst other) <> ", not one digested wheel")
+                pipInstallsWheel e2e advertised

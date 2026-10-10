@@ -16,7 +16,6 @@ module Ecluse.E2E.Harness.Npm (
     installedVersion,
 
     -- * Constants
-    npmArtifactPath,
     npmTarballPath,
     publishTargetEnv,
     publishScope,
@@ -135,13 +134,9 @@ lifecycleProbePackageJson =
 consumerPackageJson :: Text
 consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
 
--- | The path a registry serves one npm package version's artifact at, under its own root.
-npmArtifactPath :: Text -> Text -> Text
-npmArtifactPath name version = "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"
-
 -- | The proxy path one npm package version's artifact is served at.
 npmTarballPath :: Text -> Text -> Text
-npmTarballPath name version = "/npm" <> npmArtifactPath name version
+npmTarballPath name version = "/npm/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"
 
 -- | Publish first-party packages into the Verdaccio store used by the proxy's private upstream.
 publishTargetEnv :: [(Text, Text)]

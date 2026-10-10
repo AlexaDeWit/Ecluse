@@ -10,6 +10,7 @@ module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipInstallIn,
     pipInstalled,
+    pipInstallsWheel,
 
     -- * The served index
     advertisedFiles,
@@ -20,15 +21,15 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
+import Test.Hspec (Expectation, expectationFailure, shouldBe)
 import UnliftIO.Environment (getEnvironment)
 
+import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
+import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet, shouldSucceedThroughProxy)
 import Ecluse.E2E.Harness.Types
 
-{- | Isolate a consumer's pip state, pinning @project==version@ to @digest@, and remove the
-project directory after the action.
--}
+-- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
 withPipProject e2e project version digest use =
     withClientDir "pip" $ \projectDir -> do
@@ -41,9 +42,7 @@ withPipProject e2e project version digest use =
                     <> [("HOME", projectDir), ("PIP_CONFIG_FILE", "/dev/null")]
         use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = e2ePypiIndex e2e}
 
-{- | Install the pinned requirement through the proxy into the project's own target directory.
-@--require-hashes@ makes the advertised digest the download's acceptance test.
--}
+-- | Install into the project target with @--require-hashes@ checking the advertised digest.
 pipInstallIn :: PipProject -> IO ClientResult
 pipInstallIn proj =
     runClient
@@ -69,13 +68,23 @@ pipInstallIn proj =
         , ppDir proj </> requirementsFile
         ]
 
+-- | Install the fixture wheel with its advertised digest and assert its installed metadata exists.
+pipInstallsWheel :: E2E -> [(Text, Text)] -> Expectation
+pipInstallsWheel e2e advertised =
+    case filter ((== pypiWheelFile) . fst) advertised of
+        [(_, digest)] ->
+            withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
+                void $ pipInstallIn proj >>= shouldSucceedThroughProxy e2e
+                installed <- pipInstalled proj pypiDistInfo
+                installed `shouldBe` True
+        other ->
+            expectationFailure ("the served index advertised " <> show (map fst other) <> ", not one digested wheel")
+
 -- | Whether a wheel's @.dist-info@ directory landed in the project's install target.
 pipInstalled :: PipProject -> Text -> IO Bool
 pipInstalled proj distInfo = doesDirectoryExist (ppDir proj </> targetDir </> toString distInfo)
 
-{- | The @(filename, sha256)@ pairs the pypi mount advertises for a project, read through
-the proxy exactly as a client reads them. A mount that does not answer fails the setup.
--}
+-- | Read advertised @(filename, sha256)@ pairs through the proxy, failing if the mount refuses.
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]
 advertisedFiles e2e project = do
     (status, body) <- proxyGet e2e ("/pypi/simple/" <> project)
@@ -85,7 +94,7 @@ advertisedFiles e2e project = do
     pure (digestedFiles body)
 
 -- A refusal reaches the wire as a bare status, so its reason exists only in the proxy's own
--- JSONL. "no versions are available" means the index never resolved; a rule name means a denial.
+-- JSONL. "no versions are available" means the index never resolved. A rule name means a denial.
 indexRefusal :: Text -> Int -> Text -> Text
 indexRefusal project status logs =
     "the pypi mount answered "

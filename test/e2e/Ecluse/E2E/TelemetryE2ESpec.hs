@@ -149,14 +149,13 @@ spanFor pkg name exported =
     esName exported == name
         && spanCarries [("ecluse.package", TextValue (psName pkg)), ("ecluse.version", TextValue (psVersion pkg))] exported
 
-{- The statuses the private upstream answered one artifact's fetches with, oldest first. The
-attribute names are the http-client instrumentation's, and @mirror@ is that upstream's host. -}
+-- The http-client instrumentation records upstream statuses, oldest first.
 privateArtifactAnswers :: Text -> Text -> [ExportedSpan] -> [AttributeValue]
 privateArtifactAnswers name version =
     mapMaybe (lookup "http.status_code" . esAttributes) . filter (spanCarries fetch)
   where
     fetch =
         [ ("http.method", TextValue "GET")
-        , ("http.host", TextValue "mirror")
-        , ("http.target", TextValue (npmArtifactPath name version))
+        , ("http.host", TextValue mirrorHost)
+        , ("http.target", TextValue (T.drop (T.length "/npm") (npmTarballPath name version)))
         ]

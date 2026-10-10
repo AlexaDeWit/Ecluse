@@ -431,11 +431,20 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 
 - `Ecluse.E2E.MixedEcosystemE2ESpec` holds the one case in which a single proxy serves both
   clients in turn: an `npm` install from the public leg, a `pip` install, then an `npm` install
-  from the private leg. Every other proxy in the tier serves one ecosystem's traffic.
+  once the mirror holds the version. This case does not assert which leg serves that install.
 - `Ecluse.E2E.TelemetryE2ESpec` holds the telemetry cases. The telemetry configuration is
   independent of the mount, and the traffic is npm's. Two of its cases need a mount with a mirror
   target: the mirror-span case, and the case that serves a mirrored artifact from the private leg
   under a healthy collector.
+
+| Module | Cases |
+|---|---|
+| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case. |
+| `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
+| `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
+| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
+| `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
+| `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 
 The cases of one telemetry group share a collector, and each install emits the same span names. A
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
