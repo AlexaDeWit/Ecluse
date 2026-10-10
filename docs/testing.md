@@ -231,8 +231,8 @@ The checks compare bytes with each ecosystem's charges:
 - From one step up, the tier fails once a single read's peak or a realistic listing's output
   working set passes a regression limit per ecosystem. The rule for a limit is the smallest quarter
   step at least 8% above the maximum. The read limits, set by that rule from the first table below,
-  are 1.0 per source byte for npm (react, 0.888), 0.4 under its charge, and 3.5 for PyPI (boto3,
-  3.070), 0.4 under its charge. The output limits, set by that rule from the realistic shapes in
+  are 1.0 per source byte for npm (react, 0.887), 0.4 under its charge, and 3.5 for PyPI (boto3,
+  3.088), 0.4 under its charge. The output limits, set by that rule from the realistic shapes in
   the second table, are 1.75 per basis byte for npm (@aws-sdk/client-s3, 1.524, 14.8% margin), 0.25
   under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1 under its charge. One
   example checks that each limit sits below its charge.
@@ -243,7 +243,7 @@ The checks compare bytes with each ecosystem's charges:
   document's weight, expanded as a cache expands it, covers them.
 
 The following figures come from the arm64 Build job of
-[CI run 36537317917](https://github.com/AlexaDeWit/Ecluse/actions/runs/36537317917/job/109304478187),
+[CI run 38016077117](https://github.com/AlexaDeWit/Ecluse/actions/runs/38016077117/job/114106649715),
 with GHC 9.10.3, Cabal `-O1` and one capability. Each figure is heap bytes per source byte: the
 read's peak and the held entry above the baseline, the listing's peak through the read and the
 render above the held entry, and the served body's length. npm's figures are for its packed full
@@ -253,23 +253,24 @@ read.
 |---|---|--:|--:|--:|--:|--:|
 | npm | typescript | 14.97 | 0.587 | 0.465 | 0.677 | 0.659 |
 | npm | @types/node | 10.63 | 0.400 | 0.304 | 0.191 | 0.175 |
-| npm | react | 6.67 | 0.888 | 0.695 | 0.526 | 0.495 |
+| npm | react | 6.67 | 0.887 | 0.695 | 0.526 | 0.495 |
 | npm | webpack | 4.96 | 0.486 | 0.326 | 0.725 | 0.712 |
 | npm | @aws-sdk/client-s3 | 3.97 | 0.526 | 0.352 | 0.777 | 0.762 |
-| npm | express | 0.77 | 1.117 | 0.571 | 0.581 | 0.576 |
-| npm | @babel/core | 0.76 | 0.919 | 0.479 | 0.580 | 0.575 |
+| npm | express | 0.77 | 1.115 | 0.571 | 0.582 | 0.576 |
+| npm | @babel/core | 0.76 | 0.919 | 0.479 | 0.581 | 0.575 |
 | npm | request | 0.29 | 1.561 | 0.624 | 0.937 | 0.529 |
-| npm | lodash | 0.24 | 1.689 | 0.654 | 1.035 | 0.362 |
+| npm | lodash | 0.24 | 1.689 | 0.655 | 1.035 | 0.362 |
 | PyPI | numpy | 2.65 | 2.427 | 2.065 | 0.885 | 0.596 |
-| PyPI | boto3 | 2.10 | 3.070 | 2.855 | 1.012 | 0.621 |
+| PyPI | boto3 | 2.10 | 3.088 | 2.855 | 1.012 | 0.621 |
 | PyPI | requests | 0.12 | 4.005 | 3.096 | 0.909 | 0.657 |
 
 The full-read charges take each listing's read peak per source byte, merges included, among
 listings with at least one step of sources. In the arm64 Build job of
 [CI run 37923084079](https://github.com/AlexaDeWit/Ecluse/actions/runs/37923084079/job/113795530414),
 npm's realistic listings peak at 0.955 (express, publish order) and its heavy bases at 1.387
-(express, oldest heavy base). PyPI's listings peak at 3.070 (boto3, single document), heavy bases
-included.
+(express, oldest heavy base). In that of
+[CI run 38016077117](https://github.com/AlexaDeWit/Ecluse/actions/runs/38016077117/job/114106649715),
+PyPI's listings peak at 3.088 (boto3, single document), heavy bases included.
 
 The arm64 Build job of
 [CI run 36562979100](https://github.com/AlexaDeWit/Ecluse/actions/runs/36562979100/job/109388236444)

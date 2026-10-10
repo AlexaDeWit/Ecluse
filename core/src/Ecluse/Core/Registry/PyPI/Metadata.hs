@@ -48,7 +48,7 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
-{- | PyPI's memory charges, above the largest read peak per source byte (3.07, boto3) and output
+{- | PyPI's memory charges, above the largest read peak per source byte (3.09, boto3) and output
 working set per basis byte of a realistic merge (1.24, boto3) from one meter step up.
 -}
 pypiChargeFactors :: ChargeFactors
