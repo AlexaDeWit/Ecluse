@@ -34,7 +34,7 @@ import Control.Monad.ST (ST, stToIO)
 import Data.Aeson (Value (Object))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.JsonStream.TokenReader (Tokens)
+import Data.JsonStream.Lexer.Internal (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (..), PackageName, renderPackageName)
@@ -81,10 +81,8 @@ readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walk
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
 
 -- | The production packument walk into aeson's tree over a caller's intern table.
-npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> Tokens st -> Step st (Walked TreeRead)
+npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> Cursor -> Step (Walked TreeRead)
 npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits) mode (pureStep (treeStep limits name)) keepsTreeRelease table emptyTreeRead
--- Expose the state type at callers so GHC specialises the tree walk.
-{-# INLINE npmPackumentWalk #-}
 
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
 type NpmFullRead = Walked PackedRead
@@ -105,7 +103,7 @@ npmFullTable base name table0 = (seeded,) <$> newWriter (Just (authorKey, pointe
     Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
 
 -- | The production full-read walk: each kept release packed by the writer against the caller's table.
-npmFullWalk :: Writer st -> Limits -> PackageName -> InternTable -> Tokens st -> ST st (Steps (ST st) NpmFullRead)
+npmFullWalk :: Writer st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
 npmFullWalk writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument (packedStep writer limits name) keepsPackedRelease table emptyPackedRead
 {-# INLINE npmFullWalk #-}
 

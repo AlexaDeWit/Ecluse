@@ -10,14 +10,14 @@ import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.JsonStream.Lexer.Internal (Cursor)
 import Data.JsonStream.Parser qualified as J
-import Data.JsonStream.TokenReader (Tokens)
 import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalkST)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalk, readJsonWalkST)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
@@ -26,11 +26,11 @@ parseJsonChunks :: BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) ->
 parseJsonChunks bound parser step initial = evalState (readJsonStream bound parser step initial nextChunk)
 
 -- | Run the production walk driver against explicit chunks.
-walkJsonChunks :: BodyLimit -> (forall st. Tokens st -> Step st s) -> [ByteString] -> Either LimitError (StreamResult s)
-walkJsonChunks bound walk = walkWritingChunks bound (pure walk)
+walkJsonChunks :: BodyLimit -> (Cursor -> Step s) -> [ByteString] -> Either LimitError (StreamResult s)
+walkJsonChunks bound walk = evalState (readJsonWalk bound walk nextChunk)
 
 -- | Run a walk that writes as it reads against explicit chunks, from a setup that makes its writer.
-walkWritingChunks :: BodyLimit -> (forall st. ST st (Tokens st -> ST st (Steps (ST st) s))) -> [ByteString] -> Either LimitError (StreamResult s)
+walkWritingChunks :: BodyLimit -> (forall st. ST st (Cursor -> ST st (Steps (ST st) s))) -> [ByteString] -> Either LimitError (StreamResult s)
 walkWritingChunks bound setup chunks = runST $ do
     walk <- setup
     evalStateT (readJsonWalkST lift bound walk nextChunk) chunks
