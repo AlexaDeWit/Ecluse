@@ -147,6 +147,8 @@ Just "1"
 Nothing
 -}
 canonicalPep440 :: Text -> Maybe Version
+-- Inlined so a caller that wraps the version leaves one unevaluated closure, not two.
+{-# INLINE canonicalPep440 #-}
 canonicalPep440 raw = do
     key <- parsePep440 raw
     let spelling = renderPep440 key
