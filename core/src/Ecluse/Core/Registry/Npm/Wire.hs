@@ -134,6 +134,7 @@ instance FromJSON VersionManifest where
 
 availability :: Maybe Value -> Availability
 availability = \case
+    Just (String "") -> Available
     Just (String _) -> Deprecated
     Just (Bool True) -> Deprecated
     _ -> Available

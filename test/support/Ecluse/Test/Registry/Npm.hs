@@ -263,7 +263,7 @@ whether it reads as deprecated.
 deprecatedForms :: [(String, [Pair], Bool)]
 deprecatedForms =
     [ ("a string", ["deprecated" .= String "gone"], True)
-    , ("an empty string", ["deprecated" .= String ""], True)
+    , ("an empty string", ["deprecated" .= String ""], False)
     , ("true", ["deprecated" .= Bool True], True)
     , ("false", ["deprecated" .= Bool False], False)
     , ("null", ["deprecated" .= Null], False)
