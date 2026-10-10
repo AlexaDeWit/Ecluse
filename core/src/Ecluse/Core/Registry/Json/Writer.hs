@@ -34,7 +34,7 @@ import Data.Primitive.Array (MutableArray, newArray, readArray, sizeofMutableArr
 import Data.Primitive.Array qualified as Array
 import Data.Primitive.ByteArray (ByteArray, copyMutableByteArray, indexByteArray, moveByteArray, writeByteArray)
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
-import Data.Primitive.PrimArray (MutablePrimArray, copyMutablePrimArray, getSizeofMutablePrimArray, newPrimArray, readPrimArray, setPrimArray, writePrimArray)
+import Data.Primitive.PrimArray (MutablePrimArray, PrimArray, copyMutablePrimArray, getSizeofMutablePrimArray, indexPrimArray, newPrimArray, readPrimArray, setPrimArray, unsafeFreezePrimArray, writePrimArray)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
@@ -73,7 +73,7 @@ newWriter added =
         <*> newPrimVar 0
         <*> (newFilled 256 (-1) >>= newMutVar)
         <*> (newArray 256 Null >>= newMutVar)
-        <*> (newPrimArray 0 >>= newMutVar)
+        <*> (newFilled 256 0 >>= newMutVar)
         <*> (newPrimArray 64 >>= newMutVar)
         <*> newPrimVar 0
         <*> pure added
@@ -280,19 +280,39 @@ putWhole scratch = \case
         putVarint scratch (length values)
         traverse_ (putWhole scratch) values
 
--- Record the table string a blob is about to refer to. A slot no string has claimed holds null.
+-- Record the table string a blob is about to refer to, on the read's first reference to it.
 register :: Writer st -> Entry -> ST st ()
 register writer entry = do
+    lengths <- readMutVar (writerLengths writer)
+    size <- getSizeofMutablePrimArray lengths
+    known <- if entryIndex entry < size then readPrimArray lengths (entryIndex entry) else pure 0
+    when (known == 0) (claim writer entry)
+{-# INLINE register #-}
+
+{- Hold a table string and its encoded length under its index, with room for both. A slot no string
+has claimed holds null, and a length of 0. -}
+claim :: Writer st -> Entry -> ST st ()
+claim writer entry = do
     let index = entryIndex entry
     strings <- readMutVar (writerStrings writer)
-    if index < sizeofMutableArray strings
-        then writeArray strings index (entryString entry)
+    lengths <- readMutVar (writerLengths writer)
+    let held = sizeofMutableArray strings
+    if index < held
+        then record strings lengths
         else do
-            grown <- newArray (max (index + 1) (2 * sizeofMutableArray strings)) Null
-            Array.copyMutableArray grown 0 strings 0 (sizeofMutableArray strings)
-            writeArray grown index (entryString entry)
-            writeMutVar (writerStrings writer) grown
-{-# INLINE register #-}
+            let room = max (index + 1) (2 * held)
+            grownStrings <- newArray room Null
+            Array.copyMutableArray grownStrings 0 strings 0 held
+            writeMutVar (writerStrings writer) grownStrings
+            grownLengths <- newFilled room 0
+            copyMutablePrimArray grownLengths 0 lengths 0 held
+            writeMutVar (writerLengths writer) grownLengths
+            record grownStrings grownLengths
+  where
+    record strings lengths = do
+        writeArray strings (entryIndex entry) (entryString entry)
+        writePrimArray lengths (entryIndex entry) (encodedLength (entryText entry))
+{-# NOINLINE claim #-}
 
 -- The member that last recorded the table key, or -1.
 seenAt :: Writer st -> Int -> ST st Int
@@ -549,91 +569,48 @@ sealValue writer path = do
     discard writer
     writeMutVar (writerReplaced writer) replaced
     hole <- holeAt writer blob path 0
-    packed blob hole <$> sealedLength writer blob
+    -- The lengths are read here, before a later claim writes the array again.
+    lengths <- readMutVar (writerLengths writer) >>= unsafeFreezePrimArray
+    pure $! case encodedFrom lengths blob 0 of Measured encoded _ -> packed blob hole encoded
 
-{- The bytes a render writes for the blob's value as read. A table string is measured from the read's
-own copy, once for the read, because the table that holds its encoding is laid out after the read ends. -}
-sealedLength :: Writer st -> ByteArray -> ST st Int
-sealedLength writer blob = do
-    measure <- Measure <$> readMutVar (writerStrings writer) <*> measuredLengths writer <*> newPrimVar 0 <*> newPrimVar 0
-    measureValue measure blob
-    readPrimVar (measureTotal measure)
+-- The bytes a render writes for a value of a sealed blob, and the position after the value. The two
+-- return in registers as strict fields, where a pair would allocate for every value.
+data Measured = Measured !Int !Int
 
--- One value's measure: the read's table strings, each one's encoded length once a seal has measured
--- it, or 0, the cursor in the blob, and the length so far.
-data Measure st = Measure
-    { measureStrings :: MutableArray st Value
-    , measureLengths :: MutablePrimArray st Int
-    , measureAt :: PrimVar st Int
-    , measureTotal :: PrimVar st Int
-    }
+-- Measure the value at a position, from the recorded length of each table string it names.
+encodedFrom :: PrimArray Int -> ByteArray -> Int -> Measured
+encodedFrom lengths blob position = case indexByteArray blob position :: Word8 of
+    code
+        | code == opNull -> Measured 4 (position + 1)
+        | code == opFalse -> Measured 5 (position + 1)
+        | code == opTrue -> Measured 4 (position + 1)
+        | code == opShared -> case readVarint blob (position + 1) of
+            (# index, next #) -> Measured (indexPrimArray lengths index) next
+        | code == opObject -> case readVarint blob (position + 1) of
+            (# count, next #) -> membersFrom lengths blob count next (separators count)
+        | code == opArray -> case readVarint blob (position + 1) of
+            (# count, next #) -> itemsFrom lengths blob count next (separators count)
+        | otherwise -> case readVarint blob (position + 1) of (# len, next #) -> Measured len (next + len)
 
--- The measured lengths with a slot for every table string the writer has room for, new slots at 0.
-measuredLengths :: Writer st -> ST st (MutablePrimArray st Int)
-measuredLengths writer = do
-    strings <- readMutVar (writerStrings writer)
-    lengths <- readMutVar (writerLengths writer)
-    held <- getSizeofMutablePrimArray lengths
-    if sizeofMutableArray strings <= held
-        then pure lengths
-        else do
-            grown <- newFilled (sizeofMutableArray strings) 0
-            copyMutablePrimArray grown 0 lengths 0 held
-            writeMutVar (writerLengths writer) grown
-            pure grown
-
--- Add the encoded length of the value at the cursor to the total, and move the cursor past it.
-measureValue :: Measure st -> ByteArray -> ST st ()
-measureValue measure blob = do
-    position <- readPrimVar (measureAt measure)
-    case indexByteArray blob position :: Word8 of
-        code
-            | code == opNull -> advance measure (position + 1) 4
-            | code == opFalse -> advance measure (position + 1) 5
-            | code == opTrue -> advance measure (position + 1) 4
-            | code == opShared -> case readVarint blob (position + 1) of
-                (# index, next #) -> sharedLength measure index >>= advance measure next
-            | code == opObject -> case readVarint blob (position + 1) of
-                (# count, next #) -> advance measure next (separators count) >> measureMembers measure blob count
-            | code == opArray -> case readVarint blob (position + 1) of
-                (# count, next #) -> advance measure next (separators count) >> measureItems measure blob count
-            | otherwise -> case readVarint blob (position + 1) of
-                (# len, next #) -> advance measure (next + len) len
-
--- Measure the given number of members from the cursor on: each key with its colon, then its value.
-measureMembers :: Measure st -> ByteArray -> Int -> ST st ()
-measureMembers measure blob !count = when (count > 0) $ do
-    position <- readPrimVar (measureAt measure)
-    case readVarint blob position of
+-- Add the given number of members from a position on to a total: each key with its colon, then its value.
+membersFrom :: PrimArray Int -> ByteArray -> Int -> Int -> Int -> Measured
+membersFrom lengths blob !count !at !total
+    | count <= 0 = Measured total at
+    | otherwise = case readVarint blob at of
         (# tagged, next #)
-            | even tagged -> sharedLength measure (tagged `div` 2) >>= \len -> advance measure next (len + 1)
-            | otherwise -> advance measure (next + tagged `div` 2) (tagged `div` 2 + 1)
-    measureValue measure blob
-    measureMembers measure blob (count - 1)
+            | even tagged -> memberValue lengths blob count next (total + indexPrimArray lengths (tagged `div` 2) + 1)
+            | otherwise -> memberValue lengths blob count (next + tagged `div` 2) (total + tagged `div` 2 + 1)
 
-measureItems :: Measure st -> ByteArray -> Int -> ST st ()
-measureItems measure blob !count = when (count > 0) $ do
-    measureValue measure blob
-    measureItems measure blob (count - 1)
+-- A member's value after its key, then the members left.
+memberValue :: PrimArray Int -> ByteArray -> Int -> Int -> Int -> Measured
+memberValue lengths blob !count !at !total = case encodedFrom lengths blob at of
+    Measured len after -> membersFrom lengths blob (count - 1) after (total + len)
 
--- The encoded length of the table string an index names, measured on the read's first use of it.
-sharedLength :: Measure st -> Int -> ST st Int
-sharedLength measure index = do
-    known <- readPrimArray (measureLengths measure) index
-    if known > 0
-        then pure known
-        else do
-            string <- readArray (measureStrings measure) index
-            let !len = encodedLength (stringText string)
-            writePrimArray (measureLengths measure) index len
-            pure len
-
--- Move the cursor to a position, and add a length to the total.
-advance :: Measure st -> Int -> Int -> ST st ()
-advance measure position len = writePrimVar (measureAt measure) position >> (readPrimVar total >>= writePrimVar total . (+ len))
-  where
-    total = measureTotal measure
-{-# INLINE advance #-}
+itemsFrom :: PrimArray Int -> ByteArray -> Int -> Int -> Int -> Measured
+itemsFrom lengths blob !count !at !total
+    | count <= 0 = Measured total at
+    | otherwise = case encodedFrom lengths blob at of
+        Measured len after -> itemsFrom lengths blob (count - 1) after (total + len)
 
 -- | Forget the value the writer holds, and the member its top-level object replaced.
 discard :: Writer st -> ST st ()
