@@ -83,6 +83,8 @@ readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackument
 -- | The production packument walk into aeson's tree over a caller's intern table.
 npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> Tokens st -> Step st (Walked TreeRead)
 npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits) mode (pureStep (treeStep limits name)) keepsTreeRelease table emptyTreeRead
+-- Expose the state type at callers so GHC specialises the tree walk.
+{-# INLINE npmPackumentWalk #-}
 
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
 type NpmFullRead = Walked PackedRead
