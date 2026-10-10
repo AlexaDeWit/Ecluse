@@ -628,7 +628,8 @@ jobs:
 
   gate:
     name: CI gate
-    # The single Required check. Wire a new one in by adding it to `needs` here AND to
+    # One of the three contexts the ruleset requires (.agents/orchestration-strategy.md
+    # names them). Wire a gating job in by adding it to `needs` here AND to
     # scripts/ci-gate-verdict.sh. smoke and grype are absent on purpose: they never gate.
     needs:
       - changes

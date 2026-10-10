@@ -10,7 +10,7 @@ durable memory: load detailed guidance only when the task needs it. See
   decisions, and module responsibilities.
 - Identify the task type and its authoritative source before reading further. Do not preload the
   whole process and design canon.
-- The design documents describe the target. Git, the implementation, and the per-slice status
+- The design documents describe the target. Git, the implementation, and the issue tracker
   describe what has shipped. Reconcile the two. Neither is interchangeable with the other.
 - **Escalate, don't guess**. Stop on an ambiguous, missing, or contradictory requirement instead of
   inventing a way through it.
@@ -20,14 +20,14 @@ durable memory: load detailed guidance only when the task needs it. See
 
 | Work | Read next |
 |---|---|
-| Implement or change Haskell | Active slice or issue, relevant architecture section, [`docs/style.md`](docs/style.md), then applicable sections of [`docs/haddock.md`](docs/haddock.md) |
+| Implement or change Haskell | Active issue, relevant architecture section, [`docs/style.md`](docs/style.md), then applicable sections of [`docs/haddock.md`](docs/haddock.md) |
 | Change architecture or module boundaries | [`docs/architecture.md`](docs/architecture.md) and only the linked concern documents affected |
 | Change operator behaviour or configuration | [`web/content/docs/`](web/content/docs/), [`config/default.yaml`](config/default.yaml), and the relevant architecture document |
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Add an ecosystem | [`docs/adding-an-ecosystem.md`](docs/adding-an-ecosystem.md), [`docs/architecture/registry-model.md`, Registry abstraction](docs/architecture/registry-model.md#registry-abstraction), then [`docs/testing.md`, One pattern for every ecosystem](docs/testing.md#one-pattern-for-every-ecosystem) and the onboarding checklist after it |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
-| Coordinate implementation slices | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
+| Coordinate implementation work | [`.agents/orchestration-strategy.md`](.agents/orchestration-strategy.md) |
 | Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the PR template |
 
 ## Documentation policy
@@ -93,7 +93,8 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 ## CI, security, and repository gates
 
 - The CI workflow and tier semantics live in [`docs/testing.md`](docs/testing.md). The terminal
-  `gate` job is the branch-protection authority.
+  `gate` job is one of the three contexts the ruleset requires
+  ([`.agents/orchestration-strategy.md`, Gating jobs and required contexts](.agents/orchestration-strategy.md#gating-jobs-and-required-contexts)).
 - The repository rules (SHA-pinned Actions, injection-free workflows, no Semgrep or Stan ignores
   without repo-owner approval, SPDX headers, Mermaid diagrams) are in
   [CONTRIBUTING, Repository requirements](CONTRIBUTING.md#repository-requirements).

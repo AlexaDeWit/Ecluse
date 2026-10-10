@@ -6,7 +6,7 @@ Understanding comes from reliable retrieval, not from loading every source at on
 ## Context layers
 
 1. **Always loaded:** `AGENTS.md`, holding only repository-wide invariants and routing.
-2. **Task contract:** the request, active issue or slice, acceptance criteria, and file scope.
+2. **Task contract:** the request, active issue, acceptance criteria, and file scope.
 3. **Decision evidence:** only the architecture, style, testing, or operational sections the current
    decision needs.
 4. **Volatile state:** branch, diff, open PRs, test results, decisions, blockers, and next action.
@@ -36,7 +36,7 @@ file just because it exists.
 | Implement | Acceptance criteria, target modules, applicable style/Haddock sections, current diagnostics |
 | Review | Diff, acceptance criteria, affected invariants, focused verification evidence |
 | Gate and hand-off | Checks run, CI/PR state, known limitations, commit and PR requirements |
-| Orchestrate | Active slices, agents/worktrees, decisions, blockers, PR state, next dispatchable work |
+| Orchestrate | Active issues, agents/worktrees, decisions, blockers, PR state, next dispatchable work |
 
 Start a fresh thread when the objective or phase changes enough that most accumulated evidence no
 longer applies. Do not use a permanent implementation thread as project memory.
