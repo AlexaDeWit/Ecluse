@@ -11,7 +11,7 @@ set -euo pipefail
 [[ "$PROFILE_OUTPUT" == /* ]]
 readonly packages=(numpy typescript)
 readonly profile_seconds=60
-readonly profiling_stdev=0
+readonly profiling_stdev=1e-12
 readonly source_dir="$RUNNER_TEMP/json-profile-source"
 
 mkdir -- "$PROFILE_OUTPUT"
