@@ -229,12 +229,17 @@ decoderSpec = describe "mkHash agrees with the digest decoder" $ do
             ]
             `shouldBe` []
 
-    -- The decoder lowercases hex first, so the sweep covers every character a case mapping could turn into a digit.
-    it "with any character at all in a hex digit's place" $
-        firstDifferences [(MD5, T.cons c (T.drop 1 Package.validMd5)) | c <- [minBound .. maxBound]] `shouldBe` []
+    -- The decoder lowercases hex first, so a character also takes the place of as many digits as it lowers to.
+    it "with any character at all in the place of hex digits" $
+        firstDifferences
+            [ (MD5, T.cons c (T.drop width Package.validMd5))
+            | c <- [minBound .. maxBound]
+            , width <- [1 .. T.length (T.toLower (one c))]
+            ]
+            `shouldBe` []
 
-    for_ corpusPackages (agreesOnCapture npmDigests)
-    for_ pypiCorpusPackages (agreesOnCapture pypiDigests)
+    for_ corpusPackages (agreesOnCapture 2 npmDigests)
+    for_ pypiCorpusPackages (agreesOnCapture 1 pypiDigests)
 
 -- 'mkHash' with the decoder as its test: 'canonicalHashValue' is 'Just' exactly when 'decodeHash' yields bytes.
 viaDecoder :: HashAlg -> Text -> Either Text Hash
@@ -248,20 +253,23 @@ viaDecoder alg value
 firstDifferences :: [(HashAlg, Text)] -> [(HashAlg, Text)]
 firstDifferences = take 5 . filter (\(alg, value) -> mkHash alg value /= viaDecoder alg value)
 
+-- Every entry of the capture must hold at least the given count of digests, so a field the parser misses fails the test.
 -- Each digest is read as every algorithm, whole and as the components 'mkSriHashes' splits it into.
-agreesOnCapture :: J.Parser Text -> CorpusPackage -> Spec
-agreesOnCapture digestsOf package =
+agreesOnCapture :: Int -> J.Parser [Text] -> CorpusPackage -> Spec
+agreesOnCapture fewest digestsOf package =
     it ("over every digest of the capture " <> cpPath package) $ do
         bytes <- readFileBS (cpPath package)
-        streamed <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) digestsOf (\held digest -> Right (digest : held)) [] [bytes])
-        digests <- concatMap (\wire -> wire : words wire) <$> expectRight (streamValue streamed)
-        digests `shouldSatisfy` (not . null)
-        firstDifferences [(alg, digest) | digest <- digests, alg <- universe] `shouldBe` []
+        streamed <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) digestsOf (\held entry -> Right (entry : held)) [] [bytes])
+        entries <- expectRight (streamValue streamed)
+        entries `shouldSatisfy` (not . null)
+        take 5 (filter ((< fewest) . length) entries) `shouldBe` []
+        firstDifferences [(alg, reading) | digest <- concat entries, reading <- ordNub (digest : words digest), alg <- universe] `shouldBe` []
 
--- Every @dist.shasum@ and @dist.integrity@ of an npm packument, and every @hashes@ value of a PEP 691 index.
-npmDigests, pypiDigests :: J.Parser Text
-npmDigests = "versions" J..: J.objectValues ("dist" J..: (("shasum" J..: J.string) <> ("integrity" J..: J.string)))
-pypiDigests = "files" J..: J.arrayOf ("hashes" J..: J.objectValues J.string)
+-- One list for each release of an npm packument (@dist.shasum@, @dist.integrity@) and for each file of a
+-- PEP 691 index (every @hashes@ value). An entry with no digest gives the empty list.
+npmDigests, pypiDigests :: J.Parser [Text]
+npmDigests = "versions" J..: J.objectValues (many ("dist" J..: (("shasum" J..: J.string) <> ("integrity" J..: J.string))))
+pypiDigests = "files" J..: J.arrayOf (many ("hashes" J..: J.objectValues J.string))
 
 -- One spelling of a digest: the algorithm 'mkHash' is given, the SRI prefix if it has one, and the digest's length in bytes.
 data Spelling = Spelling {spellingAlg :: HashAlg, spellingPrefix :: Maybe Text, spellingBytes :: Int}
