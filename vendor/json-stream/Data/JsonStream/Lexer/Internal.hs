@@ -4,7 +4,7 @@
 -- | Incremental Haskell scanning with the vendored lexer's token and chunk semantics.
 -- State owns immutable byte slices, with no foreign result records.
 module Data.JsonStream.Lexer.Internal
-    ( Cursor, Scanned (..), start, next, feed, canFeed, stopped ) where
+    ( Cursor, Element (..), Scanned (..), start, next, feed, canFeed, stopped, remaining ) where
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
@@ -13,7 +13,13 @@ import Data.Word (Word8)
 import Foreign.C.Types (CLong)
 
 import Data.JsonStream.Number (numberDigitLimit, parseNumber)
-import Data.JsonStream.TokenParser (Element (..))
+
+-- | A lexical token independent of the public parser's leftover-input reporting.
+data Element
+    = ArrayBegin | ArrayEnd | ObjectBegin | ObjectEnd
+    | StringContent !BS.ByteString | StringRaw !BS.ByteString !Bool | StringEnd
+    | JValue !Aeson.Value | JInteger !CLong
+    deriving (Eq, Show)
 
 -- | The current piece and lexical state carried across pieces.
 data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode [BS.ByteString]
@@ -34,6 +40,11 @@ start bytes = Cursor bytes 0 Base []
 stopped :: Cursor
 stopped = Cursor BS.empty 0 Broken []
 
+-- | Materialise leftover input only for a caller that reports it.
+remaining :: Cursor -> BS.ByteString
+remaining (Cursor bytes offset _ _) = BS.drop offset bytes
+{-# INLINE remaining #-}
+
 -- | Whether input is exhausted without a pending split-string end.
 canFeed :: Cursor -> Bool
 canFeed (Cursor bytes offset mode _) = case mode of
@@ -51,7 +62,7 @@ feed cursor@(Cursor _ _ mode numbers) bytes
 next :: Cursor -> Scanned
 next (Cursor bytes offset mode numbers) = case mode of
     Broken -> Failed
-    StringFinish -> Token (StringEnd (BS.drop offset bytes)) (Cursor bytes offset Base numbers)
+    StringFinish -> Token StringEnd (Cursor bytes offset Base numbers)
     _ | offset >= BS.length bytes -> More (Cursor bytes offset mode numbers)
     Base -> base bytes offset numbers
     StringPart continued escaped -> string bytes offset continued escaped numbers
@@ -69,9 +80,9 @@ base bytes = skipSpace
     dispatch offset byte numbers
         | emptyByte byte = skipSpace (offset + 1) numbers
         | byte == openBrace = emitted ObjectBegin
-        | byte == closeBrace = emitted (ObjectEnd rest)
+        | byte == closeBrace = emitted ObjectEnd
         | byte == openBracket = emitted ArrayBegin
-        | byte == closeBracket = emitted (ArrayEnd rest)
+        | byte == closeBracket = emitted ArrayEnd
         | byte == quote = next (Cursor bytes following (StringPart False False) numbers)
         | byte == trueInitial = identifierStart TrueLiteral
         | byte == falseInitial = identifierStart FalseLiteral
@@ -80,7 +91,6 @@ base bytes = skipSpace
         | otherwise = Failed
       where
         following = offset + 1
-        rest = BS.drop following bytes
         emitted element = Token element (Cursor bytes following Base numbers)
         identifierStart literal = next (Cursor bytes following (LiteralPart literal 1) numbers)
 {-# INLINE base #-}
@@ -121,7 +131,7 @@ string bytes initial continued escaped0 numbers = go initial escaped0 False
                         else go (offset + 1) False special'
     finishString offset special
         | continued = Token (StringContent (piece offset)) (Cursor bytes (offset + 1) StringFinish numbers)
-        | otherwise = Token (StringRaw (piece offset) (not special) (BS.drop (offset + 1) bytes)) (Cursor bytes (offset + 1) Base numbers)
+        | otherwise = Token (StringRaw (piece offset) (not special)) (Cursor bytes (offset + 1) Base numbers)
 
 number :: BS.ByteString -> Int -> Bool -> [BS.ByteString] -> Scanned
 number bytes initial continued numbers = go initial 0 0 False 0 continued 1

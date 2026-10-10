@@ -7,24 +7,15 @@ module Data.JsonStream.TokenReader (
 ) where
 
 import Control.Monad.ST (ST)
-import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import Data.STRef
-import Foreign.C.Types (CLong)
 
+import Data.JsonStream.Lexer.Internal (Element (..))
 import qualified Data.JsonStream.Lexer.Internal as Lexer
-import qualified Data.JsonStream.TokenParser as List
 
 -- | The largest piece accepted by the owned reader and its body driver.
 maxChunkBytes :: Int
 maxChunkBytes = 32768
-
--- | A token without leftover-input reporting, for a consumer that always advances.
-data Element
-    = ArrayBegin | ArrayEnd | ObjectBegin | ObjectEnd
-    | StringContent !BS.ByteString | StringRaw !BS.ByteString !Bool | StringEnd
-    | JValue !Aeson.Value | JInteger !CLong
-    deriving (Eq, Show)
 
 -- | A token, a request for input, or a terminal failure.
 data Next = PartialResult !Element | TokMoreData | TokFailed
@@ -49,20 +40,7 @@ nextToken (Tokens state) = do
     case Lexer.next cursor of
         Lexer.Token value after -> do
             writeSTRef state after
-            pure (PartialResult (withoutContext value))
+            pure (PartialResult value)
         Lexer.More waiting -> writeSTRef state waiting >> pure TokMoreData
         Lexer.Failed -> writeSTRef state Lexer.stopped >> pure TokFailed
 {-# INLINE nextToken #-}
-
-withoutContext :: List.Element -> Element
-withoutContext value = case value of
-    List.ArrayBegin -> ArrayBegin
-    List.ArrayEnd _ -> ArrayEnd
-    List.ObjectBegin -> ObjectBegin
-    List.ObjectEnd _ -> ObjectEnd
-    List.StringContent bytes -> StringContent bytes
-    List.StringRaw bytes ascii _ -> StringRaw bytes ascii
-    List.StringEnd _ -> StringEnd
-    List.JValue scalar -> JValue scalar
-    List.JInteger integer -> JInteger integer
-{-# INLINE withoutContext #-}
