@@ -74,6 +74,10 @@ fileSpec = describe "IndexFile" $ do
         file <- shouldDecodeFile (fileEntry ["size" .= (1.5 :: Double)])
         ifSize file `shouldBe` Nothing
 
+    it "reads an upload instant in a layout that only the library parser reads" $ do
+        file <- shouldDecodeFile (fileEntry ["upload-time" .= ("2026-05-14 21:25:26.443+02:00" :: Text)])
+        ifUploadTime file `shouldBe` Just uploadedAt
+
     it "reads an undecodable upload instant as absent, which fails the quarantine" $ do
         file <- shouldDecodeFile (fileEntry ["upload-time" .= ("last tuesday" :: Text)])
         ifUploadTime file `shouldBe` Nothing

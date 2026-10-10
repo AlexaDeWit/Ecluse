@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The floor every ecosystem's projection of an untrusted registry document sits on: per-entry
-lenient degradation, the shared name checks, and the upstream name-agreement test.
+lenient degradation, publish-time decoding, the shared name checks, and the upstream name-agreement test.
 
 The three name checks travel together because skipping any one of them reaches an interpolated
 upstream URL. An ecosystem's grammar layers its own rules on top and never replaces them.
@@ -11,6 +11,9 @@ upstream URL. An ecosystem's grammar layers its own rules on top and never repla
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation
     partitionLenientList,
+
+    -- * Publish times
+    parsePublishTime,
 
     -- * Name agreement
     Projection (..),
@@ -23,8 +26,10 @@ module Ecluse.Core.Registry.WireSupport (
     withinNameLimit,
 ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value (String), parseJSON)
+import Data.Aeson.Types (Parser)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (
     InvalidEntry,
@@ -36,6 +41,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Server.Path (isSafeComponent)
+import Ecluse.Core.Text (readIso8601Utc)
 
 {- | Partition a list of keyed raw entries into the ones that decode and the ones that do not,
 in input order. An array-shaped format pairs each element with its own key first.
@@ -47,6 +53,14 @@ partitionLenientList kind decode =
     step (key, value) (kept, dropped) = case decode value of
         Right a -> ((key, a) : kept, dropped)
         Left err -> (kept, mkInvalidEntry kind key value (toText err) : dropped)
+
+{- | Aeson's decoding of a 'UTCTime', for a publish time of any ecosystem. A stamp in the layout that
+'readIso8601Utc' reads skips the library's parser, and every other value gets the library's instant or refusal.
+-}
+parsePublishTime :: Value -> Parser UTCTime
+parsePublishTime = \case
+    String raw | Just instant <- readIso8601Utc raw -> pure instant
+    value -> parseJSON value
 
 {- | What an upstream document projected into, once its self-reported name has been checked.
 A mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.

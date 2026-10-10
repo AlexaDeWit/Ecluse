@@ -4,10 +4,17 @@
 
 module Ecluse.Core.Registry.WireSupportSpec (spec) where
 
-import Data.Aeson (Value (Number, String), parseJSON)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), parseJSON)
 import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
+import Hedgehog (Gen, cover, forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package (
     InvalidEntry (invalidKey, invalidKind, invalidValue),
@@ -18,8 +25,10 @@ import Ecluse.Core.Registry.WireSupport (
     Projection (NameMismatch, Projected),
     checkNameAgreement,
     parseNameComponent,
+    parsePublishTime,
     partitionLenientList,
  )
+import Ecluse.Core.Text (readIso8601Utc)
 import Ecluse.Test.Package (scopedNpm, unscopedNpm)
 import Ecluse.Test.Registry.WireSupport (partitionLenient)
 
@@ -30,6 +39,7 @@ spec :: Spec
 spec = do
     partitionLenientSpec
     partitionLenientListSpec
+    parsePublishTimeSpec
     checkNameAgreementSpec
     parseNameComponentSpec
 
@@ -71,6 +81,49 @@ partitionLenientListSpec = describe "partitionLenientList" $ do
 
     it "reads an empty list as no entries either way" $
         partitionLenientList InvalidDistTag decodeInt [] `shouldBe` ([] :: [(Text, Int)], [])
+
+parsePublishTimeSpec :: Spec
+parsePublishTimeSpec = describe "parsePublishTime" $ do
+    modifyMaxSuccess (const 2000) $
+        it "decodes every JSON value to the instant or the refusal of the library's UTCTime decoder" $
+            hedgehog $ do
+                value <- forAll genTimeValue
+                let library = parseEither parseJSON value :: Either String UTCTime
+                    scanned = case value of
+                        String raw -> isJust (readIso8601Utc raw)
+                        _ -> False
+                cover 20 "a stamp the scan reads" scanned
+                cover 10 "a stamp only the library parser reads" (not scanned && isRight library)
+                cover 10 "a string neither reads" (isString value && isLeft library)
+                cover 5 "a value that is not a string" (not (isString value))
+                parseEither parsePublishTime value === library
+
+    it "refuses a string that is no stamp with the library's message" $
+        parseEither parsePublishTime (String "last tuesday")
+            `shouldBe` (parseEither parseJSON (String "last tuesday") :: Either String UTCTime)
+
+isString :: Value -> Bool
+isString = \case
+    String _ -> True
+    _ -> False
+
+-- A publish time as a registry may write it: in the usual layout, in another the library reads, or malformed.
+genTimeValue :: Gen Value
+genTimeValue =
+    Gen.frequency
+        [ (4, String <$> genUsual)
+        , (3, String <$> (Gen.element wider <*> genUsual))
+        , (2, String <$> Gen.choice [Gen.text (Range.linear 0 40) Gen.unicode, T.replace "T" "t" <$> genUsual, T.dropEnd 1 <$> genUsual])
+        , (1, Gen.element [Null, Bool True, Number 1_600_000_000, Array mempty, Object mempty])
+        ]
+  where
+    -- 'iso8601Show' writes the usual layout, with a fraction of 0 to 12 digits.
+    genUsual = do
+        day <- fromGregorian <$> Gen.integral (Range.linear 0 9999) <*> Gen.int (Range.linear 1 12) <*> Gen.int (Range.linear 1 31)
+        picos <- Gen.choice [(* 1_000_000_000_000) <$> Gen.integral (Range.linear 0 86_399), Gen.integral (Range.linear 0 86_399_999_999_999_999)]
+        pure (toText (iso8601Show (UTCTime day (picosecondsToDiffTime picos))))
+    -- Respellings the library reads and the scan declines.
+    wider = [T.replace "T" " ", (<> "+00:00") . T.dropEnd 1, (<> "-0330") . T.dropEnd 1, T.cons '+']
 
 checkNameAgreementSpec :: Spec
 checkNameAgreementSpec = describe "checkNameAgreement" $ do
