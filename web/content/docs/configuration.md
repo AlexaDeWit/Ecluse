@@ -402,7 +402,7 @@ refusals:
 | `appliesTo: []` | It names no phase. `enabled: false` is how you switch a rule off |
 | `appliesTo: [revocation]` | A deny the gate did not read would delete copies of versions the gate still admits, and the mirror worker would write them again |
 | `appliesTo: [admission]` on an allow | The Dredger would not read the allow, so a lower deny could delete a version the gate admits. Limit the deny instead |
-| An unknown word, or a value that is not a list | It names no phase Écluse has |
+| An unknown word, an empty value, or a value that is not a list | It names no phase Écluse has. An empty value does not read as both phases |
 
 Every role's boot log, and `ecluse check-config`, print each mount's rules in evaluation order with
 the phases each applies at. A `pypi` mount under the policy above keeps the shared `[admission]`,

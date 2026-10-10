@@ -148,7 +148,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-000000000124
     appliesToModel: false
   - id: as-admission-only-deny-keeps-copies
-    prose: A deny limited to admission is the operator's stated choice, rule by rule, to keep serving from the trusted stores the versions that deny refuses at the gate. The operator limits a deny only where builds that already use those versions must continue, and applies it at revocation where the stored copies must go. Every role's boot log and `ecluse check-config` name the phases each rule applies at, so the choice is visible on each start.
+    prose: A deny limited to admission is the operator's stated choice, rule by rule, to keep serving from the trusted stores the versions that deny refuses at the gate. The operator limits a deny only where builds that already use those versions must continue, and applies it at revocation where the stored copies must go. Every role's boot log and `ecluse check-config` list each mount's rules by rule type with the phases each applies at, and print each configured `appliesTo` key under the rule's configured name with the layer that set it. So the choice is visible on each start, and two rules of one type are told apart by the key lines.
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d

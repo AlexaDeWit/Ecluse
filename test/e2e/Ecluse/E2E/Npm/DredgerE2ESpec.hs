@@ -62,7 +62,11 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         run <- runDredgerOnce plane ["--once"] (sweepEnvUnder (renderRules [admissionOnlyEntry (psName dredgerPkg)]))
         (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
         auditMessages run `shouldSatisfy` elem "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
-        filter (T.isPrefixOf "deleting ") (sweepMessages run) `shouldBe` []
+        -- The walk examines every version outside the first-party belt and hands none over.
+        let guardCount = length (Map.findWithDefault [] publishDredgerName initial)
+            examined = sum (map length (Map.elems initial)) - guardCount
+        sweepMessages run
+            `shouldBe` [cycleLine ["examined " <> show examined, "deleted 0", "kept " <> show examined, "guard-skipped " <> show guardCount]]
         verdaccioSnapshot e2e `shouldReturn` initial
         verdaccioSnapshot cache `shouldReturn` privateInitial
 

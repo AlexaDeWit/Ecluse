@@ -589,7 +589,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
 hold what that selection changes for a stored version. -}
 revocationSpec :: Spec
 revocationSpec = describe "the rules that apply at revocation" $ do
-    for_ [("npm", leftPadName, npmVersion "1.0.0", "left-pad@1.0.0"), ("PyPI", mkPackageName PyPI Nothing "requests", mkVersion PyPI "2.31.0", "requests@2.31.0")] $ \(eco, name, version, revoked) -> do
+    for_ [("npm", leftPadName, npmVersion "1.0.0", "left-pad@1.0.0"), ("PyPI", requestsProject, mkVersion PyPI "2.31", "requests@2.31")] $ \(eco, name, version, revoked) -> do
         it ("deletes a stored " <> eco <> " version an identity deny names at both phases") $ do
             (rec', left) <- revocationStep inertRuleDeps [atDefaultPrecedence (DenyByIdentity revoked)] name version (Just (sampleManifest name [version]))
             recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
@@ -610,27 +610,30 @@ revocationSpec = describe "the rules that apply at revocation" $ do
             recResults rec' `shouldReturn` [SweepExamined, SweepKept]
             left `shouldBe` [version]
 
-    describe "an install-code deny above an advisory deny, over a manifest the store did not serve" $ do
-        let affected = npmVersion "1.0.0"
-            deps = advisoryDeps (pure AdvisoryFresh)
+    -- One advisory affects each fixture below 2.0.0.
+    for_ [("npm", leftPadName, npmVersion "1.0.0"), ("PyPI", requestsProject, mkVersion PyPI "1.5")] $ \(eco, name, affected) -> do
+        describe ("an install-code deny above an advisory deny, over " <> eco <> " metadata the store did not serve") $ do
+            it "stops the walk while the install-code deny applies at revocation, so the version stays" $ do
+                (rec', left) <- revocationStep walkDeps (map atDefaultPrecedence [DenyInstallTimeExecution, denyCveRule]) name affected Nothing
+                recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+                left `shouldBe` [affected]
 
-        it "stops the walk while the install-code deny applies at revocation, so the version stays" $ do
-            (rec', left) <- revocationStep deps (map atDefaultPrecedence [DenyInstallTimeExecution, denyCveRule]) leftPadName affected Nothing
-            recResults rec' `shouldReturn` [SweepExamined, SweepKept]
-            left `shouldBe` [affected]
+            it "passes the install-code deny once it is limited to admission, so the advisory deny condemns on identity alone" $ do
+                (rec', left) <- revocationStep walkDeps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] name affected Nothing
+                left `shouldBe` []
+                recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
 
-        it "passes the install-code deny once it is limited to admission, so the advisory deny condemns on identity alone" $ do
-            (rec', left) <- revocationStep deps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] leftPadName affected Nothing
+        it ("deletes for the advisory " <> eco <> " version that also runs code on install, when the install-code deny is limited to admission") $ do
+            let manifest = runningCodeOnInstall (sampleManifest name [affected])
+            (rec', left) <- revocationStep walkDeps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] name affected (Just manifest)
             left `shouldBe` []
             recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
-
-    it "deletes for the advisory a version that also runs code on install, when the install-code deny is limited to admission" $ do
-        let affected = npmVersion "1.0.0"
-            manifest = runningCodeOnInstall (sampleManifest leftPadName [affected])
-            deps = advisoryDeps (pure AdvisoryFresh)
-        (rec', left) <- revocationStep deps [limitedToAdmission DenyInstallTimeExecution, atDefaultPrecedence denyCveRule] leftPadName affected (Just manifest)
-        left `shouldBe` []
-        recInfo rec' >>= (`shouldSatisfy` any (T.isInfixOf "blocked by DenyIfCve"))
+  where
+    requestsProject = mkPackageName PyPI Nothing "requests"
+    walkDeps =
+        (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", affectingRange), ("requests", affectingRange)]))
+            { rdAdvisoryFreshness = pure AdvisoryFresh
+            }
 
 -- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
 limitedToAdmission :: Rule -> PrecededRule

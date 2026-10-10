@@ -187,6 +187,13 @@ spec = do
                 loadConfig pubUrlEnv (Just ("{\"mounts\":{\"" <> mount <> "\":{\"enabled\":true,\"rules\":{\"min-age\":{\"appliesTo\":[\"revocation\"]}}}}}"))
                     `shouldBe` Left [PolicyErrors [MalformedRule "min-age" "\"appliesTo\" must include \"admission\". A rule that applied at revocation alone would delete copies of versions the gate still admits"]]
 
+        it "refuses appliesTo written with no value, in the document and in the environment" $ do
+            let refused = first (any (T.isInfixOf "rule.appliesTo is written with no value" . renderConfigError))
+                emptyInDocument = "rules:\n  deny-scripts:\n    type: DenyInstallTimeExecution\n    appliesTo:\nmounts:\n  npm:\n    enabled: true\n"
+                nullInEnvironment = [("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_RULES", "{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":null}}")]
+            refused (loadConfig pubUrlEnv (Just emptyInDocument)) `shouldBe` Left True
+            refused (loadConfig (pubUrlEnv <> nullInEnvironment) Nothing) `shouldBe` Left True
+
         it "names the setting and its layer in the provenance lines" $
             resolvedKeyProvenance [] (Just "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}}")
                 `shouldSatisfy` elem "config: rules.deny-scripts.appliesTo = [\"admission\"] (document)"

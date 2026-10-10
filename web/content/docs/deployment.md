@@ -20,7 +20,7 @@ and run the roles your deployment needs.
 | `ecluse proxy --no-worker` | Serves clients and enqueues mirror jobs, but does not drain the queue | Scale on request rate. Needs a durable queue |
 | `ecluse mirror` | Runs the mirror worker alone, and serves only its health probes | Scale on queue depth. Needs a durable queue |
 | `ecluse pilot` | Builds each ecosystem's advisory database from the OSV exports and the EPSS feed | One instance, because parallel instances race and duplicate API calls |
-| `ecluse dredger` | Deletes versions your current rules deny from each mount's mirror target and private cache. No other role deletes | One per store, because it takes no lease |
+| `ecluse dredger` | Deletes versions your current rules deny at revocation from each mount's mirror target and private cache. No other role deletes | One per store, because it takes no lease |
 
 The fast lane, the advisory denies, and Dredger read the advisory database that Pilot publishes.
 [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker) and

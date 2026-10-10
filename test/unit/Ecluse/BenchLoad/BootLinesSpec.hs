@@ -35,8 +35,9 @@ ruleLines =
     , "config: rules.min-age.type = AllowIfOlderThan (default)"
     , "config: rules.remediation-fast-track.type = AllowIfRemediatesCve (default)"
     , "rule boot order for mount npm:"
-    , "rule 1: AllowByIdentity (precedence 250)"
-    , "rule 2: AllowIfOlderThan (precedence 100)"
+    , "rule 1: DenyByIdentity (precedence 400, applies at admission only)"
+    , "rule 2: AllowByIdentity (precedence 250, applies at admission and revocation)"
+    , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
     , "rule boot order for mount pypi:"
     ]
 
@@ -68,10 +69,10 @@ spec = do
                 [ "{\"message\":\"config: rules.min-age.type = AllowIfOlderThan (default)\"}"
                 , "{\"message\":\"config: server.port = 8080 (environment)\"}"
                 , "{\"message\":\"rule boot order for mount npm:\"}"
-                , "{\"message\":\"rule 1: AllowIfOlderThan (precedence 100)\"}"
+                , "{\"message\":\"rule 1: AllowIfOlderThan (precedence 100, applies at admission and revocation)\"}"
                 , "{\"message\":\"runtime: capabilities 2 (derived from the cgroup limit)\"}"
                 ]
-                `shouldBe` ["config: rules.min-age.type = AllowIfOlderThan (default)", "rule boot order for mount npm:", "rule 1: AllowIfOlderThan (precedence 100)"]
+                `shouldBe` ["config: rules.min-age.type = AllowIfOlderThan (default)", "rule boot order for mount npm:", "rule 1: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
     describe "loggedRules" $ do
         it "groups each rule's keys under its name, with the layers they came from" $
             loggedRules ruleLines
@@ -90,6 +91,8 @@ spec = do
     describe "ruleBootOrders" $
         it "lists each mount's rules in the order it logged them" $
             ruleBootOrders ruleLines
-                `shouldBe` [("npm", ["AllowByIdentity (precedence 250)", "AllowIfOlderThan (precedence 100)"]), ("pypi", [])]
+                `shouldBe` [ ("npm", ["DenyByIdentity (precedence 400, applies at admission only)", "AllowByIdentity (precedence 250, applies at admission and revocation)", "AllowIfOlderThan (precedence 100, applies at admission and revocation)"])
+                           , ("pypi", [])
+                           ]
   where
     line value = "config: rules.pin.note = " <> value <> " (document)"

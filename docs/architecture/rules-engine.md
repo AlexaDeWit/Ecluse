@@ -417,7 +417,7 @@ this ([`Ecluse.Core.Rules.TypesSpec`](../../core/test/unit/Ecluse/Core/Rules/Typ
 
 The claim is about one set of evidence. The Dredger reads a store's own metadata and the gate
 reads the upstream's, so the two can still differ where those documents differ. A rule limited to
-admission also no longer stops the Dredger's walk, so a lower deny that applies at revocation
+admission also does not stop the Dredger's walk, so a lower deny that applies at revocation
 decides a version the limited rule would have left undecided.
 
 ## Denial responses

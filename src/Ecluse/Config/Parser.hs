@@ -20,6 +20,7 @@ module Ecluse.Config.Parser (
     plainKey,
     optionalPlainKey,
     optionalPlainKeyOr,
+    optionalNonNullKey,
     nestedKey,
     unreadKey,
 
@@ -125,6 +126,17 @@ optionalPlainKey k = optionalKey k (const pure)
 -- | 'plainKey' for an optional key, with the value an absent one reads as.
 optionalPlainKeyOr :: (FromJSON a) => Key.Key -> a -> GroupDecoder a
 optionalPlainKeyOr k fallback = optionalKeyOr k fallback (const pure)
+
+{- | 'optionalPlainKey' for a key that refuses a written @null@, where an empty value must not
+read as the key's default.
+-}
+optionalNonNullKey :: (FromJSON a) => Key.Key -> GroupDecoder (Maybe a)
+optionalNonNullKey k = GroupDecoder [k] present
+  where
+    present input = case KeyMap.lookup k (giObject input) of
+        Nothing -> pure Nothing
+        Just Null -> fail (labelOf input k <> " is written with no value. Give it a value, or remove the key") <?> Key k
+        Just v -> Just <$> parseAt (labelOf input k) v <?> Key k
 
 -- | Decode an absent group as an empty object so its required keys determine the refusal.
 nestedKey :: Key.Key -> (KeyMap.KeyMap Value -> Parser a) -> GroupDecoder a

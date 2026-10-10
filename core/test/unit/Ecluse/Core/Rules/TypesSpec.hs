@@ -34,7 +34,7 @@ import Ecluse.Core.Rules.Types (
     DenyIfEpssParams (DenyIfEpssParams),
     Fact (Known, Unread),
     FailureAlignment (FailDeny, FailNoDecision),
-    PrecededRule (PrecededRule, prRule, ruleReach),
+    PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
     Rule (..),
     RuleEvidence (evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
@@ -48,7 +48,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, servingRuleDeps)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps)
 
 published :: UTCTime
 published = UTCTime (fromGregorian 2026 3 1) 0
@@ -137,7 +137,7 @@ revocationSpec = describe "revocationRules" $ do
     modifyMaxSuccess (const 5000) $
         it "never blocks a version the whole policy admits, on the same evidence" $
             hedgehog $ do
-                policy <- forAll (Gen.list (Range.constant 0 6) genPreceded)
+                policy <- forAll genPolicy
                 advisories <- forAll Gen.enumBounded
                 evidence <- forAll genEvidence
                 gate <- liftIO (decideUnder advisories policy evidence)
@@ -152,6 +152,8 @@ revocationSpec = describe "revocationRules" $ do
                 H.cover 10 "an allow admits at the gate" (isApproved gate)
                 H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread)
                 H.cover 20 "the version is a PyPI release" (pkgEcosystem (evName evidence) == PyPI)
+                H.cover 1 "the gate cannot decide and the Dredger blocks" (isUndecidable gate && blocks dredger)
+                H.cover 30 "two rules tie on precedence" (length (ordNub (map rulePrecedence policy)) < length policy)
                 H.annotateShow (gate, dredger)
                 H.assert (not (blocks dredger && isApproved gate))
 
@@ -180,6 +182,16 @@ decideUnder :: AdvisoryState -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideUnder advisories policy evidence =
     prepare (depsIn advisories) policy >>= \prepared -> evalRules ctx prepared evidence
 
+{- | A policy as configuration resolves one. One in three puts a deny limited to admission above a
+deny at both phases, where the Dredger's walk passes a rule that decides at the gate.
+-}
+genPolicy :: Gen [PrecededRule]
+genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules)]
+  where
+    anyRules = Gen.list (Range.constant 0 6) genPreceded
+    genDeny = Gen.filter ruleDenies genRule
+    shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genDeny
+
 {- | A rule as configuration resolves one: a deny at either reach, and an allow at both phases.
 Colliding precedences put an allow above, below, and beside each deny.
 -}
@@ -193,7 +205,7 @@ genPreceded = do
 -- | Every rule type, with parameters that fire on the versions 'genEvidence' builds.
 genRule :: Gen Rule
 genRule =
-    Gen.choice
+    Gen.choice . map (fmap generated) $
         [ pure (AllowScope (mkScope "acme"))
         , pure (AllowIfOlderThan (7 * nominalDay))
         , AllowByIdentity <$> genIdentity
@@ -206,6 +218,18 @@ genRule =
   where
     genIdentity = Gen.element ["thing", "thing@1.0.0", "thing@2.0.0", "@acme/thing"]
     genAlignment = Gen.element [FailDeny, FailNoDecision]
+
+-- Total over 'Rule', so a new rule type fails to compile here until 'genRule' generates it.
+generated :: Rule -> Rule
+generated rule = case rule of
+    AllowScope{} -> rule
+    AllowIfOlderThan{} -> rule
+    AllowByIdentity{} -> rule
+    AllowIfRemediatesCve -> rule
+    DenyInstallTimeExecution -> rule
+    DenyByIdentity{} -> rule
+    DenyIfCve{} -> rule
+    DenyIfEpss{} -> rule
 
 -- | An npm or PyPI version with each fact read or unread, from complete evidence to identity alone.
 genEvidence :: Gen RuleEvidence

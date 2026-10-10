@@ -28,7 +28,6 @@ import Ecluse.Core.Rules.Types (
     defaultDenyIfCvePrecedence,
     defaultDenyIfEpssPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
-    ruleDenies,
     ruleName,
  )
 import Ecluse.Test.Rules (admissionOnly, atPrecedence)
@@ -377,12 +376,13 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
             resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\"]}}}"
                 `shouldSatisfy` either (const False) (elem (admissionOnly (atPrecedence 300 DenyInstallTimeExecution)))
 
-        it "admits admission alone on every deny type, and on no allow type" $
-            for_ knownRuleAdds $ \(ty, body) ->
-                case resolveJsonOver emptyPolicy (limitedToAdmission body) of
-                    Right [limited] -> (ruleDenies (prRule limited), ruleReach limited) `shouldBe` (True, AdmissionOnly)
-                    Left [MalformedRule "r" reason] -> reason `shouldBe` allowLimitedToAdmission ty
-                    other -> expectationFailure (T.unpack ty <> ": expected one limited deny or one refused allow, got " <> show other)
+        it "admits admission alone on each of the four deny types, and refuses it on each of the four allow types" $ do
+            let limited ty = [resolveJsonOver emptyPolicy (limitedToAdmission body) | (known, body) <- knownRuleAdds, known == ty]
+                denies = ["DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
+                allows = ["AllowByIdentity", "AllowScope", "AllowIfOlderThan", "AllowIfRemediatesCve"]
+            (denies <> allows) `shouldMatchList` knownRuleTypes
+            for_ denies $ \ty -> map (fmap (map ruleReach)) (limited ty) `shouldBe` [Right [AdmissionOnly]]
+            for_ allows $ \ty -> limited ty `shouldBe` [Left [MalformedRule "r" (allowLimitedToAdmission ty)]]
 
     describe "an ambiguous setting" $ do
         let cases :: [(String, ByteString, [PolicyError])]
@@ -414,6 +414,12 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
         it "refuses a value that is not a list of words, naming the key" $
             for_ ["\"admission\"", "true", "[1]", "{\"admission\":true}"] $ \value ->
                 resolveJson (addedDeny value) `shouldSatisfy` refusalMentions "appliesTo"
+
+        it "refuses a key written with no value, on an added rule and on a patch" $ do
+            -- An empty value must not read as both phases, which is the reading that deletes.
+            resolveJson (addedDeny "null") `shouldSatisfy` refusalMentions "rule.appliesTo is written with no value"
+            resolveJsonOver limitedBase "{\"rules\":{\"deny-scripts\":{\"appliesTo\":null}}}"
+                `shouldSatisfy` refusalMentions "rule.appliesTo is written with no value"
 
         it "reports every refused setting of one load together" $ do
             let body =

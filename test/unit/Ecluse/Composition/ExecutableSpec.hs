@@ -58,7 +58,8 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomePrerequisites, outcomeTally), SweepTally (tallyDeleted))
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (smConfigured, smEcosystem))
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smConfigured, smEcosystem, smRules))
+import Ecluse.Core.Rules (PreparedRule (prepName))
 import Ecluse.Core.Rules.Types (ruleName)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
@@ -230,6 +231,8 @@ spec = describe "planExecutable" $ do
                 case epRoleWiring executable of
                     StorePrunerWiring wiring -> do
                         map (sort . map ruleName . smConfigured) (pwMounts wiring) `shouldBe` [evaluated]
+                        -- The prepared list is the one the evaluator runs, on a full walk too.
+                        map (sort . map prepName . smRules) (pwMounts wiring) `shouldBe` [evaluated]
                         outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
                         tallyDeleted (outcomeTally outcome) `shouldBe` selected
                     _ -> expectationFailure "expected the preview role"

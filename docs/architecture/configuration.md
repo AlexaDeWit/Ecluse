@@ -268,7 +268,7 @@ Each rule may also set `appliesTo`, the list of phases it applies at. It merges 
 does: a new rule without it applies at admission and at revocation, a patch without it keeps the
 phases of the rule it patches, and a stated list replaces them whole. A layer can therefore narrow
 a deny that a lower layer defines, and a higher layer can widen it again for one mount. The load
-refuses an empty list, a list without `admission`, an unknown word, and an allow limited to
+refuses an empty list, a key written with no value, a list without `admission`, an unknown word, and an allow limited to
 admission, and it reports every refused entry of one load together.
 [Rules engine → Admission and revocation](rules-engine.md#admission-and-revocation) holds the reason
 for each refusal.

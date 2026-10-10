@@ -63,7 +63,7 @@ Each cycle:
    pins. Both sides are read through the ecosystem's own name parser, so a spelling difference
    between the advisory database and the store cannot miss a match.
 4. Reads each of those packages' metadata **back from the store** and evaluates every version the
-   store holds against the mount's whole rule set. A package whose versions nothing condemns is
+   store holds against the mount's rules that apply at revocation. A package whose versions nothing condemns is
    read once. A condemned version's package is read again before the delete leaves, so the
    decision that destroys it is taken on the evidence standing at that moment.
 5. Deletes only what a named decisive deny condemns.
@@ -203,8 +203,8 @@ admission with `appliesTo: [admission]`
 and it never stops the evaluation either. So when an install-code deny is limited to admission and
 an advisory deny below it applies at revocation, the Dredger removes a stored version that both
 rules refuse, and the audit line names the advisory deny. It also removes that version on identity
-alone when the store serves no metadata, because the rule that needed the metadata is no longer in
-its way. The boot log lists each mount's rules in order with the phases each applies at, so read
+alone when the store serves no metadata, because the rule that needs the metadata is not among the
+rules it evaluates. The boot log lists each mount's rules in order with the phases each applies at, so read
 it to see which rules the Dredger evaluates.
 
 The first-party belt shields every version under a namespace your `firstParty` key names, and the

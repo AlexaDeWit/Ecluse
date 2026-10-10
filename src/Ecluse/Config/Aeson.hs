@@ -404,4 +404,5 @@ ruleEntryDecoder =
         <*> optionalPlainKey "minCvss"
         <*> optionalPlainKey "minEpss"
         <*> optionalPlainKey "onUnavailable"
-        <*> optionalPlainKey "appliesTo"
+        -- An empty value would read as both phases, and the Dredger deletes on that reading.
+        <*> optionalNonNullKey "appliesTo"
