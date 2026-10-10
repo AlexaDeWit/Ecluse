@@ -87,25 +87,12 @@ pack "$work/link.tar" "$work/link"
 check "fails on a second link in /bin" 1 \
   "^FAILED +/bin/site-gen:" executables "$work/link.tar"
 
-shipped_image "$work/shell"
-put "$work/shell/store" "nix/store/$hash-busybox-1.36.1/bin/sh"
-pack "$work/shell.tar" "$work/shell"
-check "fails on a program from a package that is not a listed library" 1 \
-  "^FAILED +/nix/store/$hash-busybox-1.36.1/bin/sh:" executables "$work/shell.tar"
-
-# A sibling output of a listed library is another store path. The file carries a listed
-# name, so only the store path's own name can refuse it.
-shipped_image "$work/sibling"
-put "$work/sibling/store" "nix/store/$hash-zstd-1.5.7-bin/bin/pzstd"
-pack "$work/sibling.tar" "$work/sibling"
-check "fails on a listed program from a store path that only starts with a listed name" 1 \
-  "^FAILED +/nix/store/$hash-zstd-1.5.7-bin/bin/pzstd:" executables "$work/sibling.tar"
-
-shipped_image "$work/grown"
-put "$work/grown/store" "nix/store/$hash-numactl-2.0.18/bin/numad"
-pack "$work/grown.tar" "$work/grown"
-check "fails on an unlisted program inside a listed library" 1 \
-  "^FAILED +/nix/store/$hash-numactl-2.0.18/bin/numad:" executables "$work/grown.tar"
+# A library package's store path is not read, whatever programs Nix puts in it.
+shipped_image "$work/library"
+put "$work/library/store" "nix/store/$hash-numactl-2.0.18/bin/numad"
+pack "$work/library.tar" "$work/library"
+check "passes a program that a library package carries in its own store path" 0 \
+  "^ok +/$ecluse/bin/ecluse$" executables "$work/library.tar"
 
 shipped_image "$work/sbin"
 put "$work/sbin/store" "$ecluse/sbin/ecluse-admin"

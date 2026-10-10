@@ -196,8 +196,8 @@
           haddockFlags = (old.haddockFlags or [ ]) ++ [ "--haddock-option=-j1" ];
         });
 
-        # GHC 9.10's object code varies between builds under -j, so modules compile one
-        # at a time. The nixpkgs option also drops `+RTS -A64M -RTS`, restored here.
+        # GHC 9.10's object code varies between builds under -j, so modules compile one at
+        # a time. The nixpkgs option drops haddock's -j too, and the RTS flags restored here.
         sequentialCompile = drv: hlib.overrideCabal drv (old: {
           enableParallelBuilding = false;
           configureFlags = (old.configureFlags or [ ]) ++ [
@@ -301,11 +301,9 @@
         # live network) never belong in a hermetic build.
         ecluse = hlib.dontCheck ecluseRaw;
 
-        # Only `exe:ecluse` is built and installed, so the package's development
-        # tools never reach the image. justStaticExecutables strips it and drops its
-        # reference to the Haskell library closure, which a dynamic build would drag
-        # in at about 500 MB. sequentialCompile sits here and not on `ecluse`, whose
-        # Haddock build ships in no image and keeps -j.
+        # The image's binary: `exe:ecluse` alone, without the Haskell library closure.
+        # sequentialCompile sits here and not on `ecluse`, whose Haddock build ships in
+        # no image and keeps -j.
         ecluseBinUnpruned = hlib.justStaticExecutables
           (hlib.setBuildTarget (sequentialCompile ecluse) "exe:ecluse");
 

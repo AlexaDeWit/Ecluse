@@ -1220,7 +1220,8 @@ allow-list names the job with a reason.
 The release dry-run also gates. It runs `release-build.yml`, the reusable workflow that
 `release.yml` builds its images with, so both architectures build natively and without a cache, as
 in a release. Each image build runs `scripts/image-archive.sh executables`, which fails when the
-image holds a program other than `ecluse` and the library programs that the script lists by name.
+image holds a second Écluse program or a second store path with an Écluse build. It does not read
+the programs that library packages carry in their own store paths.
 `release-dry-run-assemble` assembles the multi-arch index without pushing it, and
 `release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run job
 logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also scan

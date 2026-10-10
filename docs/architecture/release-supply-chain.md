@@ -15,18 +15,15 @@ runtime closure, and CA certificates: no shell, no package manager, and none of 
 development tools. It runs non-root (uid 65532). The flake's lock file pins its inputs. Build it
 locally with `task docker-build`, which writes `./result`, a `docker-archive`.
 
-`ecluse` is the only program of its own that the image holds. Three libraries in the runtime closure
-bring programs with them, because nixpkgs keeps each program in the library's own store path:
+`ecluse` is the only program of its own that the image holds. Library packages in the runtime
+closure keep the programs that nixpkgs puts in their own store paths, such as glibc's `getconf`
+helpers and the `numactl` tools beside libnuma.
 
-- glibc: its three `getconf` helpers.
-- numactl: six tools beside libnuma, which GHC's runtime links.
-- zstd, on amd64 only: `pzstd` beside libzstd. GHC's runtime links libdw there, and libdw links
-  libzstd.
-
-Every image build runs [`image-archive.sh`](../../scripts/image-archive.sh). It reads the `bin`,
-`sbin`, and `libexec` directories of every layer, and fails on any file or link there that is not
-`ecluse` or one of those programs. The script lists each allowed file by name, under a store path
-named for the library and its version.
+Every image build runs [`image-archive.sh`](../../scripts/image-archive.sh), which refuses a
+redundant Écluse program. A program is a file or link under a `bin`, `sbin`, or `libexec`
+directory. The image must hold `bin/ecluse` in exactly one `ecluse-<version>` store path. That
+store path must hold no other program, and the image's root must hold none but its `/bin/ecluse`
+link. The check does not read the store paths of other packages.
 
 Publishing is a separate, tag-triggered workflow
 ([`release.yml`](../../.github/workflows/release.yml)), never part of the PR `gate`. A `vX.Y.Z` tag

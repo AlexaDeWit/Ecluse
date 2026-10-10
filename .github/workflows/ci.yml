@@ -577,9 +577,8 @@ jobs:
           tag="$(bash scripts/docker-load.sh "artifacts/image-${ARCH}.tar")"
           docker run --rm --network none "$tag" --version
 
-  # A second build of the same commit. The two builds run on separate runners and
-  # restore no cache, so they share no store. The prefix keeps this build's archive out
-  # of the `image-*` reads above, and no job reads an SBOM from it.
+  # A second build of the same commit, on separate runners with no cache, so the two
+  # share no store. The prefix keeps its archive out of the `image-*` reads above.
   release-rebuild:
     name: Release rebuild
     needs: changes

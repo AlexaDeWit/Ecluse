@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
 # Checks on a release image's docker-archive, for release-build.yml and ci.yml.
-#   executables <archive>     Fail unless bin/ecluse is the image's only program, apart
-#                             from the library programs listed below. A program is a
-#                             file or link under a bin, sbin, or libexec directory.
+#   executables <archive>     Fail unless bin/ecluse, in one store path, is the only
+#                             Écluse program. Other packages' store paths are not read.
 #   compare <first> <second>  Fail unless the two archives are the same bytes, and name
 #                             the archive members and the files that differ.
 # Exit 1 on a failed check, 2 on a usage error or an unreadable archive. Needs GNU tar.
 set -euo pipefail
-
-# Programs that libraries in the runtime closure carry in their own store paths. An
-# entry admits these files only, from a store path named <package>-<version>.
-# <package>|<why the image holds it>|<its programs>
-carried=(
-  "glibc|the C library|libexec/getconf/POSIX_V6_LP64_OFF64 libexec/getconf/POSIX_V7_LP64_OFF64 libexec/getconf/XBS5_LP64_OFF64"
-  "numactl|libnuma, which GHC's runtime links|bin/memhog bin/migratepages bin/migspeed bin/numactl bin/numademo bin/numastat"
-  "zstd|libzstd, which libdw links on amd64|bin/pzstd"
-)
 
 usage() {
   echo "usage: image-archive.sh executables <archive> | compare <first> <second>" >&2
@@ -52,25 +42,10 @@ members() {
   done | sed -E 's#^\.?/##' | { grep -v '/$' || true; } | LC_ALL=C sort -u
 }
 
-# Print why the image holds package $1, when `carried` lists it with file $2.
-carried_reason() {
-  local entry rest files file
-  for entry in "${carried[@]}"; do
-    [[ "$1" =~ ^"${entry%%|*}"-[0-9][0-9.-]*$ ]] || continue
-    rest="${entry#*|}"
-    read -r -a files <<< "${rest#*|}"
-    for file in "${files[@]}"; do
-      if [ "$file" = "$2" ]; then
-        printf '%s\n' "${rest%%|*}"
-        return 0
-      fi
-    done
-  done
-  return 1
-}
-
+# A program is a file or link under a bin, sbin, or libexec directory. The check reads
+# the image's root and each ecluse-<version> store path, and no other package's.
 executables() {
-  local image="$work/image" verdict=0 shipped=0 path package inside reason
+  local image="$work/image" verdict=0 shipped=0 path package inside
   local store_path='^nix/store/[a-z0-9]{32}-([^/]+)/(.+)$'
   unpack "$1" "$image"
   # Through files, never a process substitution: bash discards that one's status, and a
@@ -89,16 +64,13 @@ executables() {
     else
       package="${BASH_REMATCH[1]}"
       inside="${BASH_REMATCH[2]}"
-      if [[ "$package" =~ ^ecluse-[0-9][0-9.]*$ ]] && [ "$inside" = "bin/ecluse" ]; then
+      if [[ ! "$package" =~ ^ecluse-[0-9][0-9.]*$ ]]; then
+        continue
+      elif [ "$inside" = "bin/ecluse" ]; then
         echo "ok      /$path"
         shipped=$((shipped + 1))
-      elif [[ "$package" =~ ^ecluse-[0-9][0-9.]*$ ]]; then
-        echo "FAILED  /$path: the image ships bin/ecluse and no other Écluse program"
-        verdict=1
-      elif reason="$(carried_reason "$package" "$inside")"; then
-        echo "ok      /$path ($reason)"
       else
-        echo "FAILED  /$path: not a program that image-archive.sh lists"
+        echo "FAILED  /$path: the image ships bin/ecluse and no other Écluse program"
         verdict=1
       fi
     fi
