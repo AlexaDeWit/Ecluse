@@ -125,9 +125,7 @@ dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
 
-{- | Build the shared fixture tree in a per-run temp directory, then remove it on every
-exit path. The name is unique per run, so two worktrees never share or delete fixtures.
--}
+-- Each run owns its fixture directory, so concurrent worktrees cannot remove each other's fixtures.
 withFixtureDir :: (FilePath -> IO a) -> IO a
 withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
   where
@@ -296,9 +294,7 @@ withE2EWith cfg action gdp =
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
 
-{- | The proxy's environment, given the published host port and the ministack mirror queue
-URL. @ECLUSE_SERVER__PUBLIC_URL@ is the host-loopback address npm reaches the proxy on.
--}
+-- PUBLIC_URL is the host-loopback address the npm client reaches.
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
     [ ("ECLUSE_SERVER__PORT", "4873")
@@ -324,7 +320,6 @@ proxyEnv hostPort queueUrl =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | The mirror target every writing role on the shared data plane publishes into.
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
     [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
@@ -350,7 +345,6 @@ mirrorRoleEnv queueUrl rules =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | The ministack alias every role inside the test network reaches an AWS-compatible store on.
 ministackEndpoint :: Text
 ministackEndpoint = "http://ministack:4566"
 
@@ -367,43 +361,25 @@ ministackAwsEnv =
     , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
-{- | A detached test container's @docker run@ specification: everything that varies between
-the harness's containers, so every creation site shares one builder and one bracket.
--}
 data DockerRun = DockerRun
     { drName :: String
-    -- ^ The @--name@, and how the log\/pause helpers address the container later.
     , drNetwork :: String
-    -- ^ The network to join (@--network@).
     , drAliases :: [String]
-    -- ^ In-network aliases (@--network-alias@, repeatable).
     , drPorts :: [String]
-    -- ^ @-p@ publish specs, e.g. @"127.0.0.1:0:4873"@.
     , drMounts :: [(FilePath, String)]
-    -- ^ @-v@ bind mounts as @(hostPath, "containerPath[:ro]")@.
     , drTmpfs :: [String]
-    -- ^ @--tmpfs@ specs, e.g. @"/var/lib/ecluse/advisories:mode=1777"@.
     , drEnv :: [(Text, Text)]
-    -- ^ @-e@ environment.
     , drImage :: String
-    -- ^ The image reference, already rendered to the string @docker@ receives.
     , drCmd :: [String]
-    -- ^ Arguments after the image, overriding the default CMD. Usually empty.
     , drAutoRemove :: Bool
-    {- ^ Pass @--rm@. A container whose logs a case reads after it exits sets this 'False', so
-    docker keeps them until the bracket force-removes it.
-    -}
+    -- A case that reads logs after exit disables auto-removal until the bracket releases them.
     }
 
-{- | Unwrap a validated pin into an 'ImageRef', failing the suite at harness startup rather
-than at the pull if the literal is not digest-pinned.
--}
+-- An invalid literal pin fails at harness startup, before pulling any image.
 pinnedExternal :: Either Text PinnedImageRef -> IO ImageRef
 pinnedExternal = fmap PinnedExternal . either (fail . toString) pure
 
-{- | The base 'DockerRun' for a named container on a network. The image is an 'ImageRef', so
-a pulled image is digest-pinned by construction and only 'LocallyBuilt' may be unpinned.
--}
+-- Only a LocallyBuilt image may lack a digest pin.
 dockerRun :: String -> String -> ImageRef -> DockerRun
 dockerRun name net image =
     DockerRun
@@ -419,15 +395,9 @@ dockerRun name net image =
         , drAutoRemove = True
         }
 
-{- | Render and run a 'DockerRun' detached (@docker run -d@), stamped with the reaping labels. It
-fails the test loudly on a non-zero exit.
--}
 runDetached :: [String] -> DockerRun -> IO ()
 runDetached labelArgs = commandOk "docker" . runArgs ["-d"] labelArgs
 
-{- | The @docker run@ arguments one spec renders to, with whatever extra flags the caller needs.
-A detached run passes @-d@ and a run waited on passes none, so both render the same spec.
--}
 runArgs :: [String] -> [String] -> DockerRun -> [String]
 runArgs extra labelArgs spec =
     ("run" : ["--rm" | drAutoRemove spec])
@@ -441,23 +411,14 @@ runArgs extra labelArgs spec =
         <> labelArgs
         <> (drImage spec : drCmd spec)
 
-{- | Run a detached container for the duration of the action, force-removing it on every
-exit path. It yields the container name the caller chose.
--}
 withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
 withDockerContainer labelArgs spec =
     bracket (runDetached labelArgs spec >> pure (drName spec)) removeContainer
 
-{- | Create a labelled docker network for the action, removing it on every exit path after
-any containers on it. @createArgs@ carries extra @network create@ flags such as @--subnet@.
--}
 withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
 withDockerNetwork labelArgs name createArgs =
     bracket (commandOk "docker" (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
 
-{- | Bring up the OTLP collector for a scenario that asks for one, waited ready and torn
-down around the action. Any other scenario is a no-op yielding 'Nothing'.
--}
 withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
 withOptionalCollector cfg labelArgs net coll body
     | not (ecCollector cfg) = body Nothing
@@ -573,9 +534,6 @@ runRoleOnce gdp env args = do
     (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
     pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
 
-{- | One product-image container specification on the shared data plane: the test CA, the advisory
-directory, the caller's environment, and the role arguments the image runs.
--}
 roleRun :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO DockerRun
 roleRun gdp env args = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
@@ -616,9 +574,7 @@ runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
 runDredgerOnce gdp flags extraEnv =
     runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
 
-{- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
-Its private upstream is a registry of its own: a deleting role refuses a shared one.
--}
+-- A deleting role requires a private upstream distinct from its mirror target.
 dredgerEnv :: [(Text, Text)]
 dredgerEnv =
     [ ("ECLUSE_SERVER__PORT", "4873")
@@ -635,16 +591,13 @@ dredgerEnv =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | Run a command, failing the test loudly with its own stderr if it exits non-zero.
 commandOk :: String -> [String] -> IO ()
 commandOk command args = do
     (code, _, err) <- readProcess (proc command args)
     unless (code == ExitSuccess) $
         fail (command <> " command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
-{- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub alias plus
-@localhost@, and a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
--}
+-- Every stub alias needs a certificate SAN, and SSL_CERT_FILE needs the system and test CAs.
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
     createDirectoryIfMissing True dir
@@ -670,7 +623,6 @@ generateCerts dir = do
 readBytesOrEmpty :: FilePath -> IO ByteString
 readBytesOrEmpty path = handleAny (\_ -> pure "") (readFileBS path)
 
--- | The host loopback port docker published a container's given @\<port\>\/tcp@ to.
 publishedPort :: String -> String -> IO Int
 publishedPort cname containerPort = do
     (_, out) <- readProcessStdout (proc "docker" ["port", cname, containerPort])
@@ -681,9 +633,7 @@ publishedPort cname containerPort = do
         pure
         (readMaybe (toString portText))
 
-{- | Create the mirror queue in the ministack SQS emulator and return its queue URL.
-@CreateQueue@ is idempotent, so retrying while the emulator warms up is safe.
--}
+-- CreateQueue is idempotent, so the emulator warm-up can retry it.
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
 createMinistackQueue manager hostPort queueName =
     pollUntil 60 500000 isJust attempt
@@ -705,7 +655,6 @@ createMinistackQueue manager hostPort queueName =
                 (200, Just url) | not (T.null url) -> Just url
                 _ -> Nothing
 
--- | The text between the first @opening@ and the following @closing@ marker, or 'Nothing'.
 between :: Text -> Text -> Text -> Maybe Text
 between opening closing t =
     let afterOpen = snd (T.breakOn opening t)
@@ -715,7 +664,7 @@ between opening closing t =
                 let (inner, rest) = T.breakOn closing (T.drop (T.length opening) afterOpen)
                  in if T.null rest then Nothing else Just inner
 
--- | Poll a URL until it returns the wanted status, up to ~30s.
+-- Readiness polling uses 100 attempts with 300 ms pauses.
 waitFor :: Manager -> Text -> Int -> IO Bool
 waitFor manager url want = pollUntil 100 300000 id probe
   where
@@ -728,9 +677,7 @@ waitFor manager url want = pollUntil 100 300000 id probe
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess
 
-{- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned, release it.
-The brief window before docker rebinds it is a tolerable race for a loopback test.
--}
+-- The window between releasing this port and Docker binding it is a loopback-test race.
 freeHostPort :: IO Int
 freeHostPort =
     bracket (socket AF_INET Stream defaultProtocol) close $ \sock -> do
@@ -745,9 +692,7 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so the
-proxy dials https-only endpoints. @cacheGuard@ adds a directive to the private-cache route alone.
--}
+-- One nginx terminates TLS for all registry aliases. The guard applies only to the private cache.
 nginxStubConfig :: Text -> Text
 nginxStubConfig cacheGuard =
     T.unlines
@@ -822,9 +767,6 @@ nginxStubConfig cacheGuard =
         , "}"
         ]
 
-{- | The Verdaccio config: anonymous read + publish, no uplinks (a sealed local
-mirror), listening on all interfaces so a peer container can reach it.
--}
 verdaccioConfig :: Text
 verdaccioConfig =
     T.unlines

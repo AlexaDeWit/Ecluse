@@ -448,7 +448,10 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 
 The cases of one telemetry group share a collector, and each install emits the same span names. A
 span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
-own case, such as the coordinate of the package that the case installs.
+own case, such as the coordinate of the package that the case installs. The private-leg case owns
+a separate coordinate, its public install, the mirror wait, and its second fresh install.
+`Ecluse.Test.CollectorSpec` in the core unit gate checks the shared parser and matching predicates
+against unrelated spans, signals, coordinates, events, links, and malformed attributes.
 
 Each module boots its own data plane, so no case reads store state that another module wrote. Every
 module opens with `whenE2EAvailable`, which runs its cases when the tier's prerequisites are present

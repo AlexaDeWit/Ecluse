@@ -696,6 +696,7 @@ library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
   exposed-modules:
+    Ecluse.Test.Collector
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
@@ -993,6 +994,7 @@ test-suite ecluse-core-unit
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support
+    Ecluse.Test.CollectorSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.Corpus.SubsetSpec
     Ecluse.Test.LogSpec

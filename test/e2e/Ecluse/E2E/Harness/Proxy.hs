@@ -66,9 +66,8 @@ proxyHead e2e path = do
                 readMaybe (toString (decodeUtf8 raw :: Text))
         pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
 
-{- | @PUT@ a proxy path with an empty body, returning the status. A mount with __no__ publication
-target refuses the publish with @405@ before it reads the body, so an empty @PUT@ proves the opt-in
-posture without driving the @npm@ CLI.
+{- | An empty @PUT@ proves that a mount without a publication target refuses with @405@
+before reading the body.
 -}
 proxyPut :: E2E -> Text -> IO Int
 proxyPut e2e path = do
