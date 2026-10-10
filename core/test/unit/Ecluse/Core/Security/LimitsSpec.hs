@@ -16,7 +16,7 @@ import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -216,6 +216,20 @@ artifactCountSpec = describe "checkArtifactCount" $ do
         -- one never refuses a document the version bound has not refused already.
         checkArtifactCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
 
+    modifyMaxSuccess (const 500) $
+        it "refuses the documents its reference refuses, naming the same count and ceiling" $
+            hedgehog $ do
+                cap <- forAll (Gen.int (Range.constant 0 12))
+                fanOuts <- forAll (Gen.choice [Gen.list (Range.constant 0 6) (pure 1), Gen.list (Range.constant 0 6) (Gen.int (Range.constant 1 4))])
+                let capped = defaultLimits{maxArtifactCount = cap}
+                    document = fannedDocument fanOuts
+                H.cover 15 "within the ceiling" (sum fanOuts < cap)
+                H.cover 1 "at the ceiling" (sum fanOuts == cap)
+                H.cover 15 "past the ceiling" (sum fanOuts > cap)
+                H.cover 15 "one artifact a version, the npm shape" (all (== 1) fanOuts)
+                H.cover 15 "several artifacts in a version, the PyPI shape" (any (> 1) fanOuts)
+                artifactCeiling capped document === referenceArtifactCeiling capped document
+
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
     let limits = defaultLimits{maxNestingDepth = 3}
@@ -331,14 +345,34 @@ nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
 
+-- The production artifact ceiling over a typed document.
+artifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
+artifactCeiling limits document = void (checkArtifactCount limits document)
+
+-- The artifact ceiling as it read a typed document, held as the reference for the production ceiling.
+referenceArtifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
+referenceArtifactCeiling limits document
+    | seen > cap = Left (TooManyArtifacts seen cap)
+    | otherwise = Right ()
+  where
+    cap = maxArtifactCount limits
+    seen = Map.foldl' (\acc details -> acc + length (pkgArtifacts details)) 0 (infoVersions document)
+
 {- | Repeat every version's artifact @n@ times, the fan-out an ecosystem that publishes many
 files per version produces.
 -}
 fanOutTo :: Int -> PackageInfo -> PackageInfo
-fanOutTo n info =
-    info{infoVersions = Map.map fanned (infoVersions info)}
+fanOutTo n info = info{infoVersions = Map.map (withFanOut n) (infoVersions info)}
+
+-- A document with one version for each count, carrying that many artifacts.
+fannedDocument :: [Int] -> PackageInfo
+fannedDocument fanOuts = document{infoVersions = Map.fromList (zipWith fan (Map.toList (infoVersions document)) fanOuts)}
   where
-    fanned d = d{pkgArtifacts = sconcat (fromList (replicate n (pkgArtifacts d)))}
+    document = packumentWith (length fanOuts)
+    fan (key, details) n = (key, withFanOut n details)
+
+withFanOut :: Int -> PackageDetails -> PackageDetails
+withFanOut n details = details{pkgArtifacts = sconcat (fromList (replicate n (pkgArtifacts details)))}
 
 packumentWith :: Int -> PackageInfo
 packumentWith n =

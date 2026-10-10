@@ -6,15 +6,25 @@ module Ecluse.Core.Package.IntegritySpec (spec) where
 
 import Prelude hiding (universe)
 
+import Data.List.NonEmpty qualified as NE
 import Data.Universe.Class (Universe (..))
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package (
-    Artifact (artFilename),
+    Artifact (artFilename, artHashes),
+    Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
     isComputable,
  )
 import Ecluse.Core.Package.Integrity (
+    IntegrityFloor (..),
+    MinIntegrity,
+    MinTrustedIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     assertedAlg,
     classifyArtifacts,
@@ -31,7 +41,11 @@ import Ecluse.Test.Package (
     artifactWith,
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
+    hexSha384Of,
+    hexSha512Of,
     unsafeHash,
+    validBlake2b,
+    validMd5,
     validSha1,
     validSha256,
     validSha256Sri,
@@ -218,3 +232,86 @@ spec = do
             -- classification it replaces and npm's behaviour does not move.
             partition (named "one.tgz" [unsafeHash SHA256 validSha256] :| []) `shouldBe` Right ("one.tgz" :| [])
             partition (named "one.tgz" [unsafeHash SHA1 validSha1] :| []) `shouldBe` Left BelowFloor
+
+    describe "the floor over a version's typed artifacts (against its reference)" $
+        modifyMaxSuccess (const 500) $ do
+            it "keeps the files the reference keeps, and refuses a version as the reference refuses it" $
+                hedgehog $ do
+                    flr <- forAll genFloor
+                    files <- forAll genFiles
+                    let expected = referencePartition flr files
+                    H.cover 5 "every file kept" (fmap length expected == Right (length files))
+                    H.cover 5 "some files dropped" (either (const False) ((< length files) . length) expected)
+                    H.cover 5 "refused below the floor" (expected == Left BelowFloor)
+                    H.cover 2 "refused with no digest" (expected == Left NoIntegrity)
+                    H.cover 10 "one file, the npm shape" (length files == 1)
+                    H.cover 10 "several files, the PyPI shape" (length files > 1)
+                    floorPartition flr files === expected
+
+            it "reads a version's digests as the reference reads them" $
+                hedgehog $ do
+                    flr <- forAll genFloor
+                    files <- forAll genFiles
+                    let expected = referenceClassify flr files
+                    H.cover 10 "meets the floor" (expected == MeetsFloor)
+                    H.cover 5 "below the floor" (expected == BelowFloor)
+                    H.cover 2 "no digest" (expected == NoIntegrity)
+                    floorVerdict flr files === expected
+
+-- The production floor over a version's typed artifacts: the files it keeps, and its verdict.
+floorPartition :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)
+floorPartition = partitionByFloor
+
+floorVerdict :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> VersionIntegrity
+floorVerdict = classifyArtifacts
+
+-- The floor as it read a version's typed artifacts, held as the reference for the production floor.
+referencePartition :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)
+referencePartition flr arts = case nonEmpty (NE.filter (referenceMeetsFloor flr) arts) of
+    Just survivors -> Right survivors
+    Nothing -> Left (referenceClassify flr arts)
+
+referenceMeetsFloor :: (IntegrityFloor floor) => floor -> Artifact -> Bool
+referenceMeetsFloor flr art = any (maybe False (meetsFloor flr) . assertedAlg) (artHashes art)
+
+referenceClassify :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> VersionIntegrity
+referenceClassify flr arts
+    | any (referenceMeetsFloor flr) arts = MeetsFloor
+    | all (null . artHashes) arts = NoIntegrity
+    | otherwise = BelowFloor
+
+-- A public or a trusted floor, so one property ranks against both.
+data AnyFloor
+    = PublicFloor MinIntegrity
+    | TrustedFloor MinTrustedIntegrity
+    deriving stock (Show)
+
+instance IntegrityFloor AnyFloor where
+    floorAlgorithm = \case
+        PublicFloor flr -> floorAlgorithm flr
+        TrustedFloor flr -> floorAlgorithm flr
+
+-- Every floor either constructor accepts.
+genFloor :: Gen AnyFloor
+genFloor = Gen.element (map PublicFloor (rights (map mkMinIntegrity universe)) <> map TrustedFloor (rights (map mkMinTrustedIntegrity universe)))
+
+-- One to four files of a version, each under its own name with up to three digests.
+genFiles :: Gen (NonEmpty Artifact)
+genFiles = NE.zipWith named (0 :| [1 ..]) <$> Gen.nonEmpty (Range.constant 1 4) (Gen.list (Range.constant 0 3) (Gen.element digestPool))
+  where
+    named :: Int -> [Hash] -> Artifact
+    named position hs = (artifactWith hs){artFilename = "file-" <> show position}
+
+-- One digest of each algorithm, and an SRI of each algorithm an SRI names.
+digestPool :: [Hash]
+digestPool =
+    [ unsafeHash MD5 validMd5
+    , unsafeHash SHA1 validSha1
+    , unsafeHash SHA256 validSha256
+    , unsafeHash SHA384 (hexSha384Of "")
+    , unsafeHash Blake2b validBlake2b
+    , unsafeHash SHA512 (hexSha512Of "")
+    , unsafeHash SRI validSha256Sri
+    , unsafeHash SRI validSha384Sri
+    , unsafeHash SRI validSha512Sri
+    ]

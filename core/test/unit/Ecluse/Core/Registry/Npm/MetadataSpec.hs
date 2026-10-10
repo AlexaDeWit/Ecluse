@@ -40,8 +40,8 @@ import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), releaseU
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
-    LimitError (TooDeeplyNested, TooManyVersions),
-    Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount),
+    LimitError (TooDeeplyNested, TooManyArtifacts, TooManyVersions),
+    Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
@@ -163,6 +163,17 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
     it "reports a version-count breach as a bound breach" $
         projectNpmManifest (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0", "2.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+    it "reports an artifact-count breach as a bound breach, and passes a document at the ceiling" $ do
+        let body = manifestBytes "is-odd" ["1.0.0", "2.0.0"]
+        projectNpmManifest (defaultLimits{maxArtifactCount = 1}) (unscopedNpm "is-odd") body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
+        projectNpmManifest (defaultLimits{maxArtifactCount = 2}) (unscopedNpm "is-odd") body `shouldSatisfy` isRight
+
+    it "counts only the releases that project toward the artifact ceiling" $ do
+        let unprojected = object ["name" .= ("is-odd" :: Text), "version" .= ("2.0.0" :: Text)]
+            body = BL.toStrict (encode (object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= versionObject "is-odd" "1.0.0", "2.0.0" .= unprojected]]))
+        projectNpmManifest (defaultLimits{maxArtifactCount = 1}) (unscopedNpm "is-odd") body `shouldSatisfy` isRight
 
     it "refuses an empty signature object beyond the retained nesting budget" $ do
         let version = withKeys [("dist", object ["tarball" .= ("https://example.test/is-odd-1.0.0.tgz" :: Text), "signatures" .= [object []]])] (versionObject "is-odd" "1.0.0")
