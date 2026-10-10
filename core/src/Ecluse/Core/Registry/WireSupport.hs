@@ -41,7 +41,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Server.Path (isSafeComponent)
-import Ecluse.Core.Text (readIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 
 {- | Partition a list of keyed raw entries into the ones that decode and the ones that do not,
 in input order. An array-shaped format pairs each element with its own key first.

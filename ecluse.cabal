@@ -300,6 +300,7 @@ library ecluse-core
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
     Ecluse.Core.Text
+    Ecluse.Core.Text.Iso8601
     Ecluse.Core.Version
     Ecluse.Core.Wire
     Ecluse.Core.Worker
@@ -973,6 +974,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.SupervisionSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
+    Ecluse.Core.Text.Iso8601Spec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec

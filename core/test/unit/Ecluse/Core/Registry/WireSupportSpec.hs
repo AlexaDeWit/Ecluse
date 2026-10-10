@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.WireSupport (
     parsePublishTime,
     partitionLenientList,
  )
-import Ecluse.Core.Text (readIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (readIso8601Utc)
 import Ecluse.Test.Package (scopedNpm, unscopedNpm)
 import Ecluse.Test.Registry.WireSupport (partitionLenient)
 
