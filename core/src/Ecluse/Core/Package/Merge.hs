@@ -280,6 +280,7 @@ divergencesOf versions =
     Set.fromList
         [ Divergence{divVersion = key, divWinning = candFingerprint winner, divLosing = candFingerprint loser}
         | (key, cs) <- Map.toList versions
+        , Set.size cs > 1 -- A version with one copy stops here, with nothing built: the common serve.
         , Just (winner, losers) <- [Set.minView cs]
         , let winningDigests = digestsByKey (candDetails winner)
         , loser <- Set.toList losers

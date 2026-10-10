@@ -323,15 +323,20 @@ genContestedSources = do
         pure (prov, (packumentWith []){infoVersions = Map.fromList copies})
 
 agreeingVersions :: Int64
-agreeingVersions = 256
+agreeingVersions = 1024
 
--- The bytes a two-source merge allocates when both sources carry the same two-file releases.
-agreeingMergeAllocation :: Int -> IO Int64
-agreeingMergeAllocation digestsPerFile = do
-    let digests = [unsafeHash SRI (validSriOf (show j)) | j <- [1 .. digestsPerFile]]
-        files = artifactWith digests :| [wheelWith "thing.whl" digests]
-        info = withArtifacts files (packumentWith [(show i <> ".0.0", []) | i <- [1 .. agreeingVersions]])
-        inputs = [(TrustedSource, syntheticSnapshot info), (GatedSource, syntheticSnapshot info)]
+-- A source of two-file releases, each file carrying the same digests.
+agreeingSource :: Int -> PackageInfo
+agreeingSource digestsPerFile =
+    withArtifacts files (packumentWith [(show i <> ".0.0", []) | i <- [1 .. agreeingVersions]])
+  where
+    digests = [unsafeHash SRI (validSriOf (show j)) | j <- [1 .. digestsPerFile]]
+    files = artifactWith digests :| [wheelWith "thing.whl" digests]
+
+-- The bytes a merge of sources that do not diverge allocates.
+mergeAllocation :: [(Provenance, PackageInfo)] -> IO Int64
+mergeAllocation sources = do
+    let inputs = map (second syntheticSnapshot) sources
     _ <- evaluate (T.length (show inputs))
     allocationBefore <- getAllocationCounter
     divergences <- evaluate (maybe (-1) (Set.size . mpDivergences) (Merge.mergePackuments inputs))
@@ -448,11 +453,19 @@ spec = do
 
     describe "copies whose digests are spelled alike" $
         it "cost the same merge whether a file carries one digest or sixteen" $ do
-            oneDigest <- agreeingMergeAllocation 1
-            sixteenDigests <- agreeingMergeAllocation 16
+            let alike digests = mergeAllocation [(TrustedSource, agreeingSource digests), (GatedSource, agreeingSource digests)]
+            oneDigest <- alike 1
+            sixteenDigests <- alike 16
             -- A fingerprint entry is over 100 bytes. The allowance is 32 for each added digest: fifteen
             -- in each of two files, in each of two copies.
             sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 2 * agreeingVersions)
+
+    describe "a version only one source carries" $
+        it "is decided before anything is built for a comparison" $ do
+            single <- mergeAllocation [(GatedSource, agreeingSource 1)]
+            -- Each version costs 822 bytes under the coverage build and 551 under a plain one. Splitting
+            -- a one-copy set for the divergence walk adds 120, which this bound catches under coverage.
+            single `shouldSatisfy` (<= 885 * agreeingVersions)
 
     describe "divergent private versions retain their listing entries" $ do
         let trusted =
