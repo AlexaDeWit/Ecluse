@@ -38,7 +38,7 @@ import Data.Primitive.PrimArray (MutablePrimArray, copyMutablePrimArray, getSize
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, valueEnd, varintSize, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (Packed, TableStrings (..), decodeScalar, decodeWith, encodedLength, opArray, opFalse, opInline, opNull, opObject, opShared, opTrue, packed, packedBlob, readVarint, separators, valueEnd, varintSize, writeVarint)
 import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putAt, putByte, putDecimal, putEncodedText, putPlainBytes, putRawBytes, putVarint, reserve, rewindTo, scratchBuffer, scratchCursor)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
 import Ecluse.Core.Registry.Json.Walk (Steps)
@@ -547,7 +547,61 @@ sealValue writer path = do
     discard writer
     writeMutVar (writerReplaced writer) replaced
     hole <- holeAt writer blob path 0
-    pure (packed blob hole)
+    packed blob hole <$> sealedLength writer blob
+
+{- The bytes a render writes for the blob's value as read. Each table string is measured from the
+read's own copy, because the table that holds its encoding is laid out after the read ends. -}
+sealedLength :: Writer st -> ByteArray -> ST st Int
+sealedLength writer blob = do
+    strings <- readMutVar (writerStrings writer)
+    at <- newPrimVar 0
+    total <- newPrimVar 0
+    measureValue strings blob at total
+    readPrimVar total
+
+-- Add the encoded length of the value at the cursor to the total, and move the cursor past it.
+measureValue :: MutableArray st Value -> ByteArray -> PrimVar st Int -> PrimVar st Int -> ST st ()
+measureValue strings blob at total = do
+    position <- readPrimVar at
+    case indexByteArray blob position :: Word8 of
+        code
+            | code == opNull -> advance at total (position + 1) 4
+            | code == opFalse -> advance at total (position + 1) 5
+            | code == opTrue -> advance at total (position + 1) 4
+            | code == opShared -> case readVarint blob (position + 1) of
+                (# index, next #) -> sharedLength strings index >>= advance at total next
+            | code == opObject -> case readVarint blob (position + 1) of
+                (# count, next #) -> advance at total next (separators count) >> measureMembers strings blob at total count
+            | code == opArray -> case readVarint blob (position + 1) of
+                (# count, next #) -> advance at total next (separators count) >> measureItems strings blob at total count
+            | otherwise -> case readVarint blob (position + 1) of
+                (# len, next #) -> advance at total (next + len) len
+
+-- Measure the given number of members from the cursor on: each key with its colon, then its value.
+measureMembers :: MutableArray st Value -> ByteArray -> PrimVar st Int -> PrimVar st Int -> Int -> ST st ()
+measureMembers strings blob at total !count = when (count > 0) $ do
+    position <- readPrimVar at
+    case readVarint blob position of
+        (# tagged, next #)
+            | even tagged -> sharedLength strings (tagged `div` 2) >>= \len -> advance at total next (len + 1)
+            | otherwise -> advance at total (next + tagged `div` 2) (tagged `div` 2 + 1)
+    measureValue strings blob at total
+    measureMembers strings blob at total (count - 1)
+
+measureItems :: MutableArray st Value -> ByteArray -> PrimVar st Int -> PrimVar st Int -> Int -> ST st ()
+measureItems strings blob at total !count = when (count > 0) $ do
+    measureValue strings blob at total
+    measureItems strings blob at total (count - 1)
+
+-- The encoded length of the table string an index names.
+sharedLength :: MutableArray st Value -> Int -> ST st Int
+sharedLength strings index = readArray strings index >>= \string -> pure $! encodedLength (stringText string)
+{-# INLINE sharedLength #-}
+
+-- Move the cursor to a position, and add a length to the total.
+advance :: PrimVar st Int -> PrimVar st Int -> Int -> Int -> ST st ()
+advance at total position len = writePrimVar at position >> (readPrimVar total >>= writePrimVar total . (+ len))
+{-# INLINE advance #-}
 
 -- | Forget the value the writer holds, and the member its top-level object replaced.
 discard :: Writer st -> ST st ()

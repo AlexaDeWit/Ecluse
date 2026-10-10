@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The packed form against aeson: its string encoding, its render with and without a rebased hole,
-and its decoding, for hostile values packed through the production reader and writer.
+its decoding, and the length each value stores, for hostile values packed through the production
+reader and writer.
 -}
 module Ecluse.Core.Registry.Json.PackedSpec (spec) where
 
@@ -15,20 +16,21 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Scientific (Scientific, scientific)
 import Data.Vector qualified as V
-import Hedgehog (Gen, PropertyT, annotateShow, diff, failure, forAll, (===))
+import Hedgehog (Gen, PropertyT, annotateShow, cover, diff, failure, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedResident, packedValue, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
+import Ecluse.Core.Registry.Json.Intern (tableTexts)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Core.Text (urlFilenameComponent)
 import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks)
-import Ecluse.Test.Registry.Packed (packBytes, packValue, renderAlone)
+import Ecluse.Test.Registry.Packed (packBytes, packTable, packValue, renderAlone, walkedLength)
 
 spec :: Spec
 spec = modifyMaxSuccess (const 2000) $ do
@@ -83,13 +85,38 @@ spec = modifyMaxSuccess (const 2000) $ do
             hedgehog $ do
                 value <- forAll (genHostile 3)
                 url <- forAll genUrl
-                (_, form) <- packedOf (packValue (Generic limit) ["url"] (Object (KeyMap.fromList [("name", value), ("url", String url)])))
+                -- A hole under @url@ holds its own bytes, and one under @tarball@ names a table string.
+                path <- forAll (Gen.element [["url"], ["dist", "tarball"]])
+                (_, form) <- packedOf (packValue (Generic limit) path (at path (String url) [("name", value)]))
                 let lacking prefix = RenderPlan{planMembers = mempty, planSlot = "k", planTables = fromList [docTable mempty], planPieces = ArrayPieces [Piece 0 form], planPrefix = prefix}
                 renderAlone (docTable mempty) Nothing form === Nothing
                 renderAlone (docTable mempty) (Just (urlPrefix "https://mirror/")) form === Nothing
                 packedValue (docTable mempty) form === Nothing
                 planValue (lacking Nothing) === Nothing
                 planValue (lacking (Just (urlPrefix "https://mirror/"))) === Nothing
+
+    describe "packedEncodedLength" $
+        it "is the length a walk of the sealed value measures over its read's table, with and without a hole" $
+            hedgehog $ do
+                leaf <- forAll (Gen.frequency [(3, String <$> genUrl), (1, genHostile 2)])
+                others <- forAll (Gen.list (Range.linear 0 4) ((,) <$> Gen.element ["name", "size", "shasum"] <*> Gen.frequency [(1, Gen.element [Object mempty, Array mempty]), (2, genHostile 3)]))
+                path <- forAll (Gen.element [[], ["url"], ["dist", "tarball"]])
+                prefix <- forAll genHostileText
+                let value = at path leaf others
+                    rebased = case leaf of
+                        String url -> at path (String (prefix <> urlFilenameComponent url)) others
+                        _ -> value
+                cover 40 "with a hole" (isString leaf)
+                cover 10 "without a hole" (not (isString leaf))
+                cover 5 "an empty object or array" (any emptyContainer (within value))
+                cover 20 "a string or key that needs an escape" (any escaped (within value))
+                cover 20 "a container inside a container" (any nests (within value))
+                (table, form) <- packedOf (packTable (Generic limit) path [toStrict (encode value) <> " "])
+                let held = docTable (tableTexts table)
+                packedEncodedLength form === walkedLength table form
+                packedEncodedLength (withoutHole form) === packedEncodedLength form
+                fmap BS.length (renderAlone held Nothing form) === Just (packedEncodedLength form)
+                renderAlone held (Just (urlPrefix prefix)) form === Just (toStrict (encode rebased))
 
     describe "renderPlan" $ do
         it "renders a document whose pieces come from several tables as aeson encodes it, holes rebased" $
@@ -150,8 +177,8 @@ limit = 64
 rendered :: (DocTable, Packed) -> Maybe ByteString
 rendered (table, form) = renderAlone table Nothing form
 
--- The packed value of a read that succeeds, failing the property otherwise.
-packedOf :: Either LimitError (StreamResult (DocTable, Packed)) -> PropertyT IO (DocTable, Packed)
+-- The packed value of a read that succeeds, with its table, failing the property otherwise.
+packedOf :: Either LimitError (StreamResult a) -> PropertyT IO a
 packedOf = \case
     Right (StreamResult (Right result) _) -> pure result
     other -> annotateShow (readOutcome other $> ()) >> failure
@@ -161,6 +188,44 @@ at :: [Text] -> Value -> [(Text, Value)] -> Value
 at path leaf others = case path of
     [] -> leaf
     name : rest -> Object (KeyMap.insert (Key.fromText name) (at rest leaf others) (KeyMap.fromList [(Key.fromText key, member) | (key, member) <- others]))
+
+-- The value and every value it holds, at any depth.
+within :: Value -> [Value]
+within value =
+    value : case value of
+        Object fields -> concatMap within (KeyMap.elems fields)
+        Array items -> concatMap within (toList items)
+        _ -> []
+
+isString :: Value -> Bool
+isString = \case
+    String _ -> True
+    _ -> False
+
+emptyContainer :: Value -> Bool
+emptyContainer = \case
+    Object fields -> KeyMap.null fields
+    Array items -> V.null items
+    _ -> False
+
+-- Whether the value is a string, or holds a key, that aeson escapes.
+escaped :: Value -> Bool
+escaped = \case
+    String text -> not (plain text)
+    Object fields -> not (all (plain . Key.toText) (KeyMap.keys fields))
+    _ -> False
+
+-- Whether the value holds an object or an array as a member or an item.
+nests :: Value -> Bool
+nests = \case
+    Object fields -> any container fields
+    Array items -> any container items
+    _ -> False
+  where
+    container = \case
+        Object _ -> True
+        Array _ -> True
+        _ -> False
 
 -- The tree the production reader builds for the chunks.
 treeRead :: [ByteString] -> Either LimitError (StreamResult Value)

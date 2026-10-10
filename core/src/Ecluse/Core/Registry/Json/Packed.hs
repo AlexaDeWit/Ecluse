@@ -6,7 +6,8 @@
 {- | The packed form: one table per document holding the bytes aeson writes for each shared string,
 and one opcode blob per retained value. A render copies those bytes into a buffer of the output's
 exact length, so no string is escaped again. A value holds at most one hole: a URL string that a
-render may rebase onto a per-request prefix, keeping the URL's file name.
+render may rebase onto a per-request prefix, keeping the URL's file name. It also holds the length
+of its encoding, so a render sizes its buffer without reading the value.
 -}
 module Ecluse.Core.Registry.Json.Packed (
     -- * Encoded strings
@@ -28,6 +29,7 @@ module Ecluse.Core.Registry.Json.Packed (
     readVarint,
     writeVarint,
     valueEnd,
+    separators,
 
     -- * The document table
     DocTable,
@@ -39,6 +41,7 @@ module Ecluse.Core.Registry.Json.Packed (
     packed,
     packedBlob,
     packedBytes,
+    packedEncodedLength,
     packedResident,
     withoutHole,
 
@@ -235,6 +238,10 @@ valueEnd blob position = case indexByteArray blob position :: Word8 of
         | count <= 0 = at
         | otherwise = items (count - 1) (valueEnd blob at)
 
+-- | The bytes an object or array of the given count encodes beside its members: two brackets and a comma between each pair.
+separators :: Int -> Int
+separators count = 2 + max 0 (count - 1)
+
 -- | One document's shared strings, back to back as aeson writes them, and where each begins.
 data DocTable = DocTable !ByteArray !(PrimArray Int)
     deriving stock (Eq, Show)
@@ -277,21 +284,27 @@ tableEntry (DocTable _ offsets) index
 tableArena :: DocTable -> ByteArray
 tableArena (DocTable arena _) = arena
 
--- | One retained value: its opcodes, and where its hole's string starts, or -1.
-data Packed = Packed !ByteArray !Int
+{- | One retained value: its opcodes, where its hole's string starts, or -1, and the length of its
+encoding as read, over the table its read seals.
+-}
+data Packed = Packed !ByteArray !Int !Int
     deriving stock (Eq, Show)
 
--- | A value from its opcodes and the position of its hole, or -1 for none.
-packed :: ByteArray -> Int -> Packed
+-- | A value from its opcodes, the position of its hole, or -1 for none, and the length of its encoding as read.
+packed :: ByteArray -> Int -> Int -> Packed
 packed = Packed
 
 -- | The value's opcodes.
 packedBlob :: Packed -> ByteArray
-packedBlob (Packed blob _) = blob
+packedBlob (Packed blob _ _) = blob
 
 -- | The bytes the value holds itself, outside its table.
 packedBytes :: Packed -> Int
-packedBytes (Packed blob _) = sizeofByteArray blob
+packedBytes (Packed blob _ _) = sizeofByteArray blob
+
+-- | The bytes a render writes for the value with no hole rebased, as the writer measured them at its seal.
+packedEncodedLength :: Packed -> Int
+packedEncodedLength (Packed _ _ encoded) = encoded
 
 -- | The heap bytes the value holds itself: its record, and its blob with the array's header.
 packedResident :: Packed -> Int
@@ -299,47 +312,7 @@ packedResident value = 24 + arrayResident (packedBytes value)
 
 -- | The value with no hole, so every render writes it as read.
 withoutHole :: Packed -> Packed
-withoutHole (Packed blob _) = Packed blob (-1)
-
--- The encoded length of the value at a position, or -1 when it names a string the table lacks, and
--- the position after it.
-encodedAt :: DocTable -> ByteArray -> Int -> (# Int, Int #)
-encodedAt table blob position = case indexByteArray blob position :: Word8 of
-    byte
-        | byte == opNull -> (# 4, position + 1 #)
-        | byte == opFalse -> (# 5, position + 1 #)
-        | byte == opTrue -> (# 4, position + 1 #)
-        | byte == opShared -> case readVarint blob (position + 1) of
-            (# index, next #) -> case tableEntry table index of (# _, len #) -> (# len, next #)
-        | byte == opObject -> case readVarint blob (position + 1) of
-            (# count, next #) -> members count next (separators count)
-        | byte == opArray -> case readVarint blob (position + 1) of
-            (# count, next #) -> items count next (separators count)
-        | otherwise -> case readVarint blob (position + 1) of (# len, next #) -> (# len, next + len #)
-  where
-    members !count !at !total
-        | count <= 0 = (# total, at #)
-        | otherwise = case readVarint blob at of
-            (# tagged, next #)
-                | even tagged -> case tableEntry table (tagged `div` 2) of
-                    (# _, keyLen #)
-                        | keyLen < 0 -> (# -1, next #)
-                        | otherwise -> member count next (keyLen + 1) total
-                | otherwise -> member count (next + tagged `div` 2) (tagged `div` 2 + 1) total
-    member !count !at !keyed !total = case encodedAt table blob at of
-        (# len, after #)
-            | len < 0 -> (# -1, after #)
-            | otherwise -> members (count - 1) after (total + keyed + len)
-    items !count !at !total
-        | count <= 0 = (# total, at #)
-        | otherwise = case encodedAt table blob at of
-            (# len, after #)
-                | len < 0 -> (# -1, after #)
-                | otherwise -> items (count - 1) after (total + len)
-
--- Two brackets and a comma between each pair of members or items.
-separators :: Int -> Int
-separators count = 2 + max 0 (count - 1)
+withoutHole (Packed blob _ encoded) = Packed blob (-1) encoded
 
 -- The array holding the scalar at a position, where its encoding starts and how long it is, and the
 -- position after it in the blob.
@@ -384,21 +357,20 @@ fileSpan array start len
         | otherwise = scanSlash (at - 1)
 
 -- The length of a value's encoding, with its hole rebased onto the prefix when one is given, or -1
--- when it names a string the table lacks.
+-- when its hole names a string the table lacks.
 renderedLength :: DocTable -> Maybe UrlPrefix -> Packed -> Int
-renderedLength table prefix (Packed blob hole) = case encodedAt table blob 0 of
-    (# len, _ #)
-        | len < 0 -> -1
-        | otherwise -> case prefix of
-            Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
-                (# array, start, old, _ #) -> case fileSpan array start old of
-                    (# _, file #) -> len - old + 2 + sizeofByteArray bytes + file
-            _ -> len
+renderedLength table prefix value@(Packed blob hole _) = case prefix of
+    Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
+        (# array, start, old, _ #)
+            | old < 0 -> -1
+            | otherwise -> case fileSpan array start old of
+                (# _, file #) -> packedEncodedLength value - old + 2 + sizeofByteArray bytes + file
+    _ -> packedEncodedLength value
 
 {- Write the value's encoding at an offset, before the limit, and return the offset after it. A write
 that would pass the limit, or a string the table lacks, returns an offset past the limit instead. -}
 pokePacked :: Ptr Word8 -> Int -> Int -> DocTable -> Maybe UrlPrefix -> Packed -> IO Int
-pokePacked target limit start table prefix (Packed blob hole) = do
+pokePacked target limit start table prefix (Packed blob hole _) = do
     at <- newPrimVar 0
     out <- newPrimVar start
     let bounded len write = do
@@ -595,7 +567,10 @@ decodeItemsWith strings blob at !count acc
 
 -- | The value back as aeson's tree, or nothing when it names a string its table lacks.
 packedValue :: DocTable -> Packed -> Maybe Value
-packedValue table (Packed blob _) = runST $ do
+packedValue table = blobValue table . packedBlob
+
+blobValue :: DocTable -> ByteArray -> Maybe Value
+blobValue table blob = runST $ do
     missing <- newPrimVar 0
     value <- newPrimVar 0 >>= decodeWith (OfTable table missing) blob
     readPrimVar missing <&> \flag -> value <$ guard (flag == 0)
@@ -603,7 +578,7 @@ packedValue table (Packed blob _) = runST $ do
 -- The value as aeson's tree, with its hole's URL rebased onto the prefix as a render writes it, or
 -- nothing when it names a string its table lacks.
 rebasedValue :: DocTable -> Maybe UrlPrefix -> Packed -> Maybe Value
-rebasedValue table prefix value@(Packed blob hole) = case prefix of
+rebasedValue table prefix value@(Packed blob hole _) = case prefix of
     Just (UrlPrefix bytes) | hole >= 0 -> case scalarSource table blob hole of
         (# _, _, len, _ #) | len < 0 -> Nothing
         (# array, from, len, next #) -> case fileSpan array from len of
@@ -619,7 +594,7 @@ rebasedValue table prefix value@(Packed blob hole) = case prefix of
                         copyByteArray target (at + 1 + sizeofByteArray bytes) array file fileLen
                         writeByteArray target (at + size - 1) quote
                         copyByteArray target (at + size) blob next rest
-                 in packedValue table (Packed rebased (-1))
+                 in blobValue table rebased
     _ -> packedValue table value
 
 -- | One packed value in a render, and the index of the plan's table its own document's read sealed.
@@ -659,7 +634,7 @@ planParts plan =
     | (key, part) <- KeyMap.toAscList (KeyMap.insert (planSlot plan) Nothing (Just <$> planMembers plan))
     ]
 
--- The render's length, or nothing when a piece names a table or string the plan lacks.
+-- The render's length, or nothing when a piece names a table the plan lacks, or its hole a string its table lacks.
 partsLength :: RenderPlan -> [(ByteString, Part)] -> Maybe Int
 partsLength plan parts = (separators (length parts) +) . sum <$> traverse partLength parts
   where

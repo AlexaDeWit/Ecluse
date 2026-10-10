@@ -27,12 +27,17 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
+import Ecluse.Core.Registry.Json.Intern (InternTable)
+import Ecluse.Core.Registry.Json.Packed (packedEncodedLength, withoutHole)
+import Ecluse.Core.Registry.Json.Walk (Walked (..))
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Npm.Document (tarballUrl)
+import Ecluse.Core.Registry.Metadata.Projection (streamError)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentVersions), tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -46,12 +51,13 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk, projectNpmManifest, projectNpmVersion)
+import Ecluse.Test.Registry.Packed (walkedLength)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
 import Ecluse.Test.Support (expectRight)
 
@@ -85,7 +91,7 @@ packedReadSpec = describe "packed full read" $ do
                 cover 20 "a survivor from the second source" (maybe False (elem 1 . mpSurvivors . fst) (mergedListing (map fst fullReads)))
                 served (map fst fullReads) === served (map snd fullReads)
 
-    forM_ corpusPackages $ \package ->
+    forM_ corpusPackages $ \package -> do
         it ("packs, decodes and renders every release of the capture " <> cpPath package) $ do
             bytes <- readFileBS (cpPath package)
             let (tree, packed) = bothFullReads [bytes]
@@ -93,18 +99,60 @@ packedReadSpec = describe "packed full read" $ do
             fmap (second (snd npmCached)) tree `shouldBe` fmap (second (snd npmCached)) packed
             served [tree] `shouldBe` served [packed]
 
+        it ("stores the length a walk of the release measures, with and without its hole, for every release of the capture " <> cpPath package) $ do
+            bytes <- readFileBS (cpPath package)
+            (table, (_, packument)) <- expectRight (packedFullRead [bytes])
+            let releases = KeyMap.toList (packumentVersions packument)
+                walked = walkedLength table
+                wrong = [(version, packedEncodedLength form, walked form) | (version, release) <- releases, form <- [release, withoutHole release], packedEncodedLength form /= walked form]
+            Just (length releases) `shouldBe` Map.lookup (cpName package) captureReleases
+            -- A wrong length is wrong in most releases, and the first few name the fault.
+            take 3 wrong `shouldBe` []
+
+-- The releases each committed capture holds, which its stored length check reads in full.
+captureReleases :: Map Text Int
+captureReleases =
+    Map.fromList
+        [ ("@types/node", 2373)
+        , ("webpack", 889)
+        , ("@aws-sdk/client-s3", 777)
+        , ("express", 289)
+        , ("typescript", 3829)
+        , ("@babel/core", 231)
+        , ("react", 2953)
+        , ("request", 126)
+        , ("lodash", 117)
+        ]
+
 -- Both full reads of the same chunks through the production projection, each as the document it serves.
 bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, CachedDoc), Either MetadataError (PackageInfo, CachedDoc))
 bothFullReads chunks =
-    ( second (fst npmCached) <$> (first MetadataBoundExceeded (walkJsonChunks bound (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name registry)
-    , second (fst npmPacked) <$> (first MetadataBoundExceeded (walkWritingChunks bound (npmFullTestWalk limits name registry) chunks) >>= projectNpmPacked limits name registry)
+    ( second (fst npmCached) <$> (first MetadataBoundExceeded (walkJsonChunks (bodyLimit chunks) (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name captureRegistry)
+    , second (fst npmPacked) . snd <$> packedFullRead chunks
     )
   where
-    total = sum (map BS.length chunks)
-    bound = MetadataBodyLimit total
-    limits = defaultLimits{maxMetadataBytes = max 1 total}
+    limits = readLimits chunks
     name = packageNameOf chunks
-    registry = "https://registry.npmjs.org"
+
+-- The packed full read of the chunks through the production projection, and the table its walk ends with.
+packedFullRead :: [ByteString] -> Either MetadataError (InternTable, (PackageInfo, PackedPackument))
+packedFullRead chunks = do
+    streamed <- first MetadataBoundExceeded (walkWritingChunks (bodyLimit chunks) (npmFullTestWalk limits name captureRegistry) chunks)
+    Walked table _ <- first (streamError limits) (streamValue streamed)
+    (table,) <$> projectNpmPacked limits name captureRegistry streamed
+  where
+    limits = readLimits chunks
+    name = packageNameOf chunks
+
+bodyLimit :: [ByteString] -> BodyLimit
+bodyLimit = MetadataBodyLimit . sum . map BS.length
+
+-- The default limits, with room for the chunks.
+readLimits :: [ByteString] -> Limits
+readLimits chunks = defaultLimits{maxMetadataBytes = max 1 (sum (map BS.length chunks))}
+
+captureRegistry :: Text
+captureRegistry = "https://registry.npmjs.org"
 
 -- The capture's own package, or @thing@ for a generated body.
 packageNameOf :: [ByteString] -> PackageName

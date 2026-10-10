@@ -18,7 +18,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
-import Ecluse.Core.Registry.Json.Packed (docTable, packedBlob, packedBytes, packedValue, valueEnd)
+import Ecluse.Core.Registry.Json.Packed (docTable, packedBlob, packedBytes, packedEncodedLength, packedValue, valueEnd)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, replacedMember, sealValue)
@@ -26,7 +26,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Test.Json (genValue)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks, walkWritingChunks)
-import Ecluse.Test.Registry.Packed (renderAlone)
+import Ecluse.Test.Registry.Packed (renderAlone, walkedLength)
 import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape)
 
 -- | A read that writes fails where the tree read fails, and otherwise holds the tree it would build.
@@ -122,7 +122,7 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
     bound = MetadataBodyLimit (sum (map BS.length chunks))
     tree tokens = withElement tokens $ \element rest ->
         readShape Trees shape mode (testTable ["url"]) element rest $ \value _ _ ->
-            Finished (Just (value, Just value, Just (toStrict (encode value)), toStrict (encode value), True))
+            Finished (Just (value, Just value, Just (toStrict (encode value)), toStrict (encode value), True, True))
     packed :: ST st (TokenResult -> ST st (Steps (ST st) (Maybe Held)))
     packed =
         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
@@ -131,11 +131,12 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
                 shared <- decodeWhole writer form
                 let held = docTable (tableTexts table)
                     decoded = packedValue held form
-                pure (Finished (Just (shared, decoded, renderAlone held Nothing form, foldMap (toStrict . encode) decoded, valueEnd (packedBlob form) 0 == packedBytes form)))
+                pure (Finished (Just (shared, decoded, renderAlone held Nothing form, foldMap (toStrict . encode) decoded, valueEnd (packedBlob form) 0 == packedBytes form, packedEncodedLength form == walkedLength table form)))
 
 -- What a read holds: the value decoded with the read's strings and with the sealed table, its render
--- and its encoding, and whether its opcodes end where its blob does.
-type Held = (Value, Maybe Value, Maybe ByteString, ByteString, Bool)
+-- and its encoding, whether its opcodes end where its blob does, and whether it stores the length a
+-- walk of those opcodes measures.
+type Held = (Value, Maybe Value, Maybe ByteString, ByteString, Bool, Bool)
 
 sameAsTree :: Shape -> Mode -> [ByteString] -> PropertyT IO ()
 sameAsTree shape mode chunks = do
