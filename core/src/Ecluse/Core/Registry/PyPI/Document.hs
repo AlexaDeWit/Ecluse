@@ -13,6 +13,7 @@ module Ecluse.Core.Registry.PyPI.Document (
 
 import Data.Aeson (Encoding, Object, Value, toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 
 import Ecluse.Core.Package.Entry (EntryKey)
@@ -33,8 +34,12 @@ simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 -- | Preserve envelope key order and file source order. Source coordinates stay internal.
 simpleEncoding :: SimpleDocument -> Encoding
 simpleEncoding document =
-    Encoding.pairs (fields (< "files") <> Encoding.pair "files" files <> fields (> "files"))
+    Encoding.pairs (KeyMap.foldrWithKey envelopePair id (simpleEnvelope document) files)
   where
-    -- The pinned KeyMap uses ascending key order, including the inserted files field.
-    fields include = KeyMap.foldMapWithKey (\key value -> if include key then Encoding.pair key (toEncoding value) else mempty) (simpleEnvelope document)
-    files = Encoding.list (toEncoding . snd) (simpleFiles document)
+    files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
+
+-- The pending files field keeps its former position in the pinned ascending KeyMap fold.
+envelopePair :: Key -> Value -> (Encoding.Series -> Encoding.Series) -> Encoding.Series -> Encoding.Series
+envelopePair key value next pending
+    | key < "files" = Encoding.pair key (toEncoding value) <> next pending
+    | otherwise = pending <> Encoding.pair key (toEncoding value) <> next mempty
