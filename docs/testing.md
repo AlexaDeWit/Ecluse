@@ -938,6 +938,7 @@ The harness separately validates each capture through the production read driver
 | `wire+project (per package)` | Complete bodies feed decoding and production full-document projection on every iteration. |
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
 | `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
+| `source digest (32 KiB chunks)` | Unchanged complete bodies pass through the production digesting source in 32 KiB pieces, and nothing reads them further. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
 | Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. They pass through the projection under a fixed table key, with no location check. |
