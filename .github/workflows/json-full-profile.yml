@@ -1,0 +1,57 @@
+name: JSON full-read profiles
+
+on:
+  push:
+    branches:
+      - measure/json-full-profile
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    name: Full-read profile (${{ matrix.variant }})
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main
+            source: 2b1abcc04412ef8017ba6b645f6da8f8166c52c7
+          - variant: native-members
+            source: 658fe0fc6a2888c6ab17c91f140aedec7717d444
+          - variant: c-specialised
+            source: b8f2e148538e60f0e70bc02dcdf2dbfb7c07e2c9
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      PROFILE_REF: ${{ matrix.source }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Profile fixed full-read inputs
+        env:
+          PROFILE_OUTPUT: ${{ runner.temp }}/json-full-profile
+        run: bash scripts/experiments/json-profile/run.sh
+
+      - name: Preserve profiles and source provenance
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: json-full-profile-${{ matrix.variant }}-${{ matrix.source }}
+          path: ${{ runner.temp }}/json-full-profile
+          if-no-files-found: warn
