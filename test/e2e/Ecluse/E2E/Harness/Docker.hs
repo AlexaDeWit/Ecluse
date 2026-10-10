@@ -21,6 +21,8 @@ module Ecluse.E2E.Harness.Docker (
     withPublicUpstreamsDown,
     withPrivateCacheDeletesRefused,
     withPublicArtifactWithheld,
+    stubReadsNow,
+    awaitStubReads,
 
     -- * The product image, run to completion
     RoleRun (..),
@@ -77,7 +79,7 @@ import UnliftIO (bracket, bracket_, finally, handleAny)
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
-import Ecluse.E2E.Harness.Stub (StubFault (..), retiredWorkers, startedWorkers, stubConfig, stubHosts)
+import Ecluse.E2E.Harness.Stub (StubFault (..), StubRead, retiredWorkers, startedWorkers, stubConfig, stubHosts, stubReads)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt, PinnedExternal),
@@ -215,13 +217,13 @@ withDredgerPrivateCache plane mirror action = do
 {- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then
 tear it down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
 -}
-withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2E :: (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2E = withE2EWith defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may
 stand up an OTLP collector at @otelcol@, up before the proxy so no export is missed.
 -}
-withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2EWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2EWith cfg action gdp =
     usingExistingPlane >>= \case
         True -> do
@@ -791,6 +793,16 @@ reloadStub plane fault = do
     unless applied (fail "the stub did not retire its old workers after a reload")
   where
     stub = gdpStub plane
+
+-- | Every request the stub has finished so far, oldest first.
+stubReadsNow :: GlobalDataPlane -> IO [StubRead]
+stubReadsNow plane = stubReads <$> containerLogs (gdpStub plane)
+
+{- | The requests the stub finished after its first @seen@, polled until they satisfy @complete@ or
+the budget lapses. The log trails a response by a moment, so a case names the reads it waits for.
+-}
+awaitStubReads :: GlobalDataPlane -> Int -> ([StubRead] -> Bool) -> IO [StubRead]
+awaitStubReads plane seen complete = pollUntil 40 250000 complete (drop seen <$> stubReadsNow plane)
 
 {- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
 put the file back on every exit path.

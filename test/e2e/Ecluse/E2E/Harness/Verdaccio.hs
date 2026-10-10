@@ -49,6 +49,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.E2E.Harness.Npm (npmArtifactPath)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
@@ -189,7 +190,7 @@ It bypasses the proxy, so a case can tell a stored artifact from a public-leg fa
 -}
 verdaccioArtifactBytes :: E2E -> Text -> Text -> IO (Int, LByteString)
 verdaccioArtifactBytes e2e name version = do
-    req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"))
+    req <- parseRequest (toString (e2eVerdaccio e2e <> npmArtifactPath name version))
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), responseBody resp)
 

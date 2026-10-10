@@ -1467,6 +1467,7 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
     Ecluse.E2E.Harness.Docker
+    Ecluse.E2E.Harness.InstalledTree
     Ecluse.E2E.Harness.Npm
     Ecluse.E2E.Harness.Pip
     Ecluse.E2E.Harness.Proxy
@@ -1475,6 +1476,7 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Verdaccio
     Ecluse.E2E.Npm.DredgerE2ESpec
     Ecluse.E2E.Npm.InstallE2ESpec
+    Ecluse.E2E.Npm.MirrorInstallE2ESpec
     Ecluse.E2E.Npm.PublishE2ESpec
     Ecluse.E2E.PyPI.InstallE2ESpec
     Ecluse.E2E.TelemetryE2ESpec
