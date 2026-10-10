@@ -81,9 +81,8 @@ import Ecluse.Core.Registry.Adapter (
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
-    AdapterMetadata (metadataFetchManifest),
+    AdapterMetadata (metadataRead),
     AdapterPublish (publishCodec),
-    ManifestFetch,
     StoreListing,
     VersionDelete,
  )
@@ -119,6 +118,8 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     noUpstreamMechanism,
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (ManifestFetch)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.Sweep.Pacing (derivedCapacity)
@@ -260,7 +261,7 @@ clearedBackend url adapter control =
     ClearedBackend
         { cbUrl = url
         , cbAlphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) adapter
-        , cbFetchManifest = maybe absentManifestRead (metadataFetchManifest . adapterMetadata) adapter
+        , cbFetchManifest = maybe absentManifestRead (fetchManifest . metadataRead . adapterMetadata) adapter
         , cbControl = control
         }
 

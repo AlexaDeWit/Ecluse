@@ -289,15 +289,16 @@ jobs:
         run: nix develop .#ci --command task test-smoke
 
   e2e:
-    name: End-to-end tests (whole-system, real npm)
+    name: End-to-end tests (whole-system, real clients)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     permissions:
       contents: read
-    # The real OCI image, an nginx stub, and Verdaccio, driven by the real npm CLI. It
-    # is hermetic unlike smoke, so it gates. Drop it from the gate only as a last resort.
+    # The real OCI image, an nginx stub, and Verdaccio, driven by the real npm and pip
+    # clients. It is hermetic unlike smoke, so it gates. Drop it from the gate only as a
+    # last resort.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -328,7 +329,7 @@ jobs:
           verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
           nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
-      - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
+      - name: End-to-end suite (builds + loads the image, drives the real clients)
         run: nix develop .#ci --command task test-e2e
 
   static-checks:

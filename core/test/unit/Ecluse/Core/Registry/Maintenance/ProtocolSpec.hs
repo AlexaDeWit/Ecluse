@@ -51,8 +51,9 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
-import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
@@ -414,7 +415,7 @@ protocolStore permitted origin = do
 
 readManifestOver :: OriginClient -> StoreManifestRead
 readManifestOver origin name =
-    first storeFaultOfMetadata <$> fetchNpmManifest passthroughTracingPort origin name
+    first storeFaultOfMetadata <$> fetchManifest npmRead passthroughTracingPort origin name
 
 withBoundedStore ::
     Limits ->

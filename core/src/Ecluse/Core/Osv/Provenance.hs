@@ -50,7 +50,7 @@ import Ecluse.Core.Osv.Schema (
     ),
     renderMetaKey,
  )
-import Ecluse.Core.Text (renderIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 
 {- | The sources one artifact was compiled from, as they described themselves. Every field is
 'Nothing' when the source supplied no such value, or when an older artifact predates the key.

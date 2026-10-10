@@ -18,19 +18,18 @@ import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered)
 import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), RenderPlan (..))
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
+import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Server.Transform (serveDocumentSize)
-import Ecluse.Test.Snapshot (digestOf)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
 -- | Measure real captures and the growth across synthetic release counts.
 benchmarks :: EcosystemBench -> Benchmark
 benchmarks ecosystem =
     bgroup "serve (filter + merge-assemble)" $
-        [ bench (entryName entry) (whnfAppIO serveDepth (Snapshot (digestOf bytes) document, info))
-        | entry@(_, bytes, info, document) <- ebCorpus ecosystem
+        [ bench (entryName entry) (whnfAppIO serveDepth (served, info))
+        | entry@(_, _, info, served) <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinearIO
                     "scales linearly in version count"
@@ -49,13 +48,12 @@ npmAssemblyBenchmarks ecosystem =
         "prepared npm assembly"
         [ bgroup
             (entryName entry)
-            [ bench label (whnf (planDepth . metadataAssemble (ebMetadata ecosystem) syntheticProxyBase (Map.singleton 0 source) plan . Just) document)
+            [ bench label (whnf (planDepth . metadataAssemble (ebMetadata ecosystem) syntheticProxyBase (Map.singleton 0 source) plan . Just) (snapshotValue source))
             | (label, survivors) <- [("all", Map.keysSet (infoVersions info)), ("one", Set.fromList (take 1 (Map.keys (infoVersions info))))]
             , Just plan <- [mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)]]
             ]
-        | entry@(_, bytes, info, document) <- ebCorpus ecosystem
-        , isJust (snd npmPacked document)
-        , let source = Snapshot (digestOf bytes) document
+        | entry@(_, _, info, source) <- ebCorpus ecosystem
+        , isJust (snd npmPacked (snapshotValue source))
         ]
 
 -- The survivors in the assembled plan, forcing what the render reads: its members, prefix and pieces.

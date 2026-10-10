@@ -6,15 +6,17 @@
 module Ecluse.Core.Registry.Npm.StreamingProjectionSpec (spec) where
 
 import Control.Monad (foldM)
-import Data.Aeson (Value (Null, Number, String), object, (.=))
+import Data.Aeson (Value (Null, Number, String), object, parseJSON, (.=))
+import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime)
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (InvalidEntryKind (..), PackageDetails (pkgPublishedAt), PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), invalidKey, invalidKind, invalidValue)
+import Ecluse.Core.Package (InvalidEntryKind (..), PackageDetails (pkgPublishedAt), PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), invalidKey, invalidKind, invalidReason, invalidValue)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -75,6 +77,17 @@ spec = describe "finishTree" $ do
         infoDistTags info `shouldBe` mempty
         fieldAt "time" raw `shouldBe` Just (object [])
 
+    it "reads a release time in a layout that only the library parser reads, to the same instant" $ do
+        usual <- publishedAt timestamp
+        usual `shouldSatisfy` isJust
+        for_ ["2020-01-01 00:00:00Z", "2020-01-01T01:00:00+01:00", "2019-12-31T19:00:00.000-0500"] $ \spelling ->
+            publishedAt (String spelling) `shouldReturn` usual
+
+    it "records the library parser's reason for a release time that is no stamp" $ do
+        (info, _) <- expectRight (project (stamped (String "last tuesday")))
+        map invalidReason (infoInvalidEntries info)
+            `shouldBe` [either toText (const "") (parseEither (parseJSON @UTCTime) (String "last tuesday"))]
+
     it "assembles and selects mirror metadata identically without the discarded raw maps" $ do
         (info, compact) <- expectRight (project (concat sourceFields))
         let expanded = withKeys [("time", withKeys [("1.0.0", timestamp)] bookkeeping), ("dist-tags", object ["latest" .= ("1.0.0" :: Text)])] compact
@@ -92,6 +105,13 @@ sourceFields =
     , [BeginContainer TimeContainer, TimeField "1.0.0" timestamp, TimeField "created" Null, TimeField "modified" (Number 7), IgnoredField]
     , [BeginContainer TagsContainer, TagField "latest" (String "1.0.0"), IgnoredField]
     ]
+
+-- One release, with the given value as its publish time.
+stamped :: Value -> [NpmField]
+stamped value = [NameField (String "thing"), BeginContainer VersionsContainer, VersionField "1.0.0" (Just release), BeginContainer TimeContainer, TimeField "1.0.0" value]
+
+publishedAt :: Value -> IO (Maybe UTCTime)
+publishedAt value = (\(info, _) -> Map.lookup "1.0.0" (infoVersions info) >>= pkgPublishedAt) <$> expectRight (project (stamped value))
 
 project :: [NpmField] -> Either Text (PackageInfo, Value)
 project fields = do
