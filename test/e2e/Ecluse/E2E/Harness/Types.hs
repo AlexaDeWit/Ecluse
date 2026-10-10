@@ -25,10 +25,8 @@ data E2E = E2E
     -- ^ The proxy's base URL on host loopback (no trailing slash).
     , e2eVerdaccio :: Text
     -- ^ The Verdaccio base URL on host loopback (the mirror, for polling).
-    , e2eStubContainer :: String
-    {- ^ The public-upstream stub container name, so a test can pause and resume it
-    ('withUpstreamPaused') to simulate a public-registry outage.
-    -}
+    , e2ePlane :: GlobalDataPlane
+    -- ^ The data plane the proxy runs on, so a case can fault a stub route or boot a second proxy on it.
     , e2eProxyContainer :: String
     {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
     ('proxyContainerLogs'): what it wrote to stdout\/stderr.
@@ -67,6 +65,7 @@ data E2EConfig = E2EConfig
 defaultE2EConfig :: E2EConfig
 defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = [], ecQueueUrl = Nothing, ecArgs = []}
 
+-- | The stores and the stub one spec group boots once: every proxy of the group runs on them.
 data GlobalDataPlane = GlobalDataPlane
     { gdpNet :: String
     , gdpStub :: String
@@ -87,7 +86,7 @@ data ClientResult = ClientResult
     deriving stock (Show)
 
 {- | An isolated, throwaway @npm@ project: its own cache, userconfig, prefix and @HOME@ keep
-global npm state out and the proxy the only registry. The lockfile stays on for 'npmCiIn'.
+global npm state out and the proxy the only registry.
 -}
 data NpmProject = NpmProject
     { npDir :: FilePath

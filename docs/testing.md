@@ -410,7 +410,8 @@ client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
 - Écluse blocks a rules-denied package and never mirrors it,
-- an installed package round-trips server → worker to the private mirror,
+- the worker mirrors an installed package, and a new project then installs it through a second
+  proxy while both public upstreams are down,
 - mirroring an older version after a newer one leaves the mirror's `dist-tags.latest` alone,
 - a tampered artifact fails the integrity gate and never publishes,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
@@ -423,7 +424,7 @@ goes in a module beside the ecosystem directories.
 
 | Module | Cases |
 |---|---|
-| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case. |
+| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case, and the mirror round trip boots a second one for its install with public down. |
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
 | `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
@@ -433,6 +434,21 @@ Each module boots its own data plane, so no case reads store state that another 
 module opens with `whenE2EAvailable`, which runs its cases when the tier's prerequisites are present
 and reports one `pending` case otherwise. The harness and the fixtures stay in
 `Ecluse.E2E.Harness.*` and `Ecluse.E2E.Fixtures.*`.
+
+One nginx container, the stub, answers for every registry name the product dials: both public
+upstreams, the mirror's front, a private upstream that holds nothing, and the private cache of the
+Dredger groups. A case that needs one of them to fail holds a fault on that route alone:
+
+| Control | Fault |
+|---|---|
+| `withPublicUpstreamsDown` | The stub closes every connection to the npm and PyPI public upstreams with no answer. The other routes keep answering, so only a private store can supply a client. |
+| `withPrivateCacheDeletesRefused` | The private cache refuses every write method and still answers reads. |
+
+Each control rewrites the stub's configuration, reloads nginx, and returns once the stub's log shows
+that every worker of the old configuration has stopped accepting connections. It restores the
+routes the same way when its action ends. A case confirms a public outage through its own proxy
+before it relies on one: `npmPublicReachable` asks that proxy for a package that only the public
+upstream holds.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,

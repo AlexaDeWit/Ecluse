@@ -29,6 +29,7 @@ module Ecluse.E2E.Fixtures.Npm (
     corpusRevokedPkg,
     tamperPkg,
     headPkg,
+    publicOnlyPkg,
     telemetryPkg,
     telemetryDdPkg,
     fixturePackages,
@@ -147,6 +148,10 @@ tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 headPkg :: PkgSpec
 headPkg = defaultPkgSpec "e2e-head"
 
+-- | A package whose artifact no case requests, so no worker mirrors it and only public holds it.
+publicOnlyPkg :: PkgSpec
+publicOnlyPkg = defaultPkgSpec "e2e-public-only"
+
 -- | A package reserved for deletion by the Dredger scenario.
 dredgerPkg :: PkgSpec
 dredgerPkg = defaultPkgSpec "e2e-dredger"
@@ -204,6 +209,7 @@ fixturePackages =
     , latestPkg
     , tamperPkg
     , headPkg
+    , publicOnlyPkg
     , dredgerPkg
     , dredgerKeepPkg
     , dredgerDryRunPkg

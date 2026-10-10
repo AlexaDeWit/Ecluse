@@ -17,10 +17,8 @@ module Ecluse.E2E.Harness.Docker (
     ddTagEnv,
     ddTagVersion,
 
-    -- * Observability
-    withUpstreamPaused,
-
     -- * Fixture controls
+    withPublicUpstreamsDown,
     withPrivateCacheDeletesRefused,
     withPublicArtifactWithheld,
 
@@ -79,6 +77,7 @@ import UnliftIO (bracket, bracket_, finally, handleAny)
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
+import Ecluse.E2E.Harness.Stub (StubFault (..), retiredWorkers, startedWorkers, stubConfig, stubHosts)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt, PinnedExternal),
@@ -135,7 +134,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
         buildPyPIFixtures (workDir </> "pypi")
         buildAdvisoryFixtures htmlDir
         writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
-        writeFileText (workDir </> "nginx.conf") (nginxStubConfig "")
+        writeFileText (workDir </> "nginx.conf") (stubConfig Nothing)
         generateCerts (workDir </> "certs")
         pure workDir
 
@@ -165,11 +164,11 @@ withGlobalDataPlane action =
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
                             }
-                    -- One nginx terminates TLS for every registry stub, so it answers to the four
-                    -- aliases below. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
+                    -- One nginx terminates TLS for every registry stub, so it answers to every
+                    -- route's alias. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
-                            { drAliases = ["upstream", "mirror", "private-upstream", "private-cache", "pypi-upstream"]
+                            { drAliases = map toString stubHosts
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
                                 , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
@@ -234,7 +233,7 @@ withE2EWith cfg action gdp =
                     , e2ePypiIndex = base <> "/pypi/simple/"
                     , e2eBaseUrl = base
                     , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
-                    , e2eStubContainer = gdpStub gdp
+                    , e2ePlane = gdp
                     , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
                     , e2eMirrorContainer = gdpVerd gdp
                     , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
@@ -245,7 +244,6 @@ withE2EWith cfg action gdp =
             sfx <- uniqueSuffix
             labelArgs <- dockerLabelArgs "e2e"
             let net = gdpNet gdp
-                stub = gdpStub gdp
                 prox = "ecluse-e2e-proxy-" <> sfx
                 coll = "ecluse-e2e-otelcol-" <> sfx
                 certsDir = gdpWorkDir gdp </> "certs"
@@ -280,7 +278,7 @@ withE2EWith cfg action gdp =
                                 , e2ePypiIndex = base <> "/pypi/simple/"
                                 , e2eBaseUrl = base
                                 , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
-                                , e2eStubContainer = stub
+                                , e2ePlane = gdp
                                 , e2eProxyContainer = prox
                                 , e2eMirrorContainer = gdpVerd gdp
                                 , e2eCollectorContainer = collectorName
@@ -636,7 +634,7 @@ commandOk command args = do
     unless (code == ExitSuccess) $
         fail (command <> " command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
-{- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub alias plus
+{- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub route plus
 @localhost@, and a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
 -}
 generateCerts :: FilePath -> IO ()
@@ -648,7 +646,7 @@ generateCerts dir = do
         srvKey = dir </> "server.key"
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
-    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
+    writeFileText ext ("subjectAltName=" <> T.intercalate "," (map ("DNS:" <>) (stubHosts <> ["localhost"]) <> ["IP:127.0.0.1"]) <> "\n")
     commandOk "openssl" ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
     commandOk "openssl" ["genrsa", "-out", srvKey, "2048"]
     commandOk "openssl" ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
@@ -739,83 +737,6 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so the
-proxy dials https-only endpoints. @cacheGuard@ adds a directive to the private-cache route alone.
--}
-nginxStubConfig :: Text -> Text
-nginxStubConfig cacheGuard =
-    T.unlines
-        [ "server {"
-        , "    listen 443 ssl;"
-        , "    server_name upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    root /usr/share/nginx/html;"
-        , "    location ~ ^/(?<pkg>[^/]+)$ {"
-        , "        default_type application/json;"
-        , "        alias /usr/share/nginx/html/$pkg/packument.json;"
-        , "    }"
-        , "    location / {"
-        , "        try_files $uri =404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name pypi-upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    root /usr/share/nginx/pypi;"
-        , "    index index.json;"
-        , -- A `types` block replaces the inherited map rather than extending it, so the
-          -- index gets the PEP 691 media type and every other file needs the default below.
-          "    types {"
-        , "        application/vnd.pypi.simple.v1+json json;"
-        , "    }"
-        , "    default_type application/octet-stream;"
-        , "    location / {"
-        , -- An index request carries a trailing slash, so the file form is tried first: a
-          -- bare $uri matches the directory, which nginx answers 403 with no index file.
-          "        try_files $uri/index.json $uri =404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name private-upstream;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    location / {"
-        , "        return 404;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name private-cache;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    resolver 127.0.0.11 valid=5s;"
-        , cacheGuard
-        , "    location / {"
-        , "        set $cache_backend cache-verdaccio:4873;"
-        , "        proxy_pass http://$cache_backend;"
-        , "        proxy_set_header Host $host;"
-        , "        proxy_set_header X-Forwarded-Proto https;"
-        , "    }"
-        , "}"
-        , "server {"
-        , "    listen 443 ssl;"
-        , "    server_name mirror;"
-        , "    ssl_certificate /certs/server.crt;"
-        , "    ssl_certificate_key /certs/server.key;"
-        , "    client_max_body_size 0;" -- admits a published tarball of any size
-        , "    location / {"
-        , "        proxy_pass http://verdaccio:4873;"
-        , "        proxy_set_header Host $host;"
-        , "        proxy_set_header X-Forwarded-Proto https;" -- keeps Verdaccio writing https URLs
-        , "        proxy_set_header X-Forwarded-For $remote_addr;"
-        , "    }"
-        , "}"
-        ]
-
 {- | The Verdaccio config: anonymous read + publish, no uplinks (a sealed local
 mirror), listening on all interfaces so a peer container can reach it.
 -}
@@ -841,32 +762,35 @@ verdaccioConfig =
         , "log: { type: stdout, format: pretty, level: warn }"
         ]
 
-{- | Pause the public-upstream stub for the duration of an action, then resume it on every exit
-path. With the stub frozen, only the private mirror can answer an install.
+{- | Take both public upstreams down for the action, npm's and PyPI's: the stub closes every
+connection to them unanswered, while the mirror, the private upstream, and the private cache answer.
 -}
-withUpstreamPaused :: E2E -> IO a -> IO a
-withUpstreamPaused e2e =
-    bracket_
-        (commandOk "docker" ["pause", e2eStubContainer e2e])
-        (commandOk "docker" ["unpause", e2eStubContainer e2e])
+withPublicUpstreamsDown :: GlobalDataPlane -> IO a -> IO a
+withPublicUpstreamsDown plane = withStubFault plane PublicUpstreamsDown
 
 {- | Refuse every write method on the private-cache route for the duration of the action, so that
 one target's deletes fail while its reads keep answering.
 -}
 withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
-withPrivateCacheDeletesRefused plane action =
-    finally (reloadStub plane refuseCacheWrites >> action) (reloadStub plane "")
+withPrivateCacheDeletesRefused plane = withStubFault plane PrivateCacheWritesRefused
 
--- The stub answers this before it picks a location, so it covers the whole route.
-refuseCacheWrites :: Text
-refuseCacheWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
+-- The stub holds one fault at a time, so leaving the action restores every route.
+withStubFault :: GlobalDataPlane -> StubFault -> IO a -> IO a
+withStubFault plane fault action =
+    finally (reloadStub plane (Just fault) >> action) (reloadStub plane Nothing)
 
--- Rewrite the bind-mounted configuration in place, then have the running nginx pick it up. The
--- write lands before the reload can fail, so a caller restores the file on every exit path.
-reloadStub :: GlobalDataPlane -> Text -> IO ()
-reloadStub plane cacheGuard = do
-    writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig cacheGuard)
-    commandOk "docker" ["exec", gdpStub plane, "nginx", "-s", "reload"]
+-- Rewrite the bind-mounted configuration and have nginx apply it. nginx retires its old workers in
+-- the background, so this returns once its log shows every one of them has stopped accepting.
+reloadStub :: GlobalDataPlane -> Maybe StubFault -> IO ()
+reloadStub plane fault = do
+    superseded <- startedWorkers <$> containerLogs stub
+    when (superseded == 0) (fail "the stub's log names no worker process, so no reload can be confirmed")
+    writeFileText (gdpWorkDir plane </> "nginx.conf") (stubConfig fault)
+    commandOk "docker" ["exec", stub, "nginx", "-s", "reload"]
+    applied <- awaitContainerLog stub ((>= superseded) . retiredWorkers) 40
+    unless applied (fail "the stub did not retire its old workers after a reload")
+  where
+    stub = gdpStub plane
 
 {- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
 put the file back on every exit path.

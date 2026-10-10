@@ -1470,6 +1470,7 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Npm
     Ecluse.E2E.Harness.Pip
     Ecluse.E2E.Harness.Proxy
+    Ecluse.E2E.Harness.Stub
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
     Ecluse.E2E.Npm.DredgerE2ESpec
