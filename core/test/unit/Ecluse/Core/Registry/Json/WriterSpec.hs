@@ -19,7 +19,7 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (docTable, packedBlob, packedBytes, packedEncodedLength, packedValue, valueEnd)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), readShape)
+import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), Walk (finish), withElement)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
@@ -27,7 +27,7 @@ import Ecluse.Test.Json (genValue)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Packed (renderAlone, walkedLength)
-import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape)
+import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape, toShapeWith)
 
 -- | A read that writes fails where the tree read fails, and otherwise holds the tree it would build.
 spec :: Spec
@@ -39,7 +39,9 @@ spec = describe "Writer" $ do
                 body <- forAll (genJsonBytes shapeNames >>= damaged)
                 chunks <- forAll (genChunks body)
                 share <- forAll Gen.bool
-                sameAsTree (toShape shape) (if share then Share else Keep) chunks
+                prepared <- forAll Gen.bool
+                let retained = if prepared then toShapeWith (prepareMembers (testTable ["url"])) shape else toShape shape
+                sameAsTree retained (if share then Share else Keep) chunks
 
         it "decodes only the members a pick names, as the tree holds them" $
             hedgehog $ do

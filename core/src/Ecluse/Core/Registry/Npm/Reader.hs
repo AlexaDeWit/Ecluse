@@ -17,7 +17,7 @@ import Data.Aeson (Value (Null))
 import Data.JsonStream.TokenReader (Element (..), Tokens)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), entryText, internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionFields)
@@ -101,12 +101,13 @@ npmWalk build depth mode step keeps table0 initial = start
                     emit current (field scalar) (skipRest 1 afterValue . done . Walked held)
             | otherwise = withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked held current))
 
-    releaseShape = Checked (depth - 2) (ObjectOr Null (releaseMembers depth))
+    releaseShape = Checked (depth - 2) (ObjectOr Null (releaseMembers table0 depth))
 
 -- The release fields "Ecluse.Core.Registry.Npm.Streaming" retains for full and selected reads.
-releaseMembers :: Int -> Members
-releaseMembers depth = namedMembers (shapedFields <> [(key, Generic (depth - 3)) | key <- versionFields])
+releaseMembers :: InternTable -> Int -> Members
+releaseMembers table depth = named (shapedFields <> [(key, Generic (depth - 3)) | key <- versionFields])
   where
+    named = prepareMembers table . namedMembers
     shapedFields =
         [ ("_npmUser", personValue ["name", "email", "url"] (depth - 3))
         , ("license", personValue ["type", "url"] (depth - 3))
@@ -114,7 +115,7 @@ releaseMembers depth = namedMembers (shapedFields <> [(key, Generic (depth - 3))
         , ("peerDependenciesMeta", dependencyMeta)
         , ("dependenciesMeta", dependencyMeta)
         , ("directories", fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3))
-        , ("devEngines", objectValue (depth - 3) (namedMembers [(key, devEngine) | key <- ["cpu", "os", "libc", "runtime", "packageManager"]]))
+        , ("devEngines", objectValue (depth - 3) (named [(key, devEngine) | key <- ["cpu", "os", "libc", "runtime", "packageManager"]]))
         , ("publishConfig", objectValue (depth - 3) publishFields)
         , ("workspaces", ArrayWith (depth - 3) (Scalar (depth - 4)) (objectValue (depth - 3) workspaceFields))
         ]
@@ -127,15 +128,15 @@ releaseMembers depth = namedMembers (shapedFields <> [(key, Generic (depth - 3))
     personValue keys budget = StringOr budget (fixed keys budget)
     objectValue budget members = ObjectWith budget members (Scalar budget)
     arrayValue budget entry = ArrayWith budget entry (Scalar budget)
-    fixed keys budget = objectValue budget (namedMembers [(key, Scalar (budget - 1)) | key <- keys])
+    fixed keys budget = objectValue budget (named [(key, Scalar (budget - 1)) | key <- keys])
     distFields =
-        namedMembers
+        named
             ( [ ("signatures", arrayValue (depth - 4) (fixed ["keyid", "sig"] (depth - 5)))
-              , ("attestations", objectValue (depth - 4) (namedMembers [("url", Scalar (depth - 5)), ("provenance", fixed ["predicateType"] (depth - 5))]))
+              , ("attestations", objectValue (depth - 4) (named [("url", Scalar (depth - 5)), ("provenance", fixed ["predicateType"] (depth - 5))]))
               ]
                 <> [(key, Scalar (depth - 4)) | key <- ["tarball", "shasum", "integrity", "unpackedSize", "fileCount"]]
             )
     dependencyMeta = objectValue (depth - 3) (everyMember (fixed ["optional"] (depth - 4)))
     devEngine = ArrayWith (depth - 4) (fixed ["name", "version", "onFail"] (depth - 5)) (fixed ["name", "version", "onFail"] (depth - 4))
-    publishFields = namedMembers [(key, Generic (depth - 4)) | key <- ["registry", "tag", "access", "provenance", "ignore-scripts", "directory", "linkDirectory", "executableFiles", "main", "module", "types", "typings", "exports", "imports", "bin", "browser"]]
-    workspaceFields = namedMembers [(key, arrayValue (depth - 4) (Scalar (depth - 5))) | key <- ["packages", "nohoist"]]
+    publishFields = named [(key, Generic (depth - 4)) | key <- ["registry", "tag", "access", "provenance", "ignore-scripts", "directory", "linkDirectory", "executableFiles", "main", "module", "types", "typings", "exports", "imports", "bin", "browser"]]
+    workspaceFields = named [(key, arrayValue (depth - 4) (Scalar (depth - 5))) | key <- ["packages", "nohoist"]]
