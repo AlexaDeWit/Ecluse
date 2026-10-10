@@ -142,8 +142,10 @@ Idempotent while the renderer keeps the filename in the terminal path segment.
 rebaseArtifactUrl :: (Text -> Maybe Text) -> Text -> Maybe Text
 rebaseArtifactUrl renderMountUrl url = do
     filename <- urlFilename url
-    _ <- urlFilename (T.strip url)
+    guard (trimmed == url || isJust (urlFilename trimmed))
     renderMountUrl filename
+  where
+    trimmed = T.strip url
 
 -- | A raw document's own object, empty for a document that is not one.
 documentObject :: Value -> KeyMap Value

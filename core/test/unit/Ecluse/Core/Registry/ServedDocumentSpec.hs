@@ -15,7 +15,7 @@ import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -29,6 +29,8 @@ import Ecluse.Core.Registry.ServedDocument (overlayObjectSurvivors, overlaySurvi
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
+import Ecluse.Core.Text (urlFilename)
+import Ecluse.Package.Filter.Support (genHostileUrl, upstreams)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
@@ -47,6 +49,7 @@ spec = do
     allocationSpec
     nameGateSpec
     rebaseSpec
+    rebaseDifferentialSpec
     droppedArtifactSpec
 
 droppedArtifactSpec :: Spec
@@ -318,6 +321,45 @@ rebaseSpec = describe "rebaseArtifactUrl" $ do
             file <- forAll (Gen.text (Range.linear 1 20) Gen.alphaNum)
             let once = rebaseArtifactUrl mountUrl ("https://upstream.test/x/" <> file <> ".tgz")
             (once >>= rebaseArtifactUrl mountUrl) === once
+
+rebaseDifferentialSpec :: Spec
+rebaseDifferentialSpec = describe "rebaseArtifactUrl against its previous implementation" $ do
+    it "keeps the raw filename when trimming changes a valid URL" $
+        rebaseArtifactUrl mountUrl " https://files.pythonhosted.org/requests-1.0.tar.gz "
+            `shouldBe` mountUrl "requests-1.0.tar.gz "
+
+    it "refuses a filename that becomes traversal only after trimming" $
+        rebaseArtifactUrl mountUrl "https://files.pythonhosted.org/.. " `shouldBe` Nothing
+
+    for_ [("identity", Just), ("mount", mountUrl), ("refusal", const Nothing)] $ \(label, render) ->
+        it ("matches deterministic URL combinations with the " <> label <> " renderer") $
+            for_ rebaseUrls $ \url ->
+                (url, rebaseArtifactUrl render url) `shouldBe` (url, referenceRebaseArtifactUrl render url)
+
+    modifyMaxSuccess (const 5000) $
+        it "matches generated hostile URLs and renderer refusals" $
+            hedgehog $ do
+                (_, _, served) <- forAll (Gen.element upstreams)
+                url <- forAll (genHostileUrl served)
+                refuses <- forAll Gen.bool
+                let render = if refuses then const Nothing else mountUrl
+                rebaseArtifactUrl render url === referenceRebaseArtifactUrl render url
+
+-- The unoptimised contract at 1a53a01b0480ae61f486a6ec1eda0a27cb646181.
+referenceRebaseArtifactUrl :: (Text -> Maybe Text) -> Text -> Maybe Text
+referenceRebaseArtifactUrl render url = do
+    filename <- urlFilename url
+    _ <- urlFilename (T.strip url)
+    render filename
+
+rebaseUrls :: [Text]
+rebaseUrls =
+    [ leading <> prefix <> filename <> suffix <> trailing
+    | prefix <- ["", "/", "https://files.pythonhosted.org/packages/ab/", "https:/", "https://[::1/"]
+    , filename <- ["", ".", "..", ". ", ".. ", " ", "requests-1.0.tar.gz", "a/b.whl", "a\\b", "%2e", ".%2E", "%2E%2e", "a%2fb", "a%5Cb", "%00", "%7f", "%ff", "%C0%AF", "%E2%82", "%C3%BC.whl", "%E2%80%AE.whl", "%252e%252e", "%", "%2", "%GG", "two%20words.whl", "name+tag.whl", "bad\NUL", "bad\n"]
+    , suffix <- ["", "?sig=abc", "#sha256=deadbeef", "?redirect=https://other.test/other.whl#hash", "/?query"]
+    , (leading, trailing) <- [("", ""), (" ", ""), ("", " "), (" ", " "), ("\t", ""), ("", "\t"), ("\n", "\n"), ("\xA0", "\xA0"), ("\x3000", "\x3000")]
+    ]
 
 overlay :: [(SourceId, Value)] -> [(Text, SourceId)] -> [(Text, Value)]
 overlay sources survivors =
