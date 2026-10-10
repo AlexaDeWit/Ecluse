@@ -7,9 +7,9 @@
 A 'Version' keeps the raw text verbatim, because version strings are embedded in artifact
 URLs and re-served. Ordering goes through 'compareVersions' on the parsed 'VersionKey',
 which exists only when the raw text parses for its ecosystem, so non-canonical text can
-never reach a comparator. Parsing is per-ecosystem and the grammar modules stay private:
-callers build with 'mkVersion' or 'parseVersionKey'. See
-@docs\/architecture\/domain-model.md@, "Version".
+never reach a comparator. Parsing is per-ecosystem and a 'VersionKey' has no public
+constructor: callers build with 'mkVersion' or 'parseVersionKey'. See
+@docs\/architecture\/registry-model.md@, "The internal domain model".
 -}
 module Ecluse.Core.Version (
     -- * Versions

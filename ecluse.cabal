@@ -312,18 +312,20 @@ library ecluse-core
       Ecluse.Core.Worker.Realise
       Ecluse.Core.Worker.Types
 
-  -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
-  -- ecluse-core: VersionKey is opaque, so callers reach these only through the
-  -- agnostic Ecluse.Core.Version API. Egress.Internal holds the raw RegistryUrl
-  -- constructor. It is an other-module, so only code inside ecluse-core reaches it,
-  -- and the app library and executable see only the abstract type through
-  -- Ecluse.Core.Security.Egress.
+  -- The PEP 440 and RubyGems version grammars. Internal to ecluse-core: VersionKey is
+  -- opaque, so callers reach them only through the agnostic Ecluse.Core.Version API.
+  -- Egress.Internal holds the raw RegistryUrl constructor. It is an other-module, so
+  -- only code inside ecluse-core reaches it, and the app library and executable see
+  -- only the abstract type through Ecluse.Core.Security.Egress.
   other-modules:
     Ecluse.Core.Security.Egress.Internal
     Ecluse.Core.Version.Gem
     Ecluse.Core.Version.Pep440
-    Ecluse.Core.Version.Semver
+
+  -- The semver grammar and the lexical atoms the grammars share, exposed so their specs
+  -- can import them. VersionKey stays opaque, so neither lets a caller build a key.
   exposed-modules:
+    Ecluse.Core.Version.Semver
     Ecluse.Core.Version.Token
 
   other-modules:
@@ -972,6 +974,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec
+    Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.IntegritySpec
@@ -1039,6 +1042,8 @@ test-suite ecluse-core-unit
     , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
+    -- Test-only: the reference parser that SemverSpec holds the semver scanner to.
+    , versions          ^>=6.0
     , wai               ^>=3.2
     , warp              ^>=3.4
     -- Test-only: a gzipped body proves the bounded metadata read bounds DECOMPRESSED
