@@ -317,7 +317,7 @@ jobs:
       # only the Security-tab view, which tracks main, hence always().
       - name: Upload Semgrep SARIF to code scanning
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -572,14 +572,14 @@ jobs:
 
       - name: Upload the arm64 SARIF to code scanning
         if: ${{ !cancelled() && hashFiles('grype-arm64.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           sarif_file: grype-arm64.sarif
           category: grype
 
       - name: Upload the amd64 SARIF to code scanning
         if: ${{ !cancelled() && hashFiles('grype-amd64.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           sarif_file: grype-amd64.sarif
           category: grype-amd64
