@@ -26,6 +26,7 @@ extra-source-files:
   bench/corpus/npm/*.json
   bench/corpus/pypi/*.json
   bench/corpus/pins.json
+  bench/load/floors.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/osv/v1/*.json
@@ -269,6 +270,7 @@ library ecluse-core
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Contract
     Ecluse.Core.Server.Fault
+    Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
@@ -312,18 +314,20 @@ library ecluse-core
       Ecluse.Core.Worker.Realise
       Ecluse.Core.Worker.Types
 
-  -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
-  -- ecluse-core: VersionKey is opaque, so callers reach these only through the
-  -- agnostic Ecluse.Core.Version API. Egress.Internal holds the raw RegistryUrl
-  -- constructor. It is an other-module, so only code inside ecluse-core reaches it,
-  -- and the app library and executable see only the abstract type through
-  -- Ecluse.Core.Security.Egress.
+  -- The PEP 440 and RubyGems version grammars. Internal to ecluse-core: VersionKey is
+  -- opaque, so callers reach them only through the agnostic Ecluse.Core.Version API.
+  -- Egress.Internal holds the raw RegistryUrl constructor. It is an other-module, so
+  -- only code inside ecluse-core reaches it, and the app library and executable see
+  -- only the abstract type through Ecluse.Core.Security.Egress.
   other-modules:
     Ecluse.Core.Security.Egress.Internal
     Ecluse.Core.Version.Gem
     Ecluse.Core.Version.Pep440
-    Ecluse.Core.Version.Semver
+
+  -- The semver grammar and the lexical atoms the grammars share, exposed so their specs
+  -- can import them. VersionKey stays opaque, so neither lets a caller build a key.
   exposed-modules:
+    Ecluse.Core.Version.Semver
     Ecluse.Core.Version.Token
 
   other-modules:
@@ -943,11 +947,13 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Cache.Backend.Local.InternalSpec
     Ecluse.Core.Server.Cache.ProviderSpec
     Ecluse.Core.Server.Cache.StoreSpec
+    Ecluse.Core.Server.Cache.TypesSpec
     Ecluse.Core.Server.Cache.VersionWeightSpec
     Ecluse.Core.Server.CacheSpec
     Ecluse.Core.Server.ConditionalSpec
     Ecluse.Core.Server.ContractSpec
     Ecluse.Core.Server.FaultSpec
+    Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.PathSpec
@@ -972,6 +978,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec
+    Ecluse.Core.Version.SemverSpec
     Ecluse.Core.Version.TokenSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
@@ -1040,6 +1047,8 @@ test-suite ecluse-core-unit
     , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
+    -- Test-only: the reference parser that SemverSpec holds the semver scanner to.
+    , versions          ^>=6.0
     , wai               ^>=3.2
     , warp              ^>=3.4
     -- Test-only: a gzipped body proves the bounded metadata read bounds DECOMPRESSED
@@ -1063,6 +1072,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.BootLinesSpec
     Ecluse.BenchLoad.ExpositionSpec
+    Ecluse.BenchLoad.FloorsSpec
     Ecluse.BenchLoad.LatencySpec
     Ecluse.BenchLoad.NpmArtifactSpec
     Ecluse.BenchLoad.NpmSpec
@@ -1081,7 +1091,10 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.RtsProbe
     Ecluse.BenchLoad.RtsProbeSpec
     Ecluse.BenchLoad.RtsWindowSpec
+    Ecluse.BenchLoad.Scenarios
+    Ecluse.BenchLoad.ScenariosSpec
     Ecluse.BenchLoad.SelectionSpec
+    Ecluse.BenchLoad.Support
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Oha
@@ -1565,6 +1578,7 @@ executable bench-load
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
+    Ecluse.BenchLoad.Scenarios
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
 
@@ -1595,14 +1609,15 @@ executable bench-load
     , wai              ^>=3.2
     , warp             ^>=3.4
 
--- Pure load-report arithmetic, pod shapes, and verdicts, shared with the gating unit suite.
--- Live probes, sockets, and process orchestration remain in the bench-load executable.
+-- Pure load-report arithmetic, pod shapes, success floors, and verdicts, shared with the gating
+-- unit suite. Live probes, sockets, and process orchestration remain in the bench-load executable.
 library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
   exposed-modules:
     Ecluse.BenchLoad.BootLines
     Ecluse.BenchLoad.Exposition
+    Ecluse.BenchLoad.Floors
     Ecluse.BenchLoad.Latency
     Ecluse.BenchLoad.NpmArtifact
     Ecluse.BenchLoad.Normalise

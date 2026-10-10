@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The one failure the load harness raises, as a typed exception and a non-zero exit. It never
-fails on a slow result. It fails when a fixture or a proxy cannot boot, when @oha@ cannot run, when
-a report does not parse, and when a run breaks an invariant in "Ecluse.BenchLoad.Verdict".
+{- | The one failure the load harness raises, as a typed exception and a non-zero exit. It fails
+when a fixture or a proxy cannot boot, when @oha@ cannot run, when a report or the committed floors
+do not parse, and when a run breaks an invariant in "Ecluse.BenchLoad.Verdict".
 -}
 module Ecluse.BenchLoad.Error (
     BenchLoadError (..),

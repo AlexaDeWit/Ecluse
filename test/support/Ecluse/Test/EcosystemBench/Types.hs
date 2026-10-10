@@ -21,12 +21,13 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Corpus (CorpusPackage)
+import Ecluse.Test.Corpus (CaptureUpstream, CorpusPackage)
 
 -- | One ecosystem's measured operations and eagerly loaded, validated corpus.
 data EcosystemBench = EcosystemBench
     { ebEcosystem :: Ecosystem
     , ebCorpus :: [LoadedEntry]
+    , ebUpstream :: CaptureUpstream
     , ebSynthetic :: Int -> ByteString
     -- ^ Positive counts produce that many distinct releases under 'ebSyntheticName'.
     , ebSyntheticName :: PackageName

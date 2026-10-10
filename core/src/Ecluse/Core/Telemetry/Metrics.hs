@@ -175,9 +175,11 @@ data CacheResult = Hit | Miss | Collapsed
 
 instance Universe CacheResult where universe = universeGeneric
 
--- | The independently budgeted metadata stores.
+-- | The independently budgeted metadata stores. A cache key and a flight key carry this tag, so it decides which keys are equal.
 data CacheStore = FullStore | VersionStore | AssembledStore
-    deriving stock (Eq, Generic, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Hashable CacheStore
 
 instance Universe CacheStore where universe = universeGeneric
 

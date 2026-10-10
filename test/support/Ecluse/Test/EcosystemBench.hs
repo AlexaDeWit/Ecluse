@@ -67,6 +67,7 @@ npmBench =
     EcosystemBench
         { ebEcosystem = Npm
         , ebCorpus = []
+        , ebUpstream = npmCaptureUpstream
         , ebSynthetic = syntheticPackumentBytes
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . (\body -> RegistryResponse 200 (BS.length body) body)
@@ -86,6 +87,7 @@ pypiBench =
     EcosystemBench
         { ebEcosystem = PyPI
         , ebCorpus = []
+        , ebUpstream = pypiCaptureUpstream
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)

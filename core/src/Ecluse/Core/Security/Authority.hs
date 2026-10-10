@@ -161,7 +161,10 @@ refuseCredentialMaterial subject url
 {- The authority component, userinfo intact, truncated at the first path, query, or fragment
 delimiter. Kept private: a caller holding the credential-bearing span is the exposure to prevent. -}
 authoritySpan :: Text -> Text
-authoritySpan raw = T.takeWhile (`notElem` ['/', '?', '#']) (afterFirst "://" raw)
+authoritySpan raw = T.takeWhile inAuthority (afterFirst "://" raw)
+
+inAuthority :: Char -> Bool
+inAuthority c = c /= '/' && c /= '?' && c /= '#'
 
 {- The authority of a URI or bare @host[:port]@ value, with any userinfo dropped. 'hostAddress' and
 'hostPortAddress' share it, so the two extractions cannot drift on an authority edge case. -}

@@ -21,27 +21,32 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
 -- | Missing capabilities remain uncached. They never fall back to another storage provider.
 data CacheProvider = CacheProvider
-    { cpFull :: Maybe (RetentionBackend Text CacheEntry)
+    { cpFull :: Maybe (RetentionBackend CacheKey CacheEntry)
     -- ^ Full metadata is absent for local storage, regardless of the supplied operations.
-    , cpVersion :: Maybe (RetentionBackend Text VersionRead)
+    , cpVersion :: Maybe (RetentionBackend CacheKey VersionRead)
     -- ^ Selected reads may use an adapter-owned projection without loading a full value locally.
-    , cpAssembled :: Maybe (RetentionBackend Text ByteString)
+    , cpAssembled :: Maybe (RetentionBackend CacheKey ByteString)
     }
 
 -- | Full retention from the selected provider, absent for local storage.
-providerFull :: CacheProvider -> Maybe (RetentionBackend Text CacheEntry)
+providerFull :: CacheProvider -> Maybe (RetentionBackend CacheKey CacheEntry)
 providerFull = cpFull
 
 -- | Selected retention from the same provider, without a full-document read.
-providerVersion :: CacheProvider -> Maybe (RetentionBackend Text VersionRead)
+providerVersion :: CacheProvider -> Maybe (RetentionBackend CacheKey VersionRead)
 providerVersion = cpVersion
 
 -- | Assembled retention from the same provider, with no local fallback.
-providerAssembled :: CacheProvider -> Maybe (RetentionBackend Text ByteString)
+providerAssembled :: CacheProvider -> Maybe (RetentionBackend CacheKey ByteString)
 providerAssembled = cpAssembled
 
 -- | Classify every operation together. Local storage cannot opt into full retention.
-cacheProvider :: BackendStorage -> Maybe (RetentionOperations Text CacheEntry) -> Maybe (RetentionOperations Text VersionRead) -> Maybe (RetentionOperations Text ByteString) -> CacheProvider
+cacheProvider ::
+    BackendStorage ->
+    Maybe (RetentionOperations CacheKey CacheEntry) ->
+    Maybe (RetentionOperations CacheKey VersionRead) ->
+    Maybe (RetentionOperations CacheKey ByteString) ->
+    CacheProvider
 cacheProvider storage full version assembled =
     CacheProvider
         { cpFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)

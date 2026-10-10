@@ -6,13 +6,14 @@
 
 {- | Load settings, the fixture interface, and the measurement of one scenario. Each scenario runs
 in a child process against its own proxy process, so every figure belongs to that scenario alone.
-Throughput and latency are informational. "Ecluse.BenchLoad.Verdict" names what fails a run.
+Latency and memory are informational. "Ecluse.BenchLoad.Verdict" names what fails a run.
 -}
 module Ecluse.BenchLoad.Harness (
     -- * Load knobs
     LoadKnobs (..),
     defaultLoadKnobs,
     loadKnobsFromEnv,
+    operatingPoint,
 
     -- * The per-ecosystem fixture interface (the Handle pattern)
     UpstreamFixture (..),
@@ -54,6 +55,7 @@ import Ecluse.BenchLoad.Exposition (
     seriesTotal,
     summariseGauge,
  )
+import Ecluse.BenchLoad.Floors (OperatingPoint (..))
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
@@ -151,6 +153,23 @@ loadKnobsFromEnv = do
   where
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
+
+-- | The operating point of a run with these knobs, scenarios ('Nothing' is all of them), and pattern overrides.
+operatingPoint :: LoadKnobs -> Maybe [Text] -> [Text] -> OperatingPoint
+operatingPoint knobs selected patternOverrides =
+    OperatingPoint
+        { opDurationSeconds = lkDurationSeconds knobs
+        , opConcurrency = lkConcurrency knobs
+        , opPayloadBytes = lkPayloadBytes knobs
+        , opUpstreamLatencyMs = lkUpstreamLatencyMicros knobs `div` 1_000
+        , opCacheMaxEntries = lkCacheMaxEntries knobs
+        , opWorkingSet = lkWorkingSet knobs
+        , opServeMaxInFlight = lkServeMaxInFlight knobs
+        , opPublicConnectionsPerHost = lkPublicConnectionsPerHost knobs
+        , opPrivateConnectionsPerHost = lkPrivateConnectionsPerHost knobs
+        , opScenarios = selected
+        , opPatternOverrides = patternOverrides
+        }
 
 -- | A per-ecosystem fixture: the ecosystem it serves and its scenarios.
 data UpstreamFixture = UpstreamFixture

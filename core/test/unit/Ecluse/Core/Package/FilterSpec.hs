@@ -14,7 +14,7 @@ import Hedgehog (Gen, assert, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -34,6 +34,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Security (AllowedHostPorts, ecosystemArtifactAuthorities)
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Package.Filter.Support (genHostileInfo, referenceEnforceArtifactLocations, upstreams)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 
@@ -45,6 +46,7 @@ spec = do
     propertiesSpec
     enforceArtifactLocationsSpec
     enforceArtifactLocationsOfSpec
+    referenceEnforcementSpec
 
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
@@ -253,6 +255,18 @@ enforceArtifactLocationsOfSpec = describe "enforceArtifactLocationsOf (single-ve
     it "keeps a same-authority artifact URL for a non-https (loopback) upstream" $
         urlOf (enforce "http://127.0.0.1:8080" (detailsWithArtifact "http://127.0.0.1:8080/thing-1.0.0.tgz"))
             `shouldBe` Just "http://127.0.0.1:8080/thing-1.0.0.tgz"
+
+referenceEnforcementSpec :: Spec
+referenceEnforcementSpec = describe "artifact-location enforcement (against the reference enforcement)" $
+    modifyMaxSuccess (const 1000) $
+        it "keeps, normalises and records what the reference does, for a document and for each version alone" $
+            hedgehog $ do
+                (upstreamBaseUrl, hostUrls, served) <- forAll (Gen.element upstreams)
+                info <- forAll (genHostileInfo served)
+                let hosts = ecosystemArtifactAuthorities hostUrls
+                    expected = referenceEnforceArtifactLocations hosts upstreamBaseUrl info
+                enforceArtifactLocations hosts upstreamBaseUrl info === expected
+                Map.mapMaybe (enforceArtifactLocationsOf hosts upstreamBaseUrl) (infoVersions info) === infoVersions expected
 
 noArtifactHosts :: AllowedHostPorts
 noArtifactHosts = ecosystemArtifactAuthorities []
