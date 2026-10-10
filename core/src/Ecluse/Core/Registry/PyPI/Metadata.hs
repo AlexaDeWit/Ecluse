@@ -15,7 +15,7 @@ module Ecluse.Core.Registry.PyPI.Metadata (
     projectPyPIStream,
 ) where
 
-import Data.JsonStream.TokenReader (Tokens)
+import Data.JsonStream.Lexer.Internal (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
@@ -59,7 +59,7 @@ readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjectio
 readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)
 
 -- | The production Simple-index walk over a caller's intern table.
-pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Tokens st -> Step st PyPIProjection
+pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Cursor -> Step PyPIProjection
 pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
 
 finishPyPIFull :: Limits -> PackageName -> Text -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, CachedDoc)

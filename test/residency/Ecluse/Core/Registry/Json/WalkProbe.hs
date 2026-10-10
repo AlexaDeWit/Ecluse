@@ -8,7 +8,8 @@ module Ecluse.Core.Registry.Json.WalkProbe (heldDuring, heldWritingDuring, allow
 import Control.Concurrent (yield)
 import Control.Monad.ST (RealWorld, ST, stToIO)
 import Data.ByteString qualified as BS
-import Data.JsonStream.TokenReader (Tokens)
+import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.TokenReader (maxChunkBytes)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (gc), getRTSStats, getRTSStatsEnabled)
 import System.Mem (performMajorGC)
 import UnliftIO.Exception (evaluate)
@@ -19,11 +20,11 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 {- | The most live bytes at any 32 KiB chunk boundary while the walk reads the body, above the live
 bytes before it started, which include the body itself.
 -}
-heldDuring :: (Tokens RealWorld -> Step RealWorld s) -> ByteString -> IO Integer
+heldDuring :: (Cursor -> Step s) -> ByteString -> IO Integer
 heldDuring walk = heldReading (`readJsonWalk` walk)
 
 -- | 'heldDuring' for a walk that writes as it reads, from a setup that makes its writer.
-heldWritingDuring :: ST RealWorld (Tokens RealWorld -> ST RealWorld (Steps (ST RealWorld) s)) -> ByteString -> IO Integer
+heldWritingDuring :: ST RealWorld (Cursor -> ST RealWorld (Steps (ST RealWorld) s)) -> ByteString -> IO Integer
 heldWritingDuring setup = heldReading $ \bound next -> stToIO setup >>= \walk -> readJsonWalkST stToIO bound walk next
 
 heldReading :: (BodyLimit -> IO ByteString -> IO result) -> ByteString -> IO Integer
@@ -51,7 +52,7 @@ allowance = 256 * 1024
 pieces :: ByteString -> [ByteString]
 pieces body
     | BS.null body = []
-    | otherwise = BS.take 32768 body : pieces (BS.drop 32768 body)
+    | otherwise = BS.take maxChunkBytes body : pieces (BS.drop maxChunkBytes body)
 
 liveBytes :: IO Word64
 liveBytes = do

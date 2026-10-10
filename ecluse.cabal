@@ -102,13 +102,13 @@ library ecluse-json-stream
   exposed-modules:
     Data.JsonStream.CLexType
     Data.JsonStream.CLexer
+    Data.JsonStream.Lexer.Internal
     Data.JsonStream.Parser
     Data.JsonStream.TokenParser
     Data.JsonStream.TokenReader
     Data.JsonStream.Unescape
 
   other-modules:
-    Data.JsonStream.Lexer.Internal
     Data.JsonStream.Number
   default-language: Haskell2010
   ghc-options:      -Wall -fwarn-incomplete-uni-patterns

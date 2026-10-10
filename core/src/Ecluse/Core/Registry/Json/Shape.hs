@@ -27,7 +27,8 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.TokenReader (Element (..), Next (..), Tokens, nextToken)
+import Data.JsonStream.Lexer.Internal (Cursor, Element (..))
+import Data.JsonStream.Lexer.Internal qualified as Lexer
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
@@ -172,13 +173,13 @@ instance (Walk r) => Build Trees r where
     {-# INLINE closeArray #-}
 
 -- | Read the value starting at the element and build it once.
-readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> Tokens (TokenState r) -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> r
+readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readShape build = readAt build 0 False
 {-# INLINEABLE readShape #-}
 
 -- json-stream races a skip of a container an alternative rejects, whose lexer failure beats a nesting
 -- failure. open counts levels inside the outermost raced container, and raced marks a raced value.
-readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> Tokens (TokenState r) -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> r
+readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readAt build open raced shape mode table element rest next = case shape of
     Scalar budget
         | budget <= 0 -> tooDeepAt open element rest
@@ -215,40 +216,38 @@ readAt build open raced shape mode table element rest next = case shape of
 {-# INLINEABLE readAt #-}
 
 -- Skip the value, then fail on the nesting limit, unless a parallel skip has already failed further on.
-tooDeepAt :: (Walk r) => Int -> Element -> Tokens (TokenState r) -> r
+tooDeepAt :: (Walk r) => Int -> Element -> Cursor -> r
 tooDeepAt open element rest
     | open > 0 = skipFrom element rest (raceFailure open)
     | otherwise = tooDeep element rest
 {-# INLINEABLE tooDeepAt #-}
 
-raceFailure :: (Walk r) => Int -> Tokens (TokenState r) -> r
-raceFailure !level tokens = reading (nextToken tokens) $ \case
-    TokFailed -> failWith "the JSON lexer failed"
-    TokMoreData -> failWith nestingLimit
-    PartialResult element ->
-        let rest = tokens
-         in case element of
-                ArrayEnd -> closed rest
-                ObjectEnd -> closed rest
-                ArrayBegin -> raceFailure (level + 1) rest
-                ObjectBegin -> raceFailure (level + 1) rest
-                StringContent _ -> longString rest
-                StringEnd -> failWith "unexpected end of string"
-                _ -> raceFailure level rest
+raceFailure :: (Walk r) => Int -> Cursor -> r
+raceFailure !level tokens = case Lexer.next tokens of
+    Lexer.Failed -> failWith "the JSON lexer failed"
+    Lexer.More _ -> failWith nestingLimit
+    Lexer.Token element rest -> case element of
+        ArrayEnd -> closed rest
+        ObjectEnd -> closed rest
+        ArrayBegin -> raceFailure (level + 1) rest
+        ObjectBegin -> raceFailure (level + 1) rest
+        StringContent _ -> longString rest
+        StringEnd -> failWith "unexpected end of string"
+        _ -> raceFailure level rest
   where
     closed rest
         | level <= 1 = failWith nestingLimit
         | otherwise = raceFailure (level - 1) rest
-    longString rest = reading (nextToken rest) $ \case
-        TokFailed -> failWith "the JSON lexer failed"
-        TokMoreData -> failWith nestingLimit
-        PartialResult (StringContent _) -> longString rest
-        PartialResult StringEnd -> raceFailure level rest
-        PartialResult _ -> failWith "unexpected token in a string"
+    longString cursor = case Lexer.next cursor of
+        Lexer.Failed -> failWith "the JSON lexer failed"
+        Lexer.More _ -> failWith nestingLimit
+        Lexer.Token (StringContent _) rest -> longString rest
+        Lexer.Token StringEnd rest -> raceFailure level rest
+        Lexer.Token _ _ -> failWith "unexpected token in a string"
 {-# INLINEABLE raceFailure #-}
 
 -- json-stream's scalar parsers: a container is skipped and handed to the last continuation.
-readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> Tokens (TokenState r) -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> (Tokens (TokenState r) -> r) -> r
+readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> (Cursor -> r) -> r
 readScalar build mode table element rest next container = case element of
     JInteger number -> integer build (fromIntegral number) (\value -> next value table rest)
     JValue (String text) -> string build mode table next (decodedName text) rest
@@ -261,7 +260,7 @@ readScalar build mode table element rest next container = case element of
 {-# INLINEABLE readScalar #-}
 
 -- The table's shared copy of a string, or a copy of its own when the mode keeps it.
-string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> Name -> Tokens (TokenState r) -> r
+string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> Cursor -> r) -> Name -> Cursor -> r
 string build mode table next name after = case mode of
     Keep -> ownString build name (\value -> next value table after)
     Share -> case internName name table of
@@ -270,7 +269,7 @@ string build mode table next name after = case mode of
 
 -- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
 -- then dropped, and nothing it holds enters the table.
-readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> Tokens (TokenState r) -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> r
+readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readObject build open members@(Members _ other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
     loop table !fields tokens = withElement tokens $ \element rest -> case element of
@@ -300,7 +299,7 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
         {-# INLINE keyed #-}
 {-# INLINEABLE readObject #-}
 
-readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> Tokens (TokenState r) -> (Built b -> InternTable -> Tokens (TokenState r) -> r) -> r
+readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readArray build open item mode table0 tokens0 next = openArray build (\items0 -> loop table0 0 items0 tokens0)
   where
     loop table !count items tokens = withElement tokens $ \element rest -> case element of
