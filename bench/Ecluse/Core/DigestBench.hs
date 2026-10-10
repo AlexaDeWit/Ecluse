@@ -16,7 +16,7 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.Registry.JsonStream (heldChunks)
+import Ecluse.Test.Registry.JsonStream (chunksOf, heldChunks)
 import Ecluse.Test.Snapshot (digestOf)
 
 -- | One group per ecosystem, one row per capture.
@@ -35,7 +35,7 @@ captureRow entry@(_, raw, _, _) = do
     digest @?= digestOf raw
     pure (bench (entryName entry) (whnfAppIO digested chunks))
   where
-    chunks = sourceChunks raw
+    chunks = chunksOf 32768 raw
 
 -- | Hash the chunks through the production source and keep nothing else.
 digested :: [ByteString] -> IO ContentDigest
@@ -46,9 +46,3 @@ digested chunks = do
 -- | Read the source to its end.
 drain :: IO ByteString -> IO (Either Void ())
 drain next = next >>= \chunk -> if BS.null chunk then pure (Right ()) else drain next
-
--- | The pieces an inflated response body arrives in.
-sourceChunks :: ByteString -> [ByteString]
-sourceChunks bytes
-    | BS.null bytes = []
-    | otherwise = let (piece, rest) = BS.splitAt 32768 bytes in piece : sourceChunks rest
