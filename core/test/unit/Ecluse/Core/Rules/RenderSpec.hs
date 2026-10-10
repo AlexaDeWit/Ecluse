@@ -21,7 +21,7 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Package (Scope, mkScope, renderScope)
 import Ecluse.Core.Rules.Render
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Text (renderIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Rules.Support (pkg)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 

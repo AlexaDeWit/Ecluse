@@ -22,17 +22,17 @@ import Ecluse.Core.Package.Merge (
     Provenance (GatedSource, TrustedSource),
     mergePackuments,
  )
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
+import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.Snapshot (digestOf, syntheticSnapshot)
+import Ecluse.Test.Snapshot (syntheticSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
 -- | The merge benches: realistic over the corpus, scaled over synthetic versions.
 benchmarks :: EcosystemBench -> Benchmark
 benchmarks ecosystem =
     bgroup "package.mergePackuments" $
-        [ bench (entryName le) (whnf mergeDepth (Snapshot (digestOf bytes) (entryInfo le)))
-        | le@(_, bytes, _, _) <- ebCorpus ecosystem
+        [ bench (entryName le) (whnf mergeDepth (entryInfo le <$ served))
+        | le@(_, _, _, served) <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinear
                     "scales linearly in version count"

@@ -22,7 +22,7 @@ import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds)
 
 import Ecluse.Core.Package (renderPackageName, renderScope)
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Text (renderIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | A human-readable summary of a decision, suitable for logs and the denial
