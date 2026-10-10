@@ -1,16 +1,11 @@
 name: Security
 
-# Haskell advisory scanning, report-only: it never gates a PR, because findings arrive
-# with disclosure time, not with in-PR changes. osv-scanner matches every exact pin in
-# cabal.project.freeze against OSV.dev, home to the HSEC advisories the GitHub Advisory
-# Database lacks. The freeze is the committed projection of the Nix package set, so it
-# covers the statically linked Haskell libraries no image scan can see. The vendored
-# json-stream's own freeze names the upstream release its source derives from.
-#
-# The SARIF goes to GitHub code scanning, so a human triages every finding in the
-# Security tab. The C closure's grype scan runs in ci.yml's nightly run. See
-# docs/architecture/release-supply-chain.md, "Vulnerability scanning and dependency
-# updates".
+# Report-only Haskell advisory scanning against OSV/HSEC, including the vendored
+# json-stream freeze. Disclosure timing makes this unsuitable as a PR gate.
+# The freezes cover statically linked Haskell libraries absent from image scans.
+# Upload SARIF to the Security tab for human triage. The nightly CI scans the C
+# closure with grype. See docs/architecture/release-supply-chain.md,
+# "Vulnerability scanning and dependency updates".
 on:
   pull_request:
     paths: ["flake.lock", "flake.nix", "cabal.project.freeze", "vendor/json-stream/json-stream.freeze", ".github/workflows/security.yml"]
@@ -48,7 +43,7 @@ jobs:
 
       - name: Upload osv-scanner SARIF to code scanning
         if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           sarif_file: osv-freeze.sarif
           category: osv-hsec
