@@ -4,6 +4,7 @@
 
 module Ecluse.Core.Security.AuthoritySpec (spec) where
 
+import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Security (
@@ -23,6 +24,7 @@ import Ecluse.Security.Support (hp, hpAt, upstreams)
 spec :: Spec
 spec = do
     hostAddressSpec
+    authorityEndSpec
     hostPortAddressSpec
     hostPortAddressWithDefaultSpec
     authorityLabelSpec
@@ -39,8 +41,6 @@ hostAddressSpec = describe "hostAddress" $ do
     it "strips a port" $
         hostAddress "https://registry.npmjs.org:8443/thing" `shouldBe` "registry.npmjs.org"
     it "strips userinfo (a credential-stuffing trick)" $
-        -- "@" tricks: the real host is what follows the last '@', not the part
-        -- before it (https://registry.npmjs.org@evil.com → evil.com).
         hostAddress "https://registry.npmjs.org@evil.com/path" `shouldBe` "evil.com"
     it "gates on the scheme authority, not a later :// in the path or query" $
         -- A crafted dist.tarball can carry a second "://" in its query. The gate reads the
@@ -58,8 +58,6 @@ hostAddressSpec = describe "hostAddress" $ do
     it "yields empty for a value with no host" $
         hostAddress "" `shouldBe` ""
     it "handles a schemeless authority with userinfo and a path" $
-        -- No "://" and a userinfo "@": this drives both 'breakOnEnd' branches, the
-        -- needle present and then absent.
         hostAddress "user:pass@registry.npmjs.org/x" `shouldBe` "registry.npmjs.org"
     it "drops a path on a schemeless bare host" $
         hostAddress "registry.npmjs.org/thing" `shouldBe` "registry.npmjs.org"
@@ -70,9 +68,17 @@ hostAddressSpec = describe "hostAddress" $ do
          in (isBlockedTarget [] (hostAddress url), isAllowedUpstreamHost upstreams <$> hostPortAddress url)
                 `shouldBe` (True, Just False)
 
-{- | The authorisation-side extraction, with the effective port parsed rather than discarded. A
-lenient port fallback or a mangled colon split would alias an authority onto an authorised one.
--}
+-- The span is private. The host reads "h" only when the authority runs past the Char to the "@".
+authorityEndSpec :: Spec
+authorityEndSpec =
+    describe "the authority's end" $
+        it "falls at '/', '?', or '#', and at no other Char" $
+            filter (\c -> inAuthority c /= (c `notElem` ['/', '?', '#'])) [minBound .. maxBound] `shouldBe` []
+  where
+    inAuthority c = hostAddress (T.pack ['x', c, '@', 'h']) == "h"
+
+{- The authorisation-side extraction, with the effective port parsed rather than discarded. A
+lenient port fallback or a mangled colon split would alias an authority onto an authorised one. -}
 hostPortAddressSpec :: Spec
 hostPortAddressSpec = describe "hostPortAddress" $ do
     it "extracts the host and an explicit port from a full URL" $
