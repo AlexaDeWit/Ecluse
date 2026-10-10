@@ -135,9 +135,14 @@ Cabal, fourmolu, hlint, Semgrep) comes from the pinned dev shell.
 ```bash
 nix develop        # enter the dev shell (direnv does this automatically)
 task build         # build the library, executable, and tests
-task check         # fast pre-push checks (a subset of the gate)
-task gate          # the full CI-gate mirror (adds the Docker integration + Haddock tiers)
+task check         # pre-push checks: build, coverage, static checks, weeder, stan (needs Docker)
+task gate          # task check, then the integration suite and the Haddock build
 ```
+
+`task check` runs the unit and integration suites under coverage, so it needs a running Docker
+daemon and starts the integration containers. `task gate` is not the whole CI gate. It omits the
+end-to-end tier, the allocation budgets, the release dry-run, and the two dependency-lock checks
+that `task nix-check` runs.
 
 [Getting Started](docs/getting-started.md) covers full setup, the `task` workflow, and
 dependency locking. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers the contribution process and
