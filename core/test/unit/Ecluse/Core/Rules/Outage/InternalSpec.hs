@@ -8,10 +8,11 @@ period, and the record of logged admissions is bounded and emptied on recovery.
 module Ecluse.Core.Rules.Outage.InternalSpec (spec) where
 
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, nominalDay)
 import Test.Hspec
 
 import Ecluse.Core.Rules.Outage.Internal
+import Ecluse.Core.Rules.Types (AdvisoryAge (AdvisoryAge), Inability (PushPastMaximum, SourceBreakerOpen))
 import Ecluse.Rules.Outage.Support (down, ident, isHealthy, period, shape, up)
 import Ecluse.Rules.Support (now)
 
@@ -22,6 +23,10 @@ stepAt secs health current = let stepped = stepOutage period (at secs) health cu
 -- | 'now' plus the given seconds.
 at :: Integer -> UTCTime
 at secs = addUTCTime (fromInteger secs) now
+
+-- | The deny rule's reading of a push the given age, against a six-day maximum.
+expiredFor :: NominalDiffTime -> SourceHealth
+expiredFor age = SourceUnavailable "DenyIfCve" (PushPastMaximum (AdvisoryAge (addUTCTime (negate (10 * nominalDay)) now) age (6 * nominalDay)))
 
 -- | Fold a timed sequence of readings, collecting every report in order.
 run :: [(Integer, SourceHealth)] -> (OutageState, [OutageReport])
@@ -50,7 +55,7 @@ spec = do
                            ]
 
         it "carries each rule's latest cause into the reminder" $ do
-            let (_, reports) = run [(0, down "DenyIfCve"), (period, SourceUnavailable "DenyIfCve" "the rule source circuit breaker is open")]
+            let (_, reports) = run [(0, down "DenyIfCve"), (period, SourceUnavailable "DenyIfCve" SourceBreakerOpen)]
             reports
                 `shouldBe` [ OutageBegan "DenyIfCve" "no advisory database loaded"
                            , OutageContinues now (Map.singleton "DenyIfCve" "the rule source circuit breaker is open")
@@ -74,10 +79,20 @@ spec = do
             osChanged (stepOutage period now (up "DenyIfCve") Healthy) `shouldBe` False
             changedBy 1 (down "DenyIfCve") `shouldBe` False -- the same rule, the same cause, inside the period
             changedBy 1 (up "DenyIfEpss") `shouldBe` False -- a rule that was never unable
-            changedBy 1 (SourceUnavailable "DenyIfCve" "the rule source circuit breaker is open") `shouldBe` True
+            changedBy 1 (SourceUnavailable "DenyIfCve" SourceBreakerOpen) `shouldBe` True
             changedBy 1 (down "DenyIfEpss") `shouldBe` True
             changedBy period (down "DenyIfCve") `shouldBe` True
             changedBy 1 (up "DenyIfCve") `shouldBe` True
+
+        it "takes an expired push whose cause reads the same as no change, though every reading's age differs" $ do
+            -- The age is read again for each package, so the fold compares the sentence it will
+            -- report and not the reading, or an expired push would write on every evaluation.
+            let began = osState (stepOutage period now (expiredFor (9 * nominalDay + 3610)) Healthy)
+                changedBy age = osChanged (stepOutage period (at 1) (expiredFor age) began)
+            changedBy (9 * nominalDay + 3620) `shouldBe` False
+            changedBy (9 * nominalDay + 7200) `shouldBe` True
+            snd (stepAt 0 (expiredFor (9 * nominalDay + 3610)) Healthy)
+                `shouldBe` Just (OutageBegan "DenyIfCve" "the advisory push is 9 days 1 hour old, past the maximum of 6 days (pushed at 2026-06-10T00:00:00Z)")
 
         it "reports a later outage as a fresh beginning" $ do
             let (_, reports) = run [(0, down "DenyIfCve"), (1, up "DenyIfCve"), (2, down "DenyIfCve")]

@@ -58,6 +58,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
  )
+import Ecluse.Core.Rules.Render (renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -263,11 +264,11 @@ outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> Either JobOutcome Mirror
 outcomeOfAdmission job admission = case admission of
     AdmissionAdmit filename artifact digests -> Right (readmittedDescriptor filename artifact digests)
     AdmissionDenied (Blocked ruleName _ reason) ->
-        refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
+        refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> renderReason reason <> ")")
     AdmissionDenied _ ->
         refused ("current policy denies " <> renderJob job <> ": no rule admits it")
     AdmissionUndecidable (Undecidable _ reason) ->
-        refused ("current policy could not be evaluated for " <> renderJob job <> ": " <> reason)
+        refused ("current policy could not be evaluated for " <> renderJob job <> ": " <> renderReason reason)
     AdmissionUndecidable _ ->
         refused ("current policy could not be evaluated for " <> renderJob job)
     AdmissionFileAbsent ->

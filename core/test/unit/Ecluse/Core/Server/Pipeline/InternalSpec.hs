@@ -36,6 +36,8 @@ import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
+    Inability (EvaluationFailed, NoDatabaseLoaded),
+    Reason (FixesNoAdvisory, RuleUnable),
     Rule (AllowIfOlderThan),
     RuleVerdict (NoDecision),
     SkippedCheck (SkippedUnavailable, Unreached),
@@ -124,7 +126,7 @@ spec = do
         it "is the effectful tier when any rule carries a resilience policy" $ do
             breaker <- newBreaker
             let resilience = Resilience defaultEffectfulConfig breaker noBreakerReporter getCurrentTime
-            evalTier [packageRule "EffRule" 300 FailDeny (Just resilience) pass (NoDecision "noop")] `shouldBe` Metric.Effectful
+            evalTier [packageRule "EffRule" 300 FailDeny (Just resilience) pass (NoDecision FixesNoAdvisory)] `shouldBe` Metric.Effectful
 
     describe "transienceCause (effectful-failure cause)" $ do
         it "maps a retryable cause to a connection fault" $
@@ -145,7 +147,7 @@ spec = do
         it "records a failure per undecidable verdict, skipping decided ones" $
             recordEffectfulFailures
                 noopMetricsPort
-                [ Undecidable (WillResolve Nothing) "unreachable"
+                [ Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" EvaluationFailed)
                 , BlockedByDefault []
                 ]
 
@@ -166,7 +168,7 @@ spec = do
         it "records a check skipped for unavailability once, at WARNING, with the package, version, rule, and cause" $ do
             logged <-
                 runJsonLog $
-                    logSkippedChecks (unscopedNpm "is-odd") "1.0.0" (Just (DbEtag "etag-xyz")) [SkippedUnavailable "DenyIfCve" "no advisory database loaded", Unreached "DenyIfEpss"]
+                    logSkippedChecks (unscopedNpm "is-odd") "1.0.0" (Just (DbEtag "etag-xyz")) [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded, Unreached "DenyIfEpss"]
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""

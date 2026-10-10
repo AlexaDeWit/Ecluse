@@ -45,7 +45,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
     versionEvaluation,
  )
-import Ecluse.Core.Rules (renderDecision)
+import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)

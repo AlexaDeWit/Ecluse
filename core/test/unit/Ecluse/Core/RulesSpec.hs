@@ -38,7 +38,7 @@ import Ecluse.Test.Cve (fakeCveLookup, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
-import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
+import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
     atDefaultPrecedence,
@@ -52,7 +52,9 @@ import Ecluse.Test.Rules (
     isNoDecision,
     isUndecidable,
     mapResilience,
+    sentences,
     servingRuleDeps,
+    verdictSentence,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -60,6 +62,7 @@ import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreakerThreshold))
 import Ecluse.Core.Rules.Freshness
+import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
 import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
@@ -80,6 +83,13 @@ decideWith deps prs ev = prepare deps prs >>= \prepared -> evalRules ctx prepare
 -- | 'decideWith' for the pure built-ins, which consult no capability.
 decide :: [PrecededRule] -> RuleEvidence -> IO Decision
 decide = decideWith inertRuleDeps
+
+-- | Expect the verdict, and the sentence a reader sees for its reason.
+shouldDecide :: IO RuleVerdict -> (RuleVerdict, Text) -> Expectation
+shouldDecide evaluated (verdict, sentence) = do
+    actual <- evaluated
+    actual `shouldBe` verdict
+    verdictSentence actual `shouldBe` sentence
 
 -- | Rule capabilities whose advisory database is the given fake's rows.
 depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
@@ -133,7 +143,7 @@ genFiringRule scopeTxt =
 
 -- Compare decisions independently of the order in which abstention reasons arrived.
 canonical :: Decision -> Decision
-canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
+canonical (BlockedByDefault reasons) = BlockedByDefault (sortOn renderReason reasons)
 canonical d = d
 
 -- | Capabilities whose serving artifact was pushed the given age before 'now'.
@@ -225,9 +235,8 @@ expirySpec = describe "an expired advisory push" $ do
                 (expired (depsWith (affecting (Just 9.8) (Just 0.9))))
                 (map atDefaultPrecedence [denyEpssAt 0.5, denyCveAt 8.0])
                 (pkg Nothing 0)
-        case decision of
-            Undecidable _ reason -> reason `shouldSatisfy` T.isPrefixOf "DenyIfCve: "
-            other -> expectationFailure ("expected a refusal, got " <> show other)
+        decision `shouldSatisfy` isUndecidable
+        sentences decision `shouldSatisfy` all (T.isPrefixOf "DenyIfCve: ")
 
     it "refuses ahead of an already-open breaker, which would otherwise skip the rule" $ do
         prepared <-
@@ -236,9 +245,8 @@ expirySpec = describe "an expired advisory push" $ do
                 [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))]
         opened <- traverse openBreakerOn prepared
         decision <- evalRules ctx opened (pkg Nothing 0)
-        case decision of
-            Undecidable _ reason -> reason `shouldSatisfy` T.isInfixOf "past the maximum"
-            other -> expectationFailure ("expected a refusal, got " <> show other)
+        decision `shouldSatisfy` isUndecidable
+        sentences decision `shouldSatisfy` all (T.isInfixOf "past the maximum")
 
 -- | Capabilities whose source reports collect in the returned ref, newest first.
 observedDeps :: RuleDeps -> IO (RuleDeps, IORef [SourceHealth])
@@ -261,25 +269,29 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
         -- admission says so, rather than reading as if every configured check passed.
         decision <- decideWith inertRuleDeps skipPolicy (pkg Nothing 30)
         admittedBy decision `shouldBe` Just "AllowIfOlderThan"
-        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
         renderDecision (pkg Nothing 30) decision
             `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (no advisory database loaded))"
 
     it "keeps a skipped lookup fault, with the generic reason the client also sees" $ do
         decision <- decideWith (faultingDeps "advisory database exploded") skipPolicy (pkg Nothing 30)
-        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule could not be evaluated"]
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" EvaluationFailed]
+        renderDecision (pkg Nothing 30) decision
+            `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (the rule could not be evaluated))"
 
     it "keeps a skip behind an open breaker" $ do
         prepared <- prepare (faultingDeps "down") skipPolicy
         opened <- traverse openBreakerOn prepared
         decision <- evalRules ctx opened (pkg Nothing 30)
-        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule source circuit breaker is open"]
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" SourceBreakerOpen]
+        renderDecision (pkg Nothing 30) decision
+            `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (the rule source circuit breaker is open))"
 
     it "keeps the remediation allow an expired push abstained, since a deny refuses on expiry instead" $ do
         decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [AllowIfRemediatesCve, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
         admittedBy decision `shouldBe` Just "AllowIfOlderThan"
         case skippedChecks decision of
-            [SkippedUnavailable "AllowIfRemediatesCve" cause] -> cause `shouldSatisfy` T.isInfixOf "past the maximum"
+            [SkippedUnavailable "AllowIfRemediatesCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
             other -> expectationFailure ("expected one skipped check, got " <> show other)
 
     it "carries no evidence once the database answers, so a later allow reads clean" $ do
@@ -301,8 +313,8 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
                 (pkg (Just "myorg") 30)
         admittedBy decision `shouldBe` Just "AllowScope"
         skippedChecks decision
-            `shouldBe` [ SkippedUnavailable "DenyIfCve" "no advisory database loaded"
-                       , SkippedUnavailable "DenyIfEpss" "no advisory database loaded"
+            `shouldBe` [ SkippedUnavailable "DenyIfCve" NoDatabaseLoaded
+                       , SkippedUnavailable "DenyIfEpss" NoDatabaseLoaded
                        , Unreached "AllowIfRemediatesCve"
                        , Unreached "AllowIfOlderThan"
                        ]
@@ -321,7 +333,7 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
     it "reports an absent database as unavailable, and a loaded one as answered, once per advisory rule" $ do
         (absent, absentReports) <- observedDeps inertRuleDeps
         void (decideWith absent skipPolicy (pkg Nothing 30))
-        reported absentReports `shouldReturn` [SourceUnavailable "DenyIfCve" "no advisory database loaded"]
+        reported absentReports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
         (loaded, loadedReports) <- observedDeps (depsWith [])
         void (decideWith loaded skipPolicy (pkg Nothing 30))
         reported loadedReports `shouldReturn` [SourceAnswered "DenyIfCve"]
@@ -329,20 +341,20 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
     it "reports under a fail-closed alignment too, so a refusing outage is observed" $ do
         (deps, reports) <- observedDeps inertRuleDeps
         void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
-        reported reports `shouldReturn` [SourceUnavailable "DenyIfCve" "no advisory database loaded"]
+        reported reports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
 
     it "reports an expired push as unavailable with its cause" $ do
         (deps, reports) <- observedDeps (expired (depsWith []))
         void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
         reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" cause] -> cause `shouldSatisfy` T.isInfixOf "past the maximum"
+            [SourceUnavailable "DenyIfCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
             other -> expectationFailure ("expected one unavailability, got " <> show other)
 
     it "reports a lookup fault once, with its detail, and nothing again for the decided verdict" $ do
         (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
         void (decideWith deps skipPolicy (pkg Nothing 30))
         reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" detail] -> detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
+            [SourceUnavailable "DenyIfCve" detail] -> renderInability detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
             other -> expectationFailure ("expected one unavailability, got " <> show other)
 
     it "reports nothing for a pure rule, which reads no source" $ do
@@ -355,16 +367,16 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
         void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
         reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
 
-{- | Each advisory rule's verdict when no generation answers, verbatim. A deployment with no database
-configured and one awaiting its first sync must read the same.
+{- | Each advisory rule's verdict when no generation answers, with its decision's sentence, verbatim.
+A deployment with no database configured and one awaiting its first sync must read the same.
 -}
-noDatabaseVerdicts :: [(Text, Rule, RuleVerdict)]
+noDatabaseVerdicts :: [(Text, Rule, RuleVerdict, Text)]
 noDatabaseVerdicts =
-    [ ("AllowIfRemediatesCve", AllowIfRemediatesCve, NoDecision "no advisory database is loaded")
-    , ("DenyIfCve set to deny", denyCveAt 8.0, CannotVet FailDeny "DenyIfCve: no advisory database loaded")
-    , ("DenyIfCve set to skip", DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), CannotVet FailNoDecision "DenyIfCve: no advisory database loaded")
-    , ("DenyIfEpss set to deny", denyEpssAt 0.5, CannotVet FailDeny "DenyIfEpss: no advisory database loaded")
-    , ("DenyIfEpss set to skip", DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), CannotVet FailNoDecision "DenyIfEpss: no advisory database loaded")
+    [ ("AllowIfRemediatesCve", AllowIfRemediatesCve, NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
+    , ("DenyIfCve set to deny", denyCveAt 8.0, CannotVet FailDeny NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
+    , ("DenyIfCve set to skip", DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), CannotVet FailNoDecision NoDatabaseLoaded, "DenyIfCve: no advisory database loaded")
+    , ("DenyIfEpss set to deny", denyEpssAt 0.5, CannotVet FailDeny NoDatabaseLoaded, "DenyIfEpss: no advisory database loaded")
+    , ("DenyIfEpss set to skip", DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), CannotVet FailNoDecision NoDatabaseLoaded, "DenyIfEpss: no advisory database loaded")
     ]
 
 -- | The decision a policy of one rule reaches from that rule's verdict.
@@ -373,20 +385,22 @@ soleDecision name = \case
     Allow reason -> Admitted name reason []
     Deny etag reason -> Blocked name etag reason
     NoDecision reason -> BlockedByDefault [reason]
-    CannotVet FailDeny reason -> Undecidable (WillResolve Nothing) reason
-    CannotVet FailNoDecision reason -> BlockedByDefault [reason]
+    CannotVet FailDeny why -> Undecidable (WillResolve Nothing) (RuleUnable name why)
+    CannotVet FailNoDecision why -> BlockedByDefault [RuleUnable name why]
 
 noDatabaseSpec :: Spec
 noDatabaseSpec = describe "an advisory rule with no database configured" $ do
     it "is prepared to run directly, with no timeout, retry, or breaker" $ do
-        rules <- prepare inertRuleDeps [atDefaultPrecedence rule | (_, rule, _) <- noDatabaseVerdicts]
+        rules <- prepare inertRuleDeps [atDefaultPrecedence rule | (_, rule, _, _) <- noDatabaseVerdicts]
         map (isJust . prepResilience) rules `shouldBe` (False <$ noDatabaseVerdicts)
 
-    for_ noDatabaseVerdicts $ \(label, rule, verdict) ->
+    for_ noDatabaseVerdicts $ \(label, rule, verdict, sentence) ->
         it (toString (label <> " keeps the verdict it reaches before the first sync")) $
             for_ [inertRuleDeps, unloadedDeps] $ \deps -> do
                 evalRule deps ctx rule (pkg Nothing 0) `shouldReturn` verdict
-                decideWith deps [atDefaultPrecedence rule] (pkg Nothing 0) `shouldReturn` soleDecision (ruleName rule) verdict
+                decision <- decideWith deps [atDefaultPrecedence rule] (pkg Nothing 0)
+                decision `shouldBe` soleDecision (ruleName rule) verdict
+                sentences decision `shouldBe` [sentence]
 
     it "decides the shipped policy as it does before the first sync" $ do
         let shipped = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
@@ -401,10 +415,10 @@ perVersionVerdict :: DbEtag -> (Text -> Text -> IO Bool) -> CveLookup -> Rule ->
 perVersionVerdict etag probe cve rule ev = case rule of
     AllowIfRemediatesCve ->
         probe name version >>= \case
-            False -> pure (NoDecision "no advisory names this version as its fix")
+            False -> pure (NoDecision FixesNoAdvisory)
             True -> remediation <$> cveAdvisoriesFor cve name
-    DenyIfCve params -> deny DenyMissingScore "CVSS" (dicMinCvss params) arSeverity <$> cveAdvisoriesFor cve name
-    DenyIfEpss params -> deny AbstainMissingScore "EPSS" (dieMinEpss params) arEpss <$> cveAdvisoriesFor cve name
+    DenyIfCve params -> deny DenyMissingScore Cvss (dicMinCvss params) arSeverity <$> cveAdvisoriesFor cve name
+    DenyIfEpss params -> deny AbstainMissingScore Epss (dieMinEpss params) arEpss <$> cveAdvisoriesFor cve name
     other -> fail ("not an advisory rule: " <> show other)
   where
     eco = pkgEcosystem (evName ev)
@@ -413,14 +427,14 @@ perVersionVerdict etag probe cve rule ev = case rule of
     remediation ranges =
         let remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
             stillOpen = ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar]
-         in case (remediated, stillOpen) of
-                (_, _ : _) -> NoDecision ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
-                ([], []) -> NoDecision "no advisory names this version as its fix"
-                (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
-    deny missing metric threshold scoreOf ranges =
-        case ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)] of
-            [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
-            ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
+         in case (mkAdvisoryIds <$> nonEmpty remediated, mkAdvisoryIds <$> nonEmpty stillOpen) of
+                (Nothing, _) -> NoDecision FixesNoAdvisory
+                (Just fixed, Just open) -> NoDecision (FixesButStillAffected fixed open)
+                (Just fixed, Nothing) -> Allow (Remediates fixed)
+    deny missing score threshold scoreOf ranges =
+        case mkAdvisoryIds <$> nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)]) of
+            Nothing -> NoDecision (NotAffectedAtThreshold score)
+            Just ids -> Deny (Just etag) (AffectedBy score threshold ids)
 
 -- | The exact @fixed_version@ match the reference probes with, in SQL on the artifact.
 sqlFixProbe :: Connection -> Text -> Text -> IO Bool
@@ -579,8 +593,9 @@ differentialSpec = describe "one read per request against a read per version, ov
             -- The rows reach an admission, a denial, a still-affected fix, and a version no advisory fixes.
             verdicts `shouldSatisfy` any isAllow
             verdicts `shouldSatisfy` any isDeny
-            verdicts `shouldSatisfy` any (\case NoDecision reason -> "but is still affected by" `T.isInfixOf` reason; _ -> False)
-            verdicts `shouldSatisfy` elem (NoDecision "no advisory names this version as its fix")
+            map verdictSentence (filter isNoDecision verdicts) `shouldSatisfy` any (T.isInfixOf "but is still affected by")
+            verdicts `shouldSatisfy` elem (NoDecision FixesNoAdvisory)
+            map verdictSentence verdicts `shouldSatisfy` elem "no advisory names this version as its fix"
 
     it "agrees on the compiled corpus" $
         withFixtureOsvDb CorpusV2 $
@@ -592,6 +607,62 @@ differentialSpec = describe "one read per request against a read per version, ov
             withOsvZipDb Npm archive $ \path ->
                 withOpened path (\probe cve -> void (agreesOn probe cve (map unscopedNpm ["withdrawal-only", "withdrawal-overlap", "corpus-vuln"])))
 
+-- | The PyPI counterpart of 'pkg': @Flask_Thing\@1.0.0@, published the given days before 'now'.
+pypiPkg :: Integer -> RuleEvidence
+pypiPkg ageDays = (pkg Nothing ageDays){evName = unscopedPyPI "Flask_Thing"}
+
+{- | Each verdict a built-in rule reaches and the sentence its reason reads as, for both
+ecosystems. A rule that gives another rule's reason, or a reworded sentence, fails its row.
+-}
+ruleSentences :: [(String, RuleDeps, Rule, RuleEvidence, RuleVerdict, Text)]
+ruleSentences =
+    [ ("AllowScope on its scope", inertRuleDeps, AllowScope myorg, pkg (Just "myorg") 0, Allow (ScopeAllowListed myorg), "scope @myorg is allow-listed")
+    , ("AllowScope on another scope", inertRuleDeps, AllowScope myorg, pkg (Just "other") 0, NoDecision (ScopeNotAllowListed myorg), "scope is not the allow-listed @myorg")
+    , ("AllowScope on a PyPI project", inertRuleDeps, AllowScope myorg, pypiPkg 0, NoDecision (ScopeNotAllowListed myorg), "scope is not the allow-listed @myorg")
+    , ("AllowIfOlderThan past the minimum", inertRuleDeps, quarantineRule, pkg Nothing 30, Allow (PublishedLongEnough (30 * nominalDay) (7 * nominalDay)), "published 30 days ago (at least 7 days old)")
+    , ("AllowIfOlderThan at the minimum", inertRuleDeps, quarantineRule, pkg Nothing 7, Allow (PublishedLongEnough (7 * nominalDay) (7 * nominalDay)), "published 7 days ago (at least 7 days old)")
+    , ("AllowIfOlderThan short of the minimum", inertRuleDeps, quarantineRule, pkg Nothing 1, NoDecision (PublishedTooRecently nominalDay (7 * nominalDay)), "published only 1 day ago, minimum age is 7 days")
+    , ("AllowIfOlderThan on a version published today", inertRuleDeps, quarantineRule, pkg Nothing 0, NoDecision (PublishedTooRecently 0 (7 * nominalDay)), "published only 0 seconds ago, minimum age is 7 days")
+    , ("AllowIfOlderThan on a version published in the future", inertRuleDeps, quarantineRule, pkg Nothing (-2), NoDecision (PublishedTooRecently (negate (2 * nominalDay)) (7 * nominalDay)), "published only 0 seconds ago, minimum age is 7 days")
+    , ("AllowIfOlderThan on a PyPI project past the minimum", inertRuleDeps, quarantineRule, pypiPkg 30, Allow (PublishedLongEnough (30 * nominalDay) (7 * nominalDay)), "published 30 days ago (at least 7 days old)")
+    , ("AllowIfOlderThan on a PyPI project short of the minimum", inertRuleDeps, quarantineRule, pypiPkg 1, NoDecision (PublishedTooRecently nominalDay (7 * nominalDay)), "published only 1 day ago, minimum age is 7 days")
+    , ("AllowIfOlderThan with no publish time", inertRuleDeps, quarantineRule, unpublished (pkg Nothing 0), NoDecision PublishTimeUnknown, "publish time is unknown")
+    , ("AllowIfOlderThan with the publish time unread", inertRuleDeps, quarantineRule, listed Nothing, CannotVet FailDeny PublishTimeUnread, "the publish time is not available")
+    , ("DenyInstallTimeExecution on an install hook", inertRuleDeps, DenyInstallTimeExecution, withInstallScripts (pkg Nothing 0), Deny Nothing (RunsOnInstall "postinstall hook"), "runs code on install: postinstall hook")
+    , ("DenyInstallTimeExecution on a PyPI project that runs code", inertRuleDeps, DenyInstallTimeExecution, withInstallScripts (pypiPkg 0), Deny Nothing (RunsOnInstall "postinstall hook"), "runs code on install: postinstall hook")
+    , ("DenyInstallTimeExecution with no install code", inertRuleDeps, DenyInstallTimeExecution, pkg Nothing 0, NoDecision NothingRunsOnInstall, "no install-time code execution")
+    , ("DenyInstallTimeExecution with the signal undetermined", inertRuleDeps, DenyInstallTimeExecution, (pkg Nothing 0){evInstallCode = Known CodeExecUnknown}, NoDecision InstallCodeUndetermined, "install-time code execution not yet determined")
+    , ("DenyInstallTimeExecution with the signal unread", inertRuleDeps, DenyInstallTimeExecution, listed Nothing, CannotVet FailDeny InstallSignalUnread, "the install-time execution signal is not available")
+    , ("DenyByIdentity on its identity", inertRuleDeps, DenyByIdentity "thing@1.0.0", pkg Nothing 0, Deny Nothing (IdentityRevoked "thing@1.0.0"), "identity thing@1.0.0 is revoked by operator")
+    , ("DenyByIdentity on another identity", inertRuleDeps, DenyByIdentity "other", pkg Nothing 0, NoDecision (IdentityNotRevoked "other"), "identity is not the revoked other")
+    , ("DenyByIdentity on a PyPI project", inertRuleDeps, DenyByIdentity "Flask_Thing@1.0.0", pypiPkg 0, Deny Nothing (IdentityRevoked "Flask_Thing@1.0.0"), "identity Flask_Thing@1.0.0 is revoked by operator")
+    , ("AllowByIdentity on its identity", inertRuleDeps, AllowByIdentity "@myorg/thing", pkg (Just "myorg") 0, Allow (IdentityAllowListed "@myorg/thing"), "identity @myorg/thing is allow-listed by operator")
+    , ("AllowByIdentity on another identity", inertRuleDeps, AllowByIdentity "other", pkg Nothing 0, NoDecision (IdentityNotAllowListed "other"), "identity is not the allow-listed other")
+    , ("AllowByIdentity on a PyPI project", inertRuleDeps, AllowByIdentity "Flask_Thing", pypiPkg 0, Allow (IdentityAllowListed "Flask_Thing"), "identity Flask_Thing is allow-listed by operator")
+    , ("DenyIfCve below its threshold", depsWith (affecting (Just 5.0) Nothing), denyCveAt 8.0, pkg Nothing 0, NoDecision (NotAffectedAtThreshold Cvss), "no advisory at or above the CVSS threshold affects this version")
+    , ("DenyIfEpss below its threshold", depsWith (affecting Nothing (Just 0.1)), denyEpssAt 0.5, pkg Nothing 0, NoDecision (NotAffectedAtThreshold Epss), "no advisory at or above the EPSS threshold affects this version")
+    , ("DenyIfCve on a PyPI project", depsWith pypiAffecting, denyCveAt 8.0, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+    , ("DenyIfEpss on a PyPI project", depsWith pypiAffecting, denyEpssAt 0.5, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+    , ("AllowIfRemediatesCve on a PyPI project", depsWith [("flask-thing", snd row) | row <- fixRows], AllowIfRemediatesCve, pypiPkg 0, Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
+    ]
+  where
+    myorg = mkScope "myorg"
+    quarantineRule = AllowIfOlderThan (7 * nominalDay)
+    unpublished ev = ev{evPublishedAt = Known Nothing}
+    pypiAffecting = [("flask-thing", snd row) | row <- affecting (Just 9.8) (Just 0.9)]
+
+ruleSentenceSpec :: Spec
+ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" $ do
+    for_ ruleSentences $ \(label, deps, rule, ev, verdict, sentence) ->
+        it label $
+            evalRule deps ctx rule ev `shouldDecide` (verdict, sentence)
+
+    for_ [(AllowIfOlderThan (7 * nominalDay), "AllowIfOlderThan: the publish time is not available"), (DenyInstallTimeExecution, "DenyInstallTimeExecution: the install-time execution signal is not available")] $ \(rule, sentence) ->
+        it (toString (ruleName rule <> " names itself in the refusal an unread fact decides")) $ do
+            decision <- decide [atDefaultPrecedence rule] (listed Nothing)
+            decision `shouldSatisfy` isUndecidable
+            sentences decision `shouldBe` [sentence]
+
 spec :: Spec
 spec = do
     expirySpec
@@ -599,22 +670,23 @@ spec = do
     sourceHealthSpec
     noDatabaseSpec
     differentialSpec
+    ruleSentenceSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
-                let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+                let pd = pypiPkg 0
                     rows = [("flask-thing", snd row) | row <- affecting (Just 9.8) (Just 0.9)]
                 evalRule (depsWith rows) ctx rule pd >>= (`shouldSatisfy` isDeny)
 
         it "matches a PyPI fix and keeps its display spelling in the decision message" $ do
-            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows]
             decision <- decideWith (depsWith rows) [atDefaultPrecedence AllowIfRemediatesCve] pd
             admittedBy decision `shouldBe` Just "AllowIfRemediatesCve"
             renderDecision pd decision `shouldSatisfy` T.isInfixOf "Flask_Thing@1.0.0"
 
         it "does not fast-track a PyPI fix while a canonical-name advisory still affects it" $ do
-            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows <> affecting Nothing Nothing]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isNoDecision)
 
@@ -675,38 +747,38 @@ spec = do
     describe "evalRule (AllowIfRemediatesCve)" $ do
         it "allows a version an advisory names as its exact fix, crediting the advisory" $
             evalRule (depsWith fixRows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                >>= (`shouldBe` Allow "remediates GHSA-fixed-0001")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
         it "names every advisory the version fixes in the reason" $ do
             let rows =
                     [ ("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)
                     , ("thing", AdvisoryRange "GHSA-fixed-0002" Nothing (Just "0.2.0") (FixedBefore "1.0.0") Nothing)
                     ]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                >>= (`shouldBe` Allow "remediates GHSA-fixed-0001, GHSA-fixed-0002")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"]))), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
         it "matches the OSV wire form of a scoped name" $ do
             let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg (Just "myorg") 0)
-                >>= (`shouldBe` Allow "remediates GHSA-fixed-0003")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0003" :| []))), "remediates GHSA-fixed-0003")
         it "abstains when no advisory names the version as a fix (exact match only)" $ do
             -- 1.0.0 sits past this advisory's 0.9.0 fix, but the fast lane is a
             -- deliberate exact-fix probe: being merely unaffected earns nothing.
             let rows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "0.9.0") Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                >>= (`shouldBe` NoDecision "no advisory names this version as its fix")
+                `shouldDecide` (NoDecision FixesNoAdvisory, "no advisory names this version as its fix")
         it "abstains when the version still sits inside another advisory's affected range" $ do
             let rows =
                     fixRows
                         <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Unbounded Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                >>= (`shouldBe` NoDecision "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
+                `shouldDecide` (NoDecision (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
         it "abstains when no advisory database is loaded" $
             evalRule inertRuleDeps ctx AllowIfRemediatesCve (pkg Nothing 0)
-                >>= (`shouldBe` NoDecision "no advisory database is loaded")
+                `shouldDecide` (NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
 
     describe "evalRule (DenyIfCve)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting (Just 9.8) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
-                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
         it "abstains when the affecting advisory is below the threshold" $
             evalRule (depsWith (affecting (Just 5.0) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
@@ -728,7 +800,7 @@ spec = do
     describe "evalRule (DenyIfEpss)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting Nothing (Just 0.75))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
         it "denies at the threshold exactly, which is where an at-or-above gate closes" $
             evalRule (depsWith (affecting Nothing (Just 0.5))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isDeny)
@@ -745,7 +817,7 @@ spec = do
                     affecting Nothing Nothing
                         <> [("thing", AdvisoryRange "CVE-2026-10002" Nothing (Just "0") Unbounded (Just 0.75))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by CVE-2026-10002 (EPSS >= 0.5)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("CVE-2026-10002" :| []))), "affected by CVE-2026-10002 (EPSS >= 0.5)")
         it "abstains when the version sits outside the affected range" $ do
             let rows = [("thing", AdvisoryRange "GHSA-affect-0002" Nothing (Just "0") (FixedBefore "1.0.0") (Just 0.99))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
@@ -816,26 +888,6 @@ spec = do
                 (map atDefaultPrecedence [denyEpssAt 0.5, denyCveAt 8.0])
                 (pkg Nothing 0)
                 >>= \d -> blockedBy d `shouldBe` Just "DenyIfCve"
-
-    describe "cveIdsInReason -- recovering advisory ids for the denial audit line" $ do
-        -- The deny reason 'denyVerdict' builds, asserted verbatim above. The audit layer reads
-        -- the ids back from it, so a reword of either fails one of these.
-        let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
-        it "recovers the id a DenyIfCve denial named" $
-            cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
-        it "recovers the id a DenyIfEpss denial named" $
-            cveIdsInReason "affected by GHSA-affect-0001 (EPSS >= 0.5)" `shouldBe` ["GHSA-affect-0001"]
-        it "recovers several ids" $
-            cveIdsInReason "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)"
-                `shouldBe` ["CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"]
-        it "recovers them from the wrapped decision message the audit line carries" $
-            -- The audit layer sees the rendered decision's wrapping, not the raw reason.
-            cveIdsInReason ("thing@1.0.0 was denied by DenyIfCve: " <> denyReason)
-                `shouldBe` ["GHSA-affect-0001"]
-        it "yields nothing for a non-CVE denial" $ do
-            cveIdsInReason "runs code on install: postinstall" `shouldBe` []
-            cveIdsInReason "thing@1.0.0 was denied by DenyInstallTimeExecution: runs code on install"
-                `shouldBe` []
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
@@ -998,34 +1050,12 @@ spec = do
             decide
                 (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowScope (mkScope "myorg")])
                 (pkg (Just "other") 1)
-                >>= \case
-                    BlockedByDefault reasons ->
-                        reasons
-                            `shouldBe` [ "scope is not the allow-listed @myorg"
-                                       , "published only 1 day ago, minimum age is 7 days"
-                                       ]
-                    other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
-
-    describe "renderDuration" $ do
-        it "renders a whole unit as that unit alone" $ do
-            renderDuration 604800 `shouldBe` "7 days"
-            renderDuration 86400 `shouldBe` "1 day"
-            renderDuration 60 `shouldBe` "1 minute"
-        it "renders the two most-significant non-zero units" $ do
-            renderDuration 90 `shouldBe` "1 minute 30 seconds"
-            renderDuration 3661 `shouldBe` "1 hour 1 minute"
-            renderDuration 86700 `shouldBe` "1 day 5 minutes"
-        it "distinguishes a value just short of a threshold from the threshold" $ do
-            renderDuration 89 `shouldBe` "1 minute 29 seconds"
-            renderDuration 90 `shouldBe` "1 minute 30 seconds"
-        it "pluralises only non-unit counts" $ do
-            renderDuration 1 `shouldBe` "1 second"
-            renderDuration 2 `shouldBe` "2 seconds"
-        it "renders a zero or sub-second duration as zero seconds" $ do
-            renderDuration 0 `shouldBe` "0 seconds"
-            renderDuration 0.4 `shouldBe` "0 seconds"
-        it "clamps a negative duration to zero" $
-            renderDuration (negate 5) `shouldBe` "0 seconds"
+                >>= \decision -> do
+                    decision `shouldBe` BlockedByDefault [ScopeNotAllowListed (mkScope "myorg"), PublishedTooRecently nominalDay (7 * nominalDay)]
+                    sentences decision
+                        `shouldBe` [ "scope is not the allow-listed @myorg"
+                                   , "published only 1 day ago, minimum age is 7 days"
+                                   ]
 
     describe "properties" $ do
         it "an empty rule set always denies by default" $
@@ -1129,22 +1159,3 @@ spec = do
         it "an affecting advisory with no EPSS score still abstains" $
             decideWith (depsWith (affecting Nothing Nothing)) [atDefaultPrecedence (denyEpssAt 0.5)] (listed Nothing)
                 >>= (`shouldSatisfy` isBlockedByDefault)
-
-    describe "renderDecision" $ do
-        -- The whole line, not a substring: it reaches an operator, so the subject, the verb,
-        -- the rule, and the reason each have to stay where they are.
-        let pd = pkg (Just "myorg") 0
-        it "renders an admission naming the rule and its reason" $
-            renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed" [])
-                `shouldBe` "@myorg/thing@1.0.0 was approved by AllowScope: scope @myorg is allow-listed"
-        it "renders a block naming the rule and its reason" $
-            renderDecision pd (Blocked "DenyAdvisory" Nothing "affected by an advisory")
-                `shouldBe` "@myorg/thing@1.0.0 was denied by DenyAdvisory: affected by an advisory"
-        it "renders a deny-by-default explaining no rule allowed it, then every reason" $
-            renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg", "published only 1 day ago"])
-                `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it): scope is not the allow-listed @myorg; published only 1 day ago"
-        it "renders a deny-by-default with no reasons as the verdict alone" $
-            renderDecision pd (BlockedByDefault []) `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it)"
-        it "renders an undecidable outcome explaining it could not be evaluated" $
-            renderDecision pd (Undecidable (WillResolve Nothing) "the advisory source is down")
-                `shouldBe` "@myorg/thing@1.0.0 could not be evaluated: the advisory source is down"

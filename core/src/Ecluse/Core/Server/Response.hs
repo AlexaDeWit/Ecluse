@@ -41,7 +41,7 @@ import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
 import Network.HTTP.Types (Status, status200, status403, status404, status500, status503)
 
-import Ecluse.Core.Rules (renderDecision)
+import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     RetryAfter (..),

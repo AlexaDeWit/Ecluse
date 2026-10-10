@@ -15,7 +15,6 @@ module Ecluse.Core.Rules.Freshness (
 
     -- * Reading one push
     AdvisoryPublication (..),
-    AdvisoryAge (..),
     AdvisoryFreshness (..),
     assessAdvisoryAge,
     ageAlarmStep,
@@ -23,7 +22,7 @@ module Ecluse.Core.Rules.Freshness (
 
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime)
 
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Types (AdvisoryAge (..), Rule (AllowIfOlderThan))
 
 {- | The maximum push age one mount's CVE-based denies accept, and where the value came from.
 The basis is carried so the boot log can report it beside the number.
@@ -72,16 +71,6 @@ maxAdvisoryAgeFor Nothing rules = maybe floorAge derivedFrom (foldr earlier Noth
         | otherwise = floorAge
 
     floorAge = MaxAdvisoryAge advisoryAgeFloor AgeFloor
-
-{- | One reading of a push: when it landed, how old it is now, and the maximum it was read
-against. An audit line and an alarm both render this, so neither can report a different number.
--}
-data AdvisoryAge = AdvisoryAge
-    { advisoryPushedAt :: UTCTime
-    , advisoryAge :: NominalDiffTime
-    , advisoryMaxAge :: NominalDiffTime
-    }
-    deriving stock (Eq, Show)
 
 {- | What a slot says about the serving artifact's publication. The undated case is separate
 because a generation whose age cannot be established is not the same as none serving at all.

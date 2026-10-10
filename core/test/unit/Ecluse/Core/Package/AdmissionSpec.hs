@@ -49,6 +49,8 @@ import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     EvalContext (EvalContext),
     FailureAlignment (FailNoDecision),
+    Inability (EvaluationFailed, NoDatabaseLoaded),
+    Reason (RuleUnable),
     RuleVerdict (CannotVet),
     SkippedCheck (SkippedUnavailable),
     Transience (WillResolve, WontResolve),
@@ -65,7 +67,7 @@ import Ecluse.Test.Package (
     v1_0_0,
  )
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule)
+import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, revocation)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -130,14 +132,14 @@ hashOfKind bs = \case
 ahead of the fixed-verdict rules, so the boot order runs it first.
 -}
 skippedCveRule :: PreparedRule
-skippedCveRule = constRule "DenyIfCve" (CannotVet FailNoDecision "DenyIfCve: no advisory database loaded")
+skippedCveRule = constRule "DenyIfCve" (CannotVet FailNoDecision NoDatabaseLoaded)
 
 spec :: Spec
 spec = do
     describe "admitArtifact -- the shared serve/worker admission oracle" $ do
         it "carries the skipped-check evidence beside an admit, so the gate can record it once" $ do
             (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
-            skipped `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+            skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
             case admission of
                 AdmissionAdmit{} -> pass
                 other -> expectationFailure ("expected an admit, got " <> show other)
@@ -209,13 +211,13 @@ spec = do
         it "carries a WontResolve inability through, so serve renders a 500 and the worker drops" $
             -- No rule set reaches this today. The projection states the disposition anyway, so the
             -- two consumers cannot answer it differently the day one does.
-            admissionTransience (AdmissionUndecidable (Undecidable WontResolve "an internal fault"))
+            admissionTransience (AdmissionUndecidable (Undecidable WontResolve (RuleUnable "DenyIfCve" EvaluationFailed)))
                 `shouldBe` Just WontResolve
 
         it "reports no transience for a settled verdict, so no consumer waits on one" $ do
             admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admitted `shouldBe` Nothing
-            admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing "denied by current policy")) `shouldBe` Nothing
+            admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing revocation)) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
             admissionTransience AdmissionBelowFloor `shouldBe` Nothing
             admissionTransience AdmissionIntegrityMissing `shouldBe` Nothing
