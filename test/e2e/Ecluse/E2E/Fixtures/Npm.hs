@@ -31,6 +31,7 @@ module Ecluse.E2E.Fixtures.Npm (
     headPkg,
     telemetryPkg,
     telemetryDdPkg,
+    telemetryPrivatePkg,
     fixturePackages,
     buildFixtures,
     artifactFile,
@@ -195,6 +196,10 @@ telemetryPkg = defaultPkgSpec "e2e-telemetry"
 telemetryDdPkg :: PkgSpec
 telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 
+-- | A coordinate reserved for the collector case that owns both private artifact fetches.
+telemetryPrivatePkg :: PkgSpec
+telemetryPrivatePkg = defaultPkgSpec "e2e-telemetry-private"
+
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
 fixturePackages =
@@ -215,6 +220,7 @@ fixturePackages =
     , corpusRevokedPkg
     , telemetryPkg
     , telemetryDdPkg
+    , telemetryPrivatePkg
     ]
 
 {- | Where the stub serves one version's artifact, under the root 'buildFixtures' writes into.

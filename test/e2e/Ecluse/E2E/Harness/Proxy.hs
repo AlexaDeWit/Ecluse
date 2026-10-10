@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Requests to the proxy's HTTP surface, and reads of the logs the proxy and the mirror store write.
 module Ecluse.E2E.Harness.Proxy (
     proxyStatus,
     proxyGet,
@@ -15,7 +16,6 @@ module Ecluse.E2E.Harness.Proxy (
     logTail,
     logTailLines,
     awaitProxyLog,
-    awaitCollectorLog,
     hasPopulatedTraceId,
 ) where
 
@@ -66,9 +66,8 @@ proxyHead e2e path = do
                 readMaybe (toString (decodeUtf8 raw :: Text))
         pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
 
-{- | @PUT@ a proxy path with an empty body, returning the status. A mount with __no__ publication
-target refuses the publish with @405@ before it reads the body, so an empty @PUT@ proves the opt-in
-posture without driving the @npm@ CLI.
+{- | An empty @PUT@ proves that a mount without a publication target refuses with @405@
+before reading the body.
 -}
 proxyPut :: E2E -> Text -> IO Int
 proxyPut e2e path = do
@@ -122,15 +121,6 @@ assertion that must await an asynchronous line.
 -}
 awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
-
-{- | Poll the OTLP collector's debug-exporter output until the predicate holds. It fails loudly when
-the environment booted without a collector, which only @ecCollector = True@ provides.
--}
-awaitCollectorLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
-awaitCollectorLog e2e matches attempts =
-    case e2eCollectorContainer e2e of
-        Nothing -> fail "awaitCollectorLog: this environment was booted without a collector"
-        Just coll -> awaitContainerLog coll matches attempts
 
 {- | Whether any @dd@ object in the log text carries a __populated__ @trace_id@. The value must
 begin with a digit, so an absent or empty id does not satisfy it.
