@@ -38,7 +38,7 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
-import Ecluse.Core.Version.Token (isAsciiAlphaNum)
+import Ecluse.Core.Text (isAsciiAlphaNum)
 
 {- | A hash algorithm an integrity digest is computed with. The 'Ord' instance is integrity
 authority, not constructor order: @SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@.

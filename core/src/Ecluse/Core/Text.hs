@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE MagicHash #-}
 
-{- | Shared text parsing, rendering and storage without dependencies on other core modules.
+{- | Shared text parsing, character classes, rendering and storage without dependencies on other core modules.
 Inbound routes and outbound artifact filenames share the same path-component gate.
 -}
 module Ecluse.Core.Text (
@@ -20,6 +20,7 @@ module Ecluse.Core.Text (
     lowerPrefixChars,
     isPrefixOfLowered,
     registryPath,
+    isAsciiAlphaNum,
     readDecimalText,
     readHexText,
     renderIso8601Utc,
@@ -28,7 +29,7 @@ module Ecluse.Core.Text (
 ) where
 
 import Data.Array.Byte (ByteArray (..))
-import Data.Char (isControl)
+import Data.Char (isAsciiLower, isAsciiUpper, isControl, isDigit)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Internal qualified as TI
@@ -128,6 +129,10 @@ first scheme separator, so a later one inside the URL cannot move where the path
 -}
 registryPath :: Text -> Text
 registryPath raw = T.dropWhile (/= '/') (afterFirst "://" raw)
+
+-- | An ASCII letter or an ASCII digit. 'Data.Char.isAlphaNum' also takes the letters and digits outside ASCII.
+isAsciiAlphaNum :: Char -> Bool
+isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c
 
 {- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else.
 Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.

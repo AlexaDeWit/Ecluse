@@ -20,7 +20,8 @@ import Data.Char (isDigit)
 import Data.List (dropWhileEnd, unsnoc)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, isAsciiAlphaNum, numOr0, parseNumSeg, withinVersionLength)
+import Ecluse.Core.Text (isAsciiAlphaNum)
+import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, withinVersionLength)
 
 {- | A parsed PEP 440 version as its canonical ordering key. The release carries no trailing
 zeros (@1.0 == 1.0.0@), and the rank fields encode PEP 440's None-handling for the derived 'Ord'.
