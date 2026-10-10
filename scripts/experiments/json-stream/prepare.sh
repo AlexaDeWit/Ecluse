@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 : "${BENCH_REPO:?Set BENCH_REPO to the project checkout}"

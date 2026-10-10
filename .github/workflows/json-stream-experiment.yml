@@ -10,13 +10,13 @@ permissions:
 
 jobs:
   upstream:
-    name: Upstream fixtures and token fold
+    name: Native string scan against compact lexer and upstream
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 45
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       BENCH_REPO: ${{ github.workspace }}
-      BENCH_BASELINE_SHA: 2b1abcc04412ef8017ba6b645f6da8f8166c52c7
+      BENCH_BASELINE_SHA: 5bce121229a92c0183a9550f7f073cb47023638d
       BENCH_CANDIDATE_SHA: ${{ github.sha }}
       BENCH_REPEATS: "5"
       BENCH_SECONDS: "0.3"
