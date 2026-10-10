@@ -18,6 +18,8 @@ module Ecluse.Core.Registry.Metadata.Fetch (
     readVersion,
 ) where
 
+import GHC.Conc (pseq)
+
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
@@ -50,7 +52,7 @@ readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erF
         -- The size is read and the document forced first, so the typed view's location check holds none of the walk's result.
         let !bodyBytes = streamBytes streamed
         (info, raw) <- finish limits name base streamed
-        pure (raw `seq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestDigest = digest})
+        pure (raw `pseq` Manifest{manifestInfo = info, manifestRaw = raw, manifestBodyBytes = bodyBytes, manifestDigest = digest})
   where
     limits = rtLimits terms
     base = rtBaseUrl terms
