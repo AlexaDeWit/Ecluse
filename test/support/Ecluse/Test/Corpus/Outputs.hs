@@ -16,7 +16,6 @@ module Ecluse.Test.Corpus.Outputs (
 ) where
 
 import Crypto.Hash (SHA256 (SHA256), hashWith)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -29,63 +28,69 @@ import Ecluse.Core.Package (
     PackageName,
     hashAlg,
     hashValue,
+    pkgEcosystem,
  )
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
-import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo, manifestRaw), VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Server.Conditional (renderETag)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), fingerprintPiece)
 import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage), cpName, syntheticProxyBase)
-import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
-import Ecluse.Test.Snapshot (digestOf)
+import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, captureVersion)
 
 -- | One ecosystem's reads of a capture, bound to the upstream it was captured from.
 data CorpusRead = CorpusRead
     { crUpstream :: CaptureUpstream
     , crMetadata :: AdapterMetadata
-    -- ^ The adapter whose production full read the outputs come from.
-    , crVersionReads :: PackageName -> ByteString -> CachedDoc -> Text -> [(Text, LByteString)]
-    -- ^ Labelled outputs of the reads that select one version key.
+    -- ^ The adapter whose production full and selected reads the outputs come from.
+    , crVersionReads :: Either MetadataError VersionRead -> CachedDoc -> Version -> [(Text, LByteString)]
+    -- ^ Labelled outputs of one version's selected read, beside the full read's document.
     , crDocumentReads :: PackageName -> ByteString -> [(Text, LByteString)]
     -- ^ Labelled outputs of any other read of the whole capture.
     }
 
-{- | One tab-separated line per output of the production full read: capture, label, byte length and
-SHA-256. Survivor sets are all versions, the least key and the greatest key, each served alone and merged with itself.
+{- | One tab-separated line per output of the production reads: capture, label, length and SHA-256.
+The survivor sets are all versions, the least key and the greatest, each served alone and merged.
 -}
 captureOutputs :: CorpusRead -> CorpusPackage -> ByteString -> IO (Either Text [Text])
 captureOutputs corpus package raw =
-    (first show >=> manifestOutputs corpus package raw) <$> captureManifest (crMetadata corpus) (crUpstream corpus) (cpPackage package) [raw]
-
-manifestOutputs :: CorpusRead -> CorpusPackage -> ByteString -> Manifest -> Either Text [Text]
-manifestOutputs corpus package raw manifest = do
-    let info = manifestInfo manifest
-        document = manifestRaw manifest
-        keys = Map.keysSet (infoVersions info)
-        ends = [("first", Set.lookupMin keys), ("last", Set.lookupMax keys)]
-        survivorSets = ("all", keys) : [(label, maybe mempty Set.singleton key) | (label, key) <- ends]
-    served <- concat <$> traverse (servedOutputs corpus name raw document info) survivorSets
-    pure $
-        map (line package) $
-            [("typed", typedFacts info), ("charge", rendered (weighCachedDoc document))]
-                <> served
-                <> [(label <> "/" <> output, bytes) | (label, Just key) <- ends, (output, bytes) <- crVersionReads corpus name raw document key]
-                <> crDocumentReads corpus name raw
+    captureManifest (crMetadata corpus) (crUpstream corpus) name [raw] >>= \case
+        Left refused -> pure (Left (show refused))
+        Right manifest -> do
+            let keys = Map.keysSet (infoVersions (manifestInfo manifest))
+                ends = [("first", Set.lookupMin keys), ("last", Set.lookupMax keys)]
+            selected <- concat <$> traverse (versionOutputs corpus name raw (manifestRaw manifest)) [(label, key) | (label, Just key) <- ends]
+            pure (manifestOutputs corpus package manifest (("all", keys) : map (second (maybe mempty Set.singleton)) ends) (selected <> crDocumentReads corpus name raw))
   where
     name = cpPackage package
 
-servedOutputs :: CorpusRead -> PackageName -> ByteString -> CachedDoc -> PackageInfo -> (Text, Set Text) -> Either Text [(Text, LByteString)]
-servedOutputs corpus name raw document info (label, survivors) =
+-- The ecosystem's outputs of one version key's production selected read, under the key's label.
+versionOutputs :: CorpusRead -> PackageName -> ByteString -> CachedDoc -> (Text, Text) -> IO [(Text, LByteString)]
+versionOutputs corpus name raw document (label, key) = do
+    selected <- captureVersion (crMetadata corpus) (crUpstream corpus) name version [raw]
+    pure [(label <> "/" <> output, bytes) | (output, bytes) <- crVersionReads corpus selected document version]
+  where
+    version = mkVersion (pkgEcosystem name) key
+
+manifestOutputs :: CorpusRead -> CorpusPackage -> Manifest -> [(Text, Set Text)] -> [(Text, LByteString)] -> Either Text [Text]
+manifestOutputs corpus package manifest survivorSets otherReads = do
+    served <- concat <$> traverse (servedOutputs corpus (cpPackage package) manifest) survivorSets
+    pure . map (line package) $
+        [("typed", typedFacts (manifestInfo manifest)), ("charge", rendered (weighCachedDoc (manifestRaw manifest)))] <> served <> otherReads
+
+servedOutputs :: CorpusRead -> PackageName -> Manifest -> (Text, Set Text) -> Either Text [(Text, LByteString)]
+servedOutputs corpus name manifest (label, survivors) =
     concat <$> traverse render [("single", [GatedSource]), ("merged", [TrustedSource, GatedSource])]
   where
-    restricted = restrictToSurvivors survivors info
+    document = manifestRaw manifest
+    restricted = restrictToSurvivors survivors (manifestInfo manifest)
     render (shape, provenances) = do
-        let sources = [Contribution provenance restricted document (digestOf raw) (BS.length raw) | provenance <- provenances]
+        let sources = [Contribution provenance restricted document (manifestDigest manifest) (manifestBodyBytes manifest) | provenance <- provenances]
         plan <- maybeToRight "no merge plan" (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
         let bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest s) (srcValue s) | s <- sources])
         body <- first (const "the render refused its plan") (metadataSerialise (crMetadata corpus) (metadataAssemble (crMetadata corpus) syntheticProxyBase bySource plan (Just document)))
@@ -97,7 +102,7 @@ servedOutputs corpus name raw document info (label, survivors) =
 rendered :: (Show a) => a -> LByteString
 rendered value = encodeUtf8 (show value :: Text)
 
--- The typed view as its name, tags and dropped entries, then one line of 'releaseFacts' per version.
+-- The typed view as its name, tags and dropped entries, then a line of 'releaseFacts' per version.
 typedFacts :: PackageInfo -> LByteString
 typedFacts info =
     encodeUtf8 . T.unlines $

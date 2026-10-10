@@ -19,6 +19,7 @@ import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
+import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CorpusPackage)
 
@@ -32,6 +33,7 @@ data EcosystemBench = EcosystemBench
     , ebDecode :: PackageName -> ByteString -> Either Text [Text]
     -- ^ Decode release keys through the adapter's wire parser.
     , ebProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+    -- ^ The pure projection of a synthetic body, under the fixed test key and with no location check.
     , ebRead :: PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
     -- ^ The production full read of a capture's chunks, as a fetch from the capture's registry runs it.
     , ebSelective :: PackageName -> Version -> [ByteString] -> IO (Either MetadataError (Maybe PackageDetails))
@@ -45,8 +47,8 @@ data EcosystemBench = EcosystemBench
     , ebRouteScaling :: [RouteScaling]
     }
 
--- | Validated corpus bytes paired with their neutral projection and native cached document.
-type LoadedEntry = (CorpusPackage, ByteString, PackageInfo, CachedDoc)
+-- | A capture's bytes with their production full read: its typed view, and its document under its digest.
+type LoadedEntry = (CorpusPackage, ByteString, PackageInfo, Snapshot CachedDoc)
 
 -- | A named request batch, including the ecosystem's supported and refused paths.
 data RouteCase = RouteCase

@@ -49,7 +49,7 @@ captureChunks bytes
     | otherwise = case BS.splitAt 32768 bytes of (!piece, rest) -> piece : captureChunks rest
 
 {- | The production full read of held chunks, as a fetch from an origin at the base URL runs it. The
-body limit is at least the chunks' size, and the charge has no payer, as on a read outside the memory gate.
+body limit is at least the chunks' size, and the charge has no payer, as outside the memory gate.
 -}
 heldManifest :: EcosystemRead -> Limits -> Text -> PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
 heldManifest eco limits base name chunks = readManifest eco passthroughTracingPort (heldTerms limits base chunks) name (heldBody chunks)

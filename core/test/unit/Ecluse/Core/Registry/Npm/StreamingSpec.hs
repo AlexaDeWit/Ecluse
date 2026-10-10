@@ -62,7 +62,7 @@ spec = describe "npmFields" $ do
     forM_ corpusPackages $ \package ->
         it ("reproduces the recorded outputs of the complete capture " <> cpPath package) $ do
             bytes <- readFileBS (cpPath package)
-            actual <- captureOutputs (corpusRead bytes) package bytes >>= expectRight
+            actual <- captureOutputs corpusRead package bytes >>= expectRight
             recorded <- recordedOutputs package
             actual `shouldBe` recorded
 
@@ -484,19 +484,16 @@ nestedRelease mode = do
 nestedValue :: Value
 nestedValue = object ["nested" .= object ["deeper" .= True]]
 
--- The full and selected reads of one capture, with limits wide enough for its whole body.
-corpusRead :: ByteString -> CorpusRead
-corpusRead bytes =
+-- npm's recorded reads: the selected read, the mirror's pick from the full read, and the version list.
+corpusRead :: CorpusRead
+corpusRead =
     CorpusRead
         { crUpstream = npmCaptureUpstream
         , crMetadata = adapterMetadata npmAdapter
-        , crVersionReads = \package raw document key ->
-            let version = mkVersion Npm key
-             in [("selected", rendered (selectedFacts <$> projectNpmVersion limits package version raw)), ("mirror", rendered (selectNpmVersionDoc version document))]
+        , crVersionReads = \selected document version ->
+            [("selected", rendered (selectedFacts <$> selected)), ("mirror", rendered (selectNpmVersionDoc version document))]
         , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionList (RegistryResponse 200 (BS.length raw) raw)))]
         }
-  where
-    limits = defaultLimits{maxMetadataBytes = BS.length bytes}
 
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())
 extractFields levels mode source =

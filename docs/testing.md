@@ -108,7 +108,10 @@ The high-water sample includes rendering and cannot establish the production rea
 peak or a bound on transient buffers. The [listing probe](#listing-peaks) measures that peak. The
 probes read each capture's held bytes through the production read driver, under the default limits
 with a body limit of at least the capture's size. They do not execute the HTTP exchange or prove
-that shipping response limits admit each capture.
+that shipping response limits admit each capture. The shared shape's entry holds the read's typed
+projection and serving document with a size and digest that the probe takes from the capture's
+bytes. An entry with the read's own digest retains 4 KiB more in this probe, the pinned block that
+digest sits in, and the shape's figures leave that block out.
 
 The retained-byte gate uses the following corpus envelopes. The figures come from all nine npm and
 three PyPI captures in the arm64 Build job of
@@ -163,8 +166,8 @@ or derived rendering, so they do not establish the same fully forced retained en
 [charges](architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling) must cover. For each
 capture, a fresh child process:
 
-1. streams the capture in 32 KiB chunks through the production parser, digest and projection,
-   enforces artifact locations against the capture's registry, and holds the cache entry
+1. reads the capture in 32 KiB chunks through the production read driver, as a fetch from the
+   capture's registry runs it, and holds the cache entry
 2. renders the served body of a single-source listing in which every version survives, as the
    strict bytes a response sends
 3. reads the capture again, and holds that entry with and then without its served document
@@ -326,12 +329,14 @@ The same residency executable accepts `--metadata-source-probe ECOSYSTEM MODE NA
 PyPI pins use the same PEP 440 canonicalisation as production artifact routes.
 `LIMIT` is the decompressed body ceiling in bytes. `PATH` remains the complete source capture.
 Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected` and
-`StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
-bytes to the new parser, separating input buffering from projection changes. The streamed modes
-read the file in 32 KiB chunks. `StreamedFull` and `StreamedSelected` run the production read
-driver's full and selected reads, and `StreamedVersions`, which is npm-only, runs the version-list
-reader. Only a full read takes a digest of its source. The other two streamed modes report the
-file's digest, which the probe takes after the measured read.
+`StreamedVersions`. The first uses the prior complete Aeson representation. The second buffers the
+whole file, then runs the production read driver's full read over the held bytes, so it differs
+from `StreamedFull` by its buffering alone. The streamed modes read the file in 32 KiB chunks.
+`StreamedFull` and `StreamedSelected` run the driver's full and selected reads, and
+`StreamedVersions`, which is npm-only, runs the version-list reader. The two full reads hash the
+source inside the measured read, as the driver does, and `BufferedLegacy` hashes its buffered body
+there too. `StreamedSelected` and `StreamedVersions` take no digest, so the probe hashes the file
+after its last sample and reports that.
 
 Each invocation makes one read with no warm-up. Accounting walks force the retained result without
 `Show` or output encoding. `read_project_ns` covers that read, projection and forcing.
@@ -733,7 +738,7 @@ JSON input rather than compressed transport traffic.
 Run `task gen-bench-corpus` only for a deliberate recapture. Version pins identify workloads and do
 not limit the captured releases. Run `BENCH_CORPUS_VERIFY=1 task gen-bench-corpus` to check committed
 sizes, hashes, provenance fields, and basic document shape without network access.
-The harness separately validates each capture through the production adapter before measurement.
+The harness separately validates each capture through the production read driver before measurement.
 
 | Group | Capture use |
 |---|---|
@@ -742,7 +747,7 @@ The harness separately validates each capture through the production adapter bef
 | `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
 | Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
-| Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
+| Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. They pass through the projection under a fixed table key, with no location check. |
 
 The projection groups read held bytes, including the structural guards. Their rows that read a
 whole capture or select one version run the production read driver over the capture's 32 KiB chunks,

@@ -49,18 +49,14 @@ import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosyste
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead, metadataSerialise))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, npmPacked, pypiSimpleCached, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
-import Ecluse.Core.Registry.Metadata.Fetch.Types (ReadTerms (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Registry.Npm.Metadata (NpmFullRead, projectNpmPacked)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
-import Ecluse.Core.Registry.PyPI.Streaming qualified as PyPIStream
-import Ecluse.Core.Registry.PyPI.StreamingProjection qualified as PyPIProjection
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
@@ -73,12 +69,9 @@ import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.JsonStream (walkWritingChunks)
-import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, sourceBody)
+import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
 import Ecluse.Test.Registry.Metadata.Projection (projectMetadata)
-import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
 import Ecluse.Test.Snapshot (digestOf, untaggedRead)
@@ -226,10 +219,8 @@ probeEvaluation package = do
 {-# NOINLINE prepareEntry #-}
 prepareEntry :: CorpusPackage -> IO (StablePtr CacheEntry, Int)
 prepareEntry package = do
-    bytes <- BS.readFile (cpPath package)
-    (info, document) <- project package bytes
-    entry <- evaluate (CacheEntry info document (BS.length bytes) (digestOf bytes))
-    count <- evaluate (Map.size (infoVersions info))
+    entry <- BS.readFile (cpPath package) >>= readCapture package >>= evaluate . manifestEntry
+    count <- evaluate (Map.size (infoVersions (entryInfo entry)))
     root <- newStablePtr entry
     pure (root, count)
 
@@ -294,7 +285,7 @@ documentLive package = do
 -- The production full read of the file in 32 KiB chunks, with the entry forced.
 readListingEntry :: PackageName -> FilePath -> IO CacheEntry
 readListingEntry name path = do
-    entry <- withBinaryFile path ReadMode (streamFull defaultLimits name . (`BS.hGetSome` 32768)) >>= either (fail . toString) pure
+    entry <- withBinaryFile path ReadMode (readFull defaultLimits name . sourceBody . (`BS.hGetSome` 32768)) >>= either (fail . toString) pure
     entry <$ evaluate (sourceSize (HeldShared entry))
 
 {-# NOINLINE prepareListingRead #-}
@@ -413,6 +404,7 @@ prepare shape package = do
             pure (HeldTyped info, 0, 0, Map.size (infoVersions info))
         Shared -> do
             (info, document) <- project package bytes
+            -- The probe's own size and digest: the read's digest keeps a 4 KiB pinned block the gate omits.
             let entry = CacheEntry info document (BS.length bytes) (digestOf bytes)
             _ <- forceShown entry
             compact <- evaluate (LBS.length (encode (diagnosticDocumentValue document)))
@@ -425,12 +417,15 @@ prepare shape package = do
     root <- evaluate held >>= newStablePtr
     pure (root, (size, compactSize, charged, versionCount))
 
--- | The production full read of a capture's held bytes, as a fetch from the capture's registry returns it.
+-- | The typed view and the served document of 'readCapture'.
 project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
-project package bytes = do
+project package bytes = (\manifest -> (manifestInfo manifest, manifestRaw manifest)) <$> readCapture package bytes
+
+-- The production full read of a capture's held bytes, as a fetch from the capture's registry returns it.
+readCapture :: CorpusPackage -> ByteString -> IO Manifest
+readCapture package bytes = do
     (metadata, upstream) <- maybe noRubyGemsCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
-    manifest <- captureManifest metadata upstream (cpPackage package) [bytes] >>= either (fail . show) pure
-    pure (manifestInfo manifest, manifestRaw manifest)
+    captureManifest metadata upstream (cpPackage package) [bytes] >>= either (fail . show) pure
 
 -- Each ecosystem's adapter reads, and the registry its captures came from.
 captureSource :: Ecosystem -> Maybe (AdapterMetadata, CaptureUpstream)
@@ -512,43 +507,29 @@ prepareSource mode limits name version path =
                 root <- newStablePtr held
                 pure (Right (root, (bytes', compactBytes', count', digest')))
 
--- | Read one explicit ecosystem representation, with the source's digest where the read itself takes one.
+{- | Read one source in a mode. A full read and the legacy read hash the source inside the measured
+read. The selected and version-list reads take no digest, so they return none.
+-}
 readSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readSource mode limits name version next = case pkgEcosystem name of
-    Npm -> readNpmSource mode limits name version next
-    PyPI -> readPyPISource mode limits name version next
-    RubyGems -> pure (Left "no RubyGems source-read measurement")
-
-readNpmSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readNpmSource mode limits name version next = case mode of
-    BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> buffered $ \_ body ->
-        first show (walkWritingChunks bound (npmFullTestWalk limits name (upstreamOrigin npmCaptureUpstream)) [body]) >>= fmap heldEntry . npmEntry limits name . (,digestOf body)
-    StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> streamSelected limits name version next
-    StreamedVersions -> readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList next <&> (first show >=> versionsResult)
+readSource mode limits name version next = case (pkgEcosystem name, mode) of
+    (RubyGems, _) -> pure (Left "no RubyGems source-read measurement")
+    (_, BufferedLegacy) -> readLegacySource limits name next
+    (_, BufferedCompact) -> boundedRead bound next >>= either (pure . Left . show) (fmap (fmap heldEntry) . readFull limits name . heldBody . one . snd)
+    (_, StreamedFull) -> fmap heldEntry <$> readFull limits name (sourceBody next)
+    (_, StreamedSelected) -> streamSelected limits name version next
+    (Npm, StreamedVersions) -> readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList next <&> (first show >=> versionsResult)
+    (PyPI, StreamedVersions) -> pure (Left "PyPI exposes no version-list-only read")
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
-    buffered projectBody = boundedRead bound next <&> (first show >=> uncurry projectBody)
     versionsResult streamed = do
         selected <- first show (streamValue streamed >>= finishVersionList)
         pure (HeldVersions selected, streamBytes streamed, Nothing)
 
-readPyPISource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readPyPISource mode limits name version next = case mode of
-    BufferedLegacy -> readLegacySource limits name next
-    BufferedCompact -> boundedRead bound next <&> (first show >=> \(_, body) -> first show (projectPyPIChunks limits name PyPIStream.FullRead [body]) >>= fmap heldEntry . pypiEntry limits name . (,digestOf body))
-    StreamedFull -> fmap heldEntry <$> streamFull limits name next
-    StreamedSelected -> streamSelected limits name version next
-    StreamedVersions -> pure (Left "PyPI exposes no version-list-only read")
-  where
-    bound = MetadataBodyLimit (maxMetadataBytes limits)
-
--- | The production full read of a source's chunks, as a fetch from the capture's registry runs it.
-streamFull :: Limits -> PackageName -> IO ByteString -> IO (Either Text CacheEntry)
-streamFull limits name next = case captureSource (pkgEcosystem name) of
+-- | The production full read of a body, as a fetch from the capture's registry runs it.
+readFull :: Limits -> PackageName -> Body -> IO (Either Text CacheEntry)
+readFull limits name body = case captureSource (pkgEcosystem name) of
     Nothing -> pure (Left "no RubyGems source-read measurement")
-    Just (metadata, upstream) -> bimap show manifestEntry <$> readManifest (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name (sourceBody next)
+    Just (metadata, upstream) -> bimap show manifestEntry <$> readManifest (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name body
 
 -- | The production selected read of a source's chunks, which takes no digest.
 streamSelected :: Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
@@ -564,16 +545,6 @@ sourceTerms limits upstream = ReadTerms{rtLimits = limits, rtBaseUrl = upstreamO
 
 manifestEntry :: Manifest -> CacheEntry
 manifestEntry manifest = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest)
-
-npmEntry :: Limits -> PackageName -> (StreamResult NpmFullRead, ContentDigest) -> Either Text CacheEntry
-npmEntry limits name (streamed, digest) = do
-    (info, packed) <- first show (projectNpmPacked limits name (upstreamOrigin npmCaptureUpstream) streamed)
-    pure (CacheEntry info (fst npmPacked packed) (streamBytes streamed) digest)
-
-pypiEntry :: Limits -> PackageName -> (StreamResult PyPIProjection.PyPIProjection, ContentDigest) -> Either Text CacheEntry
-pypiEntry limits name (streamed, digest) = do
-    (info, document) <- first show (projectPyPIStream limits name streamed)
-    pure (CacheEntry info (fst pypiSimpleCached document) (streamBytes streamed) digest)
 
 heldEntry :: CacheEntry -> (Held, Int, Maybe ContentDigest)
 heldEntry entry = (HeldShared entry, entryBodyBytes entry, Just (entryDigest entry))
