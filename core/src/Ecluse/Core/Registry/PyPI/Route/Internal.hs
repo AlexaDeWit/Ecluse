@@ -46,9 +46,8 @@ import Network.HTTP.Types (
     status503,
  )
 
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersionKey), canonicalName, fileCoordinate, isCanonicalName, projectName)
+import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersion), canonicalName, fileCoordinate, isCanonicalName, projectName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Server.Context (
     MountRouter,
@@ -88,7 +87,7 @@ import Ecluse.Core.Server.Route (
     safeSegment,
  )
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 
 -- | Match the first applicable route, otherwise answer with the 404 fallback.
 pypiRouter :: MountRouter
@@ -328,7 +327,7 @@ takeProject = \case
 artifactCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
 artifactCoordinate name file = do
     coordinate <- fileCoordinate name file
-    (mkVersion PyPI (fcVersionKey coordinate),) <$> mkFilename file
+    (fcVersion coordinate,) <$> mkFilename file
 
 -- | Render through the distribution route so generated URLs obey its capture rules.
 distributionPath :: PackageName -> Text -> Maybe Text

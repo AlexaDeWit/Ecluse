@@ -16,10 +16,10 @@ import Data.Aeson.Key qualified as Key
 import Data.JsonStream.TokenParser (Element (..), TokenResult)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (..), Trees (..), knownMembers, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
-import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
+import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
 
@@ -48,7 +48,7 @@ pypiWalk depth mode step keeps table0 initial = start
         "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
         "project-status" | full -> envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
         "alternate-locations" | full -> envelope "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1)))
-        "files" -> shaped FilesShape (eachItem file) walked after continue
+        "files" -> shaped FilesShape files walked after continue
         "versions" | full -> shaped VersionsShape (eachItem version) walked after continue
         _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
       where
@@ -63,13 +63,21 @@ pypiWalk depth mode step keeps table0 initial = start
         JValue Null -> emit acc (claim True) (\claimed -> continue (Walked table claimed) rest)
         _ -> skipFrom element rest (\afterValue -> emit acc (claim False) (\marked -> continue (Walked table marked) afterValue))
 
+    -- A selected read carries its filename memo from file to file of one array.
+    files = case mode of
+        FullRead -> eachItem file
+        SelectedRead name wanted -> \done (Walked table acc) ->
+            eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
+
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
-        | otherwise = case mode of
-            FullRead -> readShape Trees (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest (retained Just)
-            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted table element rest (retained id)
-      where
-        retained wrap payload table' afterValue = emit acc (FileField position (wrap payload)) (\acc' -> continue (Walked table' acc') afterValue)
+        | otherwise = readShape Trees (ObjectOr Null fileFields) (if keeps acc then Share else Keep) table element rest $ \payload table' afterValue ->
+            emit acc (FileField position (Just payload)) (\acc' -> continue (Walked table' acc') afterValue)
+
+    candidate selection (Selecting table memo acc) position element rest continue
+        | depth <= 2 = tooDeep element rest
+        | otherwise = selectedFile selection memo table element rest $ \payload memo' table' afterValue ->
+            emit acc (FileField position payload) (\acc' -> continue (Selecting table' memo' acc') afterValue)
 
     version (Walked table acc) position element rest continue =
         readShape Trees (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->
@@ -78,37 +86,48 @@ pypiWalk depth mode step keeps table0 initial = start
                     _ -> InvalidVersionField position value
              in emit acc field (\acc' -> continue (Walked table acc') afterValue)
 
-    fileFields = namedMembers (("hashes", ObjectWith (depth - 3) (knownMembers hashNames (Scalar (depth - 4))) (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
+    fileFields = namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
+    hashFields = knownMembers hashNames (Scalar (depth - 4))
     metaFields = namedMembers ([("tracks", ArrayWith (depth - 2) (Scalar (depth - 3)) (Scalar (depth - 2))) | full] <> [("api-version", Scalar (depth - 2))] <> [("_last-serial", Scalar (depth - 2)) | full])
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
 
-data Selecting = Selecting !InternTable SelectedFile
+-- What a selected read fixes for every file.
+data Selection = Selection
+    { selWanted :: Text
+    , selBudget :: Int
+    , selFields :: Members
+    , selHashes :: Members
+    }
+
+-- A selected read between tokens: the table, the filename memo, and the consumer's accumulator
+-- between files or the file under selection within one.
+data Selecting a = Selecting !InternTable !FilenameMemo a
 
 -- json-stream's selected-file fold: every member event reaches the fold, even after the name rejects
--- the file. The file's texts keep their own copies, so a rejected file never enters the table.
-selectedFile :: (Walk r) => Int -> FileProject -> Text -> InternTable -> Element -> TokenResult -> (Maybe Value -> InternTable -> TokenResult -> r) -> r
+-- the file. Listed keys come from the shapes and texts are copies, so no file enters the table.
+selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
 {-# INLINEABLE selectedFile #-}
-selectedFile budget project wanted table0 element rest next = case element of
-    ObjectBegin -> eachMember visit (\(Selecting table selected) after -> next (finishSelected selected) table after) (Selecting table0 (CandidateFile False [] Nothing False)) rest
-    _ -> skipFrom element rest (next Nothing table0)
+selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of
+    ObjectBegin -> eachMember visit (\(Selecting table memo file) after -> next (finishSelected file) memo table after) (Selecting table0 memo0 (CandidateFile False [] Nothing False)) rest
+    _ -> skipFrom element rest (next Nothing memo0 table0)
   where
-    collect = collectSelected project wanted
-    visit (Selecting table selected) name after continue = withElement after $ \value afterKey -> case nameBytes name of
+    collect table memo file event = case collectSelected wanted memo file event of
+        (collected, remembered) -> Selecting table remembered collected
+    visit (Selecting table memo file) name after continue = withElement after $ \value afterKey -> case nameBytes name of
         "hashes"
             | budget <= 0 -> tooDeep value afterKey
             | ObjectBegin <- value ->
                 eachMember
                     hashField
-                    (\(Selecting table' hashed) afterObject -> continue (Selecting table' (collect hashed HashesEnd)) afterObject)
-                    (Selecting table (collect selected HashesStart))
+                    (\(Selecting table' memo' hashed) afterObject -> continue (collect table' memo' hashed HashesEnd) afterObject)
+                    (collect table memo file HashesStart)
                     afterKey
             | otherwise -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
-                continue (Selecting table' (collect selected (HashesValue scalar))) afterValue
-        bytes
-            | bytes `elem` scalarNames -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
-                continue (Selecting table' (collect selected (FileScalar (Key.fromText (nameText name)) scalar))) afterValue
-            | otherwise -> skipFrom value afterKey (continue (Selecting table selected))
-    hashField (Selecting table selected) name after continue = withElement after $ \value afterKey ->
+                continue (collect table' memo file (HashesValue scalar)) afterValue
+        _ -> case listedMember fields name of
+            Just (key, shape) -> readShape Trees shape Keep table value afterKey $ \scalar table' afterValue ->
+                continue (collect table' memo file (FileScalar key scalar)) afterValue
+            Nothing -> skipFrom value afterKey (continue (Selecting table memo file))
+    hashField (Selecting table memo file) name after continue = withElement after $ \value afterKey ->
         readShape Trees (Scalar (budget - 1)) Keep table value afterKey $ \scalar table' afterValue ->
-            continue (Selecting table' (collect selected (HashField (Key.fromText (nameText name)) scalar))) afterValue
-    scalarNames = map encodeUtf8 fileScalars
+            continue (collect table' memo file (HashField (maybe (Key.fromText (nameText name)) fst (listedMember hashes name)) scalar)) afterValue

@@ -81,6 +81,17 @@ retainedSpec = describe "supported PyPI fields" $ do
         sharesString ">=3.10" (mapMaybe (fieldAt "requires-python") (files document <> files again)) `shouldReturn` False
         sharesString "2026-05-14T19:25:26Z" (mapMaybe (fieldAt "upload-time") (files document)) `shouldReturn` False
 
+    it "shares field names and known digest names across the files a selected read keeps" $ do
+        let file other = withFileKeys [("hashes", object ["sha256" .= validSha256, "custom" .= ("digest" :: Text)])] (simpleFile other)
+            body = encodeStrict (simpleIndex "requests" [file filename, file "requests-2.0.tar.gz", file "requests-1.0-py3-none-any.whl"])
+        streamed <- expectRight (projectPyPIChunks defaultLimits requestsName selected [body])
+        (_, document) <- expectRight (projectPyPIStream defaultLimits requestsName streamed)
+        let hashes = mapMaybe (fieldAt "hashes" . snd) (simpleFiles document)
+        map fst (simpleFiles document) `shouldBe` [ArrayEntry 0, ArrayEntry 2]
+        sharesKey "filename" (map snd (simpleFiles document)) `shouldReturn` True
+        sharesKey "sha256" hashes `shouldReturn` True
+        sharesKey "custom" hashes `shouldReturn` False
+
     it "retains compatibility declarations outside the policy projection" $ do
         let fields =
                 [ "meta" .= object ["api-version" .= ("1.4" :: Text), "_last-serial" .= (42 :: Int), "tracks" .= ["https://upstream.test/simple/requests/" :: Text], "unknown" .= True]

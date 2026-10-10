@@ -17,7 +17,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (infoVersions)
+import Ecluse.Core.Package (PackageName, infoVersions)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Project (fileProject, fileVersionKey)
+import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, filenameMemo, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
 import Ecluse.Core.Security (defaultLimits)
@@ -41,6 +41,7 @@ import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
+import Ecluse.Test.Registry.PyPI.Project (readThrough)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -90,7 +91,7 @@ pypiBench =
         , ebUpstream = pypiCaptureUpstream
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
-        , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
+        , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         , ebRead = captureManifest (adapterMetadata pypiAdapter) pypiCaptureUpstream
         , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata pypiAdapter) pypiCaptureUpstream name version
@@ -108,6 +109,10 @@ pypiBench =
             , RouteScaling "valid filename separators" (\count -> distribution ("requests" <> T.replicate (fromIntegral count) "_" <> "1.tar.gz"))
             ]
         }
+
+-- The release keys the files name, in the order met, read through the memo a full read keeps.
+pypiReleaseKeys :: PackageName -> [IndexFile] -> [Text]
+pypiReleaseKeys name = ordNub . mapMaybe (fmap fcVersionKey) . snd . readThrough readCoordinate (filenameMemo name) . map ifFilename
 
 readDocument :: (Value -> CachedDoc) -> ByteString -> Either Text CachedDoc
 readDocument inject = fmap inject . first toText . eitherDecodeStrict

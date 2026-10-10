@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The json-stream field parser that Simple-index reads ran before the token walk, kept as the
-reference that "Ecluse.Core.Registry.PyPI.Reader" must match. Hash names keep their own keys here,
-which leaves every value equal.
+reference that "Ecluse.Core.Registry.PyPI.Reader" must match. Member and hash names keep their own
+keys here and each file starts its own filename memo, which leaves every value equal.
 -}
 module Ecluse.Test.Registry.PyPI.Streaming (pypiFields) where
 
@@ -12,8 +12,9 @@ import Data.Aeson (Value (Array, Null, String))
 import Data.Aeson.Key qualified as Key
 import Data.JsonStream.Parser qualified as J
 
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.JsonStream (everyMember, namedMembers, retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
-import Ecluse.Core.Registry.PyPI.Project (FileProject, fileProject)
+import Ecluse.Core.Registry.PyPI.Project (filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected)
 
 -- | Read supported fields in any member order. Empty first containers still claim their keys.
@@ -46,7 +47,7 @@ pypiFields depth mode
         | depth <= 2 = Nothing <$ retainedValue 0
         | otherwise = case mode of
             FullRead -> Just <$> retainedObjectOr Null fileFields
-            SelectedRead name wanted -> selectedFile (depth - 3) (fileProject name) wanted
+            SelectedRead name wanted -> selectedFile (depth - 3) name wanted
     versions = case mode of
         SelectedRead{} -> mempty
         FullRead ->
@@ -67,10 +68,11 @@ scalar budget
 isFileScalar :: Text -> Bool
 isFileScalar key = key `elem` fileScalars
 
-selectedFile :: Int -> FileProject -> Text -> J.Parser (Maybe Value)
-selectedFile budget project wanted = finishSelected <$> J.foldI (collectSelected project wanted) initial (J.objectKeyValues field)
+selectedFile :: Int -> PackageName -> Text -> J.Parser (Maybe Value)
+selectedFile budget name wanted = finishSelected . fst <$> J.foldI collect initial (J.objectKeyValues field)
   where
-    initial = CandidateFile False [] Nothing False
+    initial = (CandidateFile False [] Nothing False, filenameMemo name)
+    collect (file, memo) = collectSelected wanted memo file
     field "hashes"
         | budget <= 0 = HashesValue <$> retainedValue 0
         | otherwise =

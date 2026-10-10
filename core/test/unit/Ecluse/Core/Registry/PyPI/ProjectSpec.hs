@@ -7,17 +7,18 @@ and allocation growth regressions.
 -}
 module Ecluse.Core.Registry.PyPI.ProjectSpec (spec) where
 
-import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Aeson (Value (Array, String), object, toJSON, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Conc (getAllocationCounter)
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 import UnliftIO (evaluate)
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (
     Artifact (..),
     Availability (Available, Yanked),
@@ -36,23 +37,26 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.PyPI.Project (
     DistributionKind (Sdist, Wheel),
     FileCoordinate (..),
+    FilenameMemo,
+    fcVersionKey,
     fileCoordinate,
-    fileProject,
-    fileVersionKey,
     filenameMemo,
     isCanonicalName,
     projectName,
     readCoordinate,
+    readLatestCoordinate,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Json (encodeStrict)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version.Token (withinVersionLength)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, pypiCorpusPackages)
+import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
-import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue, readThrough)
+import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 import Ecluse.Test.Version (genPyPI)
 
 spec :: Spec
@@ -61,6 +65,7 @@ spec = do
     canonicalNameSpec
     coordinateSpec
     memoSpec
+    captureSpec
     allocationSpec
     projectionSpec
     versionFoldSpec
@@ -107,32 +112,32 @@ coordinateSpec :: Spec
 coordinateSpec = describe "fileCoordinate" $ do
     it "reads a wheel's release" $
         fileCoordinate requestsName "requests-2.34.2-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
+            `shouldBe` Just (coordinate "2.34.2" Wheel)
 
     it "reads a wheel carrying a build tag" $
         fileCoordinate requestsName "requests-2.34.2-1-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
+            `shouldBe` Just (coordinate "2.34.2" Wheel)
 
     it "cross-normalises a wheel's underscored name onto the PEP 503 canonical key" $
         fileCoordinate azureStorageBlob "azure_storage_blob-12.14.0-py3-none-any.whl"
-            `shouldBe` Just (FileCoordinate "12.14" Wheel)
+            `shouldBe` Just (coordinate "12.14" Wheel)
 
     it "reads a source distribution's release" $
         fileCoordinate requestsName "requests-2.34.2.tar.gz"
-            `shouldBe` Just (FileCoordinate "2.34.2" Sdist)
+            `shouldBe` Just (coordinate "2.34.2" Sdist)
 
     it "takes the longest name part, so a project whose name carries a separator resolves" $
         fileCoordinate azureStorageBlob "azure-storage-blob-12.14.0.tar.gz"
-            `shouldBe` Just (FileCoordinate "12.14" Sdist)
+            `shouldBe` Just (coordinate "12.14" Sdist)
 
     it "reads a source distribution whose version carries a separator" $
         fileCoordinate requestsName "requests-2.34.2-1.tar.gz"
-            `shouldBe` Just (FileCoordinate "2.34.2.post1" Sdist)
+            `shouldBe` Just (coordinate "2.34.2.post1" Sdist)
 
     it "preserves mixed separators, ignored edge runs, and every supported archive" $
         forM_ [".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz"] $ \suffix ->
             fileCoordinate azureStorageBlob ("__Azure..Storage_-Blob---12.14.0" <> suffix)
-                `shouldBe` Just (FileCoordinate "12.14" Sdist)
+                `shouldBe` Just (coordinate "12.14" Sdist)
 
     it "rejects missing boundaries and incomplete project names" $
         forM_ ["azure-storage-blob.tar.gz", "azure-storage-.tar.gz", "azure-storage-other-1.tar.gz"] $ \file ->
@@ -140,11 +145,11 @@ coordinateSpec = describe "fileCoordinate" $ do
 
     it "retains the canonicaliser's empty-name behaviour for domain values outside the project grammar" $ do
         let emptyName = unscopedPyPI ""
-        fileCoordinate emptyName "___1.tar.gz" `shouldBe` Just (FileCoordinate "1" Sdist)
+        fileCoordinate emptyName "___1.tar.gz" `shouldBe` Just (coordinate "1" Sdist)
         fileCoordinate emptyName "1.tar.gz" `shouldBe` Nothing
 
     it "canonicalises the release, so two spellings of it key alike" $
-        fileVersionKey (fileProject requestsName) "requests-2.34.tar.gz" `shouldBe` fileVersionKey (fileProject requestsName) "requests-2.34.0.tar.gz"
+        fileCoordinate requestsName "requests-2.34.tar.gz" `shouldBe` fileCoordinate requestsName "requests-2.34.0.tar.gz"
 
     it "refuses a file naming another project, which on the artifact route is path confusion" $
         fileCoordinate requestsName "urllib3-2.0.0.tar.gz" `shouldBe` Nothing
@@ -162,35 +167,115 @@ coordinateSpec = describe "fileCoordinate" $ do
         fileCoordinate requestsName "requests-2.34.2-py3.whl" `shouldBe` Nothing
 
 memoSpec :: Spec
-memoSpec = describe "filenameMemo" $ do
-    it "reads each filename as fileCoordinate does, whatever the memo remembered before" $
-        hedgehog $ do
-            files <- forAll (Gen.list (Range.linear 0 60) genFilename)
-            let remembered = snd (mapAccumL (\memo file -> swap (readCoordinate memo file)) (filenameMemo azureStorageBlob) files)
-            remembered === map (fileCoordinate azureStorageBlob) files
+memoSpec = describe "filenameMemo" $
+    for_ memoReads $ \(readerName, readName) -> describe readerName $ do
+        it "reads each filename as fileCoordinate does, whatever the memo remembered before" $
+            hedgehog $ do
+                files <- forAll (Gen.list (Range.linear 0 60) genFilename)
+                snd (readThrough readName (filenameMemo azureStorageBlob) files) === map (fileCoordinate azureStorageBlob) files
 
-    it "reads a release key as fileCoordinate does" $
-        hedgehog $ do
-            file <- forAll genFilename
-            fileVersionKey (fileProject azureStorageBlob) file === (fcVersionKey <$> fileCoordinate azureStorageBlob file)
+        it "keeps each file's distribution kind when two files share a version text" $ do
+            let (wheel, memo) = readName (filenameMemo requestsName) "requests-2.34.2-py3-none-any.whl"
+            wheel `shouldBe` Just (coordinate "2.34.2" Wheel)
+            fst (readName memo "requests-2.34.2.tar.gz") `shouldBe` Just (coordinate "2.34.2" Sdist)
 
-    it "keeps each file's distribution kind when two files share a version text" $ do
-        let (wheel, memo) = readCoordinate (filenameMemo requestsName) "requests-2.34.2-py3-none-any.whl"
-        wheel `shouldBe` Just (FileCoordinate "2.34.2" Wheel)
-        fst (readCoordinate memo "requests-2.34.2.tar.gz") `shouldBe` Just (FileCoordinate "2.34.2" Sdist)
+        describe "properties" $
+            modifyMaxSuccess (const 5000) $
+                it "holds for each file name the version that parsing its canonical key builds" $
+                    hedgehog $ do
+                        earlier <- forAll (Gen.list (Range.linear 0 6) genNamedFile)
+                        (spelling, file) <- forAll (Gen.frequency ((2, genNamedFile) : [(1, Gen.element earlier) | not (null earlier)]))
+                        let (memo, _) = readThrough readName (filenameMemo azureStorageBlob) (map snd earlier)
+                            held = fst (readName memo file)
+                            key = maybe "" fcVersionKey held
+                            mainPart = T.takeWhile (/= '+') key
+                        cover 15 "a wheel" (fmap fcKind held == Just Wheel)
+                        cover 15 "a source distribution" (fmap fcKind held == Just Sdist)
+                        cover 15 "a name with no coordinate" (isNothing held)
+                        cover 10 "a canonical key that differs from the name's version text" (isJust held && key /= spelling)
+                        cover 8 "a version text the read met earlier" (isJust held && spelling `elem` map fst earlier)
+                        cover 3 "an epoch" (T.any (== '!') key)
+                        cover 5 "a pre-release" (T.any (`elem` ['a', 'b', 'c']) mainPart)
+                        cover 5 "a post-release" (".post" `T.isInfixOf` key)
+                        cover 5 "a dev release" (".dev" `T.isInfixOf` key)
+                        cover 5 "a local part" (T.any (== '+') key)
+                        cover 1 "a canonical key past the length bound" (isJust held && not (withinVersionLength key))
+                        cover 1 "a version text past the length bound" (not (withinVersionLength spelling))
+                        mismatched [held] === []
 
--- Repeated version spellings make later files reuse a remembered version text.
+captureSpec :: Spec
+captureSpec = describe "on the PyPI captures" $
+    for_ ((,) <$> memoReads <*> pypiCorpusPackages) $ \((readerName, readName), package) ->
+        it (readerName <> " holds for every file name of " <> cpPath package <> " the version that parsing its canonical key builds") $ do
+            document <- readFileBS (cpPath package) >>= decodeJsonOrFail
+            let names = [name | Just (Array files) <- [fieldAt "files" document], file <- toList files, Just (String name) <- [fieldAt "filename" file]]
+                held = snd (readThrough readName (filenameMemo (cpPackage package)) names)
+            Just (length names, length (catMaybes held)) `shouldBe` Map.lookup (cpName package) captureNames
+            take 5 (mismatched held) `shouldBe` []
+            take 5 [name | (name, found) <- zip names held, found /= fileCoordinate (cpPackage package) name] `shouldBe` []
+
+-- The file names each capture lists, and how many of them name a release of its project.
+captureNames :: Map Text (Int, Int)
+captureNames = Map.fromList [("boto3", (4242, 4242)), ("numpy", (4232, 4198)), ("requests", (244, 243))]
+
+type MemoRead = FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
+
+-- A full read holds every version text, and a selected read only the latest.
+memoReads :: [(String, MemoRead)]
+memoReads = [("readCoordinate", readCoordinate), ("readLatestCoordinate", readLatestCoordinate)]
+
+-- The coordinates whose version is not the one 'mkVersion' builds from their canonical key.
+mismatched :: [Maybe FileCoordinate] -> [(Version, Version)]
+mismatched held = [(version, rebuilt) | Just found <- held, let version = fcVersion found, let rebuilt = mkVersion PyPI (fcVersionKey found), version /= rebuilt]
+
+coordinate :: Text -> DistributionKind -> FileCoordinate
+coordinate = FileCoordinate . mkVersion PyPI
+
 genFilename :: Gen Text
-genFilename = do
-    project <- Gen.element ["azure-storage-blob", "azure_storage_blob", "Azure.Storage.Blob", "azure-storage", "requests", ""]
-    version <- Gen.choice [Gen.element ["1.0", "1.0.0", "1.0RC1", "1.0rc1", "v1.0", "1.0-1", "2!1.0", "1.0+Local.7", "nightly", "", "1..0"], genPyPI]
-    Gen.element
-        [ project <> "-" <> version <> "-py3-none-any.whl"
-        , project <> "-" <> version <> "-1-py3-none-any.whl"
-        , project <> "-" <> version <> ".tar.gz"
-        , project <> "-" <> version <> ".zip"
-        , project <> "-" <> version <> ".egg"
-        ]
+genFilename = snd <$> genNamedFile
+
+-- A version text and a file name around it. Repeated spellings make later files reuse a remembered text.
+genNamedFile :: Gen (Text, Text)
+genNamedFile = do
+    project <- Gen.frequency [(9, Gen.element ["azure-storage-blob", "azure_storage_blob", "Azure.Storage.Blob"]), (1, Gen.element ["azure-storage", "requests", ""])]
+    version <-
+        Gen.frequency
+            [ (2, Gen.element ["1.0", "1.0.0", "1.0RC1", "1.0rc1", "v1.0", "1.0-1", "2!1.0", "1.0+Local.7", "nightly", "", "1..0"])
+            , (2, genPyPI)
+            , (4, genSpelling)
+            , (2, genSpellingAtBound)
+            ]
+    suffix <- Gen.frequency [(4, pure "-py3-none-any.whl"), (2, pure "-1-py3-none-any.whl"), (3, pure ".tar.gz"), (2, pure ".zip"), (1, pure ".egg")]
+    pure (version, project <> "-" <> version <> suffix)
+
+-- A version in spellings PEP 440 normalises: a prefix, an epoch, zeros, each label and separator.
+genSpelling :: Gen Text
+genSpelling = do
+    prefix <- Gen.element ["", "", "", "v", "V"]
+    epoch <- sometimes ((<> "!") <$> number)
+    release <- T.intercalate "." <$> Gen.list (Range.linear 1 4) number
+    pre <- sometimes (labelled ["a", "b", "c", "rc", "alpha", "beta", "pre", "preview", "RC", "Alpha"])
+    post <- sometimes (Gen.choice [labelled ["post", "rev", "r", "POST"], ("-" <>) <$> number])
+    dev <- sometimes (labelled ["dev", "DEV"])
+    localPart <- sometimes (("+" <>) <$> (T.intercalate <$> Gen.element separators <*> Gen.list (Range.linear 1 3) (Gen.element ["ubuntu", "Local", "7", "07", "cp39"])))
+    pure (prefix <> epoch <> release <> pre <> post <> dev <> localPart)
+  where
+    sometimes part = Gen.frequency [(2, pure ""), (1, part)]
+    labelled labels = do
+        leading <- Gen.element ("" : separators)
+        label <- Gen.element labels
+        trailing <- Gen.element ("" : separators)
+        count <- Gen.frequency [(3, number), (1, pure "")]
+        pure (leading <> label <> trailing <> count)
+    number = Gen.element ["0", "1", "2", "10", "01", "007"]
+    separators = [".", "-", "_"]
+
+-- A version within a few characters of the 1024-character bound. Most suffixes grow in the canonical key.
+genSpellingAtBound :: Gen Text
+genSpellingAtBound = do
+    suffix <- Gen.element ["a", "rc", "c1", ".post", "-1", "dev", "", ".dev0"]
+    spare <- Gen.element [-1, 0, 0, 0, 1, 3]
+    pure (T.replicate (1024 - T.length suffix - spare) "1" <> suffix)
 
 allocationSpec :: Spec
 allocationSpec = describe "filename allocation growth" $

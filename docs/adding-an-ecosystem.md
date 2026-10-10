@@ -168,8 +168,14 @@ upstream sent, so upstream content would set a permanent memory floor.
 Some values cost work to parse, and many releases repeat them. Parse each distinct value once per
 read, and keep the results only for that read, for the same reason the intern table ends with it.
 PyPI's `FilenameMemo` in `Ecluse.Core.Registry.PyPI.Project` parses each distinct version text
-once, so the files of one release share one parse. A version requirement that many releases repeat
-is a candidate for the same treatment.
+once, so the files of one release share one parse. It holds the parsed version, so the projection
+does not parse the canonical spelling again. A version requirement that many releases repeat is a
+candidate for the same treatment.
+
+A read that drops most of what it parses must not let the memo grow with what it drops. PyPI's
+selected read holds only the latest version text (`readLatestCoordinate`). PyPI lists the files of
+one release together, so that read still parses once for each release, and it holds nothing for
+the files it rejects.
 
 ### 6. Derive per-document values once, and check each artifact once
 
@@ -207,7 +213,8 @@ release would cost it a full read.
   too, and still counts each skipped release toward the version cap.
 - PyPI's reference folds every retained member of every file, so PyPI's `selectedFile` reads each
   file's retained members in `Keep` mode. A file the name rejects then never enters the intern
-  table.
+  table. `listedMember` gives each listed member the key its shape holds, so the files a selected
+  read keeps share their keys without the table.
 
 ### 8. Keep only what a reader uses in the typed view
 

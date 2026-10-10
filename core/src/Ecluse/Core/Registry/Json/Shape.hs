@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Json.Shape (
     namedMembers,
     everyMember,
     knownMembers,
+    listedMember,
     Mode (..),
     MemberKey (..),
     Build (..),
@@ -65,6 +66,11 @@ everyMember = Members mempty . Just
 -- | Retain every member with one shape, sharing the key of each listed name.
 knownMembers :: [Text] -> Shape -> Members
 knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, (Key.fromText name, shape)) | name <- names]) (Just shape)
+
+-- | A listed name's key and shape. Every member a read keeps as read under that name holds this one key.
+listedMember :: Members -> Name -> Maybe (Key.Key, Shape)
+listedMember (Members named _) name = HashMap.lookup (nameBytes name) named
+{-# INLINE listedMember #-}
 
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
 data Mode = Share | Keep
@@ -263,7 +269,7 @@ string build mode table next name after = case mode of
 -- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
 -- then dropped, and nothing it holds enters the table.
 readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
-readObject build open (Members named other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
+readObject build open members@(Members _ other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
     loop table !fields tokens = case tokens of
         PartialResult (ObjectEnd _) rest -> closeObject build fields (\built -> next built table rest)
@@ -271,7 +277,7 @@ readObject build open (Members named other) mode table0 tokens0 next = openObjec
         _ -> withElement tokens $ \element rest -> case element of
             ObjectEnd _ -> closeObject build fields (\built -> next built table rest)
             _ -> memberName element rest (member table fields) (loop table fields)
-    member table fields name rest = case HashMap.lookup (nameBytes name) named of
+    member table fields name rest = case listedMember members name of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
         Nothing -> case other of
             Just shape -> value table fields name Nothing shape rest

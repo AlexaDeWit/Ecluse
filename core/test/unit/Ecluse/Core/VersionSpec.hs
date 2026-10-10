@@ -73,9 +73,8 @@ spec = do
             mustParse PyPI "1.0."
 
         describe "PEP 440 'r' post-release spelling" $ do
-            -- PEP 440 spells the post-release label post, rev, or r, and packaging normalises all
-            -- three to post. A rejection would abstain from ordering and let selectLatest repoint
-            -- dist-tags.latest past the version.
+            -- Rejecting PEP 440's r spelling would abstain from ordering and let
+            -- selectLatest move dist-tags.latest past that version.
             mustParse PyPI "1.0.r1"
             mustParse PyPI "1.0r1"
             mustParse PyPI "1.0-r1"
@@ -98,9 +97,8 @@ spec = do
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
             mustParse RubyGems ("1." <> T.replicate 100 "9")
-            -- The @versions@ library keys npm numeric components as fixed-width words, not
-            -- 'Integer'. Beyond the shared length bound the parser refuses, so a silent overflow (a
-            -- 25-digit major wrapping mod 2^64) cannot key a huge version as a small one.
+            -- npm numeric keys use fixed-width words. Refuse oversized components
+            -- before overflow can order a huge version as a small one.
             mustReject Npm ("1.0." <> T.replicate 5000 "9")
             mustReject Npm (T.replicate 25 "9" <> ".0.0")
             mustParse Npm "1.2.3"
@@ -189,9 +187,8 @@ spec = do
                         -- generator gap surfaces as totality, not noise.
                         H.assert (isJust (versionKey x))
                         H.assert (isJust (versionKey y))
-                        -- Non-vacuity: 'versionPair' guarantees a healthy fraction
-                        -- of equal pairs (EQ), and its independent draws supply
-                        -- LT/GT, so all three orderings stay populated.
+                        -- Equal pairs and independent draws must exercise all three
+                        -- orderings so the property cannot pass vacuously.
                         H.cover 1 "LT" (compareVersions x y == Just LT)
                         H.cover 1 "EQ" (compareVersions x y == Just EQ)
                         H.cover 1 "GT" (compareVersions x y == Just GT)
@@ -224,17 +221,19 @@ spec = do
                         fmap isStable (rightToMaybe (parseVersionKey eco raw)) `shouldBe` Just expected
 
     describe "canonicalPep440" $ do
-        it "spells a release without its trailing zeros" $
-            canonicalPep440 "1.0.0" `shouldBe` Just "1"
+        let spelling = fmap renderVersion . canonicalPep440
 
-        it "gives two spellings of one release the same key" $
+        it "spells a release without its trailing zeros" $
+            spelling "1.0.0" `shouldBe` Just "1"
+
+        it "gives two spellings of one release the same version" $
             canonicalPep440 "1.0" `shouldBe` canonicalPep440 "1.0.0"
 
         it "normalises an unnormalised prerelease, post-release, dev-release and local segment" $
-            canonicalPep440 "1!2.0ALPHA1-1.dev2+Ubuntu.7" `shouldBe` Just "1!2a1.post1.dev2+ubuntu.7"
+            spelling "1!2.0ALPHA1-1.dev2+Ubuntu.7" `shouldBe` Just "1!2a1.post1.dev2+ubuntu.7"
 
         it "still spells a release whose every segment is zero" $
-            canonicalPep440 "0.0" `shouldBe` Just "0"
+            spelling "0.0" `shouldBe` Just "0"
 
         it "has no spelling for text that is not PEP 440" $
             canonicalPep440 "totally bogus" `shouldBe` Nothing
@@ -244,8 +243,20 @@ spec = do
             -- spelling and the version it came from carry one ordering key.
             hedgehog $ do
                 v <- forAll genPyPI
-                (canonicalPep440 v >>= rightToMaybe . parseVersionKey PyPI)
+                (spelling v >>= rightToMaybe . parseVersionKey PyPI)
                     === rightToMaybe (parseVersionKey PyPI v)
+
+        it "is the version mkVersion builds from its spelling" $
+            for_ ["1.0.0", "1!2.0ALPHA1-1.dev2+Ubuntu.7", "0.0", "v1.0rc"] $ \raw ->
+                canonicalPep440 raw `shouldBe` (mkVersion PyPI <$> spelling raw)
+
+        it "carries no key when its spelling passes the length bound, as mkVersion reads none" $ do
+            -- The text is at the bound, and its spelling gains the implicit pre-release number.
+            let atBound = T.replicate 1023 "1" <> "a"
+            spelling atBound `shouldBe` Just (atBound <> "0")
+            fmap versionKey (canonicalPep440 atBound) `shouldBe` Just Nothing
+            canonicalPep440 atBound `shouldBe` (mkVersion PyPI <$> spelling atBound)
+            versionKey (mkVersion PyPI atBound) `shouldSatisfy` isJust
 
     describe "selectLatest" $ do
         -- All survivors here are npm versions. selectLatest is ecosystem-agnostic: it calls
