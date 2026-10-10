@@ -67,7 +67,7 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Log (runJsonLog)
 import Ecluse.Test.Package (
-    artifactWith,
+    artifactsWith,
     defaultMinIntegrity,
     detailsWith,
     leftpadName,
@@ -283,7 +283,7 @@ genIntegrityInfo = do
     keys <- Gen.subsequence ["0.9.0", "1.0.0", "1.5.0", "2.0.0"]
     versions <- forM keys $ \key -> do
         digests <- Gen.nonEmpty fileCount (Gen.subsequence [unsafeHash SHA1 validSha1, unsafeHash SHA256 validSha256])
-        pure (key, (detailsWith name (versionOf key) []){pkgArtifacts = NE.zipWith fileWith (0 :| [1 ..]) digests})
+        pure (key, (detailsWith name (versionOf key) []){pkgArtifacts = artifactsWith digests})
     tagged <- Gen.subsequence keys
     pure
         PackageInfo
@@ -292,6 +292,3 @@ genIntegrityInfo = do
             , infoDistTags = Map.fromList (zip ["latest", "next", "beta", "legacy"] (map versionOf tagged))
             , infoInvalidEntries = []
             }
-  where
-    fileWith :: Int -> [Hash] -> Artifact
-    fileWith position hashes = (artifactWith hashes){artFilename = "file-" <> show position}

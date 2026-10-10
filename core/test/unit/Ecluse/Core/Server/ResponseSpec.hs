@@ -20,7 +20,7 @@ import Ecluse.Core.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (evalRules, prepare, renderDecision)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext (EvalContext),
@@ -250,6 +250,8 @@ spec = do
                         (Reject mine, Reject theirs) -> do
                             Just (rejectionReason mine) === refusalReason decision
                             rejectionReason theirs === rejectionReason mine
+                            rejectionMessage mine === renderDecision (completeEvidence version) decision
+                            rejectionMessage theirs === renderDecision (completeEvidence other) decision
                             T.stripPrefix (subject version) (rejectionMessage mine) === T.stripPrefix (subject other) (rejectionMessage theirs)
                             assert (subject version `T.isPrefixOf` rejectionMessage mine)
                         outcomes -> annotateShow outcomes >> failure

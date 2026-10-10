@@ -232,7 +232,7 @@ artifactCountSpec = describe "checkArtifactCount" $ do
                 H.cover 15 "past the ceiling" (sum fanOuts > cap)
                 H.cover 15 "one artifact a version, the npm shape" (all (== 1) fanOuts)
                 H.cover 15 "several artifacts in a version, the PyPI shape" (any (> 1) fanOuts)
-                artifactCeiling capped document === referenceArtifactCeiling capped document
+                void (checkDocumentArtifacts capped document) === referenceArtifactCeiling capped document
 
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
@@ -348,10 +348,6 @@ nestArray :: Int -> Value
 nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
-
--- The production artifact ceiling over a typed document.
-artifactCeiling :: Limits -> PackageInfo -> Either LimitError ()
-artifactCeiling limits document = checkArtifactCount limits (sum (length . pkgArtifacts <$> infoVersions document))
 
 -- The artifact ceiling as it read a typed document, held as the reference for the production ceiling.
 referenceArtifactCeiling :: Limits -> PackageInfo -> Either LimitError ()

@@ -140,18 +140,16 @@ partitionByFloor :: (IntegrityFloor floor) => floor -> (file -> [Hash]) -> NonEm
 {-# INLINE partitionByFloor #-}
 partitionByFloor flr digestsOf files = case nonEmpty (NE.filter (digestsMeetFloor flr . digestsOf) files) of
     Just survivors -> Right survivors
-    Nothing -> Left (integrityOf False (all (null . digestsOf) files))
+    Nothing
+        | all (null . digestsOf) files -> Left NoIntegrity
+        | otherwise -> Left BelowFloor
 
 digestsMeetFloor :: (IntegrityFloor floor) => floor -> [Hash] -> Bool
 digestsMeetFloor flr = any (maybe False (meetsFloor flr) . assertedAlg)
 
 -- | Read a set of digests against a floor: one file's, or every file's of a version together.
 classifyDigests :: (IntegrityFloor floor) => floor -> [Hash] -> VersionIntegrity
-classifyDigests flr digests = integrityOf (digestsMeetFloor flr digests) (null digests)
-
--- Whether a digest clears the floor, then whether there is no digest at all.
-integrityOf :: Bool -> Bool -> VersionIntegrity
-integrityOf clears none
-    | clears = MeetsFloor
-    | none = NoIntegrity
+classifyDigests flr digests
+    | digestsMeetFloor flr digests = MeetsFloor
+    | null digests = NoIntegrity
     | otherwise = BelowFloor

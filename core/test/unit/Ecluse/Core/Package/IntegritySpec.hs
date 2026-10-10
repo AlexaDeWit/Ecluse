@@ -39,6 +39,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Test.Package (
     artifactWith,
+    artifactsWith,
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
     hexSha384Of,
@@ -292,12 +293,9 @@ genFloor = Gen.element (map PublicFloor (rights (map mkMinIntegrity universe)) <
 
 -- One to four files of a version, each under its own name with up to three digests.
 genFiles :: Gen (NonEmpty Artifact)
-genFiles = NE.zipWith named (0 :| [1 ..]) <$> Gen.nonEmpty (Range.constant 1 4) (Gen.list (Range.constant 0 3) (Gen.element digestPool))
-  where
-    named :: Int -> [Hash] -> Artifact
-    named position hs = (artifactWith hs){artFilename = "file-" <> show position}
+genFiles = artifactsWith <$> Gen.nonEmpty (Range.constant 1 4) (Gen.list (Range.constant 0 3) (Gen.element digestPool))
 
--- One digest of each algorithm, and an SRI of each algorithm an SRI names.
+-- One digest of each algorithm, and an SRI of each prefix 'mkHash' accepts. It refuses any other.
 digestPool :: [Hash]
 digestPool =
     [ unsafeHash MD5 validMd5
