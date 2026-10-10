@@ -32,6 +32,7 @@ import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
 import Ecluse.Core.Registry.Json.Packed (encodedLength, quote, varintSize, writeEncoded, writeVarint)
+import Ecluse.Core.Text (writeDigits)
 
 -- | The buffer and the offset of its next byte.
 data Scratch st = Scratch !(MutVar st (MutableByteArray st)) !(PrimVar st Int)
@@ -121,12 +122,6 @@ putDecimal scratch n = putAt scratch len $ \buffer at -> do
     pure (at + len)
   where
     len = decimalLength n
-
--- Write the digits of a magnitude backwards from the offset.
-writeDigits :: MutableByteArray st -> Int -> Word -> ST st ()
-writeDigits buffer !at !value = do
-    writeByteArray buffer at (0x30 + fromIntegral (value `rem` 10) :: Word8)
-    if value >= 10 then writeDigits buffer (at - 1) (value `quot` 10) else pass
 
 magnitude :: Int -> Word
 magnitude n = if n < 0 then fromIntegral (negate n) else fromIntegral n

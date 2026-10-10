@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Registered performance inputs for the shipped registry adapters.
-Corpus loading validates the native format before a harness starts measuring work.
+Corpus loading reads each capture through the production read driver before a harness measures work.
 -}
 module Ecluse.Test.EcosystemBench (
     module Ecluse.Test.EcosystemBench.Types,
@@ -21,6 +21,7 @@ import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Metadata (Manifest (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -29,15 +30,17 @@ import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmVersion, readNpmHeld)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, captureManifest, captureVersion)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIVersion, readPyPIHeld, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -52,11 +55,11 @@ loadEcosystem ecosystem packages = do
   where
     loadOne package = do
         raw <- readFileBS (cpPath package)
-        (info, document) <- either (fail . failure package . show) pure (ebProject ecosystem (cpPackage package) raw)
-        when (Map.null (infoVersions info)) (fail (failure package "projected to zero versions"))
+        manifest <- ebRead ecosystem (cpPackage package) (captureChunks raw) >>= either (fail . failure package . show) pure
+        when (Map.null (infoVersions (manifestInfo manifest))) (fail (failure package "projected to zero versions"))
         decoded <- either (fail . failure package . toString) pure (ebDecode ecosystem (cpPackage package) raw)
         when (null decoded) (fail (failure package "decoded to zero versions"))
-        pure (package, raw, info, document)
+        pure (package, raw, manifestInfo manifest, Snapshot (manifestDigest manifest) (manifestRaw manifest))
     failure package reason = "corpus capture " <> toString (cpName package) <> ": " <> reason
 
 npmBench :: EcosystemBench
@@ -69,8 +72,8 @@ npmBench =
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . (\body -> RegistryResponse 200 (BS.length body) body)
         , ebProject = projectNpmFull defaultLimits
-        , ebRead = readNpmHeld defaultLimits
-        , ebSelective = \name version -> fmap readDetails . projectNpmVersion defaultLimits name version
+        , ebRead = captureManifest (adapterMetadata npmAdapter) npmCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata npmAdapter) npmCaptureUpstream name version
         , ebReadDocument = readDocument (fst npmCached)
         , ebNestingDepth = nestingDepth (snd npmCached)
         , ebMetadata = adapterMetadata npmAdapter
@@ -89,8 +92,8 @@ pypiBench =
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey (fileProject name) . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
-        , ebRead = readPyPIHeld defaultLimits
-        , ebSelective = projectPyPIVersion defaultLimits
+        , ebRead = captureManifest (adapterMetadata pypiAdapter) pypiCaptureUpstream
+        , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata pypiAdapter) pypiCaptureUpstream name version
         , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)
         , ebNestingDepth = nestingDepth (fmap simpleValue . snd pypiSimpleCached)
         , ebMetadata = adapterMetadata pypiAdapter
