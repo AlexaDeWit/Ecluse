@@ -1514,6 +1514,7 @@ benchmark ecluse-bench
     Ecluse.Core.AdvisoryRulesBench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
+    Ecluse.Core.DigestBench
     Ecluse.Core.MergeBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
