@@ -55,7 +55,7 @@ import Ecluse.Test.Json (encodeStrict, fieldAt)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
-import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
+import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue, readThrough)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 import Ecluse.Test.Version (genPyPI)
 
@@ -212,6 +212,7 @@ captureSpec = describe "on the PyPI captures" $
                 held = snd (readThrough readName (filenameMemo (cpPackage package)) names)
             Just (length names, length (catMaybes held)) `shouldBe` Map.lookup (cpName package) captureNames
             take 5 (mismatched held) `shouldBe` []
+            take 5 [name | (name, found) <- zip names held, found /= fileCoordinate (cpPackage package) name] `shouldBe` []
 
 -- The file names each capture lists, and how many of them name a release of its project.
 captureNames :: Map Text (Int, Int)
@@ -226,9 +227,6 @@ memoReads = [("readCoordinate", readCoordinate), ("readLatestCoordinate", readLa
 -- The coordinates whose version is not the one 'mkVersion' builds from their canonical key.
 mismatched :: [Maybe FileCoordinate] -> [(Version, Version)]
 mismatched held = [(version, rebuilt) | Just found <- held, let version = fcVersion found, let rebuilt = mkVersion PyPI (fcVersionKey found), version /= rebuilt]
-
-readThrough :: MemoRead -> FilenameMemo -> [Text] -> (FilenameMemo, [Maybe FileCoordinate])
-readThrough readName = mapAccumL (\memo file -> swap (readName memo file))
 
 coordinate :: Text -> DistributionKind -> FileCoordinate
 coordinate = FileCoordinate . mkVersion PyPI

@@ -41,6 +41,7 @@ import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
+import Ecluse.Test.Registry.PyPI.Project (readThrough)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (readDetails)
 
@@ -111,7 +112,7 @@ pypiBench =
 
 -- The release keys the files name, in the order met, read through the memo a full read keeps.
 pypiReleaseKeys :: PackageName -> [IndexFile] -> [Text]
-pypiReleaseKeys name = ordNub . mapMaybe (fmap fcVersionKey) . snd . mapAccumL (\memo file -> swap (readCoordinate memo (ifFilename file))) (filenameMemo name)
+pypiReleaseKeys name = ordNub . mapMaybe (fmap fcVersionKey) . snd . readThrough readCoordinate (filenameMemo name) . map ifFilename
 
 readDocument :: (Value -> CachedDoc) -> ByteString -> Either Text CachedDoc
 readDocument inject = fmap inject . first toText . eitherDecodeStrict
