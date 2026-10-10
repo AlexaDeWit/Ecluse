@@ -7,27 +7,31 @@ module Ecluse.Core.Package.MergeSpec (spec) where
 
 import Data.Aeson (object, (.=))
 import Data.Aeson.Key qualified as Key
-import Data.List (nub)
+import Data.List (lookup, nub)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
+import GHC.Conc (getAllocationCounter)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
+import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyArtifacts)
+import Ecluse.Core.Package.Hash (canonicalHashValue)
+import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), assertedAlg, classifyArtifacts)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
 
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
+import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash, validSha256, validSha256Sri)
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
@@ -52,6 +56,11 @@ artifactWith hs =
         , artUrl = "https://example.test/thing.tgz"
         }
 
+-- A file under another name, for a version that carries more than the fixture tarball.
+wheelWith :: Text -> [Hash] -> Artifact
+wheelWith fileName hs =
+    (artifactWith hs){artFilename = fileName, artUrl = "https://example.test/" <> fileName}
+
 detailsWith :: Text -> [Hash] -> PackageDetails
 detailsWith rawVer hs =
     (Package.sampleDetails name (mkVersion Npm rawVer))
@@ -73,6 +82,9 @@ packumentWith vs =
             (hi : _) -> Map.singleton "latest" (mkVersion Npm hi)
         , infoInvalidEntries = []
         }
+
+withArtifacts :: NonEmpty Artifact -> PackageInfo -> PackageInfo
+withArtifacts arts info = info{infoVersions = Map.map (\d -> d{pkgArtifacts = arts}) (infoVersions info)}
 
 withPublishedAt :: UTCTime -> PackageInfo -> PackageInfo
 withPublishedAt t info =
@@ -186,6 +198,147 @@ list. The empty list yields 'mempty', so the laws are tested over the identity t
 genMerge :: Gen Merge
 genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
 
+type Triples = [(Text, Maybe HashAlg, Text)]
+
+-- Each divergence as plain facts, because a spec cannot build an 'IntegrityFingerprint'.
+divergenceFacts :: MergePlan -> Set (Text, Triples, Triples)
+divergenceFacts =
+    Set.map (\d -> (divVersion d, integrityHashes (divWinning d), integrityHashes (divLosing d))) . mpDivergences
+
+-- Each version's copies in precedence order, the winner first.
+copiesByVersion :: [(Provenance, PackageInfo)] -> Map Text (NonEmpty PackageDetails)
+copiesByVersion sources =
+    fmap snd . NE.sortWith fst
+        <$> Map.fromListWith
+            (<>)
+            [ (key, one ((prov, position), details))
+            | (position, (prov, info)) <- zip [0 :: Int ..] sources
+            , (key, details) <- Map.toList (infoVersions info)
+            ]
+
+-- The divergence set from the fingerprint test and then the contradiction test alone, over every
+-- copy of a version. The merge must agree with it whatever it tests first.
+referenceDivergences :: [(Provenance, PackageInfo)] -> Set (Text, Triples, Triples)
+referenceDivergences sources =
+    Set.fromList
+        [ (key, win, lose)
+        | (key, copies@(winner :| _)) <- Map.toList (copiesByVersion sources)
+        , let win = referenceFingerprint winner
+        , candidate <- toList copies
+        , let lose = referenceFingerprint candidate
+        , lose /= win
+        , referenceContradicts winner candidate
+        ]
+
+referenceFingerprint :: PackageDetails -> Triples
+referenceFingerprint details =
+    sort [(artFilename art, assertedAlg h, spelledBody h) | art <- toList (pkgArtifacts details), h <- artHashes art]
+  where
+    spelledBody h = if hashAlg h == SRI then sriBody (hashValue h) else hashValue h
+
+referenceContradicts :: PackageDetails -> PackageDetails -> Bool
+referenceContradicts a b = or (Map.intersectionWith (/=) (digests a) (digests b))
+  where
+    digests details =
+        Map.fromListWith
+            Set.union
+            [ ((artFilename art, assertedAlg h), Set.singleton (fromMaybe (hashValue h) (canonicalHashValue h)))
+            | art <- toList (pkgArtifacts details)
+            , h <- artHashes art
+            ]
+
+-- How a losing copy of a version relates to the winning one, for the coverage classes.
+data Relation = Relation
+    { relSpelledAlike :: Bool
+    -- ^ The same file names and hashes, as written and in the same order.
+    , relFingerprintsDiffer :: Bool
+    , relContradicts :: Bool
+    , relFileSetsDiffer :: Bool
+    }
+
+relations :: [(Provenance, PackageInfo)] -> [Relation]
+relations sources =
+    [ Relation
+        { relSpelledAlike = asWritten loser == asWritten winner
+        , relFingerprintsDiffer = referenceFingerprint loser /= referenceFingerprint winner
+        , relContradicts = referenceContradicts winner loser
+        , relFileSetsDiffer = fileNames loser /= fileNames winner
+        }
+    | winner :| losers <- Map.elems (copiesByVersion sources)
+    , loser <- losers
+    ]
+  where
+    asWritten = map (\art -> (artFilename art, artHashes art)) . toList . pkgArtifacts
+    fileNames = sort . map artFilename . toList . pkgArtifacts
+
+-- Text that 'mkHash' refuses, as a record update can leave it. The two share one fingerprint
+-- entry and differ in the body the merge compares.
+forgedSri, forgedHex :: Hash
+forgedSri = (unsafeHash SRI validSha256Sri){hashValue = "sha256-forged"}
+forgedHex = (unsafeHash SHA256 validSha256){hashValue = "forged"}
+
+-- One payload's digest in each spelling the merge compares.
+spellingsOf :: ByteString -> [Hash]
+spellingsOf bytes =
+    [ unsafeHash SHA1 (hexSha1Of bytes)
+    , unsafeHash SHA256 (hexSha256Of bytes)
+    , unsafeHash SHA256 (T.toUpper (hexSha256Of bytes))
+    , unsafeHash SRI (sriSha256Of bytes)
+    , unsafeHash SRI (sriSha512Of bytes)
+    ]
+
+genRelease :: Text -> Gen PackageDetails
+genRelease rawVer = do
+    files <- Gen.nonEmpty (Range.linear 1 2) genFile
+    pure (detailsWith rawVer []){pkgArtifacts = files}
+  where
+    genFile = wheelWith <$> Gen.element ["thing.tgz", "thing.whl"] <*> Gen.list (Range.linear 0 3) genHash
+    genHash = Gen.frequency [(2, Gen.element (spellingsOf "a" <> spellingsOf "b")), (1, Gen.element [forgedSri, forgedHex])]
+
+-- Another source's copy of a release: the same, reordered, with its forged digests respelled, with
+-- each digest replaced by that of other bytes, or unrelated.
+genCopy :: (Text, PackageDetails) -> Gen (Text, PackageDetails)
+genCopy (key, release) =
+    (,) key
+        <$> Gen.frequency
+            [ (3, pure release)
+            , (2, pure (overFiles (NE.reverse . fmap (overHashes reverse))))
+            , (2, pure (overFiles (fmap (overHashes (map (swapping [forgedSri] [forgedHex]))))))
+            , (2, pure (overFiles (fmap (overHashes (map (swapping (spellingsOf "a") (spellingsOf "b")))))))
+            , (3, genRelease key)
+            ]
+  where
+    overFiles f = release{pkgArtifacts = f (pkgArtifacts release)}
+    overHashes f art = art{artHashes = f (artHashes art)}
+    swapping xs ys h = fromMaybe h (lookup h (zip (xs <> ys) (ys <> xs)))
+
+-- Two or three sources over three releases, each carrying its own copy of some of them.
+genContestedSources :: Gen [(Provenance, PackageInfo)]
+genContestedSources = do
+    releases <- traverse (\key -> (,) key <$> genRelease key) ["1.0.0", "2.0.0", "3.0.0"]
+    Gen.list (Range.linear 2 3) $ do
+        prov <- Gen.element [TrustedSource, GatedSource]
+        carried <- Gen.frequency [(1, pure []), (3, Gen.subsequence releases), (6, pure releases)]
+        copies <- traverse genCopy carried
+        pure (prov, (packumentWith []){infoVersions = Map.fromList copies})
+
+agreeingVersions :: Int64
+agreeingVersions = 256
+
+-- The bytes a two-source merge allocates when both sources carry the same two-file releases.
+agreeingMergeAllocation :: Int -> IO Int64
+agreeingMergeAllocation digestsPerFile = do
+    let digests = [unsafeHash SRI (validSriOf (show j)) | j <- [1 .. digestsPerFile]]
+        files = artifactWith digests :| [wheelWith "thing.whl" digests]
+        info = withArtifacts files (packumentWith [(show i <> ".0.0", []) | i <- [1 .. agreeingVersions]])
+        inputs = [(TrustedSource, syntheticSnapshot info), (GatedSource, syntheticSnapshot info)]
+    _ <- evaluate (T.length (show inputs))
+    allocationBefore <- getAllocationCounter
+    divergences <- evaluate (maybe (-1) (Set.size . mpDivergences) (Merge.mergePackuments inputs))
+    allocationAfter <- getAllocationCounter
+    divergences `shouldBe` 0
+    pure (allocationBefore - allocationAfter)
+
 spec :: Spec
 spec = do
     describe "integrityDivergences" $ do
@@ -293,6 +446,14 @@ spec = do
                     integrityHashes (divLosing d) `shouldBe` [sriPair sriPublic]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
+    describe "copies whose digests are spelled alike" $
+        it "cost the same merge whether a file carries one digest or sixteen" $ do
+            oneDigest <- agreeingMergeAllocation 1
+            sixteenDigests <- agreeingMergeAllocation 16
+            -- A fingerprint entry is over 100 bytes. The allowance is 32 for each added digest: fifteen
+            -- in each of two files, in each of two copies.
+            sixteenDigests `shouldSatisfy` (<= oneDigest + 32 * 15 * 2 * 2 * agreeingVersions)
+
     describe "divergent private versions retain their listing entries" $ do
         let trusted =
                 (packument [("1.0.0", sriSame), ("2.0.0", sriPrivate)])
@@ -367,10 +528,6 @@ spec = do
         -- A multi-artifact ecosystem spreads a version's digests across files, so the fingerprint
         -- keys each digest by its file: only a shared file's shared algorithm can contradict.
         let sri = unsafeHash SRI
-            withArtifacts arts info =
-                info{infoVersions = Map.map (\d -> d{pkgArtifacts = arts}) (infoVersions info)}
-            wheelWith fileName hs =
-                (artifactWith hs){artFilename = fileName, artUrl = "https://example.test/" <> fileName}
 
         it "a mirror carrying fewer files than the index is availability, not a divergence" $ do
             -- No shared file contradicts, so the extra wheel is availability, not substituted
@@ -770,6 +927,27 @@ spec = do
                 plan <- H.evalMaybe (mergePackuments [trusted, gated])
                 mpDivergences plan === Set.empty
 
+        modifyMaxSuccess (const 1000) $
+            it "the divergence set is that of the fingerprint and contradiction tests alone" $
+                hedgehog $ do
+                    sources <- forAll genContestedSources
+                    plan <- H.evalMaybe (mergePackuments sources)
+                    let copies = copiesByVersion sources
+                        files = [art | (_, info) <- sources, details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details)]
+                        seen p = any p (relations sources)
+                        agreeing r = not (relFingerprintsDiffer r) && not (relContradicts r)
+                    H.cover 40 "copies spelled alike" (seen relSpelledAlike)
+                    H.cover 10 "the same digests listed in another order" (seen (\r -> agreeing r && not (relSpelledAlike r)))
+                    H.cover 20 "agreeing digests behind different fingerprints" (seen (\r -> relFingerprintsDiffer r && not (relContradicts r)))
+                    H.cover 20 "agreeing digests across differing file sets" (seen (\r -> relFileSetsDiffer r && not (relContradicts r)))
+                    H.cover 15 "a divergence" (seen (\r -> relFingerprintsDiffer r && relContradicts r))
+                    H.cover 3 "contradicting digests behind one fingerprint" (seen (\r -> not (relFingerprintsDiffer r) && relContradicts r))
+                    H.cover 30 "a version one source alone carries" (any (null . NE.tail) copies)
+                    H.cover 5 "three copies of one version" (any ((> 2) . length) copies)
+                    H.cover 15 "a source with no versions" (any (Map.null . infoVersions . snd) sources)
+                    H.cover 60 "a file with no digests" (any (null . artHashes) files)
+                    divergenceFacts plan === referenceDivergences sources
+
     describe "the merge accumulator is a lawful Monoid" $ do
         -- The 'Merge' accumulator is associative and identity-respecting, but deliberately
         -- not commutative, because the 'SourceId' tiebreak is positional.
@@ -846,12 +1024,7 @@ spec = do
                         [ ("1.0.0", [sriPair sriT], [sriPair sriG1])
                         , ("1.0.0", [sriPair sriT], [sriPair sriG2])
                         ]
-                actual =
-                    Set.map
-                        (\d -> (divVersion d, integrityHashes (divWinning d), integrityHashes (divLosing d)))
-                        . mpDivergences
-                        <$> plan
-            actual `shouldBe` Just expected
+            (divergenceFacts <$> plan) `shouldBe` Just expected
 
         it "a 3+-copy collision's divergences are associativity-stable (regroup the fold)" $ do
             -- A pairwise winner-versus-loser fold would break this: regrouping would change the
