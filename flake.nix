@@ -196,9 +196,20 @@
           haddockFlags = (old.haddockFlags or [ ]) ++ [ "--haddock-option=-j1" ];
         });
 
-        # Only libraries whose output differs from the base set's take
-        # sequentialHaddock, so no path cache.nixos.org serves changes.
-        sequentialHaddockOverlay = _hself: hsuper:
+        # GHC 9.10's object code varies between builds under -j, so modules compile one
+        # at a time. The nixpkgs option also drops `+RTS -A64M -RTS`, restored here.
+        sequentialCompile = drv: hlib.overrideCabal drv (old: {
+          enableParallelBuilding = false;
+          configureFlags = (old.configureFlags or [ ]) ++ [
+            "--ghc-option=+RTS"
+            "--ghc-option=-A64M"
+            "--ghc-option=-RTS"
+          ];
+        });
+
+        # Only libraries whose output differs from the base set's take the two
+        # overrides, so no path cache.nixos.org serves changes.
+        sequentialBuildOverlay = _hself: hsuper:
           let
             base = pkgs.haskell.packages.ghc910;
             rebuilt = name: pkg:
@@ -206,7 +217,7 @@
               in !(served.success && served.value == pkg.outPath);
           in builtins.mapAttrs (name: pkg:
             if (pkg.isHaskellLibrary or false) && rebuilt name pkg
-            then sequentialHaddock pkg
+            then sequentialCompile (sequentialHaddock pkg)
             else pkg) hsuper;
 
         hpkgs = pkgs.haskell.packages.ghc910.override {
@@ -214,7 +225,7 @@
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
-            sequentialHaddockOverlay
+            sequentialBuildOverlay
           ];
         };
 
@@ -284,17 +295,18 @@
             > $out
         '';
 
-        # Release artifact: the library and the executable only. dontCheck keeps
+        # The whole cabal package: every library and every executable. dontCheck keeps
         # the build from running the test suites. Those run on the cabal path (see
         # docs/testing.md), and the impure suites (integration → Docker, smoke →
         # live network) never belong in a hermetic build.
-        ecluse = hlib.dontCheck ecluseRaw;
+        ecluse = sequentialCompile (hlib.dontCheck ecluseRaw);
 
-        # The executable alone, stripped and with its reference to the full
-        # Haskell library closure removed (justStaticExecutables). A plain dynamic
-        # build drags that whole closure in and bloats the image to about 500 MB.
-        # This keeps only the binary and its system C deps for the container image.
-        ecluseBinUnpruned = hlib.justStaticExecutables ecluse;
+        # Only `exe:ecluse` is built and installed, so the package's development
+        # tools never reach the image. justStaticExecutables strips it and drops its
+        # reference to the Haskell library closure, which a dynamic build would drag
+        # in at about 500 MB.
+        ecluseBinUnpruned =
+          hlib.justStaticExecutables (hlib.setBuildTarget ecluse "exe:ecluse");
 
         # GHC's x86_64 Linux RTS links libdw and libelf for DWARF stack unwinding.
         # The nixpkgs build puts those libraries and the unused libdebuginfod in one

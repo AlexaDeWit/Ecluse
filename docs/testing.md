@@ -1186,10 +1186,18 @@ allow-list names the job with a reason.
 
 The release dry-run also gates. It runs `release-build.yml`, the reusable workflow that
 `release.yml` builds its images with, so both architectures build natively and without a cache, as
-in a release. `release-dry-run-assemble` assembles the multi-arch index without pushing it,
-and `release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run
-job logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also
-scan both images' SBOMs with grype. That scan is report-only and never gates.
+in a release. Each image build runs `scripts/image-archive.sh executables`, which fails when the
+image holds a program other than `ecluse` and those its linked libraries carry.
+`release-dry-run-assemble` assembles the multi-arch index without pushing it, and
+`release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run job
+logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also scan
+both images' SBOMs with grype. That scan is report-only and never gates.
+
+`release-rebuild` runs the same workflow a second time for the same commit, on separate runners
+that share no cache and no Nix store with the first build. `release-compare` then compares the two
+archives of each architecture by SHA-256 (`scripts/image-archive.sh compare`), and on a difference
+it prints the archive members and the files that differ. The comparison is report-only: it is not
+a `gate` dependency.
 
 Every job restores caches and only a main run ever saves one, so a pull request reads the default
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub
@@ -1226,9 +1234,10 @@ Such a PR uploads no coverage and skips the `codecov-notify` job, so the require
 `codecov/project` status stays pending by design, and the repo owner merges it by administrator
 bypass.
 
-The same script skips the release dry-run for a PR whose paths are all documentation, Haskell
-source, runbooks, or analysis-tool configuration. The `build` and `docs` jobs compile that source
-on arm64, but such a PR builds no image and compiles nothing on amd64. The flake, `ecluse.cabal`,
+The same script skips the release dry-run, and with it the rebuild and the comparison, for a PR
+whose paths are all documentation, Haskell source, runbooks, or analysis-tool configuration. The
+`build` and `docs` jobs compile that source on arm64, but such a PR builds no image and compiles
+nothing on amd64. The flake, `ecluse.cabal`,
 `cabal.project`, the freeze, the Taskfile, the workflows, the CI actions, the scripts,
 `test/oracles/` (it feeds the `.#ci` shell), and any unlisted path run it. A push to main, the nightly
 run, and a manual dispatch always run it. The `gate` job accepts a skipped job from these two
