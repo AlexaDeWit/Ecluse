@@ -87,19 +87,19 @@ collectField limits mode acc =
          in case raw of
                 Just value | isNothing (projectedBound bounded) || mode == FullRead -> retainFile position value bounded
                 _ -> bounded
-    retainFile position value current = foldl' (retainFileFact limits mode (TreeFile value)) withDrops files
+    retainFile position value current = foldl' (retainFileFact limits mode (Just (TreeFile value))) withDrops files
       where
         (files, drops) = decodeIndexFiles [(position, value)]
         withDrops
             | isNothing (projectedBound current) = current{projectedFileDrops = reverse drops <> projectedFileDrops current}
             | otherwise = current
 
-retainFileFact :: Limits -> PyPIRead -> FilePayload -> PyPIProjection -> IndexFile -> PyPIProjection
+retainFileFact :: Limits -> PyPIRead -> Maybe FilePayload -> PyPIProjection -> IndexFile -> PyPIProjection
 retainFileFact limits mode payload current file =
     let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)
-        next
-            | isNothing (projectedBound current) = current{projectedFiles = (file, coordinate, payload) : projectedFiles current, projectedMemo = memo}
-            | otherwise = current
+        next = case payload of
+            Just served | isNothing (projectedBound current) -> current{projectedFiles = (file, coordinate, served) : projectedFiles current, projectedMemo = memo}
+            _ -> current
      in case (mode, fcVersionKey <$> coordinate) of
             (FullRead, Just version) ->
                 let versions = Set.insert version (projectedVersions current)
@@ -113,17 +113,24 @@ retainFileFact limits mode payload current file =
 withBound :: Either LimitError () -> PyPIProjection -> PyPIProjection
 withBound result current = current{projectedBound = projectedBound current <|> either Just (const Nothing) result}
 
--- | Seal a valid file with its typed facts. Whole-file decoding is confined to dropped-entry diagnostics.
+{- | Keep counting after a bound stops retention, so later version faults retain their priority.
+Decode whole files only when recording their invalid-entry diagnostics.
+-}
 packedFileStep :: Writer st -> Limits -> PyPIProjection -> Int -> FileValue -> (Either LimitError PyPIProjection -> ST st r) -> ST st r
 packedFileStep writer limits acc position value next
-    | not (keepsFile acc) = discard writer >> next (Right acc)
+    | not (projectedFilesActive acc) = discard writer >> next (Right acc)
+    | isJust (projectedBound acc) = do
+        discard writer
+        next $! Right $! case value of
+            FileValue (Just file) -> retainFileFact limits FullRead Nothing acc file
+            _ -> acc
     | otherwise = do
         packed <- sealValue writer urlHole
         case value of
             FileValue (Just file) -> do
                 let !indexed = file{ifEntryKey = ArrayEntry position}
                     !served = if isJust (rebaseArtifactUrl Just (ifUrl file)) then packed else withoutHole packed
-                next (Right $! retainFileFact limits FullRead (PackedFile served) acc indexed)
+                next (Right $! retainFileFact limits FullRead (Just (PackedFile served)) acc indexed)
             _ -> do
                 diagnostic <- decodeWhole writer packed
                 next $! collectField limits FullRead acc (FileField position (Just diagnostic))

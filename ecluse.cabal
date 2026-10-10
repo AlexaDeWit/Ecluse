@@ -933,6 +933,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.RouteSpec
     Ecluse.Core.Registry.PyPI.ReaderSpec
     Ecluse.Core.Registry.PyPI.StreamingSpec
+    Ecluse.Core.Registry.PyPI.StreamingProjectionSpec
     Ecluse.Core.Registry.PyPI.WireSpec
     Ecluse.Core.Registry.RequestSpec
     Ecluse.Core.Registry.ServedDocumentSpec
