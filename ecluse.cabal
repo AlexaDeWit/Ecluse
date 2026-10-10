@@ -102,6 +102,7 @@ library ecluse-json-stream
     Data.JsonStream.CLexer
     Data.JsonStream.Parser
     Data.JsonStream.TokenParser
+    Data.JsonStream.TokenReader
     Data.JsonStream.Unescape
 
   c-sources:        vendor/json-stream/c_lib/lexer.c
@@ -731,6 +732,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonBytes
     Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.Source
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
     Ecluse.Test.Registry.Metadata.Fetch
@@ -836,6 +838,7 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
+    Data.JsonStream.TokenReaderSpec
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.ClockSpec
@@ -1388,6 +1391,7 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Data.JsonStream.TokenReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec

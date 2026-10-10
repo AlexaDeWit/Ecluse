@@ -1,7 +1,8 @@
 100644 1aaf2b9db0e2438999f03d5225e222244f2f90e1 0	vendor/json-stream/Data/JsonStream/CLexType.hsc
-100644 8342f5c60661a4769e91e870b15f365f6234c07b 0	vendor/json-stream/Data/JsonStream/CLexer.hs
+100644 6d81d022360055d01f736d82f76e88512429b0dd 0	vendor/json-stream/Data/JsonStream/CLexer.hs
 100644 d971d15a5f32c0e8be9429f097bd9f50aa158be4 0	vendor/json-stream/Data/JsonStream/Parser.hs
 100644 b11becac71e712df519ba9311b7acd77b8bd4bd8 0	vendor/json-stream/Data/JsonStream/TokenParser.hs
+100644 c574ba30df9046162d7b21526642c6b85e5611c2 0	vendor/json-stream/Data/JsonStream/TokenReader.hs
 100644 15a0c41c41b8b8e4d268b9a3387b2b12c3925915 0	vendor/json-stream/Data/JsonStream/Unescape.hs
 100644 8fda45c33d4dd72088000111c97dc37b8af3b2f1 0	vendor/json-stream/LICENSE
 100644 cc1e5e4c8ba3f694ccdbbb82939550429e235d54 0	vendor/json-stream/README.md
@@ -9,9 +10,10 @@
 100644 ea1886e54b8ad8d96340a13b235310c6126c10a3 0	vendor/json-stream/c_lib/lexer.h
 100644 f89f118312744a35fb44b3d341e06f79de17e7b1 0	vendor/json-stream/json-stream.freeze
 a196f7e7fb9d26dc814b7578fc3df1267c09d1205b5f852de696b4b4766a8e7c  vendor/json-stream/Data/JsonStream/CLexType.hsc
-d78fdaf440f69b04e7dd44d33c036bc5b1e9425f66a684754efa0d4151fad26f  vendor/json-stream/Data/JsonStream/CLexer.hs
+f323cefbef8eb3807bed476bc7864e05696a357a2f041c09327cccc5e2496e41  vendor/json-stream/Data/JsonStream/CLexer.hs
 6de036de3703097a4eabff8a97f3bc8f352101617e1df3909790ec4839a2db63  vendor/json-stream/Data/JsonStream/Parser.hs
 145a68fbc5f9de4cf06a09ae42adbd8d723ae502aeab177ff7776bdfab379ac5  vendor/json-stream/Data/JsonStream/TokenParser.hs
+3a9ed932f79a1ba60610e1216db8eeae54a7428a1740b2f0f9ccd6eba00c68ec  vendor/json-stream/Data/JsonStream/TokenReader.hs
 82fc258448dbe99fca2452fced468052b990f0484f0a4cd1582c104a9c385a8a  vendor/json-stream/Data/JsonStream/Unescape.hs
 1780d22e76d6263ad3c5ea10516afb565430b26e2701227e6550e91b2756f020  vendor/json-stream/LICENSE
 b12ed6b733bf29222ca5f43dc8d9320913e41c74bcaa27305668acf90dc21e0f  vendor/json-stream/README.md
