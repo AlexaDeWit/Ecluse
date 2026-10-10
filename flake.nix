@@ -130,7 +130,10 @@
                 (hself.callCabal2nix name "${amazonkaSrc}/${subdir}" { });
           in {
             amazonka = fromMonorepo "amazonka" "lib/amazonka";
-            amazonka-core = fromMonorepo "amazonka-core" "lib/amazonka-core";
+            # amazonka-core at this rev caps crypton below 1.2 and compiles against
+            # 2.1. Drop the jailbreak when a rev admits crypton 2.
+            amazonka-core =
+              hlib.doJailbreak (fromMonorepo "amazonka-core" "lib/amazonka-core");
             amazonka-sso = fromMonorepo "amazonka-sso" "lib/services/amazonka-sso";
             amazonka-sts = fromMonorepo "amazonka-sts" "lib/services/amazonka-sts";
             amazonka-codeartifact =
@@ -140,10 +143,10 @@
           };
 
         # These fixes cover JSON decoding DoS (HSEC-2026-0007) and X.509
-        # Name Constraints (HSEC-2026-0008). Keep the x509 family, tls, and
-        # crypton-connection aligned: tls 2.3 accepts x509 1.9, both need crypton
-        # 1.1, and crypton-connection 0.4.6 accepts tls 2.3. aeson-pretty 0.8.11
-        # admits aeson 2.3. hackageNoCheck above skips their upstream suites.
+        # Name Constraints (HSEC-2026-0008). Keep crypton, hpke, the x509 family,
+        # and tls aligned: tls 2.4.10 needs hpke 0.3 and x509 1.10, and all three
+        # need crypton 2.1.8 or later. aeson-pretty 0.8.11 admits aeson 2.3.
+        # hackageNoCheck above skips their upstream suites.
         advisoryOverlay = hself: hsuper:
           let fromHackage = hackageNoCheck hself;
           in {
@@ -153,22 +156,26 @@
               "sha256-EGwbQnjRumL2ztwXman6uEEvB0oRspEUB1tl0NyjAGI=";
             aeson-pretty = fromHackage "aeson-pretty" "0.8.11"
               "sha256-SmMKRymEU239HsYJL5oVh5eJpFqHoQdKTcw/jyWLeAU=";
-            crypton-x509 = fromHackage "crypton-x509" "1.9.1"
-              "sha256-8VZ64FbEiLj4o+Nm9ZzpNH7ZYs9w6rTkLvT9p2PgBf4=";
-            crypton-x509-store = fromHackage "crypton-x509-store" "1.9.0"
-              "sha256-GQcCEDOYh9N42GSh/A0pYGuIRqk3zwZ/lpOGxFrnClQ=";
-            crypton-x509-system = fromHackage "crypton-x509-system" "1.9.0"
-              "sha256-a3rnvpO1xYVFxxIKhp7aObh+oVj49KJqGcv2NuaAgPs=";
-            crypton-x509-validation = fromHackage "crypton-x509-validation" "1.9.1"
-              "sha256-YKufVgXC8qz80tScE3vENVrwJD1MgZYRNnjqirscrLA=";
-            tls = fromHackage "tls" "2.3.0"
-              "sha256-kip1dltP9SvauoTYSJ7Hi0bwM6bg5nVJnjTgQlZByhI=";
-            crypton-connection = fromHackage "crypton-connection" "0.4.6"
-              "sha256-B+fGwEBaChFx9mrrG5JbIjTnCSfiwuPetOOoua5FMGA=";
-            crypton = fromHackage "crypton" "1.1.4"
-              "sha256-tJSK0HoDabSqcUGORs856Jl6aWZnrqyXPSAh66HsKMM=";
-            hpke = fromHackage "hpke" "0.1.0"
-              "sha256-7bZvdB8unUZxBjrp0CSHn6dIMEJpJ20GrsbRLCT62B0=";
+            crypton-x509 = fromHackage "crypton-x509" "1.10.0"
+              "sha256-1DPBXykSxOHBl1Eb/FTRy72Faw+bgZnDBAstgDwgxiY=";
+            crypton-x509-store = fromHackage "crypton-x509-store" "1.10.0"
+              "sha256-aPUxmoF6OQSq8xJyFfPQwG4+EAwoBZs3y6vxSERqVdI=";
+            crypton-x509-system = fromHackage "crypton-x509-system" "1.10.0"
+              "sha256-CweEELCYvhtGiodo7x0PK4lr8xxD6khrXsI5/ZLqHb8=";
+            crypton-x509-validation = fromHackage "crypton-x509-validation" "1.10.0"
+              "sha256-PTK9YMG+MGpHCnDDuIBKH2IzafLNJoK45iyTpoTSQo4=";
+            tls = fromHackage "tls" "2.4.10"
+              "sha256-nWYWYiiTwP07/Rnh3udM1KLWkWNEF5L06B3XRnUWQ3E=";
+            # No crypton-connection release or revision admits x509 1.10 yet. The
+            # jailbreak strips those caps, and the tarball's tls <2.4 cap that
+            # Hackage revision 1 lifts. Drop it when upstream widens.
+            crypton-connection = hlib.doJailbreak
+              (fromHackage "crypton-connection" "0.4.6"
+                "sha256-B+fGwEBaChFx9mrrG5JbIjTnCSfiwuPetOOoua5FMGA=");
+            crypton = fromHackage "crypton" "2.1.8"
+              "sha256-AXgeI/nVn7mZDgL3Vag3ifIt3NGIHo4XKC4Dj919Oow=";
+            hpke = fromHackage "hpke" "0.3.0"
+              "sha256-nOLaB+4hq66QKM5Fftn0QNRxDXjM57rB5oJQqPcYRD4=";
             http-client-tls = fromHackage "http-client-tls" "0.4.0"
               "sha256-OvQMk+ewLWN+zMrWc6hphID9DQ32FnasXNeMG/+A/OE=";
             # attoparsec-aeson 2.2.2.0 revision 1 is Hackage's own widening to

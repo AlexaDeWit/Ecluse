@@ -34,7 +34,7 @@ source-repository-package
 -- to be recent enough to contain every pinned version. Advance it with
 -- `task bump-index-state` when cabal reports a pinned version as unknown. See
 -- docs/getting-started.md → "Dependency locking".
-index-state: 2026-07-01T00:33:51Z
+index-state: 2026-10-08T08:23:48Z
 
 -- Enable the test suites in the solver for *every* command. A bare
 -- `cabal test <suite>` (what `task test` runs) then resolves a tests-inclusive plan
@@ -56,7 +56,7 @@ benchmarks: True
 -- connection handling. Its `testWithApplication` helper, which the unit suite's HTTP
 -- stub uses, tears the connection down before warp writes the response. Every stubbed
 -- request then fails with `NoResponseDataReceived`. Bisected: 3.4.9 works, and every
--- version from 3.4.10 to the latest at this index-state (3.4.13.1) fails. The freeze
+-- version from 3.4.10 to 3.4.13.1, the latest when bisected, fails. The freeze
 -- comes from the Nix set, so this cap is a tripwire. If a flake bump moves nixpkgs onto
 -- a broken warp, the regenerated freeze conflicts here and fails loudly. The cap is
 -- about runtime behaviour, and the library is API-compatible with later warp. So it
@@ -78,10 +78,21 @@ constraints: warp < 3.4.10
 -- aeson 2.3 (HSEC-2026-0007), and no insert-ordered-containers or openapi3 release or
 -- revision admits it yet. So the Nix path jailbreaks them, and these entries are the
 -- cabal path's equivalent. Drop both when upstream widens, then re-freeze.
+--
+-- The crypton entry mirrors the amazonka overlay in flake.nix. amazonka-core at the
+-- pinned rev caps crypton below 1.2 and compiles against 2.1. Drop it when a rev admits
+-- crypton 2, then re-freeze.
+--
+-- The two crypton-connection entries mirror the advisory overlay. tls 2.4.10 needs the
+-- x509 1.10 family, and no crypton-connection release or revision admits it yet. Drop
+-- both when upstream widens, then re-freeze.
 allow-newer:
   regression-simple:base,
   insert-ordered-containers:aeson,
-  openapi3:aeson
+  openapi3:aeson,
+  amazonka-core:crypton,
+  crypton-connection:crypton-x509-store,
+  crypton-connection:crypton-x509-system
 
 -- Warnings are errors for our own package, in CI and locally. `flake.lock` pins GHC, so
 -- there is no "new compiler surfaces new warnings" surprise to guard against. The
