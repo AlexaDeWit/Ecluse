@@ -325,13 +325,13 @@ spec = describe "one OSV advisory record" $ do
             it ("preserves generated rule verdicts and ordered advisory ids for " <> show eco) $
                 hedgehog $ do
                     advs <- forAll (Gen.list (Range.linear 1 5) (generatedAdvisory eco genVersion))
-                    query <- forAll genVersion
+                    queryVersion <- forAll genVersion
                     let identified = zipWith (\n adv -> adv{osvId = "CVE-generated-" <> show ((n :: Int) `mod` 3)}) [0 ..] advs
                         scoreRows = [(osvId adv, fromIntegral n / 4) | (n, adv) <- zip [0 :: Int ..] identified]
                         scores = mkEpssScores scoreRows
                         before = concatMap (withoutDrop scores) identified
                         after = concatMap (extractFromAdvisory scores) identified
-                        queries = ordNub (query : "bogus" : concatMap advisoryVersions identified)
+                        queries = ordNub (queryVersion : "bogus" : concatMap advisoryVersions identified)
                     verdicts eco "pkg" after queries === verdicts eco "pkg" before queries
                     evalIO $ do
                         inputs <- generatedInputs identified scoreRows
