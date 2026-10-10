@@ -39,6 +39,17 @@ spec = do
         it "ignores an attribute without a key-value separator" $
             exportedSpans "Span #0\n     Name: wanted\nAttributes:\n     -> ecluse.package Str(pkg)\n"
                 `shouldBe` [ExportedSpan "wanted" []]
+        it "preserves normal integers and both Int bounds" $
+            for_ [minBound, -200, 0, 200, 404, maxBound :: Int] $ \value ->
+                exportedSpans (printedSpan "integer" [("value", "Int(" <> show value <> ")")])
+                    `shouldBe` [ExportedSpan "integer" [("value", IntValue value)]]
+        for_ [toInteger (maxBound :: Int) + 1, toInteger (minBound :: Int) - 1, 18446744073709551816, -18446744073709551416] $ \value ->
+            it ("preserves out-of-range integer " <> show value <> " without numeric evidence") $ do
+                let printed = "Int(" <> show value <> ")"
+                exportedSpans (printedSpan "integer" [("value", printed)])
+                    `shouldBe` [ExportedSpan "integer" [("value", OtherValue printed)]]
+                answers (fetchSpan fetch "Int(404)" <> fetchSpan fetch printed)
+                    `shouldBe` [IntValue 404, OtherValue printed]
 
     describe "spanFor and spanCarries" $ do
         it "accepts a name and both coordinate attributes on one span" $

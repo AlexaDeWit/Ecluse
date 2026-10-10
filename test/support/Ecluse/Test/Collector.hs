@@ -56,7 +56,7 @@ exportedSpans = spansIn . lines
 attributeValue :: Text -> AttributeValue
 attributeValue printed =
     fromMaybe (OtherValue printed) $
-        (TextValue <$> tagged "Str") <|> (IntValue <$> (tagged "Int" >>= readMaybe . toString))
+        (TextValue <$> tagged "Str") <|> (IntValue <$> (tagged "Int" >>= readMaybe @Integer . toString >>= toIntegralSized))
   where
     tagged tag = T.stripPrefix (tag <> "(") printed >>= T.stripSuffix ")"
 
