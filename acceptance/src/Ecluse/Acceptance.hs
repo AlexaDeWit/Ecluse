@@ -489,7 +489,7 @@ operatingLines op =
     , "- Allocation: the bytes the measuring thread allocated, read from GHC's per-thread allocation counter."
     , "- Time: wall-clock, for information only."
     , "- RTS: -N" <> show (opCapabilities op) <> " -A" <> show (opAllocationAreaBytes op `div` (1024 * 1024)) <> "m, read from the running RTS."
-    , "- Legs: `full` reads the whole document through the production reader over its held bytes, applies the rules, assembles, and serialises it. `singleVersion` projects one version selectively and forces its artifact digests."
+    , "- Legs: `full` reads the whole document through the production read driver over 32 KiB chunks of its held bytes, applies the rules, assembles, and serialises it. `singleVersion` reads one version through the driver's selected read and forces its artifact digests."
     , "- Advisory legs: `fullShippedAdvisories` and `fullAllAdvisoryRules` repeat `full` with the corpus advisories in bench/corpus/advisories served, under the shipped policy and under the shipped policy with both advisory denies."
     ]
 
