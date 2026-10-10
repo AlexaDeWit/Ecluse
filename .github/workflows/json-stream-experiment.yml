@@ -33,8 +33,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fetch the pinned baseline
-        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA"
+      - name: Fetch both pinned source commits
+        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"
 
       - name: Set up toolchain
         id: toolchain
