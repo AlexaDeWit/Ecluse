@@ -8,7 +8,7 @@ A 'Version' keeps the raw text verbatim, because version strings are embedded in
 URLs and re-served. Ordering goes through 'compareVersions' on the parsed 'VersionKey',
 which exists only when the raw text parses for its ecosystem, so non-canonical text can
 never reach a comparator. Parsing is per-ecosystem and a 'VersionKey' has no public
-constructor: callers build with 'mkVersion' or 'parseVersionKey'. See
+constructor: callers build with 'mkVersion', 'canonicalPep440' or 'parseVersionKey'. See
 @docs\/architecture\/registry-model.md@, "The internal domain model".
 -}
 module Ecluse.Core.Version (
@@ -48,7 +48,7 @@ parses. There is deliberately __no__ 'Ord'. Comparison goes through 'compareVers
 data Version = Version
     { -- The version as published: for rendering and round-tripping, never for ordering.
       versionRaw :: Text
-    , -- Private, so the key a version carries is always the one 'mkVersion' parsed from its text.
+    , -- Private, so the key a version carries is always the one 'mkVersion' builds from its text.
       versionKeyField :: Maybe VersionKey
     }
     deriving stock (Eq, Show)

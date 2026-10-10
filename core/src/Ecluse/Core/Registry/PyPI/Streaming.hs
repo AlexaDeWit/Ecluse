@@ -61,8 +61,7 @@ data SelectedFile
     | CandidateFile Bool [(Key.Key, Value)] (Maybe Value) Bool
 
 {- | Fold one member event into a file under selection, reading its name through the read's memo.
-The first of each field wins. The memo holds the latest version text only, so the read holds
-nothing for the files it rejects.
+The first of each field wins.
 -}
 collectSelected :: Text -> FilenameMemo -> SelectedFile -> SelectedFileEvent -> (SelectedFile, FilenameMemo)
 collectSelected _ memo RejectedFile _ = (RejectedFile, memo)
