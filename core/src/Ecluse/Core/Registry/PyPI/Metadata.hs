@@ -48,11 +48,11 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
-{- | PyPI's memory charges, above the largest read peak per source byte (3.09, boto3) and output
-working set per basis byte of a realistic merge (1.24, boto3) from one meter step up.
+{- | PyPI's charges cover read peaks of 3.196 bytes per source byte and realistic output working sets
+of 1.242 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4000, cfOutputPermille = 1600}
 
 -- Walk an index's chunks with the production field policy.
 readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
