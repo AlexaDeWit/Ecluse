@@ -5,12 +5,12 @@
 -- of the element's continuation, and every member of a read would allocate it.
 {-# OPTIONS_GHC -fno-full-laziness #-}
 
--- | Full and selected Simple-index reads share incremental extraction. Only full reads hash the source.
+{- | PyPI's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" drives. Full and
+selected Simple-index reads share incremental extraction.
+-}
 module Ecluse.Core.Registry.PyPI.Metadata (
-    newPyPIMetadataReads,
-    fetchPyPIManifest,
+    pypiRead,
     pypiChargeFactors,
-    readPyPIIndex,
     pypiIndexWalk,
     projectPyPIStream,
 ) where
@@ -18,98 +18,67 @@ module Ecluse.Core.Registry.PyPI.Metadata (
 import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
-import Ecluse.Core.Registry.Json.Intern (InternTable, newInternTable, newTableKey)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
+import Ecluse.Core.Registry.Json.Intern (InternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataResponse)
+import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection, keepsFile)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError, Limits (progressFloor), ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
-import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
-import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Bind one origin's reads to observers. PyPI retains no publication object for selected releases.
-newPyPIMetadataReads ::
-    TracingPort ->
-    MetricsPort ->
-    (PackageName -> MetadataError -> IO ()) ->
-    (PackageName -> [InvalidEntry] -> IO ()) ->
-    (PackageName -> IO ()) ->
-    OriginFor posture ->
-    MetadataReads posture
-newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
+-- | What the read driver needs to read a Simple index: the request, the walk in both modes, and their finishes.
+pypiRead :: EcosystemRead
+pypiRead =
+    EcosystemRead
+        { erRequest = simpleIndexRequest
+        , erUniqueFields = fileUniqueFields
+        , erWalkFull = \limits name _ -> readPyPIIndex limits name FullRead
+        , erFinishFull = finishPyPIFull
+        , erWalkSelected = \limits name version -> readPyPIIndex limits name (SelectedRead name (renderVersion version))
+        , erFinishSelected = finishPyPIVersion
+        }
 
-{- | PyPI's memory charges, above the largest read peak per source byte (3.07, boto3) and output
+{- | PyPI's memory charges, above the largest read peak per source byte (3.09, boto3) and output
 working set per basis byte of a realistic merge (1.24, boto3) from one meter step up.
 -}
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
 
--- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
-fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchPyPIManifest tracing origin name = do
-    result <- fetchPyPIBody tracing origin name (digestingRead (decodePyPI tracing origin name FullRead) . chargedRead (ocChargeFullRead origin))
-    pure $ do
-        (streamed, digest) <- result
-        (info, document) <- projectPyPIStream (ocLimits origin) name streamed
-        pure
-            Manifest
-                { manifestInfo = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin) info
-                , manifestRaw = fst pypiSimpleCached document
-                , manifestBodyBytes = streamBytes streamed
-                , manifestDigest = digest
-                }
-
-fetchPyPIBody :: TracingPort -> OriginClient -> PackageName -> (IO ByteString -> IO (Either LimitError r)) -> IO (Either MetadataError r)
-fetchPyPIBody tracing origin name consume =
-    metadataResponse
-        <$> spanMetadataFetch
-            tracing
-            name
-            (formThen FetchUrlUnformable (withSuccessBody (ocManager origin) (progressFloor (ocLimits origin)) consume) (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name))
-
-decodePyPI :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
-decodePyPI tracing origin name mode = spanMetadataDecode tracing name . readPyPIIndex (ocLimits origin) name mode
-
--- | Walk an index's chunks with the production field policy, over a table keyed afresh for the read.
-readPyPIIndex :: Limits -> PackageName -> PyPIRead -> IO ByteString -> IO (Either LimitError (StreamResult PyPIProjection))
-readPyPIIndex limits name mode readChunk = do
-    table <- newInternTable <$> newTableKey <*> pure fileUniqueFields
-    readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (pypiIndexWalk limits name mode table) readChunk
+-- Walk an index's chunks with the production field policy.
+readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
+readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)
 
 -- | The production Simple-index walk over a caller's intern table.
 pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> TokenResult -> Step PyPIProjection
 pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
 
-fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
-fetchPyPIVersion tracing origin name version = do
-    result <- fetchPyPIBody tracing origin name (decodePyPI tracing origin name (SelectedRead name (renderVersion version)))
-    pure $ do
-        streamed <- result
-        (info, _) <- projectPyPIStream (ocLimits origin) name streamed
-        pure
-            VersionRead
-                { vrVersion = do
-                    details <- Map.lookup (renderVersion version) (infoVersions info)
-                    located <- enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin) details
-                    pure VersionDoc{vdDetails = located, vdRaw = Nothing}
-                , vrBodyBytes = streamBytes streamed
-                , vrUpstreamLatest = Nothing
-                }
+finishPyPIFull :: Limits -> PackageName -> Text -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, CachedDoc)
+finishPyPIFull limits name base streamed =
+    bimap (enforceArtifactLocations pypiArtifactAuthorities base) (fst pypiSimpleCached) <$> projectPyPIStream limits name streamed
+
+-- PyPI retains no publication object for a selected release, and its documents declare no latest tag.
+finishPyPIVersion :: Limits -> PackageName -> Text -> Version -> StreamResult PyPIProjection -> Either MetadataError VersionRead
+finishPyPIVersion limits name base version streamed = do
+    (info, _) <- projectPyPIStream limits name streamed
+    pure
+        VersionRead
+            { vrVersion = do
+                details <- Map.lookup (renderVersion version) (infoVersions info)
+                located <- enforceArtifactLocationsOf pypiArtifactAuthorities base details
+                pure VersionDoc{vdDetails = located, vdRaw = Nothing}
+            , vrBodyBytes = streamBytes streamed
+            , vrUpstreamLatest = Nothing
+            }
 
 -- | Finish both read modes without separating typed files from their source coordinates.
 projectPyPIStream :: Limits -> PackageName -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, SimpleDocument)

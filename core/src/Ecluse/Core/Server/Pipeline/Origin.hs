@@ -38,7 +38,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Merge (Provenance)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataNewReads))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors, metadataRead))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -70,7 +70,7 @@ import Ecluse.Core.Server.Context (
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
  )
-import Ecluse.Core.Server.Metadata (MetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
+import Ecluse.Core.Server.Metadata (MetadataReads, ecosystemMetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient, withinRequestCap)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Core.Server.Pipeline.Shared (flightOf)
 import Ecluse.Core.Version (Version)
@@ -178,8 +178,8 @@ withMetadataClient ::
 withMetadataClient rt deps settle origin k =
     withRunInIO $ \runInIO ->
         k . settle . withinRequestCap (progressFloor (pdLimits deps)) $
-            metadataNewReads
-                (pdMetadata deps)
+            ecosystemMetadataReads
+                (metadataRead (pdMetadata deps))
                 (srTracing rt)
                 (srMetrics rt)
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))

@@ -64,7 +64,8 @@ import Ecluse.Core.Rules.Effectful (
 import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
+import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 -- | One ecosystem's boot-bound rule capabilities: its advisory database and the rules' observers.

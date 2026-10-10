@@ -26,19 +26,17 @@ import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, ProxySettings (..), proxyBootLines, proxyScrape)
 import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
-import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
-import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Metadata (Manifest (..))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
 import Ecluse.Test.Corpus (CaptureRecord (crBytes, crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
-import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
@@ -58,6 +56,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
 
     boot :: Pattern -> Bool -> LoadKnobs -> (Target -> IO a) -> IO a
     boot patternKind defaultCap knobs use = do
+        eco <- maybe (benchFail "pattern scenarios need an ecosystem with a metadata adapter") (pure . metadataRead . adapterMetadata) (adapterFor ecosystem)
         captures <- loadCorpusBodies packages
         evaluationTime <- verifyCaptures ecosystem captures >>= patternClock
         patternKnobs <- knobsFromEnv patternKind (length packages)
@@ -85,7 +84,7 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
                         ( \package ->
                             case Map.lookup (cpName package) servedBodies of
                                 Nothing -> benchFail "missing served capture"
-                                Just bytes -> either benchFail evaluate (accountedFullBytes ecosystem (localhost publicPort) package bytes)
+                                Just bytes -> accountedFullBytes eco (localhost publicPort) package bytes >>= either benchFail evaluate
                         )
                         [package | package <- packages, cpName package `elem` rtNames requestTrace]
                 writeIORef measuredBodies (bodyCap, servedWorking, servedLargest, sum fullWeights)
@@ -208,17 +207,12 @@ collect scraped fullWorkingBytes store capacity =
         VersionStore -> SingleVersionCacheResidentBytes
         AssembledStore -> AssembledCacheResidentBytes
 
-accountedFullBytes :: Ecosystem -> Text -> CorpusPackage -> LByteString -> Either Text Int
-accountedFullBytes ecosystem upstreamBase package bytes = do
-    let raw = LBS.toStrict bytes
-    (info, document) <-
-        first show $
-            if ecosystem == Npm
-                then projectNpmFull defaultLimits (cpPackage package) raw
-                else second (fst pypiSimpleCached) <$> projectPyPIIndex defaultLimits (cpPackage package) raw
-    let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
-        located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info
-    pure (weighCacheEntry (CacheEntry located document (fromIntegral (LBS.length bytes)) (digestOf raw)))
+-- The cache weight of a served body's production full read, as a fetch from the stub upstream holds it.
+accountedFullBytes :: EcosystemRead -> Text -> CorpusPackage -> LByteString -> IO (Either Text Int)
+accountedFullBytes eco upstreamBase package bytes =
+    bimap show weigh <$> heldManifest eco defaultLimits upstreamBase (cpPackage package) [LBS.toStrict bytes]
+  where
+    weigh manifest = weighCacheEntry (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
 
 -- | The captured artifact each package's selected version names, keyed by package name. npm only.
 selectArtifacts :: Ecosystem -> Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
