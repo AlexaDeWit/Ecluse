@@ -35,13 +35,18 @@ simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 simpleEncoding :: SimpleDocument -> Encoding
 simpleEncoding document
     | KeyMap.null envelope = Encoding.pairs files
-    | otherwise = Encoding.pairs (KeyMap.foldMapWithKey (envelopePair files) (KeyMap.insert "files" Null envelope))
+    | otherwise = Encoding.pairs (KeyMap.foldrWithKey (envelopePair files) mempty (KeyMap.insert "files" Null envelope))
   where
     envelope = simpleEnvelope document
-    files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
+    -- An unforced files encoder can retain the assembled document through a Series payload.
+    !filesEncoding = Encoding.list (toEncoding . snd) (simpleFiles document)
+    files = Encoding.pair "files" filesEncoding
 
 -- The sentinel's value never reaches the output. Only its key selects the retained files.
-envelopePair :: Encoding.Series -> Key -> Value -> Encoding.Series
-envelopePair files key value
-    | key == "files" = files
-    | otherwise = Encoding.pair key (toEncoding value)
+-- Force the tail before encoding bytes, so unfinished callbacks cannot retain the files root.
+envelopePair :: Encoding.Series -> Key -> Value -> Encoding.Series -> Encoding.Series
+envelopePair files key value !rest
+    | key == "files" = files <> rest
+    | otherwise =
+        let !encoding = toEncoding value
+         in Encoding.pair key encoding <> rest
