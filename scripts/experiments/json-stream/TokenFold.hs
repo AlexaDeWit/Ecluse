@@ -21,7 +21,13 @@ import System.Exit (die)
 import System.Mem (performGC)
 import Text.Read (readMaybe)
 
-#ifdef OWNED_READER
+#if defined(PURE_CURSOR) && defined(OWNED_READER)
+#error Select only one token consumption API
+#endif
+
+#ifdef PURE_CURSOR
+import qualified Data.JsonStream.Lexer.Internal as Tokens
+#elif defined(OWNED_READER)
 import Control.Monad.ST (runST)
 import qualified Data.JsonStream.TokenReader as Tokens
 #else
@@ -71,7 +77,7 @@ record verify (Totals count bytes checksum) element =
     fields token = case token of
         Tokens.ArrayBegin -> (arrayBeginTag, 0, 0)
         Tokens.ObjectBegin -> (objectBeginTag, 0, 0)
-#ifdef OWNED_READER
+#if defined(OWNED_READER) || defined(PURE_CURSOR)
         Tokens.ArrayEnd -> (arrayEndTag, 0, 0)
         Tokens.ObjectEnd -> (objectEndTag, 0, 0)
         Tokens.StringEnd -> (stringEndTag, 0, 0)
@@ -90,7 +96,19 @@ valueHash :: Aeson.Value -> Word64
 valueHash = foldl' (\acc char -> mix acc (fromIntegral (ord char))) 0 . show
 
 foldTokens :: Bool -> Int -> BS.ByteString -> Maybe Totals
-#ifdef OWNED_READER
+#ifdef PURE_CURSOR
+foldTokens verify pieceSize input = loop startTotals input False (Tokens.start BS.empty)
+  where
+    loop !totals rest ended cursor = case Tokens.next cursor of
+        Tokens.Token element after -> loop (record verify totals element) rest ended after
+        Tokens.Failed -> Nothing
+        Tokens.More waiting
+            | ended -> Just totals
+            | BS.null rest -> loop totals rest True (Tokens.feed waiting BS.empty)
+            | otherwise ->
+                let (piece, remaining) = BS.splitAt pieceSize rest
+                 in loop totals remaining False (Tokens.feed waiting piece)
+#elif defined(OWNED_READER)
 foldTokens verify pieceSize input = runST $ do
     reader <- Tokens.newTokenReader
     let loop !totals rest ended = do

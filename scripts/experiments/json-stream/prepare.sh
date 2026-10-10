@@ -14,11 +14,20 @@ readonly input_paths=(cabal.project cabal.project.freeze flake.nix flake.lock)
 readonly upstream_url=https://github.com/ondrap/json-stream.git
 readonly upstream_revision=537a43a775e64f50dc63c373193323de98619799
 readonly input_copy_count=2
+readonly candidate_fold_api=${BENCH_CANDIDATE_FOLD_API:-auto}
+case "$candidate_fold_api" in
+  auto|pure_cursor) ;;
+  *) fail 'BENCH_CANDIDATE_FOLD_API must be auto or pure_cursor' ;;
+esac
 
 for revision in "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"; do
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || fail "Expected a full commit SHA: $revision"
   git -C "$BENCH_REPO" cat-file -e "$revision^{commit}"
 done
+if [[ "$candidate_fold_api" == pure_cursor ]]; then
+  git -C "$BENCH_REPO" diff --quiet "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA" -- vendor/json-stream ||
+    fail 'The pure_cursor comparison requires identical baseline and candidate vendor sources'
+fi
 mkdir -- "$BENCH_OUTPUT"
 mkdir -p -- "$work_dir" "$artifact_dir/inputs" "$artifact_dir/logs" "$artifact_dir/harness"
 cp -- "$bundle_dir"/*.sh "$bundle_dir"/*.jq "$bundle_dir/TokenFold.hs" \
@@ -66,6 +75,13 @@ for variant in "${variants[@]}"; do
   fi
   [[ ! -f "$target/Data/JsonStream/Lexer/Internal.hs" ]] || native=true
   [[ ! -f "$target/Data/JsonStream/TokenReader.hs" ]] || owned=true
+  fold_api=token_parser
+  [[ "$owned" != true ]] || fold_api=owned_reader
+  if [[ "$variant" == candidate && "$candidate_fold_api" == pure_cursor ]]; then
+    [[ "$native" == true ]] || fail 'The pure_cursor lane requires Lexer.Internal'
+    fold_api=pure_cursor
+    owned=false
+  fi
   if [[ "$native" == true ]]; then
     awk '
       /^  (c-sources|includes|include-dirs|cc-options):/ {next}
@@ -113,6 +129,8 @@ CABAL
   fi
   if [[ "$owned" == true ]]; then
     printf '  cpp-options: -DOWNED_READER\n' >> "$target/harness/token-fold.cabal"
+  elif [[ "$fold_api" == pure_cursor ]]; then
+    printf '  cpp-options: -DPURE_CURSOR\n' >> "$target/harness/token-fold.cabal"
   fi
   for group in benchmarks harness; do
     printf 'packages: .\nindex-state: %s\noptimization: 2\ntests: False\nbenchmarks: False\n' \
@@ -123,8 +141,8 @@ CABAL
     cmp -- "$work_dir/original/benchmarks/$source" "$target/benchmarks/$source"
   done
   hash_sources "$target" > "$artifact_dir/$variant.sources.sha256"
-  jq -nc --arg variant "$variant" --arg revision "$revision" --argjson native "$native" --argjson owned "$owned" \
-    '{variant:$variant, revision:$revision, native_lexer:$native, owned_fold:$owned}' >> "$artifact_dir/variants.jsonl"
+  jq -nc --arg variant "$variant" --arg revision "$revision" --arg fold_api "$fold_api" --argjson native "$native" \
+    '{variant:$variant, revision:$revision, native_lexer:$native, owned_fold:($fold_api == "owned_reader"), fold_api:$fold_api}' >> "$artifact_dir/variants.jsonl"
 done
 jq -s . "$artifact_dir/variants.jsonl" > "$artifact_dir/variants.json"
 check_inputs

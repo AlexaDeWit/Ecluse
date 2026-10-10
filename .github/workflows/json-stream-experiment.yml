@@ -10,13 +10,14 @@ permissions:
 
 jobs:
   upstream:
-    name: Native string scan against compact lexer and upstream
+    name: Immutable cursor against owned reader and upstream
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 45
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       BENCH_REPO: ${{ github.workspace }}
-      BENCH_BASELINE_SHA: 5bce121229a92c0183a9550f7f073cb47023638d
+      BENCH_BASELINE_SHA: e357ee5b09272a85eeee594103c7811c2eed5f3f
+      BENCH_CANDIDATE_FOLD_API: pure_cursor
       BENCH_CANDIDATE_SHA: ${{ github.sha }}
       BENCH_REPEATS: "5"
       BENCH_SECONDS: "0.3"
