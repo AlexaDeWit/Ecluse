@@ -577,6 +577,57 @@ jobs:
           tag="$(bash scripts/docker-load.sh "artifacts/image-${ARCH}.tar")"
           docker run --rm --network none "$tag" --version
 
+  # A second build of the same commit, on separate runners with no cache, so the two
+  # share no store. The prefix keeps its archive out of the `image-*` reads above.
+  release-rebuild:
+    name: Release rebuild
+    needs: changes
+    if: ${{ needs.changes.outputs.release-build == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      retention-days: 1
+      artifact-prefix: rebuild-
+      sbom: false
+
+  # Report-only: absent from the gate's `needs`. A difference fails this job and the
+  # run, and `CI gate` stays green.
+  release-compare:
+    name: Image comparison (${{ matrix.arch }}, report-only)
+    needs: [release-dry-run, release-rebuild]
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the first build's archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-${{ matrix.arch }}
+          path: first
+
+      - name: Download the second build's archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rebuild-image-${{ matrix.arch }}
+          path: second
+
+      # The archive, never the uploaded zip: an upload's digest changes from run to run.
+      - name: Compare the two archives
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/image-archive.sh compare "first/image-${ARCH}.tar" "second/image-${ARCH}.tar"
+
   # grype findings arrive with disclosure time, not with a change, so the scan runs
   # nightly (and on dispatch) over the dry-run's SBOMs and never gates. !cancelled()
   # keeps one architecture's scan when the other architecture's build failed.
@@ -628,9 +679,8 @@ jobs:
 
   gate:
     name: CI gate
-    # One of the three contexts the ruleset requires (.agents/orchestration-strategy.md
-    # names them). Wire a gating job in by adding it to `needs` here AND to
-    # scripts/ci-gate-verdict.sh. smoke and grype are absent on purpose: they never gate.
+    # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
+    # smoke, grype, and release-compare do not gate. Required contexts are in .agents/orchestration-strategy.md.
     needs:
       - changes
       - build

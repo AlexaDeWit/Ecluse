@@ -1,7 +1,8 @@
 name: Release build
 
-# The image build release.yml publishes from and ci.yml's release dry-run runs. It holds
-# no credential and pushes nothing: publishing stays in release.yml's `publish` job.
+# The image build release.yml publishes from, and ci.yml runs twice: the release dry-run
+# and its rebuild. It holds no credential and pushes nothing: publishing stays in
+# release.yml's `publish` job.
 on:
   workflow_call:
     inputs:
@@ -9,6 +10,14 @@ on:
         description: "Days to keep the image and SBOM artifacts"
         type: number
         default: 7
+      artifact-prefix:
+        description: "Prefix for the artifact names, so a second build of one commit keeps its own set"
+        type: string
+        default: ""
+      sbom:
+        description: "Generate and upload the SBOM. A build that only feeds the comparison turns it off"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -57,24 +66,32 @@ jobs:
           ARCH: ${{ matrix.platform.arch }}
         run: cp -L result "image-${ARCH}.tar"
 
+      # Before the upload, so an image with a second Écluse program never becomes an artifact.
+      - name: Check the image's executables
+        env:
+          ARCH: ${{ matrix.platform.arch }}
+        run: bash scripts/image-archive.sh executables "image-${ARCH}.tar"
+
       # .#ecluse-bin is this architecture's binary, so its closure and its SBOM are
       # architecture-specific. release.yml attests the SPDX document to the platform
       # digest, and ci.yml's nightly grype scan reads the CycloneDX one.
       - name: Generate SBOM
+        if: ${{ inputs.sbom }}
         run: nix develop .#ci --command task sbom
 
       - name: Upload image archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-${{ matrix.platform.arch }}
+          name: ${{ inputs.artifact-prefix }}image-${{ matrix.platform.arch }}
           path: image-${{ matrix.platform.arch }}.tar
           retention-days: ${{ inputs.retention-days }}
           if-no-files-found: error
 
       - name: Upload SBOM
+        if: ${{ inputs.sbom }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom-${{ matrix.platform.arch }}
+          name: ${{ inputs.artifact-prefix }}sbom-${{ matrix.platform.arch }}
           path: |
             sbom/ecluse.spdx.json
             sbom/ecluse.cdx.json

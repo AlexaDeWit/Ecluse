@@ -10,10 +10,20 @@ contributor-facing summary and the `task` targets. The consumer-side verify reci
 ## Releases and container image
 
 Écluse ships as an OCI image that Nix builds (`dockerTools.buildLayeredImage`, see
-[`flake.nix`](../../flake.nix)), not a Dockerfile. The image is the binary's runtime closure plus CA
-certificates and nothing else: no shell, no package manager. It runs non-root (uid 65532). The flake's
-lock file pins its inputs. Build it locally with `task docker-build`, which writes `./result`, a
-`docker-archive`.
+[`flake.nix`](../../flake.nix)), not a Dockerfile. The image holds the `ecluse` executable, its
+runtime closure, and CA certificates: no shell, no package manager, and none of the repository's
+development tools. It runs non-root (uid 65532). The flake's lock file pins its inputs. Build it
+locally with `task docker-build`, which writes `./result`, a `docker-archive`.
+
+`ecluse` is the only program of its own that the image holds. Library packages in the runtime
+closure keep the programs that nixpkgs puts in their own store paths, such as glibc's `getconf`
+helpers and the `numactl` tools beside libnuma.
+
+Every image build runs [`image-archive.sh`](../../scripts/image-archive.sh), which refuses a
+redundant Écluse program. A program is a file or link under a `bin`, `sbin`, or `libexec`
+directory. The image must hold `bin/ecluse` in exactly one `ecluse-<version>` store path. That
+store path must hold no other program, and the image's root must hold none but its `/bin/ecluse`
+link. The check does not read the store paths of other packages.
 
 Publishing is a separate, tag-triggered workflow
 ([`release.yml`](../../.github/workflows/release.yml)), never part of the PR `gate`. A `vX.Y.Z` tag
@@ -32,6 +42,16 @@ under a single immutable tag. It attaches keyless provenance and SBOM attestatio
 publishes a GitHub Release carrying the image digest, the `gh attestation verify` recipe, the
 generated changelog, and every attestation and SBOM as a downloadable asset. A pre-release tag
 (`vX.Y.Z-rc.N`) publishes as a prerelease. GHCR is the only registry Écluse publishes to.
+
+**Two builds of one commit.** The CI run that holds the release dry-run builds each image a second
+time. The two builds run on separate runners and share no cache and no Nix store. The
+`release-compare` job then compares the SHA-256 of the two archives for each architecture. A pass
+shows that those two builds of that commit gave the same image archive. It is evidence and not a
+guarantee for every build, because GHC 9.10 does not promise deterministic object code. GHC 9.10
+orders its object code differently from build to build when it compiles modules in parallel, so the
+flake compiles the image's `ecluse` binary and each Haskell library it builds from source one module
+at a time. A release's own build is a third build, and no job compares it with the other two. The
+job reports its result and does not gate a merge.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces immutable
 tags, so every push is a fresh, never-reused tag. The release publishes `ecluse:X.Y.Z` and nothing
@@ -108,8 +128,8 @@ platform's digest rather than the index.
   binary the image ships (`.#ecluse-bin`), never from a scan of the image. Such a scan could not see
   the statically-linked Haskell libraries. It lists the real contents: the `ecluse` binary, whose
   Haskell dependencies link statically over a dynamic glibc, plus the platform runtime libraries.
-  It carries no dynamic-build noise to trip CVE scanners, and anyone can derive it again because the
-  image is reproducible.
+  It carries no dynamic-build noise to trip CVE scanners, and anyone can derive it again from the
+  same commit, because the flake's lock file pins that closure.
 
 **Each attestation has two homes.** It goes to GHCR as an OCI referrer, and onto the GitHub Release
 as an asset ([`release-assets.sh`](../../scripts/release-assets.sh) stages them). `gh attestation
