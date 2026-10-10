@@ -58,7 +58,9 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomePrerequisites, outcomeTally), SweepTally (tallyDeleted))
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (smEcosystem))
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smConfigured, smEcosystem, smRules))
+import Ecluse.Core.Rules (PreparedRule (prepName))
+import Ecluse.Core.Rules.Types (ruleName)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Core.Version (mkVersion)
@@ -207,6 +209,33 @@ spec = describe "planExecutable" $ do
         length (ordNub built) `shouldBe` 2
         readFakeContents mirror `shouldReturn` beforeMirror
         readFakeContents cache `shouldReturn` beforeCache
+
+    for_
+        [ ("[\"admission\",\"revocation\"]", ["AllowIfOlderThan", "AllowIfRemediatesCve", "DenyByIdentity"], 3)
+        , ("[\"admission\"]", ["AllowIfOlderThan", "AllowIfRemediatesCve"], 0)
+        ]
+        $ \(appliesTo, evaluated, selected) ->
+            it ("hands the store pruner only the rules that apply at revocation, under appliesTo " <> appliesTo) $ do
+                -- The same deny selects every stored version at both phases, and none once it is
+                -- limited to admission: no reader of the mount's rules sees it.
+                mirror <- previewFixture ["1.0.0", "3.0.0"]
+                cache <- previewFixture ["2.0.0", "3.0.0"]
+                let revoke = "{\"revoke-preview\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\",\"appliesTo\":" <> appliesTo <> "}}"
+                    onlyReads =
+                        observingOnly
+                            { sbObserving = \_ _ backend ->
+                                pure (fakeObservation (if registryUrlText (cbUrl backend) == privateUpstreamUrl then cache else mirror))
+                            }
+                executable <- expectExecutableWith (overrideEnv "ECLUSE_RULES" revoke (withObservablePrivate codeArtifactEnvVars)) BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
+                recorded <- recordingPortsUnder previewingReport Nothing
+                case epRoleWiring executable of
+                    StorePrunerWiring wiring -> do
+                        map (sort . map ruleName . smConfigured) (pwMounts wiring) `shouldBe` [evaluated]
+                        -- The prepared list is the one the evaluator runs, on a full walk too.
+                        map (sort . map prepName . smRules) (pwMounts wiring) `shouldBe` [evaluated]
+                        outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
+                        tallyDeleted (outcomeTally outcome) `shouldBe` selected
+                    _ -> expectationFailure "expected the preview role"
 
     it "reports a store maintenance client the live environment cannot build" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none

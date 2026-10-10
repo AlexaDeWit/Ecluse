@@ -331,6 +331,23 @@ spec = do
             outcome `shouldBe` refusedCheck
             report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
 
+        it "refuses a rule that applies at revocation alone with exit 2, naming the rule" $ do
+            (outcome, report) <- checkConfigRefusal (overrideEnv "ECLUSE_RULES" (limitedInstallDeny "[\"revocation\"]") runEnv)
+            outcome `shouldBe` refusedCheck
+            report
+                `shouldBe` [ "rule \"deny-scripts\": \"appliesTo\" must include \"admission\". A rule that applied at revocation alone would delete copies of versions the gate still admits"
+                           , "configuration: refused"
+                           ]
+
+        it "prints each mount's rule order with the phases each rule applies at" $ do
+            output <- checkConfigOutput (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" (limitedInstallDeny "[\"admission\"]") runEnv)
+            filter (T.isPrefixOf "rule ") (lines output)
+                `shouldBe` [ "rule boot order for mount npm:"
+                           , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                           , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
+                           , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                           ]
+
         it "prints the EPSS feed every compile attempts once, and never fetches it" $
             withStub status200 "" $ \feed -> do
                 let envVars = overrideEnv "ECLUSE_ADVISORIES__EPSS_FEED_URL" (toString (stubBaseUrl feed) <> "/epss.csv.gz") runEnv
@@ -472,6 +489,10 @@ compileEnv epssRule osvStub epssStub =
 -- | A shared policy carrying one advisory deny, which needs a store no fixture here configures.
 cveDenyRule :: String
 cveDenyRule = "{\"gate\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
+
+-- | A rule policy carrying one install-code deny, with the given JSON as its @appliesTo@.
+limitedInstallDeny :: String -> String
+limitedInstallDeny appliesTo = "{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":" <> appliesTo <> "}}"
 
 collapsedMirrorEnv :: [(String, String)]
 collapsedMirrorEnv = collapsingMirrorTarget runEnv

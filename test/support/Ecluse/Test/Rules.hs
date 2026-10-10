@@ -11,8 +11,10 @@ module Ecluse.Test.Rules (
     servingRuleDeps,
     slotRuleDeps,
 
-    -- * Precedence pairing
+    -- * Precedence and reach
     atDefaultPrecedence,
+    atPrecedence,
+    admissionOnly,
 
     -- * One version under one rule
     evalRule,
@@ -94,6 +96,7 @@ import Ecluse.Core.Rules.Types (
     Rule,
     RuleEvaluation (Unavailable),
     RuleEvidence (evInstallCode, evName),
+    RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Allow, CannotVet, Deny, NoDecision),
     completeEvidence,
     defaultPrecedence,
@@ -125,7 +128,15 @@ slotRuleDeps slot = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlo
 configured precedence ("Ecluse.Config.Rule").
 -}
 atDefaultPrecedence :: Rule -> PrecededRule
-atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
+atDefaultPrecedence r = atPrecedence (defaultPrecedence r) r
+
+-- | A rule at an explicit precedence, applying at both phases as an entry with no @appliesTo@ does.
+atPrecedence :: Int -> Rule -> PrecededRule
+atPrecedence prec = PrecededRule prec AdmissionAndRevocation
+
+-- | Limit a rule to admission, as @appliesTo: [admission]@ does.
+admissionOnly :: PrecededRule -> PrecededRule
+admissionOnly (PrecededRule prec _ rule) = PrecededRule prec AdmissionOnly rule
 
 {- | One rule's verdict for one version. An advisory rule reads its rows directly, with no gate and no
 resilience, so a lookup fault escapes.

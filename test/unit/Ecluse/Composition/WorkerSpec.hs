@@ -13,15 +13,17 @@ import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidate
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifact)
 import Ecluse.Core.Registry.Publish (MirrorTransport (ptLimits))
+import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes, progressFloor), defaultLimits, mkProgressFloor)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdFirstParty, pdLimits, pdMinIntegrity))
-import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow))
+import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpRules))
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Package (thingName)
-import Ecluse.Test.Rules (inertRuleDeps)
+import Ecluse.Test.Package (sampleDetails, thingName, unsafeFilename, v1_0_0)
+import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
 
 {- | Tests for the composition root's worker bundle construction. Construction only, no network:
 every bundle field is a closure the worker applies later.
@@ -58,6 +60,18 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
             Just policy -> do
                 map (wpFirstParty policy) names `shouldBe` [True, False, False]
                 map (wpFirstParty policy) names `shouldBe` map (pdFirstParty deps) names
+
+    it "carries a deny limited to admission onto the bundle, so ingest refuses what the gate refuses" $ do
+        -- The pin below the deny would admit the version to a reader of the revocation rules alone.
+        let rules = "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\",\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing\"}}"
+        (env, bindings, targets) <- composedFixturesFrom (overrideEnv "ECLUSE_RULES" rules staticEnvVars) testLimits
+        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+            Nothing -> expectationFailure "expected an npm bundle"
+            Just policy -> do
+                now <- wpNow policy
+                admitArtifact (EvalContext now Nothing) (wpRules policy) (wpMinIntegrity policy) (unsafeFilename "thing-1.0.0.tgz") (sampleDetails thingName v1_0_0) >>= \case
+                    AdmissionDenied decision -> blockedBy decision `shouldBe` Just "DenyByIdentity"
+                    other -> expectationFailure ("expected the bundle's rules to refuse the version, got " <> show other)
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
         -- The bundle is whole or absent: with no publish target to marry, a job for that

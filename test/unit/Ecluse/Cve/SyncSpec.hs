@@ -54,6 +54,8 @@ import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
 
+import Ecluse.Core.Rules.Types qualified as Rules
+
 spec :: Spec
 spec = do
     describe "planCveSync -- the per-ecosystem advisory-sync plan" $ do
@@ -136,7 +138,7 @@ spec = do
         it "prepares the advisory rules to run directly for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
-                advisoryPolicy = [PrecededRule (defaultPrecedence r) r | r <- [AllowIfRemediatesCve, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
+                advisoryPolicy = [PrecededRule (defaultPrecedence r) Rules.AdmissionAndRevocation r | r <- [AllowIfRemediatesCve, DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
             prepare (deps PyPI) advisoryPolicy >>= (`shouldBe` [False, False]) . map (isJust . prepResilience)
             prepare (deps Npm) advisoryPolicy >>= (`shouldBe` [True, True]) . map (isJust . prepResilience)
 
@@ -403,7 +405,7 @@ noOutageReport _ _ = pass
 
 -- | The issue's reproduction: the shipped quarantine beside an opt-in advisory deny set to skip.
 skipPolicy :: [PrecededRule]
-skipPolicy = [PrecededRule (defaultPrecedence r) r | r <- [AllowIfOlderThan (7 * nominalDay), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
+skipPolicy = [PrecededRule (defaultPrecedence r) Rules.AdmissionAndRevocation r | r <- [AllowIfOlderThan (7 * nominalDay), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
 
 -- | An old public version the quarantine admits, evaluated at 'alarmNow'.
 oldVersion :: RuleEvidence

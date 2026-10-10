@@ -122,9 +122,8 @@ spec = do
 
         it "refuses to publish (no publish) when the bytes do not match the re-admitted digest" $
             withUpstream $ \url ->
-                -- A tampered/substituted artifact: current metadata's digest names
-                -- other bytes than the upstream served, so the worker must NOT
-                -- publish. The payload carries no digest that could weaken this gate.
+                -- The admitted digest names different bytes. The queue payload carries
+                -- no digest that could weaken the publication gate.
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     job <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob job)
@@ -160,9 +159,8 @@ spec = do
                 published `shouldBe` []
 
         it "renders a failed artifact fetch without the URL's userinfo, path, or query" $
-            -- The fault text becomes the Retried reason, which the queue-realisation site logs and
-            -- the mirror-job span carries as an error status. It must name the authority and the
-            -- bounded transport cause, never the location.
+            -- The Retried reason reaches logs and spans. It may name the authority
+            -- and bounded transport cause, never the credential-bearing location.
             withRuntime (Right ()) $ \runtime queue _logRef -> do
                 job <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
                 outcome <- runWM runtime (processJob job)
@@ -205,9 +203,8 @@ spec = do
                 published `shouldBe` []
 
         it "drops a job (non-retryable) when the publish URL is unformable (a config fault)" $
-            -- An unformable publish URL is a misconfiguration redelivery cannot fix, so the worker
-            -- drops the job rather than re-enqueueing it forever. That is distinct from a retryable
-            -- rejection.
+            -- Redelivery cannot repair an unformable publish URL. Treat it as
+            -- a configuration fault rather than a retryable rejection.
             withUpstream $ \url ->
                 withRuntime (Left (PublishFetch (FetchUrlUnformable EmptyBaseUrl))) $ \runtime queue _logRef -> do
                     job <- enqueueAndReceive queue (jobWith url)
@@ -222,6 +219,19 @@ spec = do
                     job <- enqueueAndReceive queue (jobWith unreachableUrl)
                     outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` expected
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+
+        -- Ingest counts as admission, so a deny the Dredger does not read still keeps the version
+        -- out of the store. The rules that apply at revocation would admit it and reach the fetch.
+        for_ [("an npm", Npm, jobWith), ("a PyPI", PyPI, pypiJobWith)] $ \(label, eco, jobAt) ->
+            it ("drops " <> label <> " job whose version a deny limited to admission refuses, without publishing") $ do
+                rules <- refusedAtAdmissionOnly
+                withRuntimePolicies (Map.singleton eco (npmPolicy presentResolver rules)) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobAt unreachableUrl)
+                    runWM runtime (processJob job) >>= \case
+                        Dropped reason -> reason `shouldSatisfy` T.isInfixOf "blocked by DenyByIdentity"
+                        other -> expectationFailure ("expected the deny to drop the job, got " <> show other)
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
 
@@ -285,9 +295,8 @@ spec = do
                     length published `shouldBe` 1
 
         it "fetches through the request formation keyed by the job's own ecosystem" $
-            -- The policies map also carries a PyPI bundle whose request formation
-            -- refuses outright. The npm job must ride its own ecosystem's builder, so
-            -- nothing consults the decoy entry and the publish succeeds.
+            -- The PyPI builder refuses every request. The npm job must use its
+            -- own ecosystem's builder, without consulting that decoy.
             withUpstream $ \url -> do
                 let base = npmPolicy presentResolver [admitRule]
                     refusing = base{wpArtifact = (wpArtifact base){artifactByUrl = \_ _ -> Left EmptyBaseUrl}}
@@ -331,9 +340,8 @@ spec = do
                 published `shouldBe` []
 
         it "drops a job whose artifact host the current tarball-host policy refuses (payload re-gated)" $
-            -- The queue payload is a trust boundary. Ingest re-establishes the host gate
-            -- the serve path applied before its public fetch. It refuses a URL injected or
-            -- no-longer-honoured since enqueue, before any fetch.
+            -- Re-establish the host gate before fetching. A queue URL can be injected
+            -- or lose authorisation after enqueue.
             withRuntimePolicies (withHostGate (const False) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                 job <- enqueueAndReceive queue (jobWith unreachableUrl)
                 outcome <- runWM runtime (processJob job)

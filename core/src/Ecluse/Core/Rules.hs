@@ -241,7 +241,7 @@ prepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
 prepare deps = traverse (prepareRule deps)
 
 prepareRule :: RuleDeps -> PrecededRule -> IO PreparedRule
-prepareRule deps (PrecededRule prec rule) = do
+prepareRule deps (PrecededRule prec _ rule) = do
     eval <- case verdictSource rule of
         FromEvidence verdict -> pure (PerVersion (\ctx -> pure . verdict ctx))
         FromAdvisories alignment verdict -> PerPackage <$> advisoryRead deps alignment verdict
@@ -277,25 +277,32 @@ newResilience deps = do
 bootOrder :: [PreparedRule] -> [PreparedRule]
 bootOrder = sortOn (\r -> bootKey (prepPrecedence r) (prepName r))
 
--- Both 'bootOrder' and the engine order through this one key, so the tiebreak lives in
--- exactly one place.
+-- 'bootOrder' and 'renderBootOrder' order through this one key, so the logged order is the
+-- evaluated one.
 bootKey :: Int -> Text -> (Down Int, Text)
 bootKey prec name = (Down prec, name)
 
-{- | Render the boot order as one line per rule, in evaluation order, so an operator sees
-at boot how their policy will resolve.
+{- | One line per configured rule, in the order 'bootOrder' evaluates the rules prepared from them,
+with the phases each applies at.
 -}
-renderBootOrder :: [PreparedRule] -> [Text]
-renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
+renderBootOrder :: [PrecededRule] -> [Text]
+renderBootOrder rules = zipWith line [1 :: Int ..] (sortOn (\r -> bootKey (rulePrecedence r) (ruleName (prRule r))) rules)
   where
     line i r =
         "rule "
             <> show i
             <> ": "
-            <> prepName r
+            <> ruleName (prRule r)
             <> " (precedence "
-            <> show (prepPrecedence r)
+            <> show (rulePrecedence r)
+            <> ", "
+            <> renderReach (ruleReach r)
             <> ")"
+
+renderReach :: RuleReach -> Text
+renderReach = \case
+    AdmissionAndRevocation -> "applies at admission and revocation"
+    AdmissionOnly -> "applies at admission only"
 
 {- | An evaluator for one request's versions, in boot order. Its advisory rules must come from one
 'prepare', since the first reached reads the package once for them all. A throw refuses.

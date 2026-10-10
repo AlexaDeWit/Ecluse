@@ -9,7 +9,8 @@ A patch entry names a rule: it adds one, refines an existing one key by key, or 
 @enabled: false@. Refusals accumulate across entries, so one load reports every malformed rule
 rather than the first. A patch that names no default and gives no @type@ is refused, as is a
 parameter the named type does not read, because an ignored parameter reads on a deny gate as a
-setting the operator made and Écluse did not apply.
+setting the operator made and Écluse did not apply. @appliesTo@ names the phases a rule applies
+at, and a patch that does not restate it keeps the patched rule's phases.
 -}
 module Ecluse.Config.Rule (
     -- * Policies
@@ -39,7 +40,9 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
+    RuleReach (..),
     defaultPrecedence,
+    ruleDenies,
     ruleName,
  )
 
@@ -70,6 +73,7 @@ data RuleEntry = RuleEntry
     , entryMinCvss :: Maybe Double
     , entryMinEpss :: Maybe Double
     , entryOnUnavailable :: Maybe Text
+    , entryAppliesTo :: Maybe [Text]
     }
     deriving stock (Eq, Show)
 
@@ -121,14 +125,15 @@ resolveEntry base (name, entry)
             Nothing -> (name,) . Just <$> addNewRule name entry
 
 patchExistingRule :: Text -> RuleEntry -> PrecededRule -> Either [PolicyError] PrecededRule
-patchExistingRule name entry (PrecededRule prec rule) = do
+patchExistingRule name entry (PrecededRule prec reach rule) = do
     checkRestatedType name entry rule
     refuseStrayParameters name (ruleName rule) entry
     rule' <- patchRuleValue name entry rule
-    pure (PrecededRule (fromMaybe prec (entryPrecedence entry)) rule')
+    reach' <- resolveReach name entry reach rule'
+    pure (PrecededRule (fromMaybe prec (entryPrecedence entry)) reach' rule')
 
 -- The type is gated first, so a stray parameter is never reported against a type that does
--- not exist, and the stray before 'buildRule', so one run reports it beside a missing required key.
+-- not exist, and the stray before 'buildRule', so it is reported ahead of a missing required key.
 addNewRule :: Text -> RuleEntry -> Either [PolicyError] PrecededRule
 addNewRule name entry = case entryType entry of
     Nothing -> Left [MissingRuleType name]
@@ -137,7 +142,8 @@ addNewRule name entry = case entryType entry of
         | otherwise -> do
             refuseStrayParameters name ty entry
             rule <- buildRule name ty entry
-            pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) rule)
+            reach <- resolveReach name entry AdmissionAndRevocation rule
+            pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) reach rule)
 
 checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
 checkRestatedType name entry rule = case entryType entry of
@@ -285,3 +291,31 @@ parseOnUnavailable name = \case
     Just "deny" -> Right FailDeny
     Just "skip" -> Right FailNoDecision
     Just other -> Left [MalformedRule name ("\"onUnavailable\" must be \"deny\" or \"skip\", not " <> quote other)]
+
+-- The phases the entry states, or @inherited@ where it states none. An allow the Dredger did not
+-- read would leave a lower deny free to delete a version the gate admits, so only a deny narrows.
+resolveReach :: Text -> RuleEntry -> RuleReach -> Rule -> Either [PolicyError] RuleReach
+resolveReach name entry inherited rule = case entryAppliesTo entry of
+    Nothing -> Right inherited
+    Just phases ->
+        parseAppliesTo name phases >>= \case
+            AdmissionOnly | not (ruleDenies rule) -> Left [MalformedRule name (admissionOnlyAllow (ruleName rule))]
+            reach -> Right reach
+  where
+    admissionOnlyAllow ty =
+        quote ty
+            <> " is an allow, and an allow cannot be limited to admission. If the Dredger ignored it, a lower deny could delete a version this rule admits. Limit the deny instead"
+
+-- A repeated phase counts once, and every unknown word is reported.
+parseAppliesTo :: Text -> [Text] -> Either [PolicyError] RuleReach
+parseAppliesTo name phases = case (unknown, "admission" `elem` phases, "revocation" `elem` phases) of
+    (_ : _, _, _) -> Left (map (MalformedRule name . unknownPhase) unknown)
+    ([], True, True) -> Right AdmissionAndRevocation
+    ([], True, False) -> Right AdmissionOnly
+    ([], False, True) ->
+        Left [MalformedRule name "\"appliesTo\" must include \"admission\". A rule that applied at revocation alone would delete copies of versions the gate still admits"]
+    ([], False, False) ->
+        Left [MalformedRule name "\"appliesTo\" names no phase. Write [admission] or [admission, revocation], or switch the rule off with \"enabled\": false"]
+  where
+    unknown = ordNub (filter (`notElem` ["admission", "revocation"]) phases)
+    unknownPhase phase = "\"appliesTo\" names unknown phase " <> quote phase <> ". The phases are \"admission\" and \"revocation\""

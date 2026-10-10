@@ -66,7 +66,7 @@ data SweepMount = SweepMount
     , smStore :: SweepStore
     -- ^ The store's own calls. Every backend-varying fact is a value on it.
     , smRules :: [PreparedRule]
-    -- ^ The mount's own prepared rule set, the one the serve and ingest gates evaluate.
+    -- ^ The mount's prepared rules that apply at revocation.
     , smConfigured :: [Rule]
     {- ^ The same rules as configured values, which a prepared rule no longer carries. The
     candidate set reads an identity deny's names out of these.

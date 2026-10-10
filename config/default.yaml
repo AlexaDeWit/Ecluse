@@ -244,7 +244,8 @@ observability:
 # read only by `ecluse dredger`. Every other role carries these keys unread. Each cycle
 # intersects both stores' package listings with the names the advisory database covers
 # and the names an identity-deny rule pins. It then reads each of those packages' metadata
-# back from the store holding it. It deletes a version only on a named decisive deny.
+# back from the store holding it. It deletes a version only on a named decisive deny by a
+# rule that applies at revocation (see `appliesTo` under rules).
 # Deletion is permanent, so the pacing and the cap below bound what one cycle can do.
 dredger:
   # Candidate packages one chunk examines before the sweep pauses.
@@ -409,7 +410,8 @@ mounts:
     #   minTrusted: sha256
     #   divergencePolicy: warn # deprecated compatibility only, remove this key
     # Per-mount rule refinement, merged over the shared policy with the same schema
-    # as the top-level rules.
+    # as the top-level rules. An entry that restates only `appliesTo` widens or narrows
+    # a shared rule for this mount alone.
     # rules: {}
   # A pypi mount serves reads: the PEP 691 Simple index and the distribution files
   # under it. It publishes nothing, so a publicationTarget or a mirrorTarget on it
@@ -428,6 +430,15 @@ mounts:
 # The rule policy. A shipped name below patches that rule, `enabled: false` suppresses
 # it, and a new name with a `type` adds one. A rule reads only its own type's parameters,
 # and a parameter written under a type that does not read it is refused at load.
+#
+# Any rule may also set `appliesTo`, the list of phases it applies at. `admission` is the
+# gate and the mirror worker's check before a write. `revocation` is the Dredger's check
+# of the versions a store already holds. Unset, a rule applies at both, and a patch that
+# does not restate the list keeps the phases of the rule it patches. `[admission]` on a
+# deny refuses new versions and leaves stored copies in place, because the Dredger then
+# passes over the rule. The load refuses an empty list, an empty value, an empty string,
+# `[revocation]` alone, an unknown word, and `[admission]` on an allow. `enabled: false`
+# switches a rule off at both.
 rules:
   min-age:
     type: AllowIfOlderThan
@@ -459,6 +470,8 @@ rules:
   #   minCvss: 8              # CVSS >= 8.0 (high/critical). Unscored malware always blocks
   #   onUnavailable: deny     # fail-closed if the advisory database cannot answer.
   #                           # Set to "skip" to fail-open (availability over the gate)
+  #   appliesTo: [admission, revocation]  # the default. [admission] refuses new versions
+  #                                       # and keeps the copies your stores already hold
   # Opt-in exploitability deny gate, also absent from this shipped policy. It denies a
   # version a synced advisory records as affected when that advisory's EPSS score (the
   # probability of exploitation in the wild within 30 days, 0-1) is at or above `minEpss`.

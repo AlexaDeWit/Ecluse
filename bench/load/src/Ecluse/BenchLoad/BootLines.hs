@@ -111,7 +111,7 @@ ruleKey message = do
         _ -> Nothing
 
 {- | Each mount's rules in the order it evaluates them, from the boot order the proxy logged:
-the mount's label and each rule's type and precedence.
+the mount's label and each rule's type, precedence, and phases.
 -}
 ruleBootOrders :: [Text] -> [(Text, [Text])]
 ruleBootOrders = \case

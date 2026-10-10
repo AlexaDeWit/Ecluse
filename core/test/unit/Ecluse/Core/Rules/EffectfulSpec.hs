@@ -736,10 +736,10 @@ faultPolicies =
     cve a = atDefaultPrecedence (DenyIfCve (DenyIfCveParams 7.0 a))
     epss b = atDefaultPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 b))
     fastLaneLast = atDefaultPrecedence AllowIfRemediatesCve
-    fastLaneFirst = PrecededRule 300 AllowIfRemediatesCve
+    fastLaneFirst = PrecededRule 300 AdmissionAndRevocation AllowIfRemediatesCve
 
 policyLabel :: [PrecededRule] -> String
-policyLabel = intercalate ", " . map (\(PrecededRule prec rule) -> ruleLabel rule <> " at " <> show prec)
+policyLabel = intercalate ", " . map (\(PrecededRule prec _ rule) -> ruleLabel rule <> " at " <> show prec)
 
 faultSpec :: Spec
 faultSpec = describe "a faulted advisory read resolves every version to each rule's own alignment" $

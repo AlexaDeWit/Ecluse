@@ -55,11 +55,11 @@ listeningSpec :: Spec
 listeningSpec = describe "proxyListening" $ do
     let logLine message = LBS.toStrict (encode (object ["message" .= (message :: Text), "status" .= ("info" :: Text)]))
     it "accepts the line the proxy logs from the shared prefix once its listener has bound" $
-        proxyListening [logLine "rule 1: AllowIfOlderThan (precedence 100)", logLine (listeningPrefix proxyListener <> "4873")] `shouldBe` True
+        proxyListening [logLine "rule 1: AllowIfOlderThan (precedence 100, applies at admission and revocation)", logLine (listeningPrefix proxyListener <> "4873")] `shouldBe` True
     it "does not take the prefix in the middle of another message" $
         proxyListening [logLine ("bench: " <> listeningPrefix proxyListener <> "4873")] `shouldBe` False
     it "waits while the log holds only boot lines" $
-        proxyListening [logLine "rule boot order for mount npm:", logLine "rule 1: AllowIfOlderThan (precedence 100)"] `shouldBe` False
+        proxyListening [logLine "rule boot order for mount npm:", logLine "rule 1: AllowIfOlderThan (precedence 100, applies at admission and revocation)"] `shouldBe` False
 
 bootSpec :: Spec
 bootSpec = do

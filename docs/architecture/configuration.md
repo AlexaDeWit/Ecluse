@@ -264,6 +264,21 @@ Here `min-age` names a default rule, so it overrides that rule's value. `deny-sc
 carrying a `type`, so it adds a rule. Each rule may set an integer `precedence`, where higher wins.
 Omit it for the type's default.
 
+Each rule may also set `appliesTo`, the list of phases it applies at. It merges as `precedence`
+does: a new rule without it applies at admission and at revocation, a patch without it keeps the
+phases of the rule it patches, and a stated list replaces them whole. A layer can therefore narrow
+a deny that a lower layer defines, and a higher layer can widen it again for one mount.
+
+The load refuses the setting at one of two points:
+
+| Refused form | Where | What the load reports |
+|---|---|---|
+| A key written with no value, or a value that is not a list of strings, an empty string in its place included | When the document is decoded | That one fault alone, because the decode stops there |
+| An empty list, a list without `admission`, an unknown word (an empty string inside the list is one), an allow limited to admission | When the rules resolve | Every such refusal in the same `rules` object together |
+
+[Rules engine → Admission and revocation](rules-engine.md#admission-and-revocation) holds the reason
+for each refusal.
+
 [Rules engine → Evaluation model](rules-engine.md#evaluation-model) is the canonical home for the
 precedence values, the single total order the rules resolve into, and the evaluation model. This
 document owns only the document-merge schema above.

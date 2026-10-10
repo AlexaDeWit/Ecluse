@@ -360,6 +360,65 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 [Rule policy](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#rule-policy) and
 [Rules engine](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/rules-engine.md#evaluation-model).
 
+### Where a rule applies
+
+A rule applies at two phases unless you limit it. Admission is the gate: a listing, an artifact
+request, and the mirror worker's check before it writes a version to your mirror target.
+Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
+on a rule names its phases:
+
+| `appliesTo` | The rule is read by | What a deny does |
+|---|---|---|
+| Not set, or `[admission, revocation]` | The gate, the mirror worker, and the Dredger | Refuses new versions, and the Dredger removes stored copies |
+| `[admission]` | The gate and the mirror worker | Refuses new versions. Stored copies stay, and your private stores keep serving them |
+
+Limit a deny to admission when versions your builds already installed through Écluse must stay
+installable, and no new install may start on a version the rule refuses. The policy below does
+that for every mount, and the npm mount widens the rule again so that the Dredger removes there:
+
+```yaml
+rules:
+  deny-known-cves:
+    type: DenyIfCve
+    minCvss: 8
+    appliesTo: [admission]
+mounts:
+  npm:
+    rules:
+      deny-known-cves:
+        appliesTo: [admission, revocation]
+```
+
+A patch that does not restate `appliesTo` keeps the phases of the rule it patches, and a stated
+list replaces them whole. `enabled: false` switches a rule off at both phases, whatever `appliesTo`
+says beside it. In the environment the list rides inside the rule object, for example
+`ECLUSE_MOUNTS__NPM__RULES='{"deny-known-cves":{"appliesTo":["admission","revocation"]}}'`.
+
+The load refuses a setting it would have to guess at, and `ecluse check-config` reports the same
+refusals:
+
+| Setting | Why the load refuses it |
+|---|---|
+| `appliesTo: []` | It names no phase. `enabled: false` is how you switch a rule off |
+| `appliesTo: [revocation]` | A deny the gate did not read would delete copies of versions the gate still admits, and the mirror worker would write them again |
+| `appliesTo: [admission]` on an allow | The Dredger would not read the allow, so a lower deny could delete a version the gate admits. Limit the deny instead |
+| An unknown word, an empty string, an empty value, or a value that is not a list | It names no phase Écluse has. An empty value does not read as both phases |
+
+Every role's boot log, and `ecluse check-config`, print each mount's rules in evaluation order with
+the phases each applies at. A `pypi` mount under the policy above keeps the shared `[admission]`,
+so it logs:
+
+```txt
+rule boot order for mount pypi:
+rule 1: DenyIfCve (precedence 225, applies at admission only)
+rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)
+rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)
+```
+
+The Dredger evaluates the rules that apply at revocation, in that order, and passes over the
+rest. So a deny limited to admission cannot cause a revocation, and it does not stop the Dredger's
+walk either: a lower deny that applies at revocation still decides the version.
+
 ## Onboarding the advisory denies
 
 `DenyIfCve` and `DenyIfEpss` can break a cold deployment, because a freshly stood-up mirror
@@ -376,10 +435,11 @@ covered them. Enable them *after* you warm your private mirror:
    which outranks both. That covers a false positive or a risk you accept.
 
 A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
-current rules and prunes what they deny. A policy change therefore cannot leave an ineligible
-version in the mirror target or in the private cache that retained it. When Dredger runs, pin every
-version you must keep before you add a deny, and run `ecluse dredger --dry-run` to see what it would
-remove.
+current rules that apply at revocation and prunes what they deny. A policy change therefore cannot
+leave a version those rules deny in the mirror target or in the private cache that retained it.
+When Dredger runs, pin every version you must keep before you add a deny, and run
+`ecluse dredger --dry-run` to see what it would remove. To refuse new versions and keep the warmed
+ones, limit the deny to admission ([Where a rule applies](@/docs/configuration.md#where-a-rule-applies)).
 
 Add `DenyIfEpss` alongside `DenyIfCve`, not instead of it. EPSS estimates exploitation probability,
 not severity or proof of exploitation. An individual missing score makes EPSS abstain, including
@@ -394,7 +454,7 @@ deletion. A different decisive deny can still authorise deletion under the exist
 Set `onUnavailable: skip` to let another allow decide when an advisory lookup is unavailable.
 The default `deny` refuses instead. This also applies to mirror admission: a skipped check can
 precede an admission that remains trusted after the lookup recovers. Removing the allow later
-does not revoke that copy unless a named deny becomes decisive. See
+does not revoke that copy unless a named deny that applies at revocation becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
 A skipped check leaves evidence with the admission. The decision names the rule and the cause, and
