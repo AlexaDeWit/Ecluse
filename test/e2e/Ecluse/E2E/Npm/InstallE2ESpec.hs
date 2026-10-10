@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm mount on the base topology, driven by a real @npm@ client: install and policy, the
-artifact route's protocol answers, and the mirror round trip through the worker. Every case shares
-one proxy, and the lifecycle case boots a second one for the install it runs with public down. The
-mirrored-metadata case reads the store entry the lifecycle case before it wrote.
+{- | npm policy, artifact protocol responses, and mirror metadata on the base topology.
+Fresh public and mirror-only installation parity lives in "Ecluse.E2E.Npm.MirrorInstallE2ESpec".
 -}
 module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
 
@@ -15,7 +13,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
-    allowPkg,
     denyPkg,
     headPkg,
     latestPkg,
@@ -38,9 +35,6 @@ scenarios :: SpecWith GlobalDataPlane
 scenarios = do
     describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withE2E $ do
         describe "public surface -- install and policy" $ do
-            it "installs an allow-listed package end to end" $ \e2e -> do
-                void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
-
             it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
                 void $ npmInstall e2e (psName denyPkg) >>= shouldFail
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
@@ -70,30 +64,12 @@ scenarios = do
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
-        describe "server↔worker -- the full mirror lifecycle" $ do
-            it "mirrors a package served from public, then installs it from the mirror with public down" $ \e2e -> do
-                let name = psName mirrorPkg
-                    ver = psVersion mirrorPkg
-                presentBefore <- verdaccioHasVersionNow e2e name ver
-                presentBefore `shouldBe` False
-                void $ npmInstall e2e name >>= shouldSucceed
-                mirrored <- verdaccioHasVersion e2e name ver
-                mirrored `shouldBe` True
-                -- The package depends on this one, so its copy must land before public goes down.
-                verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
-                npmPublicReachable e2e `shouldReturn` True
-                -- A second proxy and a new project hold nothing the first install fetched.
-                withPublicUpstreamsDown (e2ePlane e2e) . flip withE2E (e2ePlane e2e) $ \offline -> do
-                    npmPublicReachable offline `shouldReturn` False
-                    withNpmProject offline $ \proj -> do
-                        void $ npmInstallIn proj name >>= shouldSucceedThroughProxy offline
-                        installedVersion proj name `shouldReturn` Just ver
-                        installedVersion proj (psName allowPkg) `shouldReturn` Just (psVersion allowPkg)
+        describe "server↔worker -- mirror metadata" $ do
             it "mirrors supported installation metadata and omits unknown and public-registry fields" $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
-                -- The mirror lifecycle case above seeds the store. This reads the version object
-                -- back straight from the store, so the assertion sees what the mirror holds.
+                verdaccioHasVersionNow e2e name ver `shouldReturn` False
+                void $ npmInstall e2e (name <> "@" <> ver) >>= shouldSucceedThroughProxy e2e
                 verdaccioHasVersion e2e name ver `shouldReturn` True
                 stored <- verdaccioVersionObject e2e name ver
                 stored `shouldSatisfy` isJust

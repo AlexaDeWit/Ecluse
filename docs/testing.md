@@ -445,7 +445,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 
 | Module | Cases |
 |---|---|
-| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case, and the mirror round trip boots a second one for its install with public down. |
+| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: policy, artifact protocol responses, supported mirror metadata, upstream-latest preservation, and publish refusal with no publication target. One proxy serves every case. |
 | `Ecluse.E2E.Npm.MirrorInstallE2ESpec` | The install the mirror alone serves, compared with the same install served from public. Described below. |
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
