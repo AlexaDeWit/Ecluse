@@ -295,15 +295,12 @@
             > $out
         '';
 
-        # The whole cabal package: every library and every executable. dontCheck keeps
-        # the build from running the test suites. Those run on the cabal path (see
-        # docs/testing.md), and the impure suites (integration → Docker, smoke →
-        # live network) never belong in a hermetic build.
+        # Build every library and executable here. Tests run on the Cabal path,
+        # because the integration and smoke suites need Docker or live registries.
         ecluse = hlib.dontCheck ecluseRaw;
 
-        # The image's binary: `exe:ecluse` alone, without the Haskell library closure.
-        # sequentialCompile sits here and not on `ecluse`, whose Haddock build ships in
-        # no image and keeps -j.
+        # Compile only exe:ecluse sequentially for the image. The whole-package
+        # Haddock build above keeps parallel compilation and stays outside it.
         ecluseBinUnpruned = hlib.justStaticExecutables
           (hlib.setBuildTarget (sequentialCompile ecluse) "exe:ecluse");
 
