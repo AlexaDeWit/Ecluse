@@ -24,20 +24,20 @@ module Ecluse.Core.Text (
     readDecimalText,
     readHexText,
     renderIso8601Utc,
+    writeDigits,
     displayExceptionT,
     textStorageBytes,
 ) where
 
+import Control.Monad.ST (ST)
 import Data.Array.Byte (ByteArray (..))
 import Data.Char (isAsciiLower, isAsciiUpper, isControl, isDigit)
+import Data.Primitive.ByteArray (MutableByteArray, createByteArray, setByteArray, writeByteArray)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Internal qualified as TI
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Builder qualified as TB
-import Data.Text.Lazy.Builder.Int qualified as TBI
 import Data.Text.Read qualified as TR
-import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, toGregorian)
+import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, fromGregorian, toModifiedJulianDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Exts (Int (I#), sizeofByteArray#)
 import Network.HTTP.Types.URI (urlDecode)
@@ -158,49 +158,84 @@ readWholly textReader t = case textReader t of
     Right (n, rest) | T.null rest -> Just n
     _ -> Nothing
 
-{- | Match 'iso8601Show', using a builder for years 0-9999 below 86 400 seconds.
-Other instants delegate to 'iso8601Show' to preserve its representation.
+{- | The text of 'iso8601Show', written to one buffer for years 0 to 9999 and a time of day below 86 400 s.
+In those years a negative time of day keeps a signed hour, where 'iso8601Show' borrows from the day.
 -}
 renderIso8601Utc :: UTCTime -> Text
 renderIso8601Utc t@(UTCTime day dt)
-    | year < 0 || year > 9999 || picos >= 86_400_000_000_000_000 = toText (iso8601Show t)
-    | otherwise =
-        TL.toStrict . TB.toLazyText $
-            digits 4 year
-                <> "-"
-                <> digits 2 (fromIntegral month)
-                <> "-"
-                <> digits 2 (fromIntegral dayOfMonth)
-                <> "T"
-                <> digits 2 hh
-                <> ":"
-                <> digits 2 mm
-                <> ":"
-                <> digits 2 ss
-                <> fraction
-                <> "Z"
+    | mjd < firstDayOfYear0 || mjd > lastDayOfYear9999 || picos >= picosPerDay = toText (iso8601Show t)
+    | picos < 0 = T.take 11 pastHourStamp <> show hour <> T.drop 13 pastHourStamp
+    | otherwise = stampText (fromInteger mjd) (fromInteger picos)
   where
-    (year, month, dayOfMonth) = toGregorian day
+    mjd = toModifiedJulianDay day
     picos = diffTimeToPicoseconds dt
-    (secondsOfDay, frac) = picos `divMod` 1_000_000_000_000
-    (hh, rem') = secondsOfDay `divMod` 3600
-    (mm, ss) = rem' `divMod` 60
+    (hour, pastHour) = picos `divMod` picosPerHour
+    -- The stamp of the time past the hour: every field of the result but the hour.
+    pastHourStamp = stampText (fromInteger mjd) (fromInteger pastHour)
 
-    -- The fractional second as @iso8601Show@ renders it: nothing when zero,
-    -- else a dot and the 12 picosecond digits with trailing zeros trimmed.
-    fraction :: TB.Builder
-    fraction
-        | frac == 0 = mempty
-        | otherwise =
-            TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
+firstDayOfYear0, lastDayOfYear9999 :: Integer
+firstDayOfYear0 = toModifiedJulianDay (fromGregorian 0 1 1)
+lastDayOfYear9999 = toModifiedJulianDay (fromGregorian 9999 12 31)
 
--- A non-negative integer, zero-padded to at least the given width (the inputs here never
--- exceed it).
-digits :: Int -> Integer -> TB.Builder
-digits width n =
-    let body = show n :: String
-        pad = width - length body
-     in TB.fromString (replicate pad '0') <> TBI.decimal n
+picosPerDay, picosPerHour :: Integer
+picosPerDay = 24 * picosPerHour
+picosPerHour = 3_600_000_000_000_000
+
+{- The stamp of a day number in years 0 to 9999 and the picoseconds of a time of day from zero
+below 86 400 s. The date is Howard Hinnant's @civil_from_days@, over days since 0000-03-01. -}
+stampText :: Int -> Int -> Text
+stampText !mjd !picos = TI.text (createByteArray len fill) 0 len
+  where
+    sinceMarch = mjd + 678_881
+    era = sinceMarch `div` 146_097
+    dayOfEra = sinceMarch `mod` 146_097
+    yearOfEra = (dayOfEra - dayOfEra `quot` 1460 + dayOfEra `quot` 36_524 - dayOfEra `quot` 146_096) `quot` 365
+    dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra `quot` 4 - yearOfEra `quot` 100)
+    marchMonth = (5 * dayOfYear + 2) `quot` 153
+    dayOfMonth = dayOfYear - (153 * marchMonth + 2) `quot` 5 + 1
+    month = if marchMonth < 10 then marchMonth + 3 else marchMonth - 9
+    year = yearOfEra + era * 400 + (if month <= 2 then 1 else 0)
+
+    (secondOfDay, fraction) = picos `quotRem` 1_000_000_000_000
+    (minuteOfDay, secondOfMinute) = secondOfDay `quotRem` 60
+    (hourOfDay, minuteOfHour) = minuteOfDay `quotRem` 60
+    !(fractionDigits, significant) = withoutTrailingZeros 12 fraction
+    len = if fraction == 0 then 20 else 21 + fractionDigits
+
+    -- Every digit starts as a zero, so a field written from its last digit backwards is padded.
+    fill :: MutableByteArray st -> ST st ()
+    fill target = do
+        setByteArray target 0 len (ascii '0')
+        writeDigits target 3 (fromIntegral year)
+        writeByteArray target 4 (ascii '-')
+        writeDigits target 6 (fromIntegral month)
+        writeByteArray target 7 (ascii '-')
+        writeDigits target 9 (fromIntegral dayOfMonth)
+        writeByteArray target 10 (ascii 'T')
+        writeDigits target 12 (fromIntegral hourOfDay)
+        writeByteArray target 13 (ascii ':')
+        writeDigits target 15 (fromIntegral minuteOfHour)
+        writeByteArray target 16 (ascii ':')
+        writeDigits target 18 (fromIntegral secondOfMinute)
+        when (fraction /= 0) $ do
+            writeByteArray target 19 (ascii '.')
+            writeDigits target (19 + fractionDigits) (fromIntegral significant)
+        writeByteArray target (len - 1) (ascii 'Z')
+
+ascii :: Char -> Word8
+ascii = fromIntegral . ord
+
+-- A count of digits and the value they spell, less every trailing zero of the value.
+withoutTrailingZeros :: Int -> Int -> (Int, Int)
+withoutTrailingZeros !count !value
+    | value /= 0 && value `rem` 10 == 0 = withoutTrailingZeros (count - 1) (value `quot` 10)
+    | otherwise = (count, value)
+
+-- | Write a magnitude in decimal, its last digit at the offset and the digits before it at the offsets below.
+writeDigits :: MutableByteArray st -> Int -> Word -> ST st ()
+writeDigits buffer !at !value = do
+    writeByteArray buffer at (0x30 + fromIntegral (value `rem` 10) :: Word8)
+    if value >= 10 then writeDigits buffer (at - 1) (value `quot` 10) else pass
 
 -- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text

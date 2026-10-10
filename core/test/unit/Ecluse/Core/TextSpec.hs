@@ -5,17 +5,25 @@
 -- | Shared text parsing contracts, the ASCII alphanumeric class, ISO-8601 rendering parity and text storage.
 module Ecluse.Core.TextSpec (spec) where
 
+import Data.Aeson (Value (String), parseJSON)
+import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum, isAscii)
+import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
+import Data.Text.Lazy qualified as TL
+import Data.Text.Lazy.Builder qualified as TB
+import Data.Text.Lazy.Builder.Int qualified as TBI
+import Data.Time (Day (ModifiedJulianDay), UTCTime (UTCTime), diffTimeToPicoseconds, fromGregorian, isLeapYear, picosecondsToDiffTime, toGregorian)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Hedgehog (cover, forAll, (===))
+import Hedgehog (Gen, LabelName, MonadTest, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), captureTexts, corpusPackages, pypiCorpusPackages)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -237,38 +245,165 @@ urlFilenameComponentSpec = describe "urlFilenameComponent" $ do
 
 renderIso8601Spec :: Spec
 renderIso8601Spec = describe "renderIso8601Utc" $ do
-    it "matches iso8601Show byte-for-byte across the domain" $
-        hedgehog $ do
-            -- The whole fast-path domain plus the delegating edges: expanded-representation years
-            -- on either side of 0-9999, and every picosecond fraction shape.
-            year <- forAll (Gen.integral (Range.linearFrom 2020 (-50) 10500))
-            month <- forAll (Gen.int (Range.linear 1 12))
-            day <- forAll (Gen.int (Range.linear 1 31))
-            picos <-
-                forAll $
-                    Gen.choice
-                        [ (* 1_000_000_000_000) <$> Gen.integral (Range.linear 0 86_399) -- whole seconds
-                        , Gen.integral (Range.linear 0 86_399_999_999_999_999) -- arbitrary instant
-                        , (+ 114_000_000_000) . (* 1_000_000_000_000) <$> Gen.integral (Range.linear 0 86_399) -- millisecond shape
-                        ]
-            let t = UTCTime (fromGregorian year month day) (picosecondsToDiffTime picos)
-            renderIso8601Utc t === toText (iso8601Show t)
+    modifyMaxSuccess (const 3000) $
+        it "gives the reference text for every instant, and iso8601Show's for a time of day from zero" $
+            hedgehog $ do
+                (dayClass, day) <- forAll (genClass dayClasses)
+                (timeClass, picos) <- forAll (genClass timeClasses)
+                coverEach dayClasses dayClass
+                coverEach timeClasses timeClass
+                let instant = UTCTime day (picosecondsToDiffTime picos)
+                renderIso8601Utc instant === referenceRender instant
+                when (picos >= 0) (renderIso8601Utc instant === toText (iso8601Show instant))
+
+    it "gives the reference text at every second of a day" $
+        firstMisrendered [at 2024 2 29 (secondOfDay * picosPerSecond) | secondOfDay <- [0 .. 86_399]] `shouldBe` []
+
+    it "gives the reference text on the first and last day of every month of years 0 to 9999" $
+        firstMisrendered [UTCTime day 45_296.789 | year <- [0 .. 9999], month <- [1 .. 12], day <- [fromGregorian year month 1, fromGregorian year month 31]]
+            `shouldBe` []
+
+    for_ corpusPackages (rendersCapture npmStamps)
+    for_ pypiCorpusPackages (rendersCapture pypiStamps)
 
     it "renders the canonical npm shapes" $ do
-        let at y m d ps = UTCTime (fromGregorian y m d) (picosecondsToDiffTime ps)
-        renderIso8601Utc (at 2015 1 11 ((0 * 3600 + 23 * 60 + 27) * 1_000_000_000_000 + 114_000_000_000))
+        renderIso8601Utc (at 2015 1 11 ((0 * 3600 + 23 * 60 + 27) * picosPerSecond + 114_000_000_000))
             `shouldBe` "2015-01-11T00:23:27.114Z"
         renderIso8601Utc (at 2026 6 1 0) `shouldBe` "2026-06-01T00:00:00Z"
-        renderIso8601Utc (at 44 12 31 (86_399 * 1_000_000_000_000 + 1))
+        renderIso8601Utc (at 44 12 31 (86_399 * picosPerSecond + 1))
             `shouldBe` "0044-12-31T23:59:59.000000000001Z"
 
-    it "trims trailing fraction zeros without dropping significant ones" $ do
-        let t = UTCTime (fromGregorian 2020 2 29) (picosecondsToDiffTime 100_000_000_000)
-        renderIso8601Utc t `shouldBe` "2020-02-29T00:00:00.1Z"
+    it "trims trailing fraction zeros without dropping significant ones" $
+        renderIso8601Utc (at 2020 2 29 100_000_000_000) `shouldBe` "2020-02-29T00:00:00.1Z"
 
-    it "delegates a leap-second reading and stays parity-true" $ do
-        let t = UTCTime (fromGregorian 2016 12 31) (picosecondsToDiffTime 86_400_500_000_000_000)
-        renderIso8601Utc t `shouldBe` toText (iso8601Show t)
+    it "renders a leap-second reading as iso8601Show does" $ do
+        let instant = at 2016 12 31 (picosPerDay + 500_000_000_000)
+        renderIso8601Utc instant `shouldBe` toText (iso8601Show instant)
+
+    it "keeps a signed hour for a negative time of day" $ do
+        renderIso8601Utc (at 2020 1 1 (-1)) `shouldBe` "2020-01-01T-1:59:59.999999999999Z"
+        renderIso8601Utc (at 2020 1 1 (negate (10 * picosPerHour))) `shouldBe` "2020-01-01T-10:00:00Z"
+
+at :: Integer -> Int -> Int -> Integer -> UTCTime
+at year month day picos = UTCTime (fromGregorian year month day) (picosecondsToDiffTime picos)
+
+picosPerSecond, picosPerHour, picosPerDay :: Integer
+picosPerSecond = 1_000_000_000_000
+picosPerHour = 3600 * picosPerSecond
+picosPerDay = 24 * picosPerHour
+
+{- The rendering in its plain form: 'iso8601Show' outside years 0 to 9999 and from 86 400 s, and a text
+builder with 'String' padding for the rest, where a negative time of day gives a signed hour. -}
+referenceRender :: UTCTime -> Text
+referenceRender t@(UTCTime day dt)
+    | year < 0 || year > 9999 || picos >= 86_400_000_000_000_000 = toText (iso8601Show t)
+    | otherwise =
+        TL.toStrict . TB.toLazyText $
+            digits 4 year
+                <> "-"
+                <> digits 2 (fromIntegral month)
+                <> "-"
+                <> digits 2 (fromIntegral dayOfMonth)
+                <> "T"
+                <> digits 2 hh
+                <> ":"
+                <> digits 2 mm
+                <> ":"
+                <> digits 2 ss
+                <> fraction
+                <> "Z"
+  where
+    (year, month, dayOfMonth) = toGregorian day
+    picos = diffTimeToPicoseconds dt
+    (secondsOfDay, frac) = picos `divMod` 1_000_000_000_000
+    (hh, rem') = secondsOfDay `divMod` 3600
+    (mm, ss) = rem' `divMod` 60
+
+    fraction :: TB.Builder
+    fraction
+        | frac == 0 = mempty
+        | otherwise =
+            TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
+
+    digits :: Int -> Integer -> TB.Builder
+    digits width n =
+        let body = show n :: String
+            pad = width - length body
+         in TB.fromString (replicate pad '0') <> TBI.decimal n
+
+-- The first few instants the renderer and the reference render differently. One names the fault.
+firstMisrendered :: [UTCTime] -> [(UTCTime, Text, Text)]
+firstMisrendered instants =
+    take 5 [(instant, rendered, reference) | instant <- instants, let rendered = renderIso8601Utc instant, let reference = referenceRender instant, rendered /= reference]
+
+-- A class of input: the coverage label a property must reach, and its generator.
+type Class a = (LabelName, Gen a)
+
+genClass :: [Class a] -> Gen (LabelName, a)
+genClass classes = Gen.choice [(,) name <$> gen | (name, gen) <- classes]
+
+coverEach :: (MonadTest m) => [Class a] -> LabelName -> m ()
+coverEach classes drawn = for_ classes $ \(name, _) -> cover 1 name (name == drawn)
+
+dayClasses :: [Class Day]
+dayClasses =
+    [ ("a year from 1000 to 9999", genDayIn 1000 9999)
+    , ("a year from 1 to 999", genDayIn 1 999)
+    , ("year 0", genDayIn 0 0)
+    , ("the first day of year 0", pure (fromGregorian 0 1 1))
+    , ("the last day of year 9999", pure (fromGregorian 9999 12 31))
+    , ("29 February", (\year -> fromGregorian year 2 29) <$> Gen.filter isLeapYear (Gen.integral (Range.linear 0 9999)))
+    , ("the day before year 0, rendered by iso8601Show", pure (fromGregorian (-1) 12 31))
+    , ("the day after year 9999, rendered by iso8601Show", pure (fromGregorian 10_000 1 1))
+    , ("a negative year, rendered by iso8601Show", genDayIn (-20_000) (-1))
+    , ("a year above 9999, rendered by iso8601Show", genDayIn 10_000 30_000)
+    , ("a day number far from years 0 to 9999, rendered by iso8601Show", ModifiedJulianDay <$> (Gen.element [id, negate] <*> Gen.integral (Range.linear 10_000_000 1_000_000_000_000)))
+    ]
+
+genDayIn :: Integer -> Integer -> Gen Day
+genDayIn firstYear lastYear = fromGregorian <$> Gen.integral (Range.linear firstYear lastYear) <*> Gen.int (Range.linear 1 12) <*> Gen.int (Range.linear 1 31)
+
+-- A time of day in picoseconds. The type also holds the values outside a day.
+timeClasses :: [Class Integer]
+timeClasses =
+    [ ("midnight", pure 0)
+    , ("whole seconds", wholeSeconds)
+    , ("the last picosecond of a day", pure (picosPerDay - 1))
+    , ("a fraction that starts with a zero", (+) <$> wholeSeconds <*> Gen.integral (Range.linear 1 99_999_999_999))
+    ]
+        <> [(fromString ("a " <> show count <> "-digit fraction"), genFraction count) | count <- [1 .. 12]]
+        <> [ ("a leap second, rendered by iso8601Show", Gen.integral (Range.linear picosPerDay (picosPerDay + picosPerSecond - 1)))
+           , ("past a leap second, rendered by iso8601Show", Gen.integral (Range.linear (picosPerDay + picosPerSecond) (10 ^ (21 :: Int))))
+           , ("a negative time of day within an hour", negate <$> Gen.integral (Range.linear 1 picosPerHour))
+           , ("a negative time of day within a day", negate <$> Gen.integral (Range.linear (picosPerHour + 1) picosPerDay))
+           , ("a negative time of day past a day", negate <$> Gen.integral (Range.linear (picosPerDay + 1) (10 ^ (21 :: Int))))
+           ]
+  where
+    wholeSeconds = (* picosPerSecond) <$> Gen.integral (Range.linear 0 86_399)
+    -- A fraction whose last digit of the count is not a zero, so the rule prints exactly the count.
+    genFraction :: Int -> Gen Integer
+    genFraction count = do
+        whole <- wholeSeconds
+        leading <- Gen.integral (Range.linear 0 (10 ^ (count - 1) - 1))
+        final <- Gen.integral (Range.linear 1 9)
+        pure (whole + (leading * 10 + final) * 10 ^ (12 - count))
+
+-- The instant the library parser reads from a stamp, as a JSON decode reads it.
+libraryInstant :: Text -> Either String UTCTime
+libraryInstant = parseEither parseJSON . String
+
+-- Every publish time of the capture, read by the library parser, renders as the reference does.
+rendersCapture :: J.Parser [Text] -> CorpusPackage -> Spec
+rendersCapture stampsOf package =
+    it ("gives the reference text for every publish time of the capture " <> cpPath package) $ do
+        stamps <- concat <$> captureTexts 1 stampsOf package
+        instants <- traverse (expectRight . libraryInstant) stamps
+        firstMisrendered instants `shouldBe` []
+
+-- One list for each member of an npm packument's @time@ and for each file of a PEP 691 index (@upload-time@).
+npmStamps, pypiStamps :: J.Parser [Text]
+npmStamps = "time" J..: J.objectValues (many J.string)
+pypiStamps = "files" J..: J.arrayOf (many ("upload-time" J..: J.string))
 
 textStorageSpec :: Spec
 textStorageSpec =
