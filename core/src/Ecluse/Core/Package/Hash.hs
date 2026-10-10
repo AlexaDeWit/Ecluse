@@ -30,11 +30,15 @@ module Ecluse.Core.Package.Hash (
 ) where
 
 import Crypto.Hash (Blake2b_512, Digest, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString, hashlazy)
+import Crypto.Hash qualified as Crypto
 import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase, convertToBase)
+import Data.Char (isHexDigit)
 import Data.Text qualified as T
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
+
+import Ecluse.Core.Text (isAsciiAlphaNum)
 
 {- | A hash algorithm an integrity digest is computed with. The 'Ord' instance is integrity
 authority, not constructor order: @SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@.
@@ -83,7 +87,7 @@ data Hash = Hash
 -- | Validate encoding and digest length, preserving the wire spelling. Strength is a separate admission decision.
 mkHash :: HashAlg -> Text -> Either Text Hash
 mkHash alg value
-    | isJust (decodeHash alg value) = Right (Hash alg value)
+    | isWellFormed alg value = Right (Hash alg value)
     | otherwise = Left ("malformed " <> renderHashAlg alg <> " digest")
 
 -- | Split SRI components, rejecting the whole string when empty or when any component is malformed.
@@ -93,6 +97,38 @@ mkSriHashes wire = case nonEmpty (T.words wire) of
     -- A lone component equal to the input is the input itself, so a retained hash adds no text object.
     Just (only :| []) | only == wire -> pure <$> mkHash SRI wire
     Just comps -> traverse (mkHash SRI) comps
+
+-- Answers what 'isJust' of 'decodeHash' answers, from the length and the alphabet alone.
+isWellFormed :: HashAlg -> Text -> Bool
+isWellFormed SRI value = maybe False (isBase64Digest (sriBody value)) (sriAlgorithm value >>= digestSize)
+isWellFormed alg value = maybe False (isHexDigest value) (digestSize alg)
+
+-- Either case passes, as 'decodeHash' lowercases first. No character outside ASCII lowercases to a hex digit.
+isHexDigest :: Text -> Int -> Bool
+isHexDigest value size = T.compareLength value (2 * size) == EQ && T.all isHexDigit value
+
+-- The standard alphabet and exact padding. Like the decoder, it leaves the last digit's spare bits unchecked.
+isBase64Digest :: Text -> Int -> Bool
+isBase64Digest body size =
+    T.compareLength digits digitCount == EQ && T.compareLength padding padCount == EQ && T.all (== '=') padding
+  where
+    (digits, padding) = T.span isBase64Digit body
+    digitCount = (4 * size + 2) `div` 3
+    padCount = negate digitCount `mod` 4
+
+isBase64Digit :: Char -> Bool
+isBase64Digit c = isAsciiAlphaNum c || c == '+' || c == '/'
+
+-- The digest length in bytes. An 'SRI' component takes the length of the algorithm it names.
+digestSize :: HashAlg -> Maybe Int
+digestSize = \case
+    SHA1 -> Just (Crypto.hashDigestSize Crypto.SHA1)
+    SHA256 -> Just (Crypto.hashDigestSize Crypto.SHA256)
+    SHA384 -> Just (Crypto.hashDigestSize Crypto.SHA384)
+    SHA512 -> Just (Crypto.hashDigestSize Crypto.SHA512)
+    MD5 -> Just (Crypto.hashDigestSize Crypto.MD5)
+    Blake2b -> Just (Crypto.hashDigestSize Crypto.Blake2b_512)
+    SRI -> Nothing
 
 -- | The lowercase hex a non-SRI digest is compared and reported in.
 hexDigestText :: ByteString -> Text

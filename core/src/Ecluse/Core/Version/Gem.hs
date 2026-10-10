@@ -18,7 +18,8 @@ module Ecluse.Core.Version.Gem (
 import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, isAsciiAlphaNum, withinVersionLength)
+import Ecluse.Core.Text (isAsciiAlphaNum)
+import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, withinVersionLength)
 
 -- | A parsed @Gem::Version@: a flat token list compared with zero-padding.
 newtype GemKey = GemKey [VToken]
