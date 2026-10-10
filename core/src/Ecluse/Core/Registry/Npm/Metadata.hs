@@ -70,11 +70,11 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
-{- | npm's memory charges, above the largest read peak per source byte (1.39, express, oldest heavy base)
+{- | npm's memory charges, above the largest read peak per source byte (1.06, express, oldest heavy base)
 and output working set per basis byte of a realistic merge (1.52, @aws-sdk/client-s3) from one step up.
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 1400, cfOutputPermille = 2000}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 1200, cfOutputPermille = 2000}
 
 -- Walk a packument's chunks into aeson's tree with the production field policy.
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
