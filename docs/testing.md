@@ -558,7 +558,7 @@ Use the benchmark tier to assess cost alongside the seven Cabal test suites. Non
 three workflows gates a merge or belongs in branch protection as a required check.
 The workflow YAML owns schedules and run options.
 Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
-Reports support manual comparisons, and no workflow consumes another run's results.
+A run off `main` also sets its figures beside the latest run on `main`, in a [comparison against main](#comparison-against-main).
 The load test alone stores reviewed minimums, its [success floors](#success-floors), and its scheduled run fails below them.
 
 | Workflow | Measurement | Downloadable report files |
@@ -586,6 +586,51 @@ Read a red result according to its measurement:
   signal, so it never runs on a pull request and never gates a merge. Its scheduled run goes red on these checks.
 
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
+
+### Comparison against main
+
+Use this section of a run summary to see what a branch changed without a download and a hand
+diff. A run of any of the three workflows on a ref other than `main` sets its figures beside the
+most recent successful run of the same workflow on `main`. That is every pull request for the two
+workflows that run on one, and a load test dispatched on a branch. The section has a part for each
+ecosystem, and the run's artifact holds it as `against-main.md`.
+
+| Workflow | Figure compared | Rows |
+|---|---|---|
+| Work per request | Mean time | Each bench, with a summary for each top group, and the precision tasty-bench reached for the bench in each run (`2*stdev` as a share of the mean) |
+| Performance acceptance | Time | Each leg of each package, with both version counts when the live document grew between the runs |
+| Load | Successes, refusals, success p50 and p99, and the proxy's ending | Each scenario of the pod shape, from the "At a glance" table, with the operating point rows that differ between the runs |
+
+The section compares no allocation. The [allocation budgets](#allocation-budgets-perf-allocation-gating)
+hold it.
+
+`scripts/perf-baseline.sh` fetches the baseline with the job's read-only token. It takes the newest
+successful run on `main` that still holds the artifact, and for the load test the newest one that
+measured the same pod shape. A run counts only when this repository started it on `main` and no
+pull request did. The section names that run and its commit, which can be older than the commit a
+pull request merges into. `bench-report against-main` (`task against-main`) then renders the
+section from the two reports.
+
+The section carries no verdict. It marks no row, applies no threshold, and fails no job. When no
+run on `main` holds the artifact, or the token cannot read it, the section says "no baseline" with
+the reason, and the job passes. None of the three workflows joins branch protection.
+
+One run stands on each side, so the section does not separate a change from the difference
+between two runners:
+
+- One runner measures every row of a job: every bench of a run, every leg of a run, every scenario
+  of a pod shape. The run on `main` had another runner, so a whole job can move together. Each
+  part therefore leads with how many rows rose, fell, and held, the median change, and the range,
+  and says so when no row moved against the others.
+- A row means something only beside the rows that the change does not touch, which stay in the
+  same table.
+- Each load run injects the npm upstream latency it probed, and the latency-bound scenarios move
+  with it. The operating point rows show both values when they differ.
+- A live acceptance document grows as its package publishes, so its legs then read more versions.
+- A finite replay sends the same requests every run. Its successes hold, and only its latency
+  can show a change.
+
+To conclude from one row, repeat the run.
 
 ### Load tests under a pod shape
 
@@ -882,9 +927,9 @@ manager creation, and server startup sit outside the measured iteration. Held in
 results remain resident. RTS allocation does not measure total process memory or native parser storage.
 The group excludes TLS, external network latency, compression, response assembly, and telemetry export.
 
-Work-per-request reports do not provide an automatic comparison against main or a fixed control group.
-[#1305](https://github.com/AlexaDeWit/Ecluse/issues/1305) owns that comparison. Match successful work,
-capture hashes, limits, and forcing when comparing these rows against another revision.
+The [comparison against main](#comparison-against-main) pairs these rows by name and has no fixed
+control group. It cannot tell that a row's work changed, so match successful work, capture hashes,
+limits, and forcing when you read a row against another revision.
 Replacing trimmed captures breaks historical comparability, so comparisons must use the same capture hashes.
 
 The wire-to-resident factor still requires measurements of raw and typed retention on these bodies

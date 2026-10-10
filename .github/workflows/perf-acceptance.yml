@@ -16,7 +16,8 @@ concurrency:
   group: perf-acceptance-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: read-only is all this workflow needs.
+# Least privilege: read-only is all this workflow needs. The baseline fetch reads the
+# runs and artifacts of main with the GITHUB_TOKEN.
 permissions:
   contents: read
 
@@ -54,11 +55,27 @@ jobs:
           set -eo pipefail
           nix develop .#ci --command task perf-acceptance 2>&1 | tee perf-acceptance-report.md
 
+      # Off main only: the runs on main are the baseline. A missing baseline renders as
+      # "no baseline", and neither step fails the job on it.
+      - name: Fetch the latest report on main
+        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/perf-baseline.sh perf-acceptance.yml "perf-acceptance-report-$RUNNER_ARCH-" "$RUNNER_TEMP/perf-baseline"
+
+      - name: Compare time with main
+        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
+        run: |
+          set -eo pipefail
+          nix develop .#ci --command task against-main KIND=acceptance BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=perf-acceptance-report.md | tee against-main.md
+
       # Preserve the report when the harness fails.
       - name: Upload this run's report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-acceptance-report-${{ runner.arch }}-${{ github.sha }}
-          path: perf-acceptance-report.md
+          path: |
+            perf-acceptance-report.md
+            against-main.md
           if-no-files-found: warn
