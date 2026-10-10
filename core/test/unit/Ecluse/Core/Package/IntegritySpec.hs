@@ -59,10 +59,7 @@ spec :: Spec
 spec = do
     describe "the worker verifies what the public floor admits (the #409 invariant)" $ do
         it "every algorithm that meets the default public floor is computable" $
-            -- The floor admits by algorithm authority ('meetsFloor') and the worker verifies by
-            -- computation ('isComputable'), so the computable set must cover the floor-clearing
-            -- set. Otherwise the mirror enqueues an admitted public artifact and then drops it
-            -- permanently.
+            -- An admitted algorithm the worker cannot compute causes a permanent mirror drop (#409).
             [alg | alg <- universe, meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
                 `shouldBe` []
 
@@ -254,7 +251,6 @@ spec = do
                     H.cover 2 "no digest" (expected == NoIntegrity)
                     floorVerdict flr files === expected
 
--- The production floor over a version's typed artifacts: the files it keeps, and its verdict.
 floorPartition :: (IntegrityFloor floor) => floor -> NonEmpty Artifact -> Either VersionIntegrity (NonEmpty Artifact)
 floorPartition flr = partitionByFloor flr artHashes
 
@@ -287,15 +283,12 @@ instance IntegrityFloor AnyFloor where
         PublicFloor flr -> floorAlgorithm flr
         TrustedFloor flr -> floorAlgorithm flr
 
--- Every floor either constructor accepts.
 genFloor :: Gen AnyFloor
 genFloor = Gen.element (map PublicFloor (rights (map mkMinIntegrity universe)) <> map TrustedFloor (rights (map mkMinTrustedIntegrity universe)))
 
--- One to four files of a version, each under its own name with up to three digests.
 genFiles :: Gen (NonEmpty Artifact)
 genFiles = artifactsWith <$> Gen.nonEmpty (Range.constant 1 4) (Gen.list (Range.constant 0 3) (Gen.element digestPool))
 
--- One digest of each algorithm, and an SRI of each prefix 'mkHash' accepts. It refuses any other.
 digestPool :: [Hash]
 digestPool =
     [ unsafeHash MD5 validMd5
