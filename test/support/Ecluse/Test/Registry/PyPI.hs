@@ -65,6 +65,7 @@ yankedForms =
     , ("an absent member", [], False)
     , ("a number", [("yanked", Number 1)], False)
     , ("an array", [("yanked", toJSON [String "broken sdist"])], False)
+    , ("an object", [("yanked", object ["reason" .= String "x"])], False)
     ]
 
 -- | A PEP 691 simple index: the project name and its file entries, nothing else.

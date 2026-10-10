@@ -382,11 +382,12 @@ versionFoldSpec = describe "the version-level folds over a release's files" $ do
         pkgAvailability <$> Map.lookup "2.34.2" (infoVersions wholly) `shouldBe` Just Yanked
 
     for_ yankedForms $ \(form, member, withdrawn) ->
-        it ("reads " <> form <> " on every file, and on one file of two, alike on the full and the selected read") $ do
+        it ("reads " <> form <> " on every file, and on either file of two, alike on the full and the selected read") $ do
             let marked = withFileKeys member
                 expected = if withdrawn then Yanked else Available
             bothReads (indexOf [marked (sdistFile "2.34.2"), marked (wheelFile "2.34.2")]) `shouldReturn` (Just expected, Just expected)
             bothReads (indexOf [marked (sdistFile "2.34.2"), wheelFile "2.34.2"]) `shouldReturn` (Just Available, Just Available)
+            bothReads (indexOf [sdistFile "2.34.2", marked (wheelFile "2.34.2")]) `shouldReturn` (Just Available, Just Available)
 
 -- The availability of release 2.34.2 on the production full read and on its selected read.
 bothReads :: Value -> IO (Maybe Availability, Maybe Availability)
