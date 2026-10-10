@@ -985,6 +985,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.Text.Iso8601Spec
     Ecluse.Core.TextSpec
+    Ecluse.Core.Version.Pep440Spec
     Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
