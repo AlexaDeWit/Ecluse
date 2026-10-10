@@ -13,6 +13,7 @@ import Data.Aeson (Value (..), eitherDecodeStrict, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -24,7 +25,7 @@ import Hedgehog.Range qualified as Range
 import System.Directory (copyFile, listDirectory)
 import System.FilePath (takeExtension, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldSatisfy)
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (cveDbLookup), CveLookup (cveAdvisoriesFor, cveCoveredNames), packageAdvisories)
@@ -38,7 +39,7 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (FailDeny), Rule (..), RuleVerdict, completeEvidence)
+import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), Reason (..), Rule (..), RuleVerdict (..), completeEvidence, mkAdvisoryIds, unAdvisoryIds)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), captureTexts, corpusPackages, cpName, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), compileAdvisoryInputs, corpusAdvisories)
@@ -280,6 +281,46 @@ spec = describe "one OSV advisory record" $ do
                                     }
                                ]
 
+    describe "diagnostic id order" $ do
+        let ids = mkAdvisoryIds ("B" :| ["A", "A"])
+            reordered = mkAdvisoryIds ("A" :| ["B", "A"])
+            fixed = mkAdvisoryIds ("FIX-B" :| ["FIX-A"])
+            fixedReordered = mkAdvisoryIds ("FIX-A" :| ["FIX-B"])
+            etag = Just (DbEtag "generation")
+            reason = AffectedBy Cvss 0.5 ids
+            denied = Deny etag reason
+
+        it "equates reordered ids while keeping repeated ids and separate remediation groups" $ do
+            normaliseVerdictIds denied `shouldBe` normaliseVerdictIds (Deny etag (AffectedBy Cvss 0.5 reordered))
+            normaliseVerdictIds (Allow (Remediates ids)) `shouldBe` normaliseVerdictIds (Allow (Remediates reordered))
+            normaliseVerdictIds (NoDecision (FixesButStillAffected fixed ids))
+                `shouldBe` normaliseVerdictIds (NoDecision (FixesButStillAffected fixedReordered reordered))
+
+        it "keeps decision, reason, score, threshold, etag, membership and multiplicity differences" $
+            for_
+                [ Allow reason
+                , NoDecision reason
+                , Deny etag (Remediates ids)
+                , Deny etag (AffectedBy Epss 0.5 ids)
+                , Deny etag (AffectedBy Cvss 0.6 ids)
+                , Deny (Just (DbEtag "other")) reason
+                , Deny Nothing reason
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A", "C"])))
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A"])))
+                , Deny etag (AffectedBy Cvss 0.5 (mkAdvisoryIds ("B" :| ["A", "A", "A"])))
+                ]
+                (\changed -> normaliseVerdictIds changed `shouldNotBe` normaliseVerdictIds denied)
+
+        it "keeps remediation roles and fail-closed inability fields" $ do
+            normaliseVerdictIds (NoDecision (FixesButStillAffected fixed ids))
+                `shouldNotBe` normaliseVerdictIds (NoDecision (FixesButStillAffected ids fixed))
+            for_ [CannotVet FailDeny NoDatabaseLoaded, CannotVet FailNoDecision NoDatabaseLoaded, CannotVet FailDeny EvaluationFailed] $ \verdict ->
+                normaliseVerdictIds verdict `shouldBe` verdict
+            normaliseVerdictIds (CannotVet FailDeny NoDatabaseLoaded)
+                `shouldNotBe` normaliseVerdictIds (CannotVet FailNoDecision NoDatabaseLoaded)
+            normaliseVerdictIds (CannotVet FailDeny NoDatabaseLoaded)
+                `shouldNotBe` normaliseVerdictIds (CannotVet FailDeny EvaluationFailed)
+
     describe "covered enumerated versions" $ do
         for_ coverCases $ \(label, eco, introduced, upper, versions, kept) ->
             it label $ do
@@ -302,7 +343,7 @@ spec = describe "one OSV advisory record" $ do
                 unknown aff = aff{affectedPackage = OsvPackage "pkg" "unknown"}
             length (extractFromAdvisory noScores adv{osvAffected = map unknown <$> osvAffected adv}) `shouldBe` 3
 
-        it "preserves the real reader's ordered verdicts for the review probe" $ do
+        it "preserves complete real-reader verdicts apart from diagnostic id order" $ do
             let records = reviewProbe
                 scoreRows = [("CVE-A", 0.75), ("CVE-B", 0.75)]
                 before = concatMap (withoutDrop (mkEpssScores scoreRows)) records
@@ -322,7 +363,7 @@ spec = describe "one OSV advisory record" $ do
                     compareArtifacts PyPI beforePath afterPath [("pkg", queries)]
 
         for_ [(Npm, genNpm), (PyPI, genPyPI), (RubyGems, genGem)] $ \(eco, genVersion) ->
-            it ("preserves generated rule verdicts and ordered advisory ids for " <> show eco) $
+            it ("preserves generated rule verdicts and advisory id membership for " <> show eco) $
                 hedgehog $ do
                     advs <- forAll (Gen.list (Range.linear 1 5) (generatedAdvisory eco genVersion))
                     queryVersion <- forAll genVersion
@@ -339,7 +380,7 @@ spec = describe "one OSV advisory record" $ do
                             compareArtifacts eco beforePath afterPath [("pkg", queries)]
 
         for_ [Npm, PyPI] $ \eco ->
-            it ("preserves all captured rule verdicts and ordered advisory ids for " <> show eco) $ do
+            it ("preserves all captured rule verdicts and advisory id membership for " <> show eco) $ do
                 advs <- corpusRecords eco
                 feed <- BS.readFile "bench/corpus/advisories/epss.csv"
                 let scores = mkEpssScores (mapMaybe parseEpssLine (BS.split 10 feed))
@@ -483,7 +524,7 @@ advisoryVersions adv = maybe [] (concatMap versions) (osvAffected adv)
     versions aff = fromMaybe [] (affectedVersions aff) <> maybe [] (concatMap (concatMap bounds . rangeEvents)) (affectedRanges aff)
     bounds event = catMaybes [eventIntroduced event, eventFixed event, eventLastAffected event]
 
--- Complete verdict equality includes the ids and their order in both deny and remediation reasons.
+-- Complete verdict equality ignores only diagnostic advisory id order.
 verdicts :: Ecosystem -> Text -> [ExtractedOsv] -> [Text] -> [[RuleVerdict]]
 verdicts eco name rows = verdictsFor eco name (Just (DbEtag "differential", advisories))
   where
@@ -496,8 +537,23 @@ verdictsFor eco name advisories versions = map decide rules
     context = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
     rules = AllowIfRemediatesCve : [DenyIfCve (DenyIfCveParams threshold FailDeny) | threshold <- [0, 8, 10]] <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.5, 1]]
     decide rule = case verdictSource rule of
-        FromAdvisories _ verdict -> map (verdict advisories) evidence
-        FromEvidence verdict -> map (verdict context) evidence
+        FromAdvisories _ verdict -> map (normaliseVerdictIds . verdict advisories) evidence
+        FromEvidence verdict -> map (normaliseVerdictIds . verdict context) evidence
+
+-- SQLite does not promise row order. Sorting each id collection preserves its membership and multiplicity.
+normaliseVerdictIds :: RuleVerdict -> RuleVerdict
+normaliseVerdictIds = \case
+    Allow reason -> Allow (normaliseReason reason)
+    Deny etag reason -> Deny etag (normaliseReason reason)
+    NoDecision reason -> NoDecision (normaliseReason reason)
+    verdict@CannotVet{} -> verdict
+  where
+    normaliseReason = \case
+        Remediates ids -> Remediates (ordered ids)
+        FixesButStillAffected fixed affected -> FixesButStillAffected (ordered fixed) (ordered affected)
+        AffectedBy score threshold ids -> AffectedBy score threshold (ordered ids)
+        reason -> reason
+    ordered = mkAdvisoryIds . NE.sort . unAdvisoryIds
 
 corpusRecords :: Ecosystem -> IO [OsvAdvisory]
 corpusRecords eco = do
