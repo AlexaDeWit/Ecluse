@@ -4,7 +4,7 @@
 
 {- | The sentences a reader sees for what the rules return. A rule returns facts, and a log line,
 a denial body, or an audit line asks here for the text. Each render is total over its typed value,
-so it runs outside every rule's handler.
+so a reader needs no handler around it.
 -}
 module Ecluse.Core.Rules.Render (
     -- * A decision and its parts
@@ -71,13 +71,13 @@ renderReason = \case
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
-    Remediates ids -> "remediates " <> advisoryIds ids
+    Remediates ids -> "remediates " <> listed ids
     FixesButStillAffected ids open ->
-        "fixes " <> advisoryIds ids <> " but is still affected by " <> advisoryIds open
+        "fixes " <> listed ids <> " but is still affected by " <> listed open
     FixesNoAdvisory -> "no advisory names this version as its fix"
     NoDatabaseToRemediate -> "no advisory database is loaded"
     AffectedBy score threshold ids ->
-        "affected by " <> advisoryIds ids <> " (" <> scoreName score <> " >= " <> show threshold <> ")"
+        "affected by " <> listed ids <> " (" <> scoreName score <> " >= " <> show threshold <> ")"
     NotAffectedAtThreshold score ->
         "no advisory at or above the " <> scoreName score <> " threshold affects this version"
     RuleUnable rule inability -> rule <> ": " <> renderInability inability
@@ -106,8 +106,8 @@ renderInability = \case
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"
 
-advisoryIds :: NonEmpty Text -> Text
-advisoryIds = T.intercalate ", " . toList
+listed :: AdvisoryIds -> Text
+listed = T.intercalate ", " . toList . unAdvisoryIds
 
 scoreName :: AdvisoryScore -> Text
 scoreName = \case

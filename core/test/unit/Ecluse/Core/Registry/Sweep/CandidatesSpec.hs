@@ -29,6 +29,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowByIdentity, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
     RuleVerdict (Deny),
     completeEvidence,
+    mkAdvisoryIds,
  )
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
@@ -72,7 +73,7 @@ intersectionSpec = describe "candidateSet" $ do
         candidates <- candidateSet (adapterProjectName pypiAdapter) [] (Just cve)
         inCandidates candidates name `shouldBe` True
         evalRule deps ctx advisoryRule (completeEvidence (sampleDetails name v1_0_0))
-            `shouldReturn` Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 7.0 ("CVE-2026-0001" :| []))
+            `shouldReturn` Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 7.0 (mkAdvisoryIds ("CVE-2026-0001" :| [])))
 
     it "carries every name the loaded generation covers" $ do
         candidates <- candidateSet project [] (Just (coveringLookup ["left-pad", "@babel/core"]))

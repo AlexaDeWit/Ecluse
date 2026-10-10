@@ -2,20 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The sentence each typed rule result renders to. The pins are the recorded sentences, written
-out in full. The oracle builds each sentence from its facts a second time, apart from the render,
-so a reword of either fails here.
+{- | The sentence each typed rule result renders to. The pins are the evidence: the recorded
+sentences, written out in full. The properties compare the render with a second copy of the same
+construction, so they catch an edit to one copy and not an error both copies share.
 -}
 module Ecluse.Core.Rules.RenderSpec (spec) where
 
 import Data.Fixed (Fixed (MkFixed))
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian, nominalDay, nominalDiffTimeToSeconds, picosecondsToDiffTime, secondsToNominalDiffTime)
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, PropertyT, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Package (Scope, mkScope, renderScope)
@@ -23,6 +23,7 @@ import Ecluse.Core.Rules.Render
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Rules.Support (pkg)
+import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
 
 spec :: Spec
 spec = do
@@ -59,19 +60,19 @@ reasonPins =
     , (IdentityNotRevoked "thing@1.0.0", "identity is not the revoked thing@1.0.0")
     , (IdentityAllowListed "@myorg/thing", "identity @myorg/thing is allow-listed by operator")
     , (IdentityNotAllowListed "Flask_Thing", "identity is not the allow-listed Flask_Thing")
-    , (Remediates ("GHSA-fixed-0001" :| []), "remediates GHSA-fixed-0001")
-    , (Remediates ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"]), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
-    , (FixesButStillAffected ("GHSA-fixed-0001" :| []) ("GHSA-open-0002" :| []), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
-    , (FixesButStillAffected ("GHSA-a" :| ["GHSA-b"]) ("GHSA-c" :| ["MAL-d"]), "fixes GHSA-a, GHSA-b but is still affected by GHSA-c, MAL-d")
+    , (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| [])), "remediates GHSA-fixed-0001")
+    , (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"])), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
+    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| [])), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
+    , (FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| ["GHSA-b"])) (mkAdvisoryIds ("GHSA-c" :| ["MAL-d"])), "fixes GHSA-a, GHSA-b but is still affected by GHSA-c, MAL-d")
     , (FixesNoAdvisory, "no advisory names this version as its fix")
     , (NoDatabaseToRemediate, "no advisory database is loaded")
-    , (AffectedBy Cvss 8.0 ("GHSA-affect-0001" :| []), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
-    , (AffectedBy Epss 0.5 ("GHSA-affect-0001" :| []), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
-    , (AffectedBy Cvss 7.0 ("CVE-2026-0001" :| ["GHSA-aaaa-bbbb-cccc"]), "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)")
-    , (AffectedBy Cvss 0 ("MAL-2026-1" :| []), "affected by MAL-2026-1 (CVSS >= 0.0)")
-    , (AffectedBy Cvss 10 ("MAL-2026-1" :| []), "affected by MAL-2026-1 (CVSS >= 10.0)")
-    , (AffectedBy Epss 1 ("CVE-2026-10002" :| []), "affected by CVE-2026-10002 (EPSS >= 1.0)")
-    , (AffectedBy Epss 0.05 ("CVE-2026-10002" :| []), "affected by CVE-2026-10002 (EPSS >= 5.0e-2)")
+    , (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+    , (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+    , (AffectedBy Cvss 7.0 (mkAdvisoryIds ("CVE-2026-0001" :| ["GHSA-aaaa-bbbb-cccc"])), "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)")
+    , (AffectedBy Cvss 0 (mkAdvisoryIds ("MAL-2026-1" :| [])), "affected by MAL-2026-1 (CVSS >= 0.0)")
+    , (AffectedBy Cvss 10 (mkAdvisoryIds ("MAL-2026-1" :| [])), "affected by MAL-2026-1 (CVSS >= 10.0)")
+    , (AffectedBy Epss 1 (mkAdvisoryIds ("CVE-2026-10002" :| [])), "affected by CVE-2026-10002 (EPSS >= 1.0)")
+    , (AffectedBy Epss 0.05 (mkAdvisoryIds ("CVE-2026-10002" :| [])), "affected by CVE-2026-10002 (EPSS >= 5.0e-2)")
     , (NotAffectedAtThreshold Cvss, "no advisory at or above the CVSS threshold affects this version")
     , (NotAffectedAtThreshold Epss, "no advisory at or above the EPSS threshold affects this version")
     , (RuleUnable "AllowIfOlderThan" PublishTimeUnread, "AllowIfOlderThan: the publish time is not available")
@@ -107,17 +108,97 @@ pushedAt = UTCTime (fromGregorian 2026 6 11) 0
 pushedMidSecond :: UTCTime
 pushedMidSecond = UTCTime (fromGregorian 2026 6 11) (picosecondsToDiffTime 45_296_500_000_000_000)
 
+{- | One tag for each 'Reason' constructor. 'reasonTag' matches every constructor, so a new one
+does not compile until it has a tag, and then fails here until it has a pin and a generator arm.
+-}
+data ReasonTag
+    = ScopeAllowListedTag
+    | ScopeNotAllowListedTag
+    | PublishedLongEnoughTag
+    | PublishedTooRecentlyTag
+    | PublishTimeUnknownTag
+    | RunsOnInstallTag
+    | NothingRunsOnInstallTag
+    | InstallCodeUndeterminedTag
+    | IdentityRevokedTag
+    | IdentityNotRevokedTag
+    | IdentityAllowListedTag
+    | IdentityNotAllowListedTag
+    | RemediatesTag
+    | FixesButStillAffectedTag
+    | FixesNoAdvisoryTag
+    | NoDatabaseToRemediateTag
+    | AffectedByTag
+    | NotAffectedAtThresholdTag
+    | RuleUnableTag
+    deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+reasonTag :: Reason -> ReasonTag
+reasonTag = \case
+    ScopeAllowListed{} -> ScopeAllowListedTag
+    ScopeNotAllowListed{} -> ScopeNotAllowListedTag
+    PublishedLongEnough{} -> PublishedLongEnoughTag
+    PublishedTooRecently{} -> PublishedTooRecentlyTag
+    PublishTimeUnknown -> PublishTimeUnknownTag
+    RunsOnInstall{} -> RunsOnInstallTag
+    NothingRunsOnInstall -> NothingRunsOnInstallTag
+    InstallCodeUndetermined -> InstallCodeUndeterminedTag
+    IdentityRevoked{} -> IdentityRevokedTag
+    IdentityNotRevoked{} -> IdentityNotRevokedTag
+    IdentityAllowListed{} -> IdentityAllowListedTag
+    IdentityNotAllowListed{} -> IdentityNotAllowListedTag
+    Remediates{} -> RemediatesTag
+    FixesButStillAffected{} -> FixesButStillAffectedTag
+    FixesNoAdvisory -> FixesNoAdvisoryTag
+    NoDatabaseToRemediate -> NoDatabaseToRemediateTag
+    AffectedBy{} -> AffectedByTag
+    NotAffectedAtThreshold{} -> NotAffectedAtThresholdTag
+    RuleUnable{} -> RuleUnableTag
+
+-- | One tag for each 'Inability' constructor, under the same guard as 'ReasonTag'.
+data InabilityTag
+    = PublishTimeUnreadTag
+    | InstallSignalUnreadTag
+    | NoDatabaseLoadedTag
+    | PushPastMaximumTag
+    | PushUndatedTag
+    | SourceBreakerOpenTag
+    | EvaluationFailedTag
+    | RuleThrewTag
+    | AttemptTimedOutTag
+    deriving stock (Bounded, Enum, Eq, Ord, Show)
+
+inabilityTag :: Inability -> InabilityTag
+inabilityTag = \case
+    PublishTimeUnread -> PublishTimeUnreadTag
+    InstallSignalUnread -> InstallSignalUnreadTag
+    NoDatabaseLoaded -> NoDatabaseLoadedTag
+    PushPastMaximum{} -> PushPastMaximumTag
+    PushUndated -> PushUndatedTag
+    SourceBreakerOpen -> SourceBreakerOpenTag
+    EvaluationFailed -> EvaluationFailedTag
+    RuleThrew{} -> RuleThrewTag
+    AttemptTimedOut -> AttemptTimedOutTag
+
+-- | Require that the run drew every tag, each in at least one case in a hundred.
+coverEvery :: (Bounded tag, Enum tag, Eq tag, Show tag) => tag -> PropertyT IO ()
+coverEvery drawn = for_ [minBound .. maxBound] $ \tag -> cover 1 (show tag) (drawn == tag)
+
 reasonSpec :: Spec
-reasonSpec = describe "renderReason" $
+reasonSpec = describe "renderReason" $ do
     for_ reasonPins $ \(reason, sentence) ->
         it ("reads " <> show reason <> " as its recorded sentence") $
             renderReason reason `shouldBe` sentence
+    it "has a recorded sentence for every constructor" $
+        ordNub (sort (map (reasonTag . fst) reasonPins)) `shouldBe` [minBound .. maxBound]
 
 inabilitySpec :: Spec
-inabilitySpec = describe "renderInability" $
+inabilitySpec = describe "renderInability" $ do
     for_ inabilityPins $ \(inability, sentence) ->
         it ("reads " <> show inability <> " as its recorded sentence") $
             renderInability inability `shouldBe` sentence
+    it "has a recorded sentence for every constructor" $
+        ordNub (sort (map (inabilityTag . fst) inabilityPins)) `shouldBe` [minBound .. maxBound]
 
 durationSpec :: Spec
 durationSpec = describe "renderDuration" $ do
@@ -184,8 +265,11 @@ decisionSpec = describe "renderDecision" $ do
     it "renders an admission's skipped and unreached checks as a parenthetical after its reason" $
         renderDecision pd (Admitted "AllowScope" (ScopeAllowListed (mkScope "myorg")) [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded, Unreached "DenyIfEpss"])
             `shouldBe` "@myorg/thing@1.0.0 was approved by AllowScope: scope @myorg is allow-listed (skipped for unavailability: DenyIfCve (no advisory database loaded); not reached: DenyIfEpss)"
+    it "renders a PyPI subject by its project name as written" $
+        renderDecision (identityEvidence (unscopedPyPI "Flask_Thing") (pypiVersion "1.0.0")) (Admitted "AllowByIdentity" (IdentityAllowListed "Flask_Thing") [])
+            `shouldBe` "Flask_Thing@1.0.0 was approved by AllowByIdentity: identity Flask_Thing is allow-listed by operator"
     it "renders a block naming the rule and its reason" $
-        renderDecision pd (Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 ("GHSA-affect-0001" :| [])))
+        renderDecision pd (Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))))
             `shouldBe` "@myorg/thing@1.0.0 was denied by DenyIfCve: affected by GHSA-affect-0001 (CVSS >= 8.0)"
     it "renders a deny-by-default explaining no rule allowed it, then every reason" $
         renderDecision pd (BlockedByDefault [ScopeNotAllowListed (mkScope "myorg"), PublishedTooRecently nominalDay (7 * nominalDay), RuleUnable "DenyIfCve" NoDatabaseLoaded])
@@ -222,25 +306,40 @@ readBackSpec = describe "cveIdsInReason -- recovering advisory ids for the denia
             threshold <- forAll genThreshold
             ids <- forAll genIds
             let denial = Blocked "DenyIfCve" (Just (DbEtag "etag-1")) (AffectedBy score threshold ids)
-            cveIdsInReason (renderDecision (pkg Nothing 0) denial) === toList ids
+            cveIdsInReason (renderDecision (pkg Nothing 0) denial) === toList (unAdvisoryIds ids)
 
 oracleSpec :: Spec
-oracleSpec = describe "properties" $ do
-    it "renders every reason as the sentence its rule builds from the same facts" $
+oracleSpec = describe "properties" . modifyMaxSuccess (const 1000) $ do
+    it "renders a generated reason of every constructor as the second copy of its sentence does" $
         hedgehog $ do
             reason <- forAll genReason
+            coverEvery (reasonTag reason)
             renderReason reason === oracleReason reason
-    it "renders every inability as the sentence its source builds from the same facts" $
+    it "renders a generated inability of every constructor as the second copy of its sentence does" $
         hedgehog $ do
             inability <- forAll genInability
+            coverEvery (inabilityTag inability)
             renderInability inability === oracleInability inability
-    it "renders every duration as the two-unit ladder does" $
+    it "renders a generated duration of every class as the second copy of the ladder does" $
         hedgehog $ do
             duration <- forAll genDuration
+            cover 5 "negative" (duration < 0)
+            cover 5 "under a second" (duration > 0 && duration < 1)
+            for_ [("minute", 60), ("hour", 3600), ("day", 86400)] $ \(unit, boundary) ->
+                cover 2 (fromString ("within a second of one " <> unit)) (abs (duration - boundary) <= 1)
+            cover 5 "more than two non-zero units" (length (filter (/= 0) (unitCounts duration)) > 2)
             renderDuration duration === oracleDuration duration
 
-{- | Each reason's sentence, built from its facts as the rule that gives it builds it. Every
-constructor is matched, so a new one does not compile until it has a sentence here.
+-- | The whole days, hours, minutes and seconds of a duration, for the property's coverage classes.
+unitCounts :: NominalDiffTime -> [Integer]
+unitCounts duration = [days, hours, minutes, seconds]
+  where
+    (days, underDay) = max 0 (round (nominalDiffTimeToSeconds duration)) `divMod` 86400
+    (hours, underHour) = underDay `divMod` 3600
+    (minutes, seconds) = underHour `divMod` 60
+
+{- | A second copy of each reason's sentence. Every constructor is matched, so a new one does not
+compile until it has a sentence here.
 -}
 oracleReason :: Reason -> Text
 oracleReason = \case
@@ -256,13 +355,16 @@ oracleReason = \case
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
     IdentityNotAllowListed ident -> "identity is not the allow-listed " <> ident
-    Remediates ids -> "remediates " <> T.intercalate ", " (toList ids)
-    FixesButStillAffected ids open -> "fixes " <> T.intercalate ", " (toList ids) <> " but is still affected by " <> T.intercalate ", " (toList open)
+    Remediates ids -> "remediates " <> commaJoined ids
+    FixesButStillAffected ids open -> "fixes " <> commaJoined ids <> " but is still affected by " <> commaJoined open
     FixesNoAdvisory -> "no advisory names this version as its fix"
     NoDatabaseToRemediate -> "no advisory database is loaded"
-    AffectedBy score threshold ids -> "affected by " <> T.intercalate ", " (toList ids) <> " (" <> oracleMetric score <> " >= " <> show threshold <> ")"
+    AffectedBy score threshold ids -> "affected by " <> commaJoined ids <> " (" <> oracleMetric score <> " >= " <> show threshold <> ")"
     NotAffectedAtThreshold score -> "no advisory at or above the " <> oracleMetric score <> " threshold affects this version"
     RuleUnable rule inability -> rule <> ": " <> oracleInability inability
+
+commaJoined :: AdvisoryIds -> Text
+commaJoined = T.intercalate ", " . toList . unAdvisoryIds
 
 oracleMetric :: AdvisoryScore -> Text
 oracleMetric = \case
@@ -288,7 +390,9 @@ oracleInability = \case
     RuleThrew thrown -> "the rule threw: " <> thrown
     AttemptTimedOut -> "the attempt timed out"
 
--- | The two most-significant non-zero units of a duration, on a ladder of its own.
+{- | A second copy of the two-unit ladder. It is the same algorithm as 'renderDuration', so it
+guards the render against a later edit and proves nothing the pins in 'durationSpec' do not.
+-}
 oracleDuration :: NominalDiffTime -> Text
 oracleDuration d = case take 2 (components ladder secs) of
     [] -> "0 seconds"
@@ -346,8 +450,8 @@ genScope = mkScope <$> Gen.text (Range.linear 1 12) Gen.alphaNum
 genFact :: Gen Text
 genFact = Gen.text (Range.linear 0 24) Gen.unicode
 
-genIds :: Gen (NonEmpty Text)
-genIds = Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.linear 1 19) (Gen.choice [Gen.alphaNum, pure '-']))
+genIds :: Gen AdvisoryIds
+genIds = mkAdvisoryIds <$> Gen.nonEmpty (Range.linear 1 5) (Gen.text (Range.linear 1 19) (Gen.choice [Gen.alphaNum, pure '-']))
 
 genScore :: Gen AdvisoryScore
 genScore = Gen.element [Cvss, Epss]
@@ -356,15 +460,18 @@ genScore = Gen.element [Cvss, Epss]
 genThreshold :: Gen Double
 genThreshold = Gen.choice [Gen.element [0, 0.05, 0.5, 1, 7, 10], Gen.double (Range.linearFrac 0 10)]
 
-{- | A duration in picoseconds from a day before zero to past a million years, with the unit
-boundaries and their neighbours drawn as often as the rest.
+{- | A duration in picoseconds. A sixth are negative, a sixth under a second, and a quarter within
+a second of a unit boundary. The rest run to a thousand days and to past a million years.
 -}
 genDuration :: Gen NominalDiffTime
 genDuration =
-    Gen.choice
-        [ Gen.element [0, 0.4, 0.5, 1, 1.5, 59, 59.5, 60, 61, 3599, 3600, 3601, 86399, 86400, 86401, 604800]
-        , picoseconds <$> Gen.integral (Range.linearFrom 0 (negate 86_400_000_000_000_000) 86_400_000_000_000_000_000)
-        , picoseconds <$> Gen.integral (Range.linear 0 100_000_000_000_000_000_000_000_000)
+    Gen.frequency
+        [ (2, negate . picoseconds <$> Gen.integral (Range.linear 1 86_400_000_000_000_000))
+        , (2, picoseconds <$> Gen.integral (Range.linear 1 999_999_999_999))
+        , (3, (+) <$> Gen.element [60, 3600, 86400] <*> (picoseconds <$> Gen.integral (Range.linearFrom 0 (negate 1_000_000_000_000) 1_000_000_000_000)))
+        , (3, picoseconds <$> Gen.integral (Range.linear 0 86_400_000_000_000_000_000))
+        , (1, picoseconds <$> Gen.integral (Range.linear 0 100_000_000_000_000_000_000_000_000))
+        , (1, Gen.element [0, 0.5, 1, 1.5, 59.5, 604800])
         ]
   where
     picoseconds = secondsToNominalDiffTime . MkFixed

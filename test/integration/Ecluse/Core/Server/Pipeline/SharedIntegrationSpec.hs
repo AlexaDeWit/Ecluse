@@ -26,7 +26,7 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (exposure, packageRule, remediation)
+import Ecluse.Test.Rules (packageRule, remediation, revocation)
 import Katip (Environment (Environment), closeScribes)
 
 spec :: Spec
@@ -48,7 +48,7 @@ downEffectfulRule =
 
 denyingEffectfulRule :: IO PreparedRule
 denyingEffectfulRule =
-    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny pass (Deny Nothing exposure)
+    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny pass (Deny Nothing revocation)
 
 allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =

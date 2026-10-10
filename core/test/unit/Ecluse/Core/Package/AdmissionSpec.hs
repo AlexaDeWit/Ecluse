@@ -65,7 +65,7 @@ import Ecluse.Test.Package (
     v1_0_0,
  )
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, exposure)
+import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule, revocation)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -215,7 +215,7 @@ spec = do
         it "reports no transience for a settled verdict, so no consumer waits on one" $ do
             admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admitted `shouldBe` Nothing
-            admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing exposure)) `shouldBe` Nothing
+            admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing revocation)) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
             admissionTransience AdmissionBelowFloor `shouldBe` Nothing
             admissionTransience AdmissionIntegrityMissing `shouldBe` Nothing

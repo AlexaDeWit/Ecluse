@@ -24,7 +24,7 @@ import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepGuardSkipp
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Maintenance
 import Ecluse.Test.Package (leftPadName, npmVersion)
-import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, exposure, inertRuleDeps, remediation)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, exposure, inertRuleDeps, remediation, revocation)
 import Ecluse.Test.Sweep
 
 spec :: Spec
@@ -228,7 +228,7 @@ spec = describe "grouped deletion" $ do
         mount <- grouped mirror cache
         changed <- newIORef False
         attempts <- newIORef (0 :: Int)
-        let policy = denyRule{prepEval = PerVersion (\_ _ -> readIORef changed <&> \allow -> if allow then Allow remediation else Deny Nothing exposure)}
+        let policy = denyRule{prepEval = PerVersion (\_ _ -> readIORef changed <&> \allow -> if allow then Allow remediation else Deny Nothing revocation)}
             fault = (protocolFault "response lost"){faultRetry = RetryWorthwhile}
             source =
                 mapDeletion

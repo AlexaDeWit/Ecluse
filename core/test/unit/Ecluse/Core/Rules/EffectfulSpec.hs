@@ -57,7 +57,6 @@ import Ecluse.Test.Rules (
     atDefaultPrecedence,
     blockedBy,
     evalRule,
-    exposure,
     inertRuleDeps,
     isApproved,
     isBlockedByDefault,
@@ -66,6 +65,7 @@ import Ecluse.Test.Rules (
     mapResilience,
     packageRule,
     remediation,
+    revocation,
     sentences,
     servingRuleDeps,
     withInstallScripts,
@@ -136,7 +136,7 @@ genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
     Gen.element
         [ Allow remediation
-        , Deny Nothing exposure
+        , Deny Nothing revocation
         , CannotVet FailDeny NoDatabaseLoaded
         ]
 
@@ -176,7 +176,7 @@ shouldAllResolve decisions (decision, reasons) = do
 
 -- | The decision an advisory deny reaches on one affecting advisory.
 deniedBy :: Text -> Text -> AdvisoryScore -> Double -> Text -> Decision
-deniedBy rule etag score threshold advisory = Blocked rule (Just (DbEtag etag)) (AffectedBy score threshold (advisory :| []))
+deniedBy rule etag score threshold advisory = Blocked rule (Just (DbEtag etag)) (AffectedBy score threshold (mkAdvisoryIds (advisory :| [])))
 
 spec :: Spec
 spec = do
@@ -323,13 +323,13 @@ engineSpec = do
             readIORef readCount `shouldReturn` 0
 
         it "an effectful deny outranks a lower per-version allow (boot order decides)" $ do
-            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing exposure)
+            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing revocation)
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
         it "a lower-ranked effectful rule never displaces a higher per-version allow" $ do
             (reading, readCount) <- counting pass
-            rule <- mkRule "EffDeny" 100 fastConfig FailDeny reading (Deny Nothing exposure)
+            rule <- mkRule "EffDeny" 100 fastConfig FailDeny reading (Deny Nothing revocation)
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             admittedBy decision `shouldBe` Just "AllowScope"
             readIORef readCount `shouldReturn` 0
@@ -407,14 +407,14 @@ engineSpec = do
 
     describe "evalRules -- precedence, not timing, decides" $ do
         it "credits the earliest-in-boot-order decisive rule, not the fastest" $ do
-            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (threadDelay 40_000) (Deny Nothing exposure)
+            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (threadDelay 40_000) (Deny Nothing revocation)
             fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow remediation)
             decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
         it "credits the earlier decisive advisory rule, and the later rule runs no read of its own" $ do
             (lagging, readCount) <- counting pass
-            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing exposure)
+            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing revocation)
             laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision lagging (Allow remediation)
             decision <- evalRules ctx [laggard, winner] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffWinner"
@@ -424,7 +424,7 @@ engineSpec = do
         it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
             let mk =
                     sequence
-                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing exposure)
+                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing revocation)
                         , failingRule "EffUnavail" 300 fastConfig FailDeny
                         ]
             forward <- mk >>= \rules -> evalRules ctx rules (pkg Nothing 0)

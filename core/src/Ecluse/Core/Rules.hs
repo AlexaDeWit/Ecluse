@@ -60,7 +60,6 @@ import Ecluse.Core.Rules.Effectful (
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Version (renderVersion)
 
@@ -170,7 +169,7 @@ advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> AdvisoryScore -> Double -
 advisoryDenyVerdict etag missing score threshold scoreOf advisories = \ev ->
     case ordNub (map arCveId (affecting scored (evVersion ev))) of
         [] -> unaffected
-        affected : more -> Deny (Just etag) (AffectedBy score threshold (named affected more))
+        affected : more -> Deny (Just etag) (AffectedBy score threshold (mkAdvisoryIds (affected :| more)))
   where
     scored = keepAdvisories (scoreAtLeast missing threshold . scoreOf) advisories
     unaffected = NoDecision (NotAffectedAtThreshold score)
@@ -180,15 +179,11 @@ classifyRanges :: PackageAdvisories -> RuleEvidence -> RuleVerdict
 classifyRanges advisories ev =
     case (remediated, stillOpen) of
         ([], _) -> NoDecision FixesNoAdvisory
-        (fixed : fixes, []) -> Allow (Remediates (named fixed fixes))
-        (fixed : fixes, open : others) -> NoDecision (FixesButStillAffected (named fixed fixes) (named open others))
+        (fixed : fixes, []) -> Allow (Remediates (mkAdvisoryIds (fixed :| fixes)))
+        (fixed : fixes, open : others) -> NoDecision (FixesButStillAffected (mkAdvisoryIds (fixed :| fixes)) (mkAdvisoryIds (open :| others)))
   where
     remediated = ordNub (map arCveId (fixedAt advisories (evVersion ev)))
     stillOpen = ordNub (map arCveId (affecting advisories (evVersion ev)))
-
--- The advisories a reason names, evaluated with the verdict, so a reason holds no deferred matching.
-named :: Text -> [Text] -> NonEmpty Text
-named advisory more = strictElements (advisory :| more)
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.

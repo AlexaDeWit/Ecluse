@@ -38,7 +38,7 @@ import Ecluse.Test.Cve (fakeCveLookup, referenceInside, unscoredEpssCases)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV2), RangeRow, mkValidDbWithRows)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.OsvDb (withFixtureOsvDb, withOsvZipDb)
-import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, v1_0_0)
+import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
     atDefaultPrecedence,
@@ -367,9 +367,8 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
         void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
         reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
 
-{- | Each advisory rule's verdict when no generation answers, and the sentence its decision reads
-as, verbatim. A deployment with no database configured and one awaiting its first sync must read
-the same.
+{- | Each advisory rule's verdict when no generation answers, with its decision's sentence, verbatim.
+A deployment with no database configured and one awaiting its first sync must read the same.
 -}
 noDatabaseVerdicts :: [(Text, Rule, RuleVerdict, Text)]
 noDatabaseVerdicts =
@@ -428,12 +427,12 @@ perVersionVerdict etag probe cve rule ev = case rule of
     remediation ranges =
         let remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
             stillOpen = ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar]
-         in case (nonEmpty remediated, nonEmpty stillOpen) of
+         in case (mkAdvisoryIds <$> nonEmpty remediated, mkAdvisoryIds <$> nonEmpty stillOpen) of
                 (Nothing, _) -> NoDecision FixesNoAdvisory
                 (Just fixed, Just open) -> NoDecision (FixesButStillAffected fixed open)
                 (Just fixed, Nothing) -> Allow (Remediates fixed)
     deny missing score threshold scoreOf ranges =
-        case nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)]) of
+        case mkAdvisoryIds <$> nonEmpty (ordNub [arCveId ar | ar <- ranges, referenceInside eco version ar, scoreAtLeast missing threshold (scoreOf ar)]) of
             Nothing -> NoDecision (NotAffectedAtThreshold score)
             Just ids -> Deny (Just etag) (AffectedBy score threshold ids)
 
@@ -610,7 +609,7 @@ differentialSpec = describe "one read per request against a read per version, ov
 
 -- | The PyPI counterpart of 'pkg': @Flask_Thing\@1.0.0@, published the given days before 'now'.
 pypiPkg :: Integer -> RuleEvidence
-pypiPkg ageDays = (pkg Nothing ageDays){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+pypiPkg ageDays = (pkg Nothing ageDays){evName = unscopedPyPI "Flask_Thing"}
 
 {- | Each verdict a built-in rule reaches and the sentence its reason reads as, for both
 ecosystems. A rule that gives another rule's reason, or a reworded sentence, fails its row.
@@ -642,9 +641,9 @@ ruleSentences =
     , ("AllowByIdentity on a PyPI project", inertRuleDeps, AllowByIdentity "Flask_Thing", pypiPkg 0, Allow (IdentityAllowListed "Flask_Thing"), "identity Flask_Thing is allow-listed by operator")
     , ("DenyIfCve below its threshold", depsWith (affecting (Just 5.0) Nothing), denyCveAt 8.0, pkg Nothing 0, NoDecision (NotAffectedAtThreshold Cvss), "no advisory at or above the CVSS threshold affects this version")
     , ("DenyIfEpss below its threshold", depsWith (affecting Nothing (Just 0.1)), denyEpssAt 0.5, pkg Nothing 0, NoDecision (NotAffectedAtThreshold Epss), "no advisory at or above the EPSS threshold affects this version")
-    , ("DenyIfCve on a PyPI project", depsWith pypiAffecting, denyCveAt 8.0, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
-    , ("DenyIfEpss on a PyPI project", depsWith pypiAffecting, denyEpssAt 0.5, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
-    , ("AllowIfRemediatesCve on a PyPI project", depsWith [("flask-thing", snd row) | row <- fixRows], AllowIfRemediatesCve, pypiPkg 0, Allow (Remediates ("GHSA-fixed-0001" :| [])), "remediates GHSA-fixed-0001")
+    , ("DenyIfCve on a PyPI project", depsWith pypiAffecting, denyCveAt 8.0, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+    , ("DenyIfEpss on a PyPI project", depsWith pypiAffecting, denyEpssAt 0.5, pypiPkg 0, Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+    , ("AllowIfRemediatesCve on a PyPI project", depsWith [("flask-thing", snd row) | row <- fixRows], AllowIfRemediatesCve, pypiPkg 0, Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
     ]
   where
     myorg = mkScope "myorg"
@@ -675,19 +674,19 @@ spec = do
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
-                let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+                let pd = pypiPkg 0
                     rows = [("flask-thing", snd row) | row <- affecting (Just 9.8) (Just 0.9)]
                 evalRule (depsWith rows) ctx rule pd >>= (`shouldSatisfy` isDeny)
 
         it "matches a PyPI fix and keeps its display spelling in the decision message" $ do
-            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows]
             decision <- decideWith (depsWith rows) [atDefaultPrecedence AllowIfRemediatesCve] pd
             admittedBy decision `shouldBe` Just "AllowIfRemediatesCve"
             renderDecision pd decision `shouldSatisfy` T.isInfixOf "Flask_Thing@1.0.0"
 
         it "does not fast-track a PyPI fix while a canonical-name advisory still affects it" $ do
-            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = pypiPkg 0
                 rows = [("flask-thing", snd row) | row <- fixRows <> affecting Nothing Nothing]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isNoDecision)
 
@@ -748,18 +747,18 @@ spec = do
     describe "evalRule (AllowIfRemediatesCve)" $ do
         it "allows a version an advisory names as its exact fix, crediting the advisory" $
             evalRule (depsWith fixRows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                `shouldDecide` (Allow (Remediates ("GHSA-fixed-0001" :| [])), "remediates GHSA-fixed-0001")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| []))), "remediates GHSA-fixed-0001")
         it "names every advisory the version fixes in the reason" $ do
             let rows =
                     [ ("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)
                     , ("thing", AdvisoryRange "GHSA-fixed-0002" Nothing (Just "0.2.0") (FixedBefore "1.0.0") Nothing)
                     ]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                `shouldDecide` (Allow (Remediates ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"])), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0001" :| ["GHSA-fixed-0002"]))), "remediates GHSA-fixed-0001, GHSA-fixed-0002")
         it "matches the OSV wire form of a scoped name" $ do
             let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg (Just "myorg") 0)
-                `shouldDecide` (Allow (Remediates ("GHSA-fixed-0003" :| [])), "remediates GHSA-fixed-0003")
+                `shouldDecide` (Allow (Remediates (mkAdvisoryIds ("GHSA-fixed-0003" :| []))), "remediates GHSA-fixed-0003")
         it "abstains when no advisory names the version as a fix (exact match only)" $ do
             -- 1.0.0 sits past this advisory's 0.9.0 fix, but the fast lane is a
             -- deliberate exact-fix probe: being merely unaffected earns nothing.
@@ -771,7 +770,7 @@ spec = do
                     fixRows
                         <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Unbounded Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
-                `shouldDecide` (NoDecision (FixesButStillAffected ("GHSA-fixed-0001" :| []) ("GHSA-open-0002" :| [])), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
+                `shouldDecide` (NoDecision (FixesButStillAffected (mkAdvisoryIds ("GHSA-fixed-0001" :| [])) (mkAdvisoryIds ("GHSA-open-0002" :| []))), "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
         it "abstains when no advisory database is loaded" $
             evalRule inertRuleDeps ctx AllowIfRemediatesCve (pkg Nothing 0)
                 `shouldDecide` (NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
@@ -779,7 +778,7 @@ spec = do
     describe "evalRule (DenyIfCve)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting (Just 9.8) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
-                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Cvss 8.0 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (CVSS >= 8.0)")
         it "abstains when the affecting advisory is below the threshold" $
             evalRule (depsWith (affecting (Just 5.0) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
@@ -801,7 +800,7 @@ spec = do
     describe "evalRule (DenyIfEpss)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting Nothing (Just 0.75))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 ("GHSA-affect-0001" :| [])), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("GHSA-affect-0001" :| []))), "affected by GHSA-affect-0001 (EPSS >= 0.5)")
         it "denies at the threshold exactly, which is where an at-or-above gate closes" $
             evalRule (depsWith (affecting Nothing (Just 0.5))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isDeny)
@@ -818,7 +817,7 @@ spec = do
                     affecting Nothing Nothing
                         <> [("thing", AdvisoryRange "CVE-2026-10002" Nothing (Just "0") Unbounded (Just 0.75))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 ("CVE-2026-10002" :| [])), "affected by CVE-2026-10002 (EPSS >= 0.5)")
+                `shouldDecide` (Deny (Just (DbEtag "etag-1")) (AffectedBy Epss 0.5 (mkAdvisoryIds ("CVE-2026-10002" :| []))), "affected by CVE-2026-10002 (EPSS >= 0.5)")
         it "abstains when the version sits outside the affected range" $ do
             let rows = [("thing", AdvisoryRange "GHSA-affect-0002" Nothing (Just "0") (FixedBefore "1.0.0") (Just 0.99))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)

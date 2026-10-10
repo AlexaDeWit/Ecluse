@@ -45,7 +45,7 @@ import Ecluse.Core.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
-import Ecluse.Test.Rules (atDefaultPrecedence, exposure, inertRuleDeps, remediation)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, remediation, revocation)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime
@@ -210,7 +210,7 @@ spec = do
 
         it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing exposure) of
+            case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing revocation) of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"

@@ -34,7 +34,7 @@ import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, ServerError, Unavailable'),
  )
 import Ecluse.Test.Package (npmVersion, sampleDetails, thingName)
-import Ecluse.Test.Rules (exposure)
+import Ecluse.Test.Rules (revocation)
 
 -- The version snapshot the gate reasons over. Each case supplies its own verdict, so only the
 -- snapshot's validity matters.
@@ -66,7 +66,7 @@ spec = describe "publicArtifactGate -- the shared admission verdict on the serve
         statusOf AdmissionFileAbsent `shouldBe` Just NotFound
 
     it "renders a policy denial as a 403" $
-        statusOf (AdmissionDenied (Blocked "test-deny" Nothing exposure)) `shouldBe` Just Forbidden
+        statusOf (AdmissionDenied (Blocked "test-deny" Nothing revocation)) `shouldBe` Just Forbidden
 
     it "renders an artifact the integrity floor refuses as a 403" $ do
         statusOf AdmissionBelowFloor `shouldBe` Just Forbidden

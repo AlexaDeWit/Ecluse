@@ -44,6 +44,9 @@ module Ecluse.Core.Rules.Types (
 
     -- * Why a rule reached its result
     Reason (..),
+    AdvisoryIds,
+    mkAdvisoryIds,
+    unAdvisoryIds,
     Inability (..),
     AdvisoryScore (..),
     AdvisoryAge (..),
@@ -62,6 +65,7 @@ import Ecluse.Core.Package (
     PackageName,
     Scope,
  )
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version)
 
 {- | The closed built-in rule vocabulary accepted from configuration.
@@ -410,20 +414,34 @@ data Reason
     | -- | 'AllowByIdentity' abstains: the version is not the identity it allows.
       IdentityNotAllowListed Text
     | -- | 'AllowIfRemediatesCve' admits: the advisories this version is the exact fix for.
-      Remediates (NonEmpty Text)
+      Remediates AdvisoryIds
     | -- | 'AllowIfRemediatesCve' abstains: the advisories it fixes, then those still affecting it.
-      FixesButStillAffected (NonEmpty Text) (NonEmpty Text)
+      FixesButStillAffected AdvisoryIds AdvisoryIds
     | -- | 'AllowIfRemediatesCve' abstains: no advisory names this version as its fix.
       FixesNoAdvisory
     | -- | 'AllowIfRemediatesCve' abstains: no advisory database is loaded.
       NoDatabaseToRemediate
     | -- | An advisory deny fires: the score it gates on, its threshold, and the affecting advisories.
-      AffectedBy AdvisoryScore Double (NonEmpty Text)
+      AffectedBy AdvisoryScore Double AdvisoryIds
     | -- | An advisory deny abstains: no advisory at or above its threshold affects the version.
       NotAffectedAtThreshold AdvisoryScore
-    | -- | The named rule could not vet the version.
+    | -- | The named rule could not vet the version. The engine's fold builds this, never a rule.
       RuleUnable Text Inability
     deriving stock (Eq, Show)
+
+{- | The advisories a reason names, at least one. 'mkAdvisoryIds' is the only way to build it and
+evaluates every identifier, so a reason leaves no range matching for the reader that renders it.
+-}
+newtype AdvisoryIds = AdvisoryIds (NonEmpty Text)
+    deriving stock (Eq, Show)
+
+-- | Name the advisories. Evaluating the result evaluates every identifier.
+mkAdvisoryIds :: NonEmpty Text -> AdvisoryIds
+mkAdvisoryIds = AdvisoryIds . strictElements
+
+-- | The identifiers, in the order the rule found them.
+unAdvisoryIds :: AdvisoryIds -> NonEmpty Text
+unAdvisoryIds (AdvisoryIds ids) = ids
 
 -- | The score an advisory deny gates on.
 data AdvisoryScore

@@ -25,6 +25,7 @@ module Ecluse.Test.Rules (
 
     -- * Reasons for a fixed verdict
     remediation,
+    revocation,
     exposure,
 
     -- * Package-read prepared rules
@@ -89,13 +90,14 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Inability (NoDatabaseLoaded),
     PrecededRule (PrecededRule),
-    Reason (AffectedBy, Remediates),
+    Reason (AffectedBy, IdentityRevoked, Remediates),
     Rule,
     RuleEvaluation (Unavailable),
     RuleEvidence (evInstallCode, evName),
     RuleVerdict (Allow, CannotVet, Deny, NoDecision),
     completeEvidence,
     defaultPrecedence,
+    mkAdvisoryIds,
  )
 
 {- | Rule capabilities with no advisory database configured and no observers. Each advisory rule
@@ -179,15 +181,16 @@ an absent advisory database, so a fail-closed evaluation reaches an undecidable 
 -}
 admitRule, denyRule, cannotVetRule :: PreparedRule
 admitRule = constRule "test-admit" (Allow remediation)
-denyRule = constRule "test-deny" (Deny Nothing exposure)
+denyRule = constRule "test-deny" (Deny Nothing revocation)
 cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny NoDatabaseLoaded)
 
 {- | The reasons a fixed-verdict rule gives where a case reads the verdict and not the reason: an
-allow's, and a deny's.
+allow's, a deny's that names no advisory generation, and a deny's that names one.
 -}
-remediation, exposure :: Reason
-remediation = Remediates ("GHSA-test-0001" :| [])
-exposure = AffectedBy Cvss 7.0 ("GHSA-test-0001" :| [])
+remediation, revocation, exposure :: Reason
+remediation = Remediates (mkAdvisoryIds ("GHSA-test-0001" :| []))
+revocation = IdentityRevoked "thing"
+exposure = AffectedBy Cvss 7.0 (mkAdvisoryIds ("GHSA-test-0001" :| []))
 
 -- | The rule name credited for an admission or a block, if any (the engine credits by name).
 admittedBy, blockedBy :: Decision -> Maybe Text
