@@ -1103,9 +1103,15 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.ReplaySpec
+    Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.PatternsSpec
     Ecluse.BenchLoad.PatternReportSpec
     Ecluse.BenchLoad.VerdictSpec
+    Ecluse.BenchReport.AgainstMain.AcceptanceSpec
+    Ecluse.BenchReport.AgainstMain.BenchSpec
+    Ecluse.BenchReport.AgainstMain.LoadSpec
+    Ecluse.BenchReport.AgainstMainSpec
+    Ecluse.BenchReport.MarkdownSpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1643,30 +1649,38 @@ library ecluse-bench-load
     , aeson >=2.2 && <2.4
     , universe-base ^>=1.1
 
--- Work-per-request bench report core: the PURE CSV-to-Markdown rendering behind the
--- bench run summary (parse the tasty-bench CSV, group by tasty path, render the
--- structured report). An INTERNAL sublibrary, following the ecluse-bench-load pattern,
--- so the gating unit suite exercises the parse and rendering deterministically. No HTTP
--- and no egress former, so unlike bench-load it needs no dev-http-egress gating. It
--- stays out of the shipped library closure.
+-- The pure rendering behind the benchmark run summaries: the work-per-request report from
+-- the tasty-bench CSV, and the comparison of a bench, acceptance, or load report with the
+-- latest run on main. An internal sublibrary, following the ecluse-bench-load pattern, so
+-- the gating unit suite exercises the parsing and rendering. No HTTP and no egress former,
+-- so unlike bench-load it needs no dev-http-egress gating. It stays out of the shipped
+-- library closure.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
-  exposed-modules: Ecluse.BenchReport
-  build-depends:   text ^>=2.1
+  exposed-modules:
+    Ecluse.BenchReport
+    Ecluse.BenchReport.AgainstMain
+    Ecluse.BenchReport.AgainstMain.Acceptance
+    Ecluse.BenchReport.AgainstMain.Bench
+    Ecluse.BenchReport.AgainstMain.Load
+    Ecluse.BenchReport.Markdown
+  build-depends:
+    , containers  ^>=0.7
+    , text        ^>=2.1
 
--- The bench report renderer: the thin file-reading shell over ecluse-bench-report.
--- CI runs it after the benchmarks to turn bench-results.csv, plus the teed console
--- output, into the run summary. It appends to $GITHUB_STEP_SUMMARY itself, like the
--- load and acceptance harnesses, so the workflow step stays a single unwrapped
--- command.
+-- The file-reading shell over ecluse-bench-report. CI runs it after the benchmarks to turn
+-- bench-results.csv, plus the teed console output, into the run summary, and after each
+-- benchmark workflow off main to render the comparison with main. It appends to
+-- $GITHUB_STEP_SUMMARY itself, like the load and acceptance harnesses.
 executable bench-report
   import:         shared
   main-is:        Main.hs
   hs-source-dirs: bench/report
   build-depends:
     , ecluse:ecluse-bench-report
-    , text  ^>=2.1
+    , filepath  ^>=1.4 || ^>=1.5
+    , text      ^>=2.1
 
 -- Live performance-acceptance harness: the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the

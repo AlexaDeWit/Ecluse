@@ -18,6 +18,7 @@ import Ecluse.BenchReport (
     groupRows,
     parseCsv,
     renderReport,
+    splitEcosystem,
     splitName,
     stripAnsi,
  )
@@ -67,6 +68,13 @@ spec = do
         it "groups by heading, preserving first-appearance and row order" $
             map (second (map rowBench . toList)) (groupRows [mkRow "b" "x", mkRow "a" "y", mkRow "b" "z"])
                 `shouldBe` [("b", ["x", "z"]), ("a", ["y"])]
+
+    describe "splitEcosystem" $ do
+        it "splits a group that opens with an ecosystem into its name and the path under it" $
+            splitEcosystem "ecosystem: npm.wire+project (per package).lodash (medium)"
+                `shouldBe` (Just "npm", "wire+project (per package).lodash (medium)")
+        it "leaves a group outside an ecosystem whole" $
+            splitEcosystem "cache maintenance.256" `shouldBe` (Nothing, "cache maintenance.256")
 
     describe "formatPs" $ do
         it "keeps sub-nanosecond figures in picoseconds" $

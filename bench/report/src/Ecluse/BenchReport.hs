@@ -11,6 +11,7 @@ module Ecluse.BenchReport (
     parseCsv,
     splitName,
     groupRows,
+    splitEcosystem,
 
     -- * Rendering
     ReportInput (..),
@@ -25,7 +26,8 @@ module Ecluse.BenchReport (
 import Data.Char (isAlphaNum)
 import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
-import Numeric (showFFloat)
+
+import Ecluse.BenchReport.Markdown (cells, fixed)
 
 -- | A CSV row with optional GC statistics when the run enabled RTS statistics.
 data BenchRow = BenchRow
@@ -162,9 +164,13 @@ ecosystemSections groups = concatMap section (ordNub (map (ecosystemSection . fs
             <> concatMap
                 (groupSectionAt (if isJust ecosystem then "#### " else "### "))
                 (filter ((== ecosystem) . ecosystemSection . fst) groups)
+    ecosystemSection = fst . splitEcosystem
 
-ecosystemSection :: Text -> Maybe Text
-ecosystemSection groupName = fst . T.breakOn "." <$> T.stripPrefix "ecosystem: " groupName
+-- | The ecosystem a group's path opens with, when it names one, and the path under it.
+splitEcosystem :: Text -> (Maybe Text, Text)
+splitEcosystem groupName = case T.breakOn "." <$> T.stripPrefix "ecosystem: " groupName of
+    Just (ecosystem, under) -> (Just ecosystem, T.drop 1 under)
+    Nothing -> (Nothing, groupName)
 
 preamble :: [Text]
 preamble =
@@ -279,8 +285,8 @@ readingNotes :: [Text]
 readingNotes =
     [ "### Reading the numbers"
     , ""
-    , "- **Inform-only.** Time is runner-dependent. Nothing here gates, and there is no"
-        <> " cross-run baseline."
+    , "- **Inform-only.** Time is runner-dependent, and nothing here gates. A run off `main`"
+        <> " adds a section after this report that sets each time beside the latest run on `main`."
     , "- **Allocated and copied are per-iteration GC-stats deltas** -- the"
         <> " machine-independent signal to trend."
     , "- **Peak memory is a process-wide high-water mark** at megabyte granularity: it"
@@ -289,9 +295,6 @@ readingNotes =
     , "- **The generator tests and complexity assertions are not in the CSV**. Their"
         <> " verdicts live in the raw console output, and a trip reds the run."
     ]
-
-cells :: [Text] -> Text
-cells xs = "| " <> T.intercalate " | " xs <> " |"
 
 -- A heading's GitHub anchor slug: lowercase, punctuation dropped, spaces to hyphens
 -- (hyphens and underscores survive), matching how the run summary renders heading ids.
@@ -318,10 +321,9 @@ scaled step units n = pick (fromIntegral n) units
         _ -> sig3 v <> " " <> unit
     sig3 v
         | v == 0 = "0"
-        | v >= 100 = fmt 0 v
-        | v >= 10 = fmt 1 v
-        | otherwise = fmt 2 v
-    fmt d v = toText (showFFloat (Just d) v "")
+        | v >= 100 = fixed 0 v
+        | v >= 10 = fixed 1 v
+        | otherwise = fixed 2 v
 
 -- | Remove console colour and cursor sequences before embedding Markdown output.
 stripAnsi :: Text -> Text
