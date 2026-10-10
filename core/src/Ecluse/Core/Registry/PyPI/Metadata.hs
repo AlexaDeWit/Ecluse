@@ -11,7 +11,6 @@ selected Simple-index reads share incremental extraction.
 module Ecluse.Core.Registry.PyPI.Metadata (
     pypiRead,
     pypiChargeFactors,
-    readPyPIIndex,
     pypiIndexWalk,
     projectPyPIStream,
 ) where
@@ -55,7 +54,7 @@ working set per basis byte of a realistic merge (1.24, boto3) from one meter ste
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
 
--- | Walk an index's chunks with the production field policy.
+-- Walk an index's chunks with the production field policy.
 readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
 readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)
 

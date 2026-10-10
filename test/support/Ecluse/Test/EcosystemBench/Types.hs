@@ -18,7 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CorpusPackage)
 
@@ -32,9 +32,10 @@ data EcosystemBench = EcosystemBench
     , ebDecode :: PackageName -> ByteString -> Either Text [Text]
     -- ^ Decode release keys through the adapter's wire parser.
     , ebProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
-    , ebRead :: PackageName -> ByteString -> IO (Either MetadataError (PackageInfo, CachedDoc))
-    -- ^ The full read of held bytes through the reader a fetch runs.
-    , ebSelective :: PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
+    , ebRead :: PackageName -> [ByteString] -> IO (Either MetadataError Manifest)
+    -- ^ The production full read of a capture's chunks, as a fetch from the capture's registry runs it.
+    , ebSelective :: PackageName -> Version -> [ByteString] -> IO (Either MetadataError (Maybe PackageDetails))
+    -- ^ The production selected read of a capture's chunks, on the same terms.
     , ebReadDocument :: ByteString -> Either Text CachedDoc
     -- ^ Prepare a wire guard's native input outside its measured operation.
     , ebNestingDepth :: CachedDoc -> Int

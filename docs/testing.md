@@ -106,8 +106,9 @@ The retained samples include any backing arrays reachable through the selected s
 These counters distinguish the retained heap from allocation and cache accounting.
 The high-water sample includes rendering and cannot establish the production read/decode/project
 peak or a bound on transient buffers. The [listing probe](#listing-peaks) measures that peak. The
-probes use production projection functions with the default structural limits. They do not execute
-the HTTP bounded read or prove that shipping response limits admit each capture.
+probes read each capture's held bytes through the production read driver, under the default limits
+with a body limit of at least the capture's size. They do not execute the HTTP exchange or prove
+that shipping response limits admit each capture.
 
 The retained-byte gate uses the following corpus envelopes. The figures come from all nine npm and
 three PyPI captures in the arm64 Build job of
@@ -299,9 +300,8 @@ body, so twice the served body sets the output working set.
 ### Read evaluation
 
 `MetadataResidencySpec` checks that a full read hands back a fully evaluated result. For each
-capture, a fresh child process reads through the production projection and enforces artifact
-locations against the capture's registry, as a production fetch does. It then takes two samples of
-the same rooted cache entry:
+capture, a fresh child process reads the held bytes through the production read driver, as a fetch
+from the capture's registry runs it. It then takes two samples of the same rooted cache entry:
 
 - the live bytes with the entry at weak head normal form, as production holds a read result
 - the live bytes after the child forces the entry through its derived rendering
@@ -328,8 +328,10 @@ PyPI pins use the same PEP 440 canonicalisation as production artifact routes.
 Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected` and
 `StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
 bytes to the new parser, separating input buffering from projection changes. The streamed modes
-read the file in 32 KiB chunks through the production driver. `StreamedVersions` is npm-only.
-Every streamed mode hashes the source to report it. Production selected reads skip that hash.
+read the file in 32 KiB chunks. `StreamedFull` and `StreamedSelected` run the production read
+driver's full and selected reads, and `StreamedVersions`, which is npm-only, runs the version-list
+reader. Only a full read takes a digest of its source. The other two streamed modes report the
+file's digest, which the probe takes after the measured read.
 
 Each invocation makes one read with no warm-up. Accounting walks force the retained result without
 `Show` or output encoding. `read_project_ns` covers that read, projection and forcing.
@@ -492,12 +494,16 @@ a changed figure comes from a changed build. The budgets cover allocation only. 
 allocates nothing leaves the figure unchanged, and shows only in the reports' time columns, which
 carry no budget.
 
-The full legs read each capture through the production reader a fetch runs (`readNpmFull` or
-`readPyPIIndex` with its finishing projection, over a table keyed afresh for the read), fed the
-held bytes as one chunk, then run the rules, the advisory reads, the merge, assembly, and
-serialisation. The fetch wraps that reader in `digestingRead` and `chargedRead` and applies
-`enforceArtifactLocations` to its result, and none of the three runs in the gate. The
-single-version leg projects through the test-support tree walk over a fixed table key.
+Every leg reads its capture through the production read driver, `Ecluse.Core.Registry.Metadata.Fetch`,
+as a fetch from the capture's registry runs it. The harness holds the capture's bytes and feeds the
+driver 32 KiB chunks of them in place of a socket, cut before the measured pass.
+
+- The full legs run the driver's full read (`readManifest`): the charge and the source digest for
+  each chunk, the walk over a table keyed afresh for the read, the finish, and the artifact location
+  check. They then run the rules, the advisory reads, the merge, assembly, and serialisation. The
+  charge has no payer, as on a read outside the memory gate.
+- The single-version leg runs the driver's selected read (`readVersion`), which takes no digest and
+  pays no charge, and checks the selected version's artifact locations.
 
 Each package has four legs:
 
@@ -517,10 +523,10 @@ rules' own read, under the key the rules look it up by.
 
 The harness runs each leg five times, each pass on its own copy of the capture, and reports the
 median, with the smallest and largest pass beside it. It counts the bytes each pass allocates with
-GHC's per-thread allocation counter. For one build over one input, a full leg's figure moves by a
-few hundredths of a percent between passes and runs, because the reader draws a fresh table key for
-each read, and a single-version leg's by a few dozen bytes. Both stay far inside the margin, and the
-median absorbs the spread within a run. Wall-clock time appears in the report for information only.
+GHC's per-thread allocation counter. For one build over one input, a leg's figure moves by a few
+hundredths of a percent between passes and runs, because each read draws a fresh table key. That
+stays far inside the margin, and the median absorbs the spread within a run. Wall-clock time appears
+in the report for information only.
 The age rules evaluate at each capture's `capturedAt` time in `bench/corpus/pins.json`, so they
 admit the same versions on every run. The harness links the shipped server's RTS options (the
 `shipped-rts` stanza in `ecluse.cabal`), and the report prints the capabilities and allocation area
@@ -738,8 +744,10 @@ The harness separately validates each capture through the production adapter bef
 | Load metadata and cache scenarios | Fixture upstreams serve the captured metadata and rewrite artifact authorities for the local harness. The private upstream of the 5% and 25% private-copy points serves cut captures, and that of the 100% points serves the capture bytes uncut. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
-The projection groups measure decoding from held bytes, including the structural guards.
-They do not measure source hashing or the production HTTP wrappers.
+The projection groups read held bytes, including the structural guards. Their rows that read a
+whole capture or select one version run the production read driver over the capture's 32 KiB chunks,
+so they include the source digest of a full read and the artifact location check. No projection row
+measures the HTTP exchange.
 
 The cold-read group calls `fetchFullManifest` and `fetchVersionMetadata` through uncached production
 clients. Each iteration includes request formation, loopback HTTP, bounded response consumption,
@@ -870,7 +878,7 @@ Timed allocation and GC deltas cover the replay window.
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
 Each report states the parameters, distinct wire bytes, and shared accounted capacity.
 Occupancy, retention refusals, retention fraction, and collapsed fraction remain per-store observations. The wire-to-resident comparison
-uses matching accounted bytes for the full store, computed through production projection and
+uses matching accounted bytes for the full store, computed through the production full read and
 the historical `weighCacheEntry` helper before measurement. Version and assembled working-set bytes remain unavailable.
 The separate full-store wire-equivalent estimate excludes retained artifact keys.
 Full candidate accounting runs only during diagnostic preparation. Local requests never weigh or
@@ -966,7 +974,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
-| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `project`, `captureUpstream`, `readSource`, `streamFull` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `peakLimits`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each regression limit below its charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | Seven of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The limit check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without peak limits skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads, and `Ecluse.Test.Corpus.Merge` cuts, an ecosystem they do not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Append the ecosystem's capture list to `packages` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), and add its arms to that module's `captureSource`, `readSource` and `readLegacySource`. In [MemoryModelResidencySpec.hs](../test/residency/Ecluse/Core/Server/MemoryModelResidencySpec.hs), add its arms to `envelopePermille`, `peakLimits`, `entryBelowSource` and `probeIdentity`, and add it to the ecosystem list of the check that keeps each regression limit below its charge. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | Seven of these pass silently when left out. `packages` feeds both metadata residency specs, so a capture list it does not append is skipped, and the only corpus-wide check is that some capture exceeds 3,687,514 bytes. The limit check covers only the ecosystems in its `for_ [Npm, PyPI]`. An ecosystem without peak limits skips the [listing checks](#listing-peaks), one that `entryBelowSource` does not name skips the entry-below-source check, and one without retained-heap limits takes the generic ones. `readLegacySource` reads, and `Ecluse.Test.Corpus.Merge` cuts, an ecosystem they do not name as npm. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |

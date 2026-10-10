@@ -725,6 +725,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.JsonStream
     Ecluse.Test.Registry.Packed
     Ecluse.Test.Registry.Shape
+    Ecluse.Test.Registry.Metadata.Fetch
     Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI

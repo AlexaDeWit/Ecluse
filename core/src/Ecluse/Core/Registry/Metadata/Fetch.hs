@@ -16,7 +16,6 @@ module Ecluse.Core.Registry.Metadata.Fetch (
     -- * Reading from any body
     readManifest,
     readVersion,
-    keyedRead,
 ) where
 
 import Ecluse.Core.Package (PackageName)
@@ -65,7 +64,7 @@ readVersion EcosystemRead{erUniqueFields = uniqueFields, erWalkSelected = walk, 
   where
     limits = rtLimits terms
 
--- | Run a walk over a table keyed afresh for the read, within the metadata body limit.
+-- Run a walk over a table keyed afresh for the read, within the metadata body limit.
 keyedRead :: Limits -> [Text] -> DocumentWalk s -> IO ByteString -> IO (Either LimitError (StreamResult s))
 keyedRead limits uniqueFields walk readChunk = do
     table <- newInternTable <$> newTableKey <*> pure uniqueFields

@@ -30,39 +30,42 @@ import Ecluse.Core.Package (
     hashAlg,
     hashValue,
  )
-import Ecluse.Core.Package.Filter (enforceArtifactLocations, restrictToSurvivors)
+import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
-import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo, manifestRaw), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Server.Conditional (renderETag)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..), fingerprintPiece)
 import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage), cpName, syntheticProxyBase)
+import Ecluse.Test.Registry.Metadata.Fetch (captureManifest)
 import Ecluse.Test.Snapshot (digestOf)
 
 -- | One ecosystem's reads of a capture, bound to the upstream it was captured from.
 data CorpusRead = CorpusRead
-    { crProject :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
-    -- ^ The full read, before artifact-location enforcement.
-    , crUpstream :: CaptureUpstream
+    { crUpstream :: CaptureUpstream
     , crMetadata :: AdapterMetadata
+    -- ^ The adapter whose production full read the outputs come from.
     , crVersionReads :: PackageName -> ByteString -> CachedDoc -> Text -> [(Text, LByteString)]
     -- ^ Labelled outputs of the reads that select one version key.
     , crDocumentReads :: PackageName -> ByteString -> [(Text, LByteString)]
     -- ^ Labelled outputs of any other read of the whole capture.
     }
 
-{- | One tab-separated line per output: capture, label, byte length and SHA-256. Survivor sets are
-all versions, the least key and the greatest key, each served alone and merged with itself.
+{- | One tab-separated line per output of the production full read: capture, label, byte length and
+SHA-256. Survivor sets are all versions, the least key and the greatest key, each served alone and merged with itself.
 -}
-captureOutputs :: CorpusRead -> CorpusPackage -> ByteString -> Either Text [Text]
-captureOutputs corpus package raw = do
-    (projected, document) <- first show (crProject corpus name raw)
-    let upstream = crUpstream corpus
-        info = enforceArtifactLocations (upstreamAuthorities upstream) (upstreamOrigin upstream) projected
+captureOutputs :: CorpusRead -> CorpusPackage -> ByteString -> IO (Either Text [Text])
+captureOutputs corpus package raw =
+    (first show >=> manifestOutputs corpus package raw) <$> captureManifest (crMetadata corpus) (crUpstream corpus) (cpPackage package) [raw]
+
+manifestOutputs :: CorpusRead -> CorpusPackage -> ByteString -> Manifest -> Either Text [Text]
+manifestOutputs corpus package raw manifest = do
+    let info = manifestInfo manifest
+        document = manifestRaw manifest
         keys = Map.keysSet (infoVersions info)
         ends = [("first", Set.lookupMin keys), ("last", Set.lookupMax keys)]
         survivorSets = ("all", keys) : [(label, maybe mempty Set.singleton key) | (label, key) <- ends]

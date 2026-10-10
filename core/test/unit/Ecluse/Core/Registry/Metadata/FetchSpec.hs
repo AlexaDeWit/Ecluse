@@ -46,7 +46,7 @@ import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadata
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
-import Ecluse.Test.Registry.JsonStream (heldBody)
+import Ecluse.Test.Registry.Metadata.Fetch (heldBody)
 import Ecluse.Test.Registry.Npm (packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndex)
 import Ecluse.Test.Snapshot (digestOf)

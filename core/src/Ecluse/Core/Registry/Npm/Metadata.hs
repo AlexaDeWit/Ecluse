@@ -17,10 +17,8 @@ module Ecluse.Core.Registry.Npm.Metadata (
     -- * The memory budget
     npmChargeFactors,
 
-    -- * Reading a packument
-    readNpmPackument,
+    -- * Walking a packument
     npmPackumentWalk,
-    readNpmFull,
     NpmFullRead,
     npmFullWalk,
     npmFullTable,
@@ -78,7 +76,7 @@ and output working set per basis byte of a realistic merge (1.52, @aws-sdk/clien
 npmChargeFactors :: ChargeFactors
 npmChargeFactors = ChargeFactors{cfFullReadPermille = 1400, cfOutputPermille = 2000}
 
--- | Walk a packument's chunks into aeson's tree with the production field policy.
+-- Walk a packument's chunks into aeson's tree with the production field policy.
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
 
@@ -89,7 +87,7 @@ npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits)
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
 type NpmFullRead = Walked PackedRead
 
--- | Walk a whole packument's chunks into its packed form, given the origin's base URL.
+-- Walk a whole packument's chunks into its packed form, given the origin's base URL.
 readNpmFull :: Limits -> PackageName -> Text -> DocumentWalk NpmFullRead
 readNpmFull limits name base bound table0 readChunk = do
     (table, writer) <- stToIO (npmFullTable base name table0)

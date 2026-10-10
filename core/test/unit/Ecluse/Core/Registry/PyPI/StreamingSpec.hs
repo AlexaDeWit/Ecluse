@@ -14,7 +14,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashValue)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
-import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
@@ -46,15 +45,14 @@ corpusSpec = describe "the corpus captures" $
     for_ pypiCorpusPackages $ \package ->
         it ("reproduces the recorded outputs of the complete capture " <> cpPath package) $ do
             bytes <- readFileBS (cpPath package)
-            actual <- expectRight (captureOutputs corpusRead package bytes)
+            actual <- captureOutputs corpusRead package bytes >>= expectRight
             recorded <- recordedOutputs package
             actual `shouldBe` recorded
 
 corpusRead :: CorpusRead
 corpusRead =
     CorpusRead
-        { crProject = \package -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits package
-        , crUpstream = pypiCaptureUpstream
+        { crUpstream = pypiCaptureUpstream
         , crMetadata = adapterMetadata pypiAdapter
         , crVersionReads = \package raw _ key -> [("selected", rendered (fmap releaseFacts <$> projectPyPIVersion defaultLimits package (mkVersion PyPI key) raw))]
         , crDocumentReads = \_ _ -> []

@@ -39,7 +39,7 @@ import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutp
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest, projectNpmVersion)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (digestOf)
@@ -62,7 +62,7 @@ spec = describe "npmFields" $ do
     forM_ corpusPackages $ \package ->
         it ("reproduces the recorded outputs of the complete capture " <> cpPath package) $ do
             bytes <- readFileBS (cpPath package)
-            actual <- expectRight (captureOutputs (corpusRead bytes) package bytes)
+            actual <- captureOutputs (corpusRead bytes) package bytes >>= expectRight
             recorded <- recordedOutputs package
             actual `shouldBe` recorded
 
@@ -488,8 +488,7 @@ nestedValue = object ["nested" .= object ["deeper" .= True]]
 corpusRead :: ByteString -> CorpusRead
 corpusRead bytes =
     CorpusRead
-        { crProject = projectNpmFull limits
-        , crUpstream = npmCaptureUpstream
+        { crUpstream = npmCaptureUpstream
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \package raw document key ->
             let version = mkVersion Npm key
