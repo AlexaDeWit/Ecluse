@@ -2,11 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The install the mirror alone serves, held against the same install served from public. A new
-project installs the fixture graph through the public gate, and the worker mirrors every version.
-A second proxy and a second new project then install the same root while both public upstreams are
-down. The two installs must agree on everything a client can see, so a field the mirror loses shows
-as a difference whether or not a case names it.
+{- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed
+trees, lockfiles, dependency resolution, module exports, and the linked executable's output.
 -}
 module Ecluse.E2E.Npm.MirrorInstallE2ESpec (spec) where
 

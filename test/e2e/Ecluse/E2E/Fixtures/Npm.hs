@@ -55,6 +55,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (proc, runProcess_)
 
+import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 
@@ -142,7 +143,7 @@ mirrorRegistryFields =
 mirrorRegistryDistFields :: [Pair]
 mirrorRegistryDistFields =
     [ "signatures" .= [object ["keyid" .= ("SHA256:fixture" :: Text), "sig" .= ("MEUCIQ" :: Text)]]
-    , "attestations" .= object ["url" .= ("https://upstream/-/npm/v1/attestations/e2e-mirror@1.0.0" :: Text)]
+    , "attestations" .= object ["url" .= (stubUrl NpmPublic <> "-/npm/v1/attestations/e2e-mirror@1.0.0")]
     ]
 
 {- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
@@ -401,7 +402,7 @@ packument spec digests =
 
     tarballUrl :: Text -> Text
     tarballUrl version =
-        "https://upstream/"
+        stubUrl NpmPublic
             <> psName spec
             <> "/-/"
             <> psName spec

@@ -103,7 +103,8 @@ faultLines = \case
     closeUnanswered = "    return " <> show unansweredStatus <> ";"
     refuseWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
 
--- nginx's own status for closing a connection with no answer, which a client reads as a dead host.
+-- nginx's own status for closing a connection with no response. The client connects and completes
+-- TLS, and the server then closes the connection in place of answering the request.
 unansweredStatus :: Int
 unansweredStatus = 444
 

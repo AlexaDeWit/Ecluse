@@ -24,11 +24,12 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
+import Ecluse.E2E.Harness.Stub (StubRoute (PyPIPublic), stubUrl)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | The in-network URL the nginx stub answers this project's Simple index on.
 pypiUpstreamUrl :: Text
-pypiUpstreamUrl = "https://pypi-upstream/"
+pypiUpstreamUrl = stubUrl PyPIPublic
 
 -- | The one project the fixture index serves, in PEP 503 canonical form.
 pypiProject :: Text

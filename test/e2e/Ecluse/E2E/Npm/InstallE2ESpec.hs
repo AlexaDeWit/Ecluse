@@ -74,15 +74,15 @@ scenarios = do
             it "mirrors a package served from public, then installs it from the mirror with public down" $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
-                presentBefore <- verdaccioHasVersionNow e2e name ver -- (1) a miss in the private mirror
+                presentBefore <- verdaccioHasVersionNow e2e name ver
                 presentBefore `shouldBe` False
-                void $ npmInstall e2e name >>= shouldSucceed -- (2,3) served from public
-                mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
+                void $ npmInstall e2e name >>= shouldSucceed
+                mirrored <- verdaccioHasVersion e2e name ver
                 mirrored `shouldBe` True
                 -- The package depends on this one, so its copy must land before public goes down.
                 verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
                 npmPublicReachable e2e `shouldReturn` True
-                -- (5) A second proxy and a new project hold nothing the install above fetched.
+                -- A second proxy and a new project hold nothing the first install fetched.
                 withPublicUpstreamsDown (e2ePlane e2e) . flip withE2E (e2ePlane e2e) $ \offline -> do
                     npmPublicReachable offline `shouldReturn` False
                     withNpmProject offline $ \proj -> do
@@ -102,7 +102,7 @@ scenarios = do
                         (field, KeyMap.lookup field version) `shouldBe` (field, Just value)
                     forM_ mirrorOmittedAuthorFields $ \(field, _) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
-                    KeyMap.lookup "author" version `shouldBe` Just (String ("See https://upstream/" <> name))
+                    KeyMap.lookup "author" version `shouldBe` Just (String ("See " <> stubUrl NpmPublic <> name))
                     forM_ mirrorRegistryFields $ \(field, _) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
                     KeyMap.lookup "name" version `shouldBe` Just (String name)

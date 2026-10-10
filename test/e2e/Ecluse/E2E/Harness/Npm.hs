@@ -51,6 +51,7 @@ import Ecluse.E2E.Fixtures.Npm (psName, publicOnlyPkg)
 import Ecluse.E2E.Harness.Client (clientReport, runClient, withClientDir)
 import Ecluse.E2E.Harness.InstalledTree (InstalledTree, TreeEntry (TreeFile), redactTree, snapshotTree)
 import Ecluse.E2E.Harness.Proxy (proxyStatus)
+import Ecluse.E2E.Harness.Stub (StubRoute (Mirror), stubUrl)
 import Ecluse.E2E.Harness.Types
 
 -- | Isolate a consumer's npm state and remove its project directory after the action.
@@ -265,7 +266,7 @@ npmTarballPath name version = "/npm" <> npmArtifactPath name version
 -- | Publish first-party packages into the Verdaccio store used by the proxy's private upstream.
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", "https://mirror/")
+    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", stubUrl Mirror)
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
 

@@ -449,7 +449,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.Npm.MirrorInstallE2ESpec` | The install the mirror alone serves, compared with the same install served from public. Described below. |
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
-| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
+| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 
@@ -499,9 +499,13 @@ compare what a client can see of the two installs:
   redacted. A failure prints each differing path with the lines one side lacks.
 
 A last case boots a proxy whose private upstream holds nothing, and the same install fails under
-the same outage. The tree comparison catches a field that no case names: whatever the mirror loses
-that `npm` records or links shows as a difference. Every ecosystem with a mirror write owes this
-scenario. PyPI has no mirror write, so it has no counterpart.
+the same outage. The tree comparison detects differences in installed paths, file bytes,
+executable permissions, link targets, and lockfile contents after the proxy address is redacted.
+It detects metadata loss only when that loss changes this fixture's installed tree or lockfile.
+It does not prove that every metadata field survives, even when the fixture declares that field.
+Every ecosystem with a mirror write owes this scenario. PyPI has no mirror write, so it has no
+counterpart. Its one case under the outage is the failing `pip` install of a mount with no private
+store, where the stub's log shows that the PyPI public route answered nothing.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,

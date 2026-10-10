@@ -81,7 +81,17 @@ import UnliftIO (bracket, bracket_, finally, handleAny)
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
-import Ecluse.E2E.Harness.Stub (StubFault (..), StubRead, retiredWorkers, startedWorkers, stubConfig, stubHosts, stubReads)
+import Ecluse.E2E.Harness.Stub (
+    StubFault (..),
+    StubRead,
+    StubRoute (Mirror, NpmPublic, PrivateCache),
+    retiredWorkers,
+    startedWorkers,
+    stubConfig,
+    stubHosts,
+    stubReads,
+    stubUrl,
+ )
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt, PinnedExternal),
@@ -303,8 +313,8 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction, so an nginx terminator serves
       -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror)
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
       -- index and the distribution files under it through the same proxy.
       ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
@@ -322,7 +332,7 @@ proxyEnv hostPort queueUrl =
 
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
+    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", stubUrl Mirror)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     ]
 
@@ -334,8 +344,8 @@ mirrorRoleEnv queueUrl rules =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://" <> mirrorHost <> "/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror)
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
@@ -580,10 +590,10 @@ dredgerEnv =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl PrivateCache)
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN", "e2e-private-maintenance-token")
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION", "true")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION", "true")
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")

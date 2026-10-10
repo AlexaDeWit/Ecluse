@@ -91,8 +91,8 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
         roleExit run `shouldSatisfy` (/= ExitSuccess)
         let output = roleOutput run
-        output `shouldSatisfy` T.isInfixOf "npm mirror store on mirrorTarget https://mirror/"
-        output `shouldSatisfy` T.isInfixOf "npm private cache on privateUpstream https://private-cache/"
+        output `shouldSatisfy` T.isInfixOf ("npm mirror store on mirrorTarget " <> stubUrl Mirror)
+        output `shouldSatisfy` T.isInfixOf ("npm private cache on " <> privateTarget)
         output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> psName dredgerDryRunPkg <> "@2.0.0")
         output `shouldSatisfy` T.isInfixOf "deleted 2"
         output `shouldSatisfy` T.isInfixOf "counted from partial evidence"
@@ -506,7 +506,7 @@ relaxedProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", permissiveRules)]
 
 privateCacheEnv :: [(Text, Text)]
 privateCacheEnv =
-    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl PrivateCache)
     , ("ECLUSE_CACHE__TTL", "1")
     ]
 
@@ -531,7 +531,7 @@ recoverySweepEnv revoked = [("ECLUSE_RULES", identityRule revoked)]
 
 -- The label the Dredger's audit lines carry for the private cache it swept.
 privateTarget :: Text
-privateTarget = "privateUpstream https://private-cache/"
+privateTarget = "privateUpstream " <> stubUrl PrivateCache
 
 -- npm publishes into a store directly when the store's own URL is the project's registry.
 publishingDirectly :: E2E -> E2E
