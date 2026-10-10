@@ -22,6 +22,7 @@ module Ecluse.Core.Registry.Json.Walk (
 
     -- * Tokens
     withElement,
+    withScanned,
     skipFrom,
     skipRest,
     tooDeep,
@@ -107,17 +108,18 @@ emit step acc field next = step acc field (either refuse next)
 withElement :: (Walk r) => Cursor -> (Element -> Cursor -> r) -> r
 withElement tokens next = case Lexer.next tokens of
     Lexer.Token element rest -> once element rest
-    result -> awaitElement result once
+    result -> withScanned result once
   where
     once = oneShot (oneShot . next)
 {-# INLINE withElement #-}
 
-awaitElement :: (Walk r) => Lexer.Scanned -> (Element -> Cursor -> r) -> r
-awaitElement result next = case result of
+-- | Continue a scan result without scanning its input again.
+withScanned :: (Walk r) => Lexer.Scanned -> (Element -> Cursor -> r) -> r
+withScanned result next = case result of
     Lexer.Token element rest -> next element rest
     Lexer.More waiting -> needData (\chunk -> withElement (Lexer.feed waiting chunk) next)
     Lexer.Failed -> failWith "the JSON lexer failed"
-{-# INLINEABLE awaitElement #-}
+{-# INLINEABLE withScanned #-}
 
 -- | Skip the value starting at the element without decoding it, as json-stream's @ignoreVal@ does.
 skipFrom :: (Walk r) => Element -> Cursor -> (Cursor -> r) -> r

@@ -32,7 +32,7 @@ import Data.JsonStream.Lexer.Internal qualified as Lexer
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement, withScanned)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
 none left is skipped and fails the read.
@@ -272,10 +272,12 @@ string build mode table next name after = case mode of
 readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readObject build open members@(Members _ other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
-    loop table !fields tokens = withElement tokens $ \element rest -> case element of
-        ObjectEnd -> closeObject build fields (\built -> next built table rest)
-        StringRaw bytes True -> member table fields (Plain bytes) rest
-        _ -> memberName element rest (member table fields) (loop table fields)
+    loop table !fields tokens = case Lexer.next tokens of
+        Lexer.Token ObjectEnd rest -> closeObject build fields (\built -> next built table rest)
+        Lexer.Token (StringRaw bytes True) rest -> member table fields (Plain bytes) rest
+        scanned -> withScanned scanned $ \element rest -> case element of
+            ObjectEnd -> closeObject build fields (\built -> next built table rest)
+            _ -> memberName element rest (member table fields) (loop table fields)
     member table fields name rest = case listedMember members name of
         Just (shared, shape) -> value table fields name (Just shared) shape rest
         Nothing -> case other of
