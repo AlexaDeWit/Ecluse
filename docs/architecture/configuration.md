@@ -183,15 +183,9 @@ the meter holds by a fraction of a step. The sampler's measurement of live data 
 charges absorbs that excess.
 
 The charges come from the committed corpus and its merges, so a document shaped or sized unlike
-them can hold more than it pays for. The tier measures one such shape: an npm document whose text
-is mostly deprecation notices. An entry holds a release's deprecation notice once, in the served
-release. In the tier's npm heavy-base merges of captures of at least one step, the private
-document's share of the held entry is 0.87 to 0.99 bytes per source byte, within the charge of
-1.4. That figure is the difference between a heavy-base merge and the same capture's single
-listing, because no probe reads such a document alone. For a shape that does exceed its charge,
-two things absorb the excess. The sampler measures it as live data outside the charges after the
-next major collection, and the ceiling the budget may reach, set out below, falls as that
-remainder grows.
+them can hold more than it pays for. Écluse treats such documents as rare. Two things absorb the
+excess. The sampler measures it as live data outside the charges after the next major collection,
+and the ceiling the budget may reach, set out below, falls as that remainder grows.
 
 A listing's response pays per byte of its output basis. The basis is the larger of two estimates,
 one anchored on the largest document the listing merges and one on the base document, whose
