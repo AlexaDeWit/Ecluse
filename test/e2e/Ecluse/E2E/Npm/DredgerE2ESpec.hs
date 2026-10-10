@@ -2,12 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Dredger lifecycle evidence from a real Verdaccio store.
+{- | Dredger lifecycle evidence from a real Verdaccio store behind the npm mount.
 Complete version snapshots connect store contents with each cycle's audit records. One group decides
 by operator identity alone, one by the advisory generation Pilot compiles, one follows what the next
 private read sees once a cleanup has run, and one rolls policy out across roles in the wrong order.
 -}
-module Ecluse.DredgerE2ESpec (spec) where
+module Ecluse.E2E.Npm.DredgerE2ESpec (spec) where
 
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
@@ -40,15 +40,11 @@ import Ecluse.Test.Package (sriSha512Of)
 
 -- | Verify store contents and audit records under operator identity denies and advisory denials.
 spec :: Spec
-spec = do
-    unavailable <- runIO e2eUnavailable
-    case unavailable of
-        Just reason -> it "Dredger end-to-end environment is available" (pendingWith reason)
-        Nothing -> do
-            aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
-            aroundAll withGlobalDataPlane revocationScenario
-            aroundAll withGlobalDataPlane (aroundAllWith withRecoveryStores recoveryScenarios)
-            aroundAll withGlobalDataPlane (aroundAllWith withRolloutStores rolloutScenarios)
+spec = whenE2EAvailable $ do
+    aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
+    aroundAll withGlobalDataPlane revocationScenario
+    aroundAll withGlobalDataPlane (aroundAllWith withRecoveryStores recoveryScenarios)
+    aroundAll withGlobalDataPlane (aroundAllWith withRolloutStores rolloutScenarios)
 
 identityScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 identityScenarios = describe "identity denies with no advisory database" $ do

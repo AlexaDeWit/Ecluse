@@ -16,13 +16,11 @@ import Ecluse.Core.Package (PackageInfo, PackageName, infoVersions)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable))
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Server.Transform (serveDocumentSize)
-import Ecluse.Test.Snapshot (digestOf)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
 -- | Per capture: the full read into aeson's tree, and the listing render from aeson's tree and as served.
@@ -32,15 +30,14 @@ benchmarks ecosystem = do
     pure (bgroup "packed served form (full read and listing render)" entries)
   where
     serve = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
-    captureGroup entry@(package, bytes, info, document) = do
-        let digest = digestOf bytes
-        tree <- unHeldTree <$> forcedTree ecosystem document
+    captureGroup entry@(package, bytes, info, served) = do
+        tree <- unHeldTree <$> forcedTree ecosystem served
         pure $
             bgroup
                 (entryName entry)
                 [ bench "full read, aeson's tree" (whnf (versionCount . treeRead (cpPackage package)) bytes)
-                , bench "listing render, aeson's tree" (whnfAppIO serve (Snapshot digest tree, info))
-                , bench "listing render, as served" (whnfAppIO serve (Snapshot digest document, info))
+                , bench "listing render, aeson's tree" (whnfAppIO serve (tree <$ served, info))
+                , bench "listing render, as served" (whnfAppIO serve (served, info))
                 ]
     treeRead :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
     treeRead name = case ebEcosystem ecosystem of

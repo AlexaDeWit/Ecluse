@@ -44,21 +44,22 @@ import Ecluse.Acceptance (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Exchange (boundedFetch)
+import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), defaultLimits, maxMetadataBytes)
-import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Rules (inertRuleDeps)
 import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSizeUnder)
-import Ecluse.Test.Snapshot (digestOf)
 
 main :: IO ()
 main =
@@ -148,52 +149,52 @@ measureDocument bench advisories ctx pkg raw =
     case ebDecode bench pkg raw >>= maybe (Left "the document lists no versions") Right . nonEmpty of
         Left reason -> pure (Left reason)
         Right versions -> do
-            digest <- Exception.evaluate (digestOf raw)
             target <- Exception.evaluate (mkVersion (ebEcosystem bench) (NE.last versions))
-            legs <- forM universe $ \leg -> (leg,) <$> measurePasses (operation digest target leg) raw
+            legs <- forM universe $ \leg -> (leg,) <$> measurePasses (operation target leg) raw
             pure $ case [leg | (leg, Nothing) <- legs] of
                 [] -> Right (length versions, [(leg, measurement) | (leg, Just measurement) <- legs])
                 failed -> Left ("these legs did not decode or project: " <> unwords (map legKey failed))
   where
-    operation digest target = \case
-        FullDocument -> full inertRuleDeps permissiveAgeRules digest
+    operation target = \case
+        FullDocument -> full inertRuleDeps permissiveAgeRules
         SingleVersion -> runSelective bench pkg target
-        FullShippedAdvisories -> full advisories shippedPolicy digest
-        FullAllAdvisoryRules -> full advisories allAdvisoryRules digest
+        FullShippedAdvisories -> full advisories shippedPolicy
+        FullAllAdvisoryRules -> full advisories allAdvisoryRules
     full deps policy = runFull deps policy ctx bench pkg
 
--- Each pass reads its own copy, allocated before the pass, so no pass reuses another's evaluated input.
-measurePasses :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe Measurement)
+-- Each pass reads its own copy, allocated and cut into chunks before the pass, so no pass reuses another's evaluated input.
+measurePasses :: ([ByteString] -> IO Bool) -> ByteString -> IO (Maybe Measurement)
 measurePasses operation raw = do
     copies <- BS.useAsCStringLen raw (replicateM passCount . BS.packCStringLen)
-    passes <- traverse (measurePass operation) copies
+    passes <- traverse (measurePass operation <=< chunked) copies
     pure (summarise <$> (nonEmpty =<< sequence passes))
   where
+    chunked copy = let chunks = captureChunks copy in chunks <$ Exception.evaluate (length chunks)
     summarise measured =
         let bytes = NE.sort (fmap fst measured)
          in Measurement (median bytes) (NE.head bytes) (NE.last bytes) (median (fmap snd measured))
 
 -- The allocation counter counts down, and covers only the calling thread.
-measurePass :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe (Int64, Double))
-measurePass operation copy = do
+measurePass :: ([ByteString] -> IO Bool) -> [ByteString] -> IO (Maybe (Int64, Double))
+measurePass operation chunks = do
     before <- getAllocationCounter
     t0 <- getMonotonicTime
-    done <- operation copy
+    done <- operation chunks
     t1 <- getMonotonicTime
     after <- getAllocationCounter
     pure (if done then Just (before - after, (t1 - t0) * 1000) else Nothing)
 
-runFull :: RuleDeps -> [PrecededRule] -> EvalContext -> EcosystemBench -> PackageName -> ContentDigest -> ByteString -> IO Bool
-runFull deps policy ctx bench pkg digest raw =
-    ebRead bench pkg raw >>= \case
+runFull :: RuleDeps -> [PrecededRule] -> EvalContext -> EcosystemBench -> PackageName -> [ByteString] -> IO Bool
+runFull deps policy ctx bench pkg chunks =
+    ebRead bench pkg chunks >>= \case
         Left _ -> pure False
-        Right (info, document) -> do
-            size <- serveDocumentSizeUnder deps policy (ebMetadata bench) ctx (Snapshot digest document, info)
+        Right manifest -> do
+            size <- serveDocumentSizeUnder deps policy (ebMetadata bench) ctx (Snapshot (manifestDigest manifest) (manifestRaw manifest), manifestInfo manifest)
             Exception.evaluate (size > 0)
 
-runSelective :: EcosystemBench -> PackageName -> Version -> ByteString -> IO Bool
-runSelective bench pkg version raw = Exception.evaluate $
-    case detailsDepth <$> ebSelective bench pkg version raw of
+runSelective :: EcosystemBench -> PackageName -> Version -> [ByteString] -> IO Bool
+runSelective bench pkg version chunks =
+    ebSelective bench pkg version chunks >>= \selected -> Exception.evaluate $ case detailsDepth <$> selected of
         Right (Depth depth) -> depth `seq` True
         _ -> False
 

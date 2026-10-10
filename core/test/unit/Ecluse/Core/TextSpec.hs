@@ -2,20 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Shared text parsing contracts, the ASCII alphanumeric class, ISO-8601 rendering parity and text storage.
+-- | Shared text parsing contracts, the ASCII alphanumeric class and text storage.
 module Ecluse.Core.TextSpec (spec) where
 
 import Data.Char (isAlphaNum, isAscii)
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian, picosecondsToDiffTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Hedgehog (cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
+import Ecluse.Core.Text (afterFirst, httpPrefix, httpsPrefix, isAsciiAlphaNum, isPrefixOfLowered, joinUrlPath, nonBlank, readDecimalText, readHexText, stripTrailingSlash, textStorageBytes, urlFilename, urlFilenameComponent)
 
 spec :: Spec
 spec = do
@@ -29,7 +27,6 @@ spec = do
     isAsciiAlphaNumSpec
     readDecimalTextSpec
     readHexTextSpec
-    renderIso8601Spec
     textStorageSpec
 
 afterFirstSpec :: Spec
@@ -234,41 +231,6 @@ urlFilenameComponentSpec = describe "urlFilenameComponent" $ do
 
     it "returns an empty component for an empty URL" $
         urlFilenameComponent "" `shouldBe` ""
-
-renderIso8601Spec :: Spec
-renderIso8601Spec = describe "renderIso8601Utc" $ do
-    it "matches iso8601Show byte-for-byte across the domain" $
-        hedgehog $ do
-            -- The whole fast-path domain plus the delegating edges: expanded-representation years
-            -- on either side of 0-9999, and every picosecond fraction shape.
-            year <- forAll (Gen.integral (Range.linearFrom 2020 (-50) 10500))
-            month <- forAll (Gen.int (Range.linear 1 12))
-            day <- forAll (Gen.int (Range.linear 1 31))
-            picos <-
-                forAll $
-                    Gen.choice
-                        [ (* 1_000_000_000_000) <$> Gen.integral (Range.linear 0 86_399) -- whole seconds
-                        , Gen.integral (Range.linear 0 86_399_999_999_999_999) -- arbitrary instant
-                        , (+ 114_000_000_000) . (* 1_000_000_000_000) <$> Gen.integral (Range.linear 0 86_399) -- millisecond shape
-                        ]
-            let t = UTCTime (fromGregorian year month day) (picosecondsToDiffTime picos)
-            renderIso8601Utc t === toText (iso8601Show t)
-
-    it "renders the canonical npm shapes" $ do
-        let at y m d ps = UTCTime (fromGregorian y m d) (picosecondsToDiffTime ps)
-        renderIso8601Utc (at 2015 1 11 ((0 * 3600 + 23 * 60 + 27) * 1_000_000_000_000 + 114_000_000_000))
-            `shouldBe` "2015-01-11T00:23:27.114Z"
-        renderIso8601Utc (at 2026 6 1 0) `shouldBe` "2026-06-01T00:00:00Z"
-        renderIso8601Utc (at 44 12 31 (86_399 * 1_000_000_000_000 + 1))
-            `shouldBe` "0044-12-31T23:59:59.000000000001Z"
-
-    it "trims trailing fraction zeros without dropping significant ones" $ do
-        let t = UTCTime (fromGregorian 2020 2 29) (picosecondsToDiffTime 100_000_000_000)
-        renderIso8601Utc t `shouldBe` "2020-02-29T00:00:00.1Z"
-
-    it "delegates a leap-second reading and stays parity-true" $ do
-        let t = UTCTime (fromGregorian 2016 12 31) (picosecondsToDiffTime 86_400_500_000_000_000)
-        renderIso8601Utc t `shouldBe` toText (iso8601Show t)
 
 textStorageSpec :: Spec
 textStorageSpec =

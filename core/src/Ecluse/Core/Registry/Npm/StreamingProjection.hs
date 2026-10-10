@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.Wire (distFields)
 import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
+import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -121,7 +121,7 @@ collectField limits acc = \case
     TimeField key value ->
         Right
             acc
-                { projectedTimes = firstInsert key (decode force InvalidPublishTime key value) (projectedTimes acc)
+                { projectedTimes = firstInsert key (decode parsePublishTime force InvalidPublishTime key value) (projectedTimes acc)
                 , projectedBookkeeping =
                     if key == "created" || key == "modified"
                         then firstInsert key value (projectedBookkeeping acc)
@@ -129,10 +129,10 @@ collectField limits acc = \case
                 }
     TagField _ _ | projectedActiveContainer acc /= Just TagsContainer -> Right acc
     TagField key _ | Map.member key (projectedTags acc) -> Right acc
-    TagField key value -> Right acc{projectedTags = firstInsert key (decode (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
+    TagField key value -> Right acc{projectedTags = firstInsert key (decode parseJSON (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
   where
     -- Force the decoded payload so a successful entry cannot retain its source Value.
-    decode convert kind key value = case parseEither parseJSON value of
+    decode parse convert kind key value = case parseEither parse value of
         Left err -> Left $! mkInvalidEntry kind key value (toText err)
         Right typed -> Right $! convert typed
 

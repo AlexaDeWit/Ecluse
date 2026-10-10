@@ -66,7 +66,7 @@ import Ecluse.Core.Supervision (
     superviseLoop,
     transientPolicy,
  )
-import Ecluse.Core.Text (renderIso8601Utc)
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (SyncSchedule, schedAbsentReport, schedBootBackoff, schedPollDelay), absentReportInterval, bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Log (logLine, moduleField)

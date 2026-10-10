@@ -341,7 +341,7 @@ job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they ma
 | `codecov-notify` | Codecov statuses | none, it only releases the Codecov statuses |
 | `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | included in `task check` |
 | `docs` | Haddock builds | `task docs-check` |
-| `e2e` | End-to-end tests (whole-system, real npm) | `task test-e2e` |
+| `e2e` | End-to-end tests (whole-system, real clients) | `task test-e2e` |
 | `weeder` | Dead-code check (weeder) | `task weeder` (also in `task check`) |
 | `stan` | Haskell static analysis (stan) | `task stan` (also in `task check`) |
 | `gate` | CI gate | green exactly when every job above passes |
