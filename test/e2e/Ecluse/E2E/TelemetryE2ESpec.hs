@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Telemetry export from the product image, which holds for any mount: OTLP metrics and spans
-reaching a collector, the JSONL log stream with no collector, a visible degradation when the
-collector is unreachable, and the Datadog unified service tags. An @npm@ client only supplies the
-traffic.
+{- | Telemetry export from the product image under each telemetry configuration: OTLP metrics and
+spans reaching a collector, the JSONL log stream with no collector, a visible degradation when the
+collector is unreachable, and the Datadog unified service tags. The configuration is independent of
+the mount. The traffic is npm's, and the mirror-span and private-leg cases need a mount with a
+mirror target.
 -}
 module Ecluse.E2E.TelemetryE2ESpec (spec) where
 

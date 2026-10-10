@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The npm mount on the base topology, driven by a real @npm@ client: install and policy, the
-artifact route's protocol answers, and the mirror round trip through the worker. Every case shares
-one proxy, and the mirrored-metadata case reads the store entry the lifecycle case before it wrote.
+artifact route's protocol answers, the mirror round trip through the worker, and the @405@ that
+refuses a publish when no publication target is configured. Every case shares one proxy, and the
+mirrored-metadata case reads the store entry the lifecycle case before it wrote.
 -}
 module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
 

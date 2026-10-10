@@ -418,20 +418,24 @@ client- and mirror-observable outcomes:
 
 The spec modules sit under `test/e2e/Ecluse/E2E/`, with one directory per ecosystem, so a module's
 name states the ecosystem of its cases. The suite's log heads each section with that name, less the
-`Spec` suffix. No module holds cases for more than one ecosystem. A case that holds for any mount
-goes in a module beside the ecosystem directories.
+`Spec` suffix. A module in an ecosystem directory holds that ecosystem's cases alone. A module whose
+cases belong to no single ecosystem sits beside the directories, and there are two:
 
-| Module | Cases |
-|---|---|
-| `Ecluse.E2E.Npm.InstallE2ESpec` | The npm mount on the base topology: install and policy, the artifact route's protocol answers, the mirror round trip, and the publish refusal with no publication target. One proxy serves every case. |
-| `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
-| `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
-| `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount. |
-| `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. It holds for any mount, and an `npm` client supplies the traffic. |
+- `Ecluse.E2E.MixedEcosystemE2ESpec` holds the one case in which a single proxy serves both
+  clients in turn: an `npm` install from the public leg, a `pip` install, then an `npm` install
+  from the private leg. Every other proxy in the tier serves one ecosystem's traffic.
+- `Ecluse.E2E.TelemetryE2ESpec` holds the telemetry cases. The telemetry configuration is
+  independent of the mount, and the traffic is npm's. Two of its cases need a mount with a mirror
+  target: the mirror-span case, and the case that serves a mirrored artifact from the private leg
+  under a healthy collector.
+
+The cases of one telemetry group share a collector, and each install emits the same span names. A
+span assertion therefore reads whole spans through `exportedSpans` and keys on an attribute of its
+own case, such as the coordinate of the package that the case installs.
 
 Each module boots its own data plane, so no case reads store state that another module wrote. Every
 module opens with `whenE2EAvailable`, which runs its cases when the tier's prerequisites are present
-and reports one `pending` case otherwise. The harness and the fixtures stay in
+and reports one `pending` case otherwise. The harness and the fixtures sit in
 `Ecluse.E2E.Harness.*` and `Ecluse.E2E.Fixtures.*`.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
