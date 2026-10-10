@@ -98,18 +98,19 @@ to update it), or use a gitignored scratch file with a branch-scoped name
 (`scratchpad/pr-body-<branch>.md`). Never a file at the repository root: concurrent agents and
 worktrees collide on it, and it gets staged by accident.
 
-The Summary is the part worth effort. A reviewer reads it before the diff, so write it so someone
-who has not opened the diff understands the change on its own. Two to five sentences: what changed
-and why, in words a sharp colleague on another team follows. For a security or behaviour change,
-say who could do what before and what holds now. Name a deliberate trade-off in one sentence if
-there was one. End with `Closes #NNN` where a slice completes.
+**What** and **Why** are the part worth effort. A reviewer reads them before the diff, so write
+them so someone who has not opened the diff understands the change on its own. Two to five
+sentences between them: what changed and why, in words a sharp colleague on another team follows.
+For a security or behaviour change, say who could do what before and what holds now. Name a
+deliberate trade-off in one sentence under **Consequences** if there was one. End with
+`Closes #NNN` when the PR completes its issue.
 
-Rules for the Summary:
+Rules for the body:
 
 - Lead with the point: what a reviewer or operator gains or is protected from. The mechanism comes
   second, and only as far as the diff does not already show it. No play-by-play of files.
-- Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
-  the Summary.
+- Short paragraphs. A bullet list only when enumerating cases. No headings beyond the template's
+  three, and no bold lead-ins.
 - The body never carries inventories, counts, tables, or per-round appendices. Audit detail (what
   was trimmed, why an over-cap comment stayed, an error-message change) lives in the commit message
   of the change that did it. A review round rewrites the body only when the goal or a consequence

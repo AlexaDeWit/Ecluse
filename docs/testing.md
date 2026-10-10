@@ -1337,7 +1337,7 @@ Cancellation stops the command's process group after a two-second grace period.
 Each diagnostic command has a five-second deadline and a 201-line output limit.
 `task test-scripts` checks output streaming, exit status, snapshot limits and cancellation without a Haskell build.
 
-## Coverage: Codecov (gating)
+## Coverage: Codecov
 
 CI measures coverage per gating suite and reports it to [Codecov](https://about.codecov.io/).
 Generation is local and tool-agnostic. A suite is built instrumented: HPC, in an isolated
@@ -1375,10 +1375,11 @@ the merged dashboard. It does not paper over gaps. If the *merged* report still 
 error arms red (e.g. `Worker.hs`'s fail-closed integrity-mismatch branch), that is a genuine
 uncovered path a test owes.
 
-The gate is Codecov's two commit statuses, both in [`codecov.yml`](../codecov.yml).
-`codecov/project` allows no regression versus the PR base, within a 1% threshold. `codecov/patch`
-requires new and changed lines at ≥ 85%, a floor that verifies behaviour rather than a number to
-chase. Uploads use GitHub OIDC (`use_oidc: true`), so there is no `CODECOV_TOKEN` to leak. Coverage
+Codecov posts two commit statuses, both configured in [`codecov.yml`](../codecov.yml).
+`codecov/project` allows no regression versus the PR base, within a 1% threshold, and it is the
+one the ruleset requires. `codecov/patch` asks for new and changed lines at ≥ 85%, a floor that
+verifies behaviour rather than a number to chase. Uploads use GitHub OIDC (`use_oidc: true`), so
+there is no `CODECOV_TOKEN` to leak. Coverage
 measures library code only. It excludes `app/**`, `bench/**`, and `test/**`, and drops every
 `Ecluse.Test.*` module of `ecluse-test-support` from the HPC report too.
 [`docs/style.md`](style.md) → "Data types and deriving" decides which derived instances the 85%
