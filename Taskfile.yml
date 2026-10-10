@@ -137,6 +137,17 @@ tasks:
     desc: Render the work-per-request bench CSV as a Markdown report
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-report -- {{.BENCH_CSV | default "bench-results.csv"}} {{.BENCH_LOG | default "bench-output.txt"}}'
+  against-main:
+    desc: Set a performance report beside the latest run on main (KIND=bench|acceptance|load, BASELINE=<dir>, REPORT=<file>)
+    requires:
+      vars: [KIND, BASELINE, REPORT]
+    # Through the environment, never spliced into the command, so a path reaches the tool as one argument.
+    env:
+      KIND: '{{.KIND}}'
+      BASELINE: '{{.BASELINE}}'
+      REPORT: '{{.REPORT}}'
+    cmds:
+      - '{{.NIX_BENCH}} cabal run -v0 bench-report -- against-main "$KIND" "$BASELINE" "$REPORT"'
   bench-profile:
     desc: Profiling build -> run -> cost-centre flame graph
     cmds:
@@ -385,6 +396,7 @@ tasks:
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
       - bash scripts/image-archive.test.sh
+      - bash scripts/perf-baseline.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh
       - bash scripts/source-inventory.test.sh

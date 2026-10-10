@@ -679,9 +679,8 @@ jobs:
 
   gate:
     name: CI gate
-    # The single Required check. Wire a new one in by adding it to `needs` here AND to
-    # scripts/ci-gate-verdict.sh. smoke, grype, and release-compare are absent on
-    # purpose: they do not gate.
+    # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
+    # smoke, grype, and release-compare do not gate. Required contexts are in .agents/orchestration-strategy.md.
     needs:
       - changes
       - build

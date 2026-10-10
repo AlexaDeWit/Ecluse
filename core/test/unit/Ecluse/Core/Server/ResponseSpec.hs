@@ -20,7 +20,9 @@ import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
+    Inability (EvaluationFailed),
     PrecededRule,
+    Reason (RuleUnable),
     Rule (AllowScope, DenyInstallTimeExecution),
     completeEvidence,
  )
@@ -43,7 +45,7 @@ import Ecluse.Core.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, remediation, revocation)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime
@@ -204,11 +206,11 @@ spec = do
 
         it "an effectful approval admits, like a pure approval" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            serveDecisionOf pd (Admitted "AllowAdvisory" "remediates" []) `shouldBe` Admit
+            serveDecisionOf pd (Admitted "AllowAdvisory" remediation []) `shouldBe` Admit
 
         it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing "affected by an advisory") of
+            case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing revocation) of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"
@@ -218,6 +220,6 @@ spec = do
             -- Fail-closed: a needed effectful rule that could not be consulted
             -- rejects as Unavailable, the transience flowing through to the status.
             let pd = pkg "public" 30 NoCodeOnInstall
-            case serveDecisionOf pd (Undecidable (WillResolve (Just (RetryAfter 20))) "advisory source down") of
+            case serveDecisionOf pd (Undecidable (WillResolve (Just (RetryAfter 20))) (RuleUnable "DenyAdvisory" EvaluationFailed)) of
                 Reject rej -> rejectionReason rej `shouldBe` Unavailable (WillResolve (Just (RetryAfter 20)))
                 Admit -> expectationFailure "an undecidable decision must reject, not admit"

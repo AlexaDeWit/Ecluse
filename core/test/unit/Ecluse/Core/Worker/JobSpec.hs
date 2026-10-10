@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (ppLatest, ppMetadata),
     newMirrorPublish,
  )
-import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
+import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
@@ -89,14 +89,14 @@ spec = do
         -- 'Ecluse.Core.Package.Admission.admissionTransience' is the one input to the split, and
         -- the serve gate reads it to choose a 503 over a 500. The two cannot disagree.
         it "retries an inability the evaluator expects to clear (an advisory source briefly down)" $
-            case outcomeOfAdmission (jobWith unreachableUrl) (undecided (WillResolve Nothing) "no advisory database is loaded") of
-                Left (Retried _ reason) -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
+            case outcomeOfAdmission (jobWith unreachableUrl) (undecided (WillResolve Nothing) NoDatabaseLoaded) of
+                Left (Retried _ reason) -> reason `shouldSatisfy` T.isInfixOf "DenyIfCve: no advisory database loaded"
                 other -> expectationFailure ("expected a retry for a clearing inability, got " <> show other)
 
         it "drops an inability no retry can clear, rather than redelivering until the budget retires it" $
             -- WontResolve is the rule engine's own statement that no redelivery changes the
             -- verdict. A repaired advisory source rides the next request's enqueue instead.
-            case outcomeOfAdmission (jobWith unreachableUrl) (undecided WontResolve "the advisory index is corrupt") of
+            case outcomeOfAdmission (jobWith unreachableUrl) (undecided WontResolve (RuleThrew "the advisory index is corrupt")) of
                 Left (Dropped reason) -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
@@ -566,9 +566,9 @@ resolverCarryingWith :: Artifact -> CachedDoc -> PackageName -> Version -> IO Ve
 resolverCarryingWith artifact raw name version =
     pure (VersionPresent VersionDoc{vdDetails = (sampleDetails name version){pkgArtifacts = artifact :| []}, vdRaw = Just raw} Nothing)
 
--- An admission verdict no rule could decide, with the given transience.
-undecided :: Transience -> Text -> ArtifactAdmission
-undecided transience reason = AdmissionUndecidable (Undecidable transience reason)
+-- An admission verdict the advisory deny could not decide, with the given transience and cause.
+undecided :: Transience -> Inability -> ArtifactAdmission
+undecided transience why = AdmissionUndecidable (Undecidable transience (RuleUnable "DenyIfCve" why))
 
 -- A stand-in reason renderer. The unit pins the verdict and that the reason is rendered from
 -- the very fault being judged, never the wording each worker leg chooses.

@@ -55,8 +55,9 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     partitionByFloor,
  )
-import Ecluse.Core.Rules (PreparedRule, cveIdsInReason, prepResilience)
+import Ecluse.Core.Rules (PreparedRule, prepResilience)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
+import Ecluse.Core.Rules.Render (cveIdsInReason, renderInability)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     SkippedCheck (SkippedUnavailable, Unreached),
@@ -297,5 +298,5 @@ logSkippedChecks pkg version etag = traverse_ logOne
     logOne = \case
         Unreached _ -> pass
         SkippedUnavailable rule cause ->
-            katipAddContext (versionAuditPayload pkg version etag <> sl "rule" rule <> sl "cause" cause) $
+            katipAddContext (versionAuditPayload pkg version etag <> sl "rule" rule <> sl "cause" (renderInability cause)) $
                 logFM WarningS (ls ("admitted with a check skipped for unavailability" :: Text))

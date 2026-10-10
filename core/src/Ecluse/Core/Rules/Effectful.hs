@@ -57,9 +57,9 @@ data Resilience = Resilience
 data ReadFault = ReadFault
     { rfTransience :: Transience
     -- ^ Whether a retry may succeed, with the configured @Retry-After@ hint.
-    , rfReason :: Text
+    , rfReason :: Inability
     -- ^ The client-facing cause a decision carries.
-    , rfDetail :: Text
+    , rfDetail :: Inability
     -- ^ The fault detail an operator reads in the outage report, never in a client message.
     }
     deriving stock (Eq, Show)
@@ -72,40 +72,38 @@ runResilient res act = do
         then
             -- Breaker open and still cooling down: fast-fail without running the read, the cheap
             -- path a sustained outage stays on.
-            pure (Left (ReadFault (transientCause (resConfig res)) breakerOpen breakerOpen))
+            pure (Left (ReadFault (transientCause (resConfig res)) SourceBreakerOpen SourceBreakerOpen))
         else do
             result <- attemptWithRetry res act
             -- Read the clock again after the retry run. An exhausted result then starts its
             -- cooldown at the failure commit, not at the start of the run.
             settledNow <- resClock res
             settleOutcome res settledNow result
-  where
-    breakerOpen = "the rule source circuit breaker is open"
 
 -- Settle a finished retry run against the breaker. A value resets it, an exhausted run trips it.
-settleOutcome :: Resilience -> UTCTime -> Either (Transience, Text) a -> IO (Either ReadFault a)
+settleOutcome :: Resilience -> UTCTime -> Either (Transience, Inability) a -> IO (Either ReadFault a)
 settleOutcome res now = \case
     Right value -> do
         commitBreaker res recordSuccess
         pure (Right value)
     Left (transience, detail) -> do
         commitBreaker res (tripOnFailure (resConfig res) now)
-        pure (Left (ReadFault transience "the rule could not be evaluated" detail))
+        pure (Left (ReadFault transience EvaluationFailed detail))
 
 -- Attempt the read under the per-attempt timeout until the retry budget is spent. Only a fault retries.
-attemptWithRetry :: Resilience -> IO a -> IO (Either (Transience, Text) a)
+attemptWithRetry :: Resilience -> IO a -> IO (Either (Transience, Inability) a)
 attemptWithRetry res act =
     retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res act)
   where
     shouldRetry _ = pure . isLeft
 
 -- One attempt under the timeout. Only a throw or a timeout retries and feeds the breaker.
-attemptOnce :: Resilience -> IO a -> IO (Either (Transience, Text) a)
+attemptOnce :: Resilience -> IO a -> IO (Either (Transience, Inability) a)
 attemptOnce res act = do
     result <- tryAny (timeout (ecTimeout (resConfig res)) act)
     pure $ case result of
-        Left e -> Left (transient, "the rule threw: " <> displayExceptionT e)
-        Right Nothing -> Left (transient, "the attempt timed out")
+        Left e -> Left (transient, RuleThrew (displayExceptionT e))
+        Right Nothing -> Left (transient, AttemptTimedOut)
         Right (Just value) -> Right value
   where
     transient = transientCause (resConfig res)
