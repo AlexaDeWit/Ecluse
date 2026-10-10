@@ -33,10 +33,7 @@ module Ecluse.Core.Rules (
     -- * Evaluation
     newEvaluator,
     evalRules,
-    renderDecision,
-    renderDuration,
-    renderIneligible,
-    cveIdsInReason,
+    pushInability,
 
     -- * Observing the advisory source
     SourceHealth (..),
@@ -44,9 +41,8 @@ module Ecluse.Core.Rules (
     noSourceReporter,
 ) where
 
-import Data.Text qualified as T
 import Data.Text.Short qualified as TS
-import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
+import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime)
 import UnliftIO (tryAny)
 import UnliftIO.MVar (modifyMVar)
 
@@ -61,11 +57,10 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
     runResilient,
  )
-import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 -- | One ecosystem's boot-bound rule capabilities: its advisory database and the rules' observers.
@@ -130,90 +125,62 @@ refuses rather than abstaining, so the fold stops at it.
 verdictSource :: Rule -> VerdictSource
 verdictSource = \case
     AllowScope scope -> FromEvidence $ \_ ev -> case pkgNamespace (evName ev) of
-        Just s
-            | s == scope ->
-                Allow ("scope " <> renderScope scope <> " is allow-listed")
-        _ ->
-            NoDecision ("scope is not the allow-listed " <> renderScope scope)
+        Just s | s == scope -> Allow (ScopeAllowListed scope)
+        _ -> NoDecision (ScopeNotAllowListed scope)
     AllowIfOlderThan minAge -> FromEvidence $ \ctx ev -> case evPublishedAt ev of
-        Unread -> needsFact "AllowIfOlderThan" "the publish time"
-        Known Nothing -> NoDecision "publish time is unknown"
+        Unread -> CannotVet FailDeny PublishTimeUnread
+        Known Nothing -> NoDecision PublishTimeUnknown
         Known (Just publishedAt) -> ageVerdict minAge (diffUTCTime (ctxNow ctx) publishedAt)
     DenyInstallTimeExecution -> FromEvidence $ \_ ev -> case evInstallCode ev of
-        Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
-        Known (RunsCodeOnInstall how) -> Deny Nothing ("runs code on install: " <> how)
-        Known NoCodeOnInstall -> NoDecision "no install-time code execution"
-        Known CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
+        Unread -> CannotVet FailDeny InstallSignalUnread
+        Known (RunsCodeOnInstall how) -> Deny Nothing (RunsOnInstall how)
+        Known NoCodeOnInstall -> NoDecision NothingRunsOnInstall
+        Known CodeExecUnknown -> NoDecision InstallCodeUndetermined
     DenyByIdentity ident -> FromEvidence $ \_ ev ->
         if matchesIdentity ident ev
-            then Deny Nothing ("identity " <> ident <> " is revoked by operator")
-            else NoDecision ("identity is not the revoked " <> ident)
+            then Deny Nothing (IdentityRevoked ident)
+            else NoDecision (IdentityNotRevoked ident)
     AllowByIdentity ident -> FromEvidence $ \_ ev ->
         if matchesIdentity ident ev
-            then Allow ("identity " <> ident <> " is allow-listed by operator")
-            else NoDecision ("identity is not the allow-listed " <> ident)
+            then Allow (IdentityAllowListed ident)
+            else NoDecision (IdentityNotAllowListed ident)
     -- Expiry abstains on the remediation allow, so a deny's refusal is what the version meets.
     AllowIfRemediatesCve -> FromAdvisories (AdvisoryAlignment FailNoDecision FailNoDecision) $ \case
-        Nothing -> const (NoDecision "no advisory database is loaded")
+        Nothing -> const (NoDecision NoDatabaseToRemediate)
         Just (_, advisories) -> classifyRanges advisories
-    -- A deny's configured alignment governs a faulted read and an unloaded database alike.
+    -- A deny's configured alignment governs a faulted read and an unloaded database alike. No
+    -- in-process retry could load a database, so its absence is a verdict and never a fault.
     DenyIfCve params -> FromAdvisories (AdvisoryAlignment FailDeny (dicOnUnavailable params)) $ \case
-        Nothing -> const (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity advisories
+        Nothing -> const (CannotVet (dicOnUnavailable params) NoDatabaseLoaded)
+        Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore Cvss (dicMinCvss params) arSeverity advisories
     DenyIfEpss params -> FromAdvisories (AdvisoryAlignment FailDeny (dieOnUnavailable params)) $ \case
-        Nothing -> const (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss advisories
+        Nothing -> const (CannotVet (dieOnUnavailable params) NoDatabaseLoaded)
+        Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
 
 {- The minimum-age verdict for a version whose publish time the evidence carries. The quarantine
 holds a new version until the registry has had time to yank a malicious publish. -}
 ageVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
 ageVerdict minAge age
-    | age >= minAge =
-        Allow ("published " <> renderDuration age <> " ago (at least " <> renderDuration minAge <> " old)")
-    | otherwise =
-        NoDecision ("published only " <> renderDuration age <> " ago, minimum age is " <> renderDuration minAge)
+    | age >= minAge = Allow (PublishedLongEnough age minAge)
+    | otherwise = NoDecision (PublishedTooRecently age minAge)
 
-{- The verdict when the evidence carries no reading of a fact the rule consults. It is fail-closed so
-the fold stops here, rather than letting a lower-precedence rule decide past an unresolved one. -}
-needsFact :: Text -> Text -> RuleVerdict
-needsFact rule fact = CannotVet FailDeny (rule <> ": " <> fact <> " is not available")
-
-{- The verdict when no advisory database is loaded. It is a 'CannotVet' verdict and not a
-fault, because no in-process retry could load one, so the harness never retries it. -}
-noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
-noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
-
--- The score filter and the reason texts no version changes are built once per read.
-advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
-advisoryDenyVerdict etag missing metric threshold scoreOf advisories = \ev ->
+-- The score filter and the abstention no version changes are built once per read.
+advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> AdvisoryScore -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
+advisoryDenyVerdict etag missing score threshold scoreOf advisories = \ev ->
     case ordNub (map arCveId (affecting scored (evVersion ev))) of
         [] -> unaffected
-        ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> thresholdNote)
+        affected : more -> Deny (Just etag) (AffectedBy score threshold (mkAdvisoryIds (affected :| more)))
   where
     scored = keepAdvisories (scoreAtLeast missing threshold . scoreOf) advisories
-    unaffected = NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
-    thresholdNote = " (" <> metric <> " >= " <> show threshold <> ")"
-
--- | Read the advisory identifiers from a scored denial reason, or return none.
-cveIdsInReason :: Text -> [Text]
-cveIdsInReason message
-    | T.null afterThreshold = []
-    | otherwise = filter (not . T.null) (map T.strip (T.splitOn ", " ids))
-  where
-    -- 'stripPrefix' drops the marker without an O(n) 'Data.Text.length' on it (STAN-0208).
-    -- An absent marker leaves the body empty, so the guard yields @[]@.
-    (_, afterAffected) = T.breakOn "affected by " message
-    body = fromMaybe "" (T.stripPrefix "affected by " afterAffected)
-    (ids, afterThreshold) = T.breakOn " (" body
+    unaffected = NoDecision (NotAffectedAtThreshold score)
 
 -- A version still inside any advisory's affected range, an unfixed one included, must not fast-track.
 classifyRanges :: PackageAdvisories -> RuleEvidence -> RuleVerdict
 classifyRanges advisories ev =
     case (remediated, stillOpen) of
-        ([], _) -> NoDecision "no advisory names this version as its fix"
-        (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
-        (ids, open) ->
-            NoDecision ("fixes " <> T.intercalate ", " ids <> " but is still affected by " <> T.intercalate ", " open)
+        ([], _) -> NoDecision FixesNoAdvisory
+        (fixed : fixes, []) -> Allow (Remediates (mkAdvisoryIds (fixed :| fixes)))
+        (fixed : fixes, open : others) -> NoDecision (FixesButStillAffected (mkAdvisoryIds (fixed :| fixes)) (mkAdvisoryIds (open :| others)))
   where
     remediated = ordNub (map arCveId (fixedAt advisories (evVersion ev)))
     stillOpen = ordNub (map arCveId (affecting advisories (evVersion ev)))
@@ -371,7 +338,7 @@ heldFor (PackageCell held) package compute =
 -- The evaluator's one advisory read of a package: its rows, or why it has none.
 data AdvisoryRead
     = RowsRead AdvisoryRows
-    | PushIneligible Text
+    | PushIneligible Inability
     | ReadGivenUp ReadFault
 
 {- One rule's evaluation of every version from the shared read, made by this rule if it is the first
@@ -381,7 +348,7 @@ decideFromRead name packageRead shared reaching =
     heldFor shared package (caught (readShared packageRead package)) >>= \case
         Left escape -> pure (Left escape)
         Right advisory ->
-            caught (resolveRead name packageRead advisory <$ reportSource (prReporter packageRead) (readHealth name packageRead advisory reaching))
+            caught (resolveRead packageRead advisory <$ reportSource (prReporter packageRead) (readHealth name packageRead advisory reaching))
   where
     package = evName reaching
 
@@ -389,18 +356,18 @@ decideFromRead name packageRead shared reaching =
 breaker admission, which an open breaker would otherwise skip past. -}
 readShared :: PackageRead -> PackageName -> IO AdvisoryRead
 readShared packageRead package =
-    prFreshness packageRead >>= \freshness -> case renderIneligible freshness of
+    prFreshness packageRead >>= \freshness -> case pushInability freshness of
         Just why -> pure (PushIneligible why)
         Nothing -> case prResilience packageRead of
             Nothing -> RowsRead <$> prRows packageRead package
             Just res -> either ReadGivenUp RowsRead <$> runResilient res (prRows packageRead package)
 
 -- One rule's evaluation of each version, under its own alignments. A fault resolves all alike.
-resolveRead :: Text -> PackageRead -> AdvisoryRead -> RuleEvidence -> RuleEvaluation
-resolveRead name packageRead = \case
+resolveRead :: PackageRead -> AdvisoryRead -> RuleEvidence -> RuleEvaluation
+resolveRead packageRead = \case
     RowsRead rows -> Decided . prVerdict packageRead rows
-    PushIneligible why -> const (Decided (CannotVet (onExpiredPush alignment) (name <> ": " <> why)))
-    ReadGivenUp fault -> const (Unavailable (rfTransience fault) (onFaultedRead alignment) (name <> ": " <> rfReason fault))
+    PushIneligible why -> const (Decided (CannotVet (onExpiredPush alignment) why))
+    ReadGivenUp fault -> const (Unavailable (rfTransience fault) (onFaultedRead alignment) (rfReason fault))
   where
     alignment = prAlignment packageRead
 
@@ -408,7 +375,7 @@ resolveRead name packageRead = \case
 readHealth :: Text -> PackageRead -> AdvisoryRead -> RuleEvidence -> SourceHealth
 readHealth name packageRead advisory reaching = case advisory of
     RowsRead rows -> case prVerdict packageRead rows reaching of
-        CannotVet _ reason -> SourceUnavailable name (bareCause name reason)
+        CannotVet _ why -> SourceUnavailable name why
         Allow _ -> SourceAnswered name
         Deny _ _ -> SourceAnswered name
         NoDecision _ -> SourceAnswered name
@@ -422,7 +389,7 @@ stepRules _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed
 stepRules ev ((rule, eval) : rest) passed =
     eval ev >>= \case
         -- An evaluation that throws breaks its contract and must refuse admission.
-        Left escape -> pure (Undecidable (WillResolve Nothing) (prepName rule <> ": the rule threw: " <> escape))
+        Left escape -> pure (Undecidable (WillResolve Nothing) (RuleUnable (prepName rule) (RuleThrew escape)))
         Right res -> case decisive (prepName rule) res of
             Just d -> pure (withEvidence passed (map fst rest) d)
             Nothing -> stepRules ev rest (Passed (prepName rule) res : passed)
@@ -430,17 +397,24 @@ stepRules ev ((rule, eval) : rest) passed =
 -- One non-decisive evaluation as the fold keeps it, so the trail and the evidence read one record.
 data Passed = Passed Text RuleEvaluation
 
+-- The audit reason one passed evaluation leaves in the deny-by-default trail, its rule named
+-- where the rule could not vet.
 passedReason :: Passed -> Reason
-passedReason (Passed _ res) = reasonOf res
+passedReason (Passed name res) = case res of
+    Unavailable _ _ why -> RuleUnable name why
+    Decided (CannotVet _ why) -> RuleUnable name why
+    Decided (Allow reason) -> reason
+    Decided (Deny _ reason) -> reason
+    Decided (NoDecision reason) -> reason
 
 -- The evidence a fail-open inability leaves. A fail-closed one is decisive, so it never passes.
 skippedOf :: Passed -> Maybe SkippedCheck
 skippedOf (Passed name res) = case res of
-    Decided (CannotVet alignment reason) -> skipped alignment reason
-    Unavailable _ alignment reason -> skipped alignment reason
+    Decided (CannotVet alignment why) -> skipped alignment why
+    Unavailable _ alignment why -> skipped alignment why
     Decided _ -> Nothing
   where
-    skipped FailNoDecision reason = Just (SkippedUnavailable name (bareCause name reason))
+    skipped FailNoDecision why = Just (SkippedUnavailable name why)
     skipped FailDeny _ = Nothing
 
 -- Only an admission carries evidence: the checks that could not vet ahead of it, in boot order,
@@ -450,11 +424,6 @@ withEvidence passed unreached = \case
     Admitted name reason _ -> Admitted name reason (reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached)
     other -> other
 
--- A verdict's reason names its rule for the audit trail. A record that names the rule in its own
--- field carries the cause alone.
-bareCause :: Text -> Reason -> Reason
-bareCause name reason = fromMaybe reason (T.stripPrefix (name <> ": ") reason)
-
 -- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal. An admission's
 -- evidence is attached by the fold, which alone knows what it passed and pre-empted.
 decisive :: Text -> RuleEvaluation -> Maybe Decision
@@ -462,95 +431,17 @@ decisive name = \case
     Decided (Allow reason) -> Just (Admitted name reason [])
     Decided (Deny etag reason) -> Just (Blocked name etag reason)
     Decided (NoDecision _) -> Nothing
-    Decided (CannotVet FailDeny reason) -> Just (Undecidable (WillResolve Nothing) reason)
+    Decided (CannotVet FailDeny why) -> Just (Undecidable (WillResolve Nothing) (RuleUnable name why))
     Decided (CannotVet FailNoDecision _) -> Nothing
-    Unavailable transience FailDeny reason -> Just (Undecidable transience reason)
+    Unavailable transience FailDeny why -> Just (Undecidable transience (RuleUnable name why))
     Unavailable _ FailNoDecision _ -> Nothing
-
--- The audit reason carried by any result, gathered for the deny-by-default trail.
-reasonOf :: RuleEvaluation -> Reason
-reasonOf (Unavailable _ _ reason) = reason
-reasonOf (Decided verdict) = case verdict of
-    Allow reason -> reason
-    Deny _ reason -> reason
-    NoDecision reason -> reason
-    CannotVet _ reason -> reason
 
 {- | Why a push is not eligible evidence, or 'Nothing' while it is. A serving generation the store
 gave no publication time for reads as unverified, because its age cannot be established.
 -}
-renderIneligible :: AdvisoryFreshness -> Maybe Text
-renderIneligible = \case
+pushInability :: AdvisoryFreshness -> Maybe Inability
+pushInability = \case
     AdvisoryFresh -> Nothing
     AdvisoryAging{} -> Nothing
-    AdvisoryStale observed -> Just (renderExpiredPush observed)
-    AdvisoryUndated -> Just "the object store reported no publication time for the serving advisory artifact"
-
--- An expired push: its age, the maximum it passed, and when it landed, so an operator can
--- tell an update outage from a maximum set too short.
-renderExpiredPush :: AdvisoryAge -> Text
-renderExpiredPush observed =
-    "the advisory push is "
-        <> renderDuration (advisoryAge observed)
-        <> " old, past the maximum of "
-        <> renderDuration (advisoryMaxAge observed)
-        <> " (pushed at "
-        <> renderIso8601Utc (advisoryPushedAt observed)
-        <> ")"
-
-{- | A human-readable summary of a decision, suitable for logs and the denial
-response body.
--}
-renderDecision :: RuleEvidence -> Decision -> Text
-renderDecision ev decision =
-    let subject = renderPackageName (evName ev) <> "@" <> renderVersion (evVersion ev)
-     in case decision of
-            Admitted name reason skipped ->
-                subject <> " was approved by " <> name <> ": " <> reason <> renderSkippedChecks skipped
-            Blocked name _ reason ->
-                subject <> " was denied by " <> name <> ": " <> reason
-            BlockedByDefault reasons ->
-                subject
-                    <> " was denied (no rule allowed it)"
-                    <> if null reasons
-                        then ""
-                        else ": " <> T.intercalate "; " reasons
-            Undecidable _ reason ->
-                subject <> " could not be evaluated: " <> reason
-
--- The evidence as a parenthetical, so an admission's line never reads as if every check passed.
-renderSkippedChecks :: [SkippedCheck] -> Text
-renderSkippedChecks [] = ""
-renderSkippedChecks checks = " (" <> T.intercalate "; " (map render checks) <> ")"
-  where
-    render = \case
-        SkippedUnavailable rule cause -> "skipped for unavailability: " <> rule <> " (" <> cause <> ")"
-        Unreached rule -> "not reached: " <> rule
-
--- | Keep two non-zero units to distinguish near-threshold durations. Negative values render as zero.
-renderDuration :: NominalDiffTime -> Text
-renderDuration d = case take 2 (durationComponents secs) of
-    [] -> "0 seconds"
-    parts -> T.unwords (map renderDurationPart parts)
-  where
-    secs = max 0 (round (nominalDiffTimeToSeconds d)) :: Integer
-
-durationLadder :: [(Text, Integer)]
-durationLadder =
-    [ ("day", 86400)
-    , ("hour", 3600)
-    , ("minute", 60)
-    , ("second", 1)
-    ]
-
-durationComponents :: Integer -> [(Text, Integer)]
-durationComponents = go durationLadder
-  where
-    go [] _ = []
-    go ((unit, size) : rest) r =
-        let (q, r') = r `divMod` size
-         in [(unit, q) | q > 0] <> go rest r'
-
--- Render one @(unit, count)@ component, pluralising the unit (@1 minute@, @30 seconds@).
-renderDurationPart :: (Text, Integer) -> Text
-renderDurationPart (unit, n) = show n <> " " <> unit <> (if n == 1 then "" else "s")
+    AdvisoryStale observed -> Just (PushPastMaximum observed)
+    AdvisoryUndated -> Just PushUndated

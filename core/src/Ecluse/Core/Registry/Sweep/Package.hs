@@ -46,8 +46,9 @@ import Ecluse.Core.Registry.Sweep.Types (
     recordMetric,
     recordTally,
  )
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluator, renderIneligible)
-import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluator, pushInability)
+import Ecluse.Core.Rules.Render (renderInability, renderReason)
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Inability, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -160,7 +161,7 @@ decideVersion counting ports counters decide evidence version = do
 across a long manifest read or a batch, and a delete is permanent. So it is read again here. -}
 stillEligible :: SweepPorts -> SweepState -> SweepMount -> PackageName -> [Condemned] -> IO [Condemned]
 stillEligible ports counters mount name condemned =
-    rdAdvisoryFreshness (smRuleDeps mount) >>= \freshness -> case renderIneligible freshness of
+    rdAdvisoryFreshness (smRuleDeps mount) >>= \freshness -> case pushInability freshness of
         Nothing -> pure condemned
         Just why -> do
             let advisoryRules = [ruleName r | r <- smConfigured mount, readsAdvisories r]
@@ -193,7 +194,7 @@ announceKept ports name =
         )
 
 -- The versions the unusable evidence spared, so an operator sees what a recovered Pilot would act on.
-announceIneligible :: SweepPorts -> PackageName -> Text -> [Condemned] -> IO ()
+announceIneligible :: SweepPorts -> PackageName -> Inability -> [Condemned] -> IO ()
 announceIneligible ports name why withheld =
     auditError
         (sweepAudit ports)
@@ -201,7 +202,7 @@ announceIneligible ports name why withheld =
             <> ": "
             <> show (length withheld)
             <> " versions an advisory rule denied stay in the store, because "
-            <> why
+            <> renderInability why
         )
 
 -- Where a halting run would have stopped, for a run that carries on past the cap instead.
@@ -230,7 +231,7 @@ condemnationMessage ports name condemned =
         <> ": blocked by "
         <> cdRule condemned
         <> " ("
-        <> cdReason condemned
+        <> renderReason (cdReason condemned)
         <> "); advisory generation "
         <> renderGeneration (cdAdvisoryEtag condemned)
 

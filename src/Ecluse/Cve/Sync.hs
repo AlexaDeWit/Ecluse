@@ -46,7 +46,6 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
 import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), RuleDeps (..), SourceReporter, noSourceReporter)
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryFreshness (AdvisoryFresh),
     AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
     MaxAdvisoryAge,
@@ -54,6 +53,7 @@ import Ecluse.Core.Rules.Freshness (
     assessAdvisoryAge,
  )
 import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy), sourceReporter, tvarOutageStore)
+import Ecluse.Core.Rules.Types (AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt))
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement,
     MountReadiness,
