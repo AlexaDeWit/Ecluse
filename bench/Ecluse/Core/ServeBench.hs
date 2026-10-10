@@ -7,17 +7,24 @@ Decoding and fetch-digest construction stay outside the measured operation.
 -}
 module Ecluse.Core.ServeBench (benchmarks) where
 
+import Data.Aeson (Encoding, Value (Number), toEncoding)
+import Data.Aeson.Encoding (encodingToLazyByteString)
+import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Ecluse.Bench.Corpus (benchEvalContext, entryName, syntheticInput)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Package.Filter (restrictToSurvivors)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked, npmRendered, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), RenderPlan (..))
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
@@ -38,10 +45,48 @@ benchmarks ecosystem =
                     (either (const (pure (-1))) serveDepth)
                ]
             <> [npmAssemblyBenchmarks ecosystem | ebEcosystem ecosystem == Npm]
+            <> [pypiEncodingBenchmarks ecosystem | ebEcosystem ecosystem == PyPI]
   where
     serveDepth = serveDocumentSize (ebMetadata ecosystem) benchEvalContext
 
--- | Assemble each packed full read's listing as production does, before its render.
+-- Existing serve rows include assembly and do not isolate envelope encoding.
+pypiEncodingBenchmarks :: EcosystemBench -> Benchmark
+pypiEncodingBenchmarks ecosystem =
+    bgroup
+        "prepared PyPI encoding"
+        [ bgroup
+            (entryName entry)
+            [ encodingSize previousEncoding document `seq`
+                encodingSize simpleEncoding document `seq`
+                    bgroup
+                        label
+                        [ bench "previous encoder" (whnf (encodingSize previousEncoding) document)
+                        , bench "direct pairs" (whnf (encodingSize simpleEncoding) document)
+                        ]
+            | (label, document) <-
+                ("retained envelope and files", retained)
+                    : [ ("envelope fields " <> show count <> ", files " <> show fileCount, simpleDocument (envelope count) (take fileCount (simpleFiles retained)))
+                      | count <- [0, 1, 8, 64, 512]
+                      , fileCount <- [0, 1]
+                      ]
+            ]
+        | entry@(_, _, _, source) <- ebCorpus ecosystem
+        , Just retained <- [snd pypiSimpleCached (snapshotValue source)]
+        ]
+  where
+    envelope count = KeyMap.fromList [(Key.fromText (prefix <> show position), Number (fromIntegral position)) | position <- [0 .. count - 1 :: Int], let prefix = if even position then "a-" else "z-"]
+
+encodingSize :: (SimpleDocument -> Encoding) -> SimpleDocument -> Int64
+encodingSize encoder = LBS.length . encodingToLazyByteString . encoder
+
+-- Freeze the base encoder here because the benchmark does not link the mirrored unit spec.
+previousEncoding :: SimpleDocument -> Encoding
+previousEncoding document =
+    Encoding.pairs (KeyMap.foldMapWithKey Encoding.pair (KeyMap.insert "files" files (toEncoding <$> simpleEnvelope document)))
+  where
+    files = Encoding.list (toEncoding . snd) (simpleFiles document)
+
+-- Assembly must finish before the measured render reads the packed listing.
 npmAssemblyBenchmarks :: EcosystemBench -> Benchmark
 npmAssemblyBenchmarks ecosystem =
     bgroup

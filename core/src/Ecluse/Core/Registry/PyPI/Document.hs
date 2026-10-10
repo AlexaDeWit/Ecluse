@@ -11,8 +11,9 @@ module Ecluse.Core.Registry.PyPI.Document (
     simpleEncoding,
 ) where
 
-import Data.Aeson (Encoding, Object, Value, toEncoding)
+import Data.Aeson (Encoding, Object, Value (Null), toEncoding)
 import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 
 import Ecluse.Core.Package.Entry (EntryKey)
@@ -30,9 +31,17 @@ data SimpleDocument = SimpleDocument
 simpleDocument :: Object -> [(EntryKey, Value)] -> SimpleDocument
 simpleDocument envelope = SimpleDocument (KeyMap.delete "files" envelope)
 
--- | Encode the envelope with the retained files in source order. Source coordinates stay internal.
+-- | Preserve envelope key order and file source order, overwriting any envelope files key.
 simpleEncoding :: SimpleDocument -> Encoding
-simpleEncoding document =
-    Encoding.pairs (KeyMap.foldMapWithKey Encoding.pair (KeyMap.insert "files" files (toEncoding <$> simpleEnvelope document)))
+simpleEncoding document
+    | KeyMap.null envelope = Encoding.pairs files
+    | otherwise = Encoding.pairs (KeyMap.foldMapWithKey (envelopePair files) (KeyMap.insert "files" Null envelope))
   where
-    files = Encoding.list (toEncoding . snd) (simpleFiles document)
+    envelope = simpleEnvelope document
+    files = Encoding.pair "files" (Encoding.list (toEncoding . snd) (simpleFiles document))
+
+-- The sentinel's value never reaches the output. Only its key selects the retained files.
+envelopePair :: Encoding.Series -> Key -> Value -> Encoding.Series
+envelopePair files key value
+    | key == "files" = files
+    | otherwise = Encoding.pair key (toEncoding value)
