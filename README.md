@@ -16,9 +16,8 @@ trusting it: the keyless provenance and SBOM attestations, and a rebuild from pi
 > **Status: generally available, pre-1.0.0.** The npm packument, tarball, and publish paths
 > run today and are ready for use. A `pypi` mount serves reads, the PEP 691 Simple index and
 > the distribution files under it, and writes nothing. An AWS-backed deployment is wired end to end: an SQS
-> mirror queue, a demand-driven worker, and writes under a container-role credential. The
-> deployment runbook is still to come. GCP and Azure integrations are not planned until there
-> is user demand. Configuration can still change before `v1.0.0`. The
+> mirror queue, a demand-driven worker, and writes under a container-role credential.
+> Configuration can still change before `v1.0.0`. The
 > [operator manual](https://ecluse-proxy.com/docs/) is the deployment contract.
 
 [Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
