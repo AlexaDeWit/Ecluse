@@ -12,7 +12,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import GHC.Conc (getNumCapabilities)
-import System.Environment (getArgs)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (infoVersions, pkgEcosystem)
