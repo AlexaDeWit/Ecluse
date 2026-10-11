@@ -6,6 +6,7 @@ module Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec (spec) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -67,7 +68,7 @@ port never answers @\/metrics@. Pull-based and in-process, so no backend takes p
 spec :: Spec
 spec = describe "Prometheus scrape listener" $ do
     beforeAll driveScrapeRun $ do
-        it "renders the recorded ecluse.* series as Prometheus text exposition" $ \run -> do
+        it (caseLabel "integration/telemetry-scrape/native-001" "renders the recorded ecluse.* series as Prometheus text exposition") $ \run -> do
             let served = runExposition run
             fStatus served `shouldBe` 200
             fContentType served `shouldBe` Just "text/plain; version=0.0.4; charset=utf-8"
@@ -79,31 +80,31 @@ spec = describe "Prometheus scrape listener" $ do
             fBody served `shouldSatisfy` T.isInfixOf "# TYPE ecluse_mirror_jobs_processed counter"
             fBody served `shouldSatisfy` T.isInfixOf "result=\"published\""
 
-        it "labels every series from the bounded vocabulary alone" $ \run ->
+        it (caseLabel "integration/telemetry-scrape/native-002" "labels every series from the bounded vocabulary alone") $ \run ->
             -- Bounded labels answer cardinality, not exposure: they are what stops the exposition
             -- growing a series per package. A label key follows '{' or ','.
             forM_ highCardinalityKeys $ \key -> do
                 fBody (runExposition run) `shouldNotSatisfy` T.isInfixOf ("{" <> key <> "=\"")
                 fBody (runExposition run) `shouldNotSatisfy` T.isInfixOf ("," <> key <> "=\"")
 
-        it "serves one path only, so the listener answers nothing else" $ \run ->
+        it (caseLabel "integration/telemetry-scrape/native-003" "serves one path only, so the listener answers nothing else") $ \run ->
             fStatus (runListenerOther run) `shouldBe` 404
 
-        it "leaves the proxy port with no /metrics to find, even under the scrape transport" $ \run ->
+        it (caseLabel "integration/telemetry-scrape/native-004" "leaves the proxy port with no /metrics to find, even under the scrape transport") $ \run ->
             -- Identical triples, so a client on the data port cannot tell the path apart from any
             -- other unmounted one and learn that an exposition exists.
             runProxyMetrics run `shouldBe` runProxyUnknown run
 
-    it "starts no listener while telemetry is off, whatever the transport selects" $ do
+    it (caseLabel "integration/telemetry-scrape/native-005" "starts no listener while telemetry is off, whatever the transport selects") $ do
         reached <- scrapeReachableWith TelemetryOff
         reached `shouldBe` False
 
-    it "starts one while telemetry is on, which is what makes that a real difference" $ do
+    it (caseLabel "integration/telemetry-scrape/native-006" "starts one while telemetry is on, which is what makes that a real difference") $ do
         reached <- scrapeReachableWith TelemetryOn
         reached `shouldBe` True
 
-{- Record a spread of @ecluse.*@ signals through a live telemetry handle, then read both the
-dedicated listener and the proxy's own port inside that one session. -}
+-- Record a spread of @ecluse.*@ signals through a live telemetry handle, then read both the
+-- dedicated listener and the proxy's own port inside that one session.
 driveScrapeRun :: IO ScrapeRun
 driveScrapeRun = do
     scrapePort <- freePort
@@ -120,8 +121,8 @@ driveScrapeRun = do
                     <*> fetch (urlOn proxyPort "/metrics")
                     <*> fetch (urlOn proxyPort "/not-a-mount")
 
-{- Whether the scrape listener answers under the given switch, with the scrape transport selected
-either way. That is the composed join: the selection alone must not open a port. -}
+-- Whether the scrape listener answers under the given switch, with the scrape transport selected
+-- either way. That is the composed join: the selection alone must not open a port.
 scrapeReachableWith :: TelemetrySwitch -> IO Bool
 scrapeReachableWith switch = do
     scrapePort <- freePort
@@ -141,8 +142,8 @@ recordSpread telemetry = do
     recordRuleDenial metrics (Just "min-age") ReasonPolicy
     recordMirrorJobProcessed metrics Published
 
-{- Point the SDK at the scrape transport on a port this run owns. 'withSdkEnv' restores every key
-it sets, and the OTLP endpoint stays unused because no push exporter is selected. -}
+-- Point the SDK at the scrape transport on a port this run owns. 'withSdkEnv' restores every key
+-- it sets, and the OTLP endpoint stays unused because no push exporter is selected.
 withScrapeEnv :: Int -> IO a -> IO a
 withScrapeEnv scrapePort =
     withSdkEnv

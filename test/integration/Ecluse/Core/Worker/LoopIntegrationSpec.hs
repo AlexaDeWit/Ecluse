@@ -4,6 +4,7 @@
 
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (status200, status201, status409, status503)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
@@ -46,7 +47,7 @@ spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "mirror worker (ministack + WAI stubs)" $ do
-            it "fetches, verifies, publishes, and acks a faithful job (via the loop)" $ \container ->
+            it (caseLabel "integration/worker/native-001" "fetches, verifies, publishes, and acks a faithful job (via the loop)") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
@@ -60,7 +61,7 @@ spec =
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
-            it "publishes nothing when the artifact fails its integrity digest" $ \container ->
+            it (caseLabel "integration/worker/native-002" "publishes nothing when the artifact fails its integrity digest") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
@@ -73,7 +74,7 @@ spec =
                         published <- readIORef publishLog
                         published `shouldBe` []
 
-            it "treats a 409 (version already present) as idempotent success and acks" $ \container ->
+            it (caseLabel "integration/worker/native-003" "treats a 409 (version already present) as idempotent success and acks") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     -- The mirror target answers 409 (the version is already present). 409-is-
                     -- success, so the worker acks and the job does not redeliver.
@@ -86,7 +87,7 @@ spec =
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
-            it "leaves a transiently-rejected job un-acked, so it redelivers" $ \container ->
+            it (caseLabel "integration/worker/native-004" "leaves a transiently-rejected job un-acked, so it redelivers") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     -- The mirror target answers 503 (a retryable rejection). The worker
                     -- must not ack, so the message redelivers: a real second delivery.
@@ -104,7 +105,7 @@ spec =
                         length published `shouldSatisfy` (>= 2)
                         published `shouldSatisfy` all (== npmPublishPath)
 
-            it "never mirrors an over-cap artifact; it dead-letters the job to ride the redrive policy (issue #846)" $ \container ->
+            it (caseLabel "integration/worker/native-005" "never mirrors an over-cap artifact; it dead-letters the job to ride the redrive policy (issue #846)") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-overcap" defaultQueueOptions
@@ -117,7 +118,7 @@ spec =
                         published <- readIORef publishLog
                         published `shouldBe` []
 
-            it "refuses a queued job under the stricter policy the consuming worker booted" $ \container ->
+            it (caseLabel "integration/worker/native-006" "refuses a queued job under the stricter policy the consuming worker booted") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-rollout-strict" rolloutQueueOptions
@@ -130,7 +131,7 @@ spec =
                         readIORef publishLog `shouldReturn` []
                         assertQueueDrained queue
 
-            it "publishes that same queued job under the older policy the consuming worker booted" $ \container ->
+            it (caseLabel "integration/worker/native-007" "publishes that same queued job under the older policy the consuming worker booted") $ \container ->
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-rollout-old" rolloutQueueOptions
@@ -143,7 +144,7 @@ spec =
                         readIORef publishLog `shouldReturn` [npmPublishPath]
                         assertQueueDrained queue
 
-            it "advances the heartbeat as the loop polls a real queue" $ \container ->
+            it (caseLabel "integration/worker/native-008" "advances the heartbeat as the loop polls a real queue") $ \container ->
                 withUpstream $ \_upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl _publishLog -> do
                         queue <- freshQueue container "worker-heartbeat" defaultQueueOptions{qoWaitSeconds = 1}
@@ -157,8 +158,8 @@ spec =
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
 
-{- A visibility window short enough that the ack assertions can outwait it. The shipped 30s default
-would hide an un-acked message behind its lease, so the read after the loop could never fail. -}
+-- A visibility window short enough that the ack assertions can outwait it. The shipped 30s default
+-- would hide an un-acked message behind its lease, so the read after the loop could never fail.
 rolloutQueueOptions :: QueueOptions
 rolloutQueueOptions = defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
 

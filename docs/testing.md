@@ -54,8 +54,25 @@ lightweight LocalStack alternative, with `amazonka` pointed at `http://<containe
 throwaway credentials. The telemetry specs run a real OTLP **Collector** container the same way. Both
 are hermetic: no real cloud account, no real credentials.
 
-The tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides one. Locally,
-install Docker: Nix ships the toolchain, not the daemon. Run: `task test-integration`.
+The complete tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides one.
+Local HTTP groups need no Docker. Run `task test-integration` for every group, or select one by its stable ID:
+
+```bash
+task test-contract-list TIER=integration
+task test-contract-plan TIER=integration
+task test-integration GROUP=integration/pypi
+task test-integration GROUP=integration/queue-sqs
+task test-integration SHARD=http
+```
+
+`ECOSYSTEM`, `BACKEND`, and `CAPABILITY` intersect with `GROUP` and `SHARD`.
+Discovery validates independent obligations without constructing specs, reading credentials, or acquiring services.
+Unknown groups, empty selections, missing prerequisites, pending cases, and missing execution results fail.
+The `http`, `aws`, and `telemetry` partitions are local scheduling data, not a new CI matrix.
+Reports and the selected manifest go under `scratchpad/integration/<run-id>/`.
+In-process integration records an inapplicable product image identity.
+The instrumented coverage run uses the same runner and always executes every group.
+It retains one integration report, the other three suite reports, and the existing product-module denominator.
 
 > **Token-mint caveat.** No emulator covers CodeArtifact's `GetAuthorizationToken` API.
 > The [unit spec](../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs)

@@ -1,0 +1,43 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Independent integration requirements reject removed cases and capability drift.
+module Ecluse.Test.Contract.Integration.CatalogueSpec (spec) where
+
+import Test.Hspec
+
+import Ecluse.Test.Contract.Catalogue (selectGroups, validateCatalogue)
+import Ecluse.Test.Contract.Integration.Catalogue (integrationCatalogue)
+import Ecluse.Test.Contract.Types
+
+spec :: Spec
+spec = do
+    it "validates integration coverage without acquiring its providers" $
+        validateCatalogue integrationCatalogue `shouldBe` Right integrationCatalogue
+    it "rejects each missing native or canonical case independently" $
+        for_ (catalogueGroups integrationCatalogue) $ \group ->
+            for_ (groupCases group) $ \item -> do
+                let changed = integrationCatalogue{catalogueGroups = map (removeCase group item) (catalogueGroups integrationCatalogue)}
+                validateCatalogue changed `shouldSatisfy` isLeft
+    it "rejects every removed supported profile" $
+        for_ (catalogueProfiles integrationCatalogue) $ \profile ->
+            validateCatalogue integrationCatalogue{catalogueProfiles = filter ((/= profileId profile) . profileId) (catalogueProfiles integrationCatalogue)} `shouldSatisfy` isLeft
+    it "rejects capability removal without erasing its obligation" $
+        for_ (catalogueProfiles integrationCatalogue) $ \profile ->
+            for_ (profileCapabilities profile) $ \capability -> do
+                let removeCapability candidate = if profileId candidate == profileId profile then candidate{profileCapabilities = filter (/= capability) (profileCapabilities candidate)} else candidate
+                validateCatalogue integrationCatalogue{catalogueProfiles = map removeCapability (catalogueProfiles integrationCatalogue)} `shouldSatisfy` isLeft
+    it "rejects a newly registered ecosystem without coverage" $
+        validateCatalogue integrationCatalogue{catalogueProductionEcosystems = "new-ecosystem" : catalogueProductionEcosystems integrationCatalogue} `shouldSatisfy` isLeft
+    it "selects each whole group by its fixed identifier" $
+        for_ (catalogueGroups integrationCatalogue) $ \group ->
+            selectGroups emptySelection{selectionGroup = Just (groupId group)} integrationCatalogue `shouldBe` Right [group]
+    it "rejects unknown and empty intersections before setup" $ do
+        selectGroups emptySelection{selectionGroup = Just "absent"} integrationCatalogue `shouldSatisfy` isLeft
+        selectGroups emptySelection{selectionGroup = Just "integration/pypi", selectionBackend = Just "ministack"} integrationCatalogue `shouldSatisfy` isLeft
+
+removeCase :: Group -> Case -> Group -> Group
+removeCase selected item candidate
+    | groupId candidate == groupId selected = candidate{groupCases = filter ((/= caseId item) . caseId) (groupCases candidate)}
+    | otherwise = candidate

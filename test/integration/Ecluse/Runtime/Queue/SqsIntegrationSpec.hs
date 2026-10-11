@@ -6,6 +6,7 @@
 module Ecluse.Runtime.Queue.SqsIntegrationSpec (spec) where
 
 import Data.Unique (hashUnique, newUnique)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
@@ -59,7 +60,7 @@ spec =
                     queueContract "queue/sqs"
                     leasedQueueContract "queue/sqs"
 
-            it "extendVisibility holds an un-acked job past its original window" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-001" "extendVisibility holds an un-acked job past its original window") $ \container -> do
                 -- Extend the in-flight message well past its 1s visibility timeout. No
                 -- reappearance inside the original window proves the extension held it.
                 queue <- freshQueue container "mirror-extend" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
@@ -71,7 +72,7 @@ spec =
                 stillHidden2 <- expectRightIO (receive queue)
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
-            it "renews a received job's visibility for as long as the worker holds it (issue #1208)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-002" "renews a received job's visibility for as long as the worker holds it (issue #1208)") $ \container -> do
                 -- The lease controller against real SQS: a job that outruns its two-second
                 -- window stays hidden, so no second consumer can take it mid-mirror.
                 queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
@@ -86,7 +87,7 @@ spec =
                 -- having finished is half of what this case proves.
                 outcomes `shouldBe` [Just ()]
 
-            it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-003" "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)") $ \container -> do
                 -- Terminal faults must return through redrive, never DeleteMessage.
                 -- Reappearance proves that terminal handling retained the payload.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
@@ -96,13 +97,13 @@ spec =
                 redelivered <- receiveUntil queue
                 map msgJob redelivered `shouldBe` [sampleJob]
 
-            it "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-004" "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)") $ \container -> do
                 -- A plain CreateQueue leaves nothing to capture a poison message, so
                 -- Écluse must warn the operator at boot.
                 queue <- freshQueue container "mirror-no-dlq" defaultQueueOptions
                 deadLetterTerminus queue `shouldBe` Right TerminusAbsent
 
-            it "probes an attached redrive policy, reading its maxReceiveCount (issue #935)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-005" "probes an attached redrive policy, reading its maxReceiveCount (issue #935)") $ \container -> do
                 -- The capture count 9 sits above the shipped floor of 5, so the raise is
                 -- visible. At 5 the effective budget would equal the floor either way.
                 queue <- freshQueue container "mirror-with-dlq" defaultQueueOptions{qoDeadLetterAfter = Just 9}
@@ -111,7 +112,7 @@ spec =
                 -- the dead-letter queue always takes the message first.
                 deliveryBudget queue `shouldBe` DeliveryBudget 10
 
-            it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
+            it (caseLabel "integration/queue-sqs/native-006" "reports an unreachable endpoint as the handle's typed transport fault") $ \_container -> do
                 -- The poll must come back as a typed 'Left' with the unreachable cause,
                 -- classified at the adapter edge, never as an exception through the caller.
                 queue <- deadEndpointQueue

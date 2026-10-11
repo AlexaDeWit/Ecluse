@@ -14,6 +14,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (dropWhileEnd, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, methodGet, methodHead, status200, status401, status403, status404, status503, statusCode)
 import Network.Wai (Application, responseLBS)
@@ -57,18 +58,18 @@ spec = do
 
 indexSpec :: Spec
 indexSpec = describe "the served Simple index" $ do
-    it "serves the PEP 691 JSON form under its own media type" $
+    it (caseLabel "integration/pypi/native-001" "serves the PEP 691 JSON form under its own media type") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             simpleStatus resp `shouldBe` status200
             lookup "Content-Type" (simpleHeaders resp) `shouldBe` Just "application/vnd.pypi.simple.v1+json"
 
-    it "names the surviving releases in the PEP 700 versions array" $
+    it (caseLabel "integration/pypi/native-002" "names the surviving releases in the PEP 700 versions array") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             servedVersions resp `shouldBe` ["2.34.2"]
 
-    it "rebases every served file onto this mount, so the bytes come back through the gate" $
+    it (caseLabel "integration/pypi/native-003" "rebases every served file onto this mount, so the bytes come back through the gate") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             servedUrls resp
@@ -76,7 +77,7 @@ indexSpec = describe "the served Simple index" $ do
                            , "http://ecluse.test/pypi/simple/requests/requests-2.34.2.tar.gz"
                            ]
 
-    it "omits the PEP 658 sidecar keys, because it serves no .metadata companion" $
+    it (caseLabel "integration/pypi/native-004" "omits the PEP 658 sidecar keys, because it serves no .metadata companion") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             for_ sidecarKeys (`excludesSidecar` resp)
@@ -84,7 +85,7 @@ indexSpec = describe "the served Simple index" $ do
             servedFiles resp `shouldBe` expectedFiles
 
     for_ sidecarKeys $ \key ->
-        it ("recognises " <> toString key <> " and rejects its retained-response control") $
+        it (caseLabel ("integration/pypi/native-005/" <> key) (toText ("recognises " <> toString key <> " and rejects its retained-response control" :: String))) $
             withPyPIProxy publicIndex $ \app -> do
                 resp <- getIndex app
                 let input = resp{simpleBody = encode (publicIndex "http://upstream.test")}
@@ -93,18 +94,18 @@ indexSpec = describe "the served Simple index" $ do
                 servedKeys retained `shouldContain` [key]
                 excludesSidecar key retained `shouldThrow` namedKeyFailure key
 
-    it "preserves the digest a client verifies the download against" $
+    it (caseLabel "integration/pypi/native-006" "preserves the digest a client verifies the download against") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             servedDigests resp `shouldBe` [sha256Digest, sha256Digest]
 
-    it "answers the same index with a trailing slash, which the router collapses" $
+    it (caseLabel "integration/pypi/native-007" "answers the same index with a trailing slash, which the router collapses") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPath "/pypi/simple/requests/" app
             simpleStatus resp `shouldBe` status200
             servedVersions resp `shouldBe` ["2.34.2"]
 
-    it "denies a non-canonical project name with the structural 404, never a redirect" $
+    it (caseLabel "integration/pypi/native-008" "denies a non-canonical project name with the structural 404, never a redirect") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPath "/pypi/simple/Requests" app
             simpleStatus resp `shouldBe` status404
@@ -113,7 +114,7 @@ indexSpec = describe "the served Simple index" $ do
 conditionalFloorSpec :: Spec
 conditionalFloorSpec = describe "listing validators across configured integrity floors" $
     for_ [("public", publicPypiDeps), ("trusted", privatePypiDeps)] $ \(origin, depsFor) ->
-        it ("returns the changed " <> origin <> " listing before accepting its new validator") $ do
+        it (caseLabel ("integration/pypi/native-009/" <> toText origin) (toText ("returns the changed " <> origin <> " listing before accepting its new validator" :: String))) $ do
             publicFloor <- either (fail . toString) pure (mkMinIntegrity SHA512)
             trustedFloor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)
             withPyPIProxyOver mixedIntegrityIndex depsFor $ \proxy -> do
@@ -161,19 +162,19 @@ mixedIntegrityIndex authority =
 
 artifactSpec :: Spec
 artifactSpec = describe "the served distribution file" $ do
-    it "denies a file naming another project, which is a path-confusion attempt" $
+    it (caseLabel "integration/pypi/native-010" "denies a file naming another project, which is a path-confusion attempt") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPath "/pypi/simple/requests/urllib3-2.0.0.tar.gz" app
             simpleStatus resp `shouldBe` status404
 
 negotiationSpec :: Spec
 negotiationSpec = describe "content negotiation, decided from the route record" $ do
-    it "serves a client that admits the JSON form" $
+    it (caseLabel "integration/pypi/native-011" "serves a client that admits the JSON form") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPathWith [("Accept", "application/vnd.pypi.simple.v1+json, text/html;q=0.01")] "/pypi/simple/requests" app
             simpleStatus resp `shouldBe` status200
 
-    it "answers 406 to a client that requires HTML, before any upstream work" $
+    it (caseLabel "integration/pypi/native-012" "answers 406 to a client that requires HTML, before any upstream work") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPathWith [("Accept", "text/html")] "/pypi/simple/requests" app
             statusOf resp `shouldBe` 406
@@ -181,13 +182,13 @@ negotiationSpec = describe "content negotiation, decided from the route record" 
 
 refusalBodySpec :: Spec
 refusalBodySpec = describe "the operator help message on a refusal the route table decides" $ do
-    it "carries it on the 406 a client admitting no JSON takes" $
+    it (caseLabel "integration/pypi/native-013" "carries it on the 406 a client admitting no JSON takes") $
         withHelpfulPyPIProxy $ \app -> do
             resp <- getPathWith [("Accept", "text/html")] "/pypi/simple/requests" app
             statusOf resp `shouldBe` 406
             simpleBody resp `shouldBe` helpBytes
 
-    it "carries it on the 405 an upload takes, because this mount publishes nothing" $ do
+    it (caseLabel "integration/pypi/native-014" "carries it on the 405 an upload takes, because this mount publishes nothing") $ do
         withPyPIProxy publicIndex $ \app -> do
             resp <- postPath "/pypi/legacy" app
             statusOf resp `shouldBe` 405
@@ -197,7 +198,7 @@ refusalBodySpec = describe "the operator help message on a refusal the route tab
             statusOf resp `shouldBe` 405
             simpleBody resp `shouldBe` helpBytes
 
-    it "carries it on the structural 404 a path no route claims takes" $
+    it (caseLabel "integration/pypi/native-015" "carries it on the structural 404 a path no route claims takes") $
         withHelpfulPyPIProxy $ \app -> do
             resp <- getPath "/pypi/pypi/requests/json" app
             statusOf resp `shouldBe` 404
@@ -206,7 +207,7 @@ refusalBodySpec = describe "the operator help message on a refusal the route tab
 privateLegSpec :: Spec
 privateLegSpec = describe "the private artifact leg, addressed by the index's own location" $ do
     for_ [status404, status503] $ \upstreamStatus ->
-        it ("keeps public artifact fallback after private index HTTP " <> show (statusCode upstreamStatus)) $
+        it (caseLabel ("integration/pypi/native-016/" <> show (statusCode upstreamStatus)) (toText ("keeps public artifact fallback after private index HTTP " <> show (statusCode upstreamStatus) :: String))) $
             testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private index unavailable"))) $ \privatePort ->
                 withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) $ \proxy -> do
                     response <- getPathWith [clientCredential] sdistPath (proxyApp proxy)
@@ -216,7 +217,7 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
                     map snd hits `shouldSatisfy` all isNothing
 
     for_ [status401, status403] $ \upstreamStatus ->
-        it ("refuses an index HTTP " <> show (statusCode upstreamStatus) <> " on metadata and indexed artifacts") $
+        it (caseLabel ("integration/pypi/native-017/" <> show (statusCode upstreamStatus)) (toText ("refuses an index HTTP " <> show (statusCode upstreamStatus) <> " on metadata and indexed artifacts" :: String))) $
             withPyPIProxyResponding (const (\_ respond -> respond (responseLBS upstreamStatus [("WWW-Authenticate", "private-secret")] "private-secret"))) publicIndex privatePypiDeps $ \proxy ->
                 for_ ["/pypi/simple/requests", sdistPath] $ \path ->
                     for_ [methodGet, methodHead] $ \method -> do
@@ -227,7 +228,7 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
                         decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "private-secret")
                         when (method == methodHead) (simpleBody response `shouldBe` "")
 
-    it "resolves the file through the private index and carries the credential there" $
+    it (caseLabel "integration/pypi/native-018" "resolves the file through the private index and carries the credential there") $
         -- A private index names each file's location itself, so the leg reads that index rather
         -- than probing a conventional path the backend may not spell.
         withPrivatePyPIProxy privateIndexOnItself $ \proxy -> do
@@ -237,7 +238,7 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
             hits <- privateHits proxy
             lookup sdistPath hits `shouldBe` Just (Just basicCredential)
 
-    it "drops a file the private index puts on a foreign host, never fetching it" $
+    it (caseLabel "integration/pypi/native-019" "drops a file the private index puts on a foreign host, never fetching it") $
         -- The projection and the download gate read one authority definition, so a location the
         -- served listing would not carry is a location this leg does not fetch either.
         withPrivatePyPIProxy (privateIndexOn "http://files.example.invalid") $ \proxy -> do
@@ -404,7 +405,7 @@ namedKeyFailure key = T.isInfixOf key . toText . displayException
 availabilitySpec :: Spec
 availabilitySpec = describe "admission-only yank policy" $ do
     for_ [(False, status200), (True, status403)] $ \(allYanked, expected) ->
-        it ("gates listings and distribution files with all files yanked=" <> show allYanked) $ do
+        it (caseLabel ("integration/pypi/native-020/" <> (if allYanked then "all-yanked" else "available")) (toText ("gates listings and distribution files with all files yanked=" <> show allYanked :: String))) $ do
             rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
             withPyPIProxyOver (yankedIndex allYanked) publicPypiDeps $ \proxy -> do
                 let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
@@ -414,7 +415,7 @@ availabilitySpec = describe "admission-only yank policy" $ do
                 simpleStatus artifact `shouldBe` expected
                 when allYanked $ for_ [listing, artifact] $ \response ->
                     decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "withdrawn notice must not enter refusals")
-    it "keeps a previously mirrored yanked release retrievable from trusted metadata" $ do
+    it (caseLabel "integration/pypi/native-021" "keeps a previously mirrored yanked release retrievable from trusted metadata") $ do
         rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
         withPrivatePyPIProxy (yankedIndex True) $ \proxy -> do
             let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})

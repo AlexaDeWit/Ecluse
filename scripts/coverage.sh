@@ -26,11 +26,22 @@ if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
 fi
 
 # Instrumented build + run of just this suite.
-cabal test "$suite" \
-  --enable-coverage \
-  --builddir="$builddir" \
-  --test-show-details=direct \
-  "$@"
+if [ "$suite" = ecluse-integration ]; then
+  cabal build "$suite" --enable-coverage --builddir="$builddir"
+  export ECLTEST_INTEGRATION_BINARY
+  ECLTEST_INTEGRATION_BINARY="$(cabal list-bin "$suite" --enable-coverage --builddir="$builddir")"
+  bash scripts/test-integration.sh coverage \
+    --enable-coverage \
+    --builddir="$builddir" \
+    --test-show-details=direct \
+    "$@"
+else
+  cabal test "$suite" \
+    --enable-coverage \
+    --builddir="$builddir" \
+    --test-show-details=direct \
+    "$@"
+fi
 
 tix="$(bash scripts/coverage-tix.sh "$suite" "$builddir")"
 

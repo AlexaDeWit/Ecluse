@@ -8,6 +8,7 @@ import Data.Aeson (Value, encode, (.=))
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (status200, status201, status404)
 import Network.Wai (Application, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -54,16 +55,14 @@ import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (stubLocalhostUrl, withStub)
 import Ecluse.Test.Wai (localhost, selfBaseUrl, servedVersions, status)
 
-{- | The AWS-backed path end to end through the real composition root: the serve
-'Ecluse.Server.application' and the mirror worker 'Ecluse.runWorker' over a real SQS queue in a
-@ministack@ container, with WAI npm stubs for both upstreams and the mirror target. Requires a
-Docker daemon and never real AWS.
+{- | Serve and mirror through the composition root against ministack SQS and WAI npm stubs.
+Requires Docker, without a live AWS account.
 -}
 spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "AWS-backed Écluse end to end (ministack SQS + WAI npm stubs)" $ do
-            it "filters public versions by the rules on a packument request" $ \container ->
+            it (caseLabel "integration/aws-composition/native-001" "filters public versions by the rules on a packument request") $ \container ->
                 withAwsProxy container "aws-e2e-packument" $ \proxy -> do
                     resp <- getPath "/npm/left-pad" (tpApp proxy)
                     status resp `shouldBe` 200
@@ -71,7 +70,7 @@ spec =
                     -- 2-day-old one, so only the survivor is in the served document.
                     servedVersions resp `shouldMatchList` ["1.0.0"]
 
-            it "gates a tarball, enqueues a real SQS job, and the worker mirrors it (fetch → verify → publish)" $ \container ->
+            it (caseLabel "integration/aws-composition/native-002" "gates a tarball, enqueues a real SQS job, and the worker mirrors it (fetch → verify → publish)") $ \container ->
                 withAwsProxy container "aws-e2e-tarball" $ \proxy -> do
                     resp <- getPath "/npm/left-pad/-/left-pad-1.0.0.tgz" (tpApp proxy)
                     status resp `shouldBe` 200
@@ -93,8 +92,8 @@ data TestProxy = TestProxy
     , tpMirrorLog :: IORef [ByteString]
     }
 
-{- The queue comes from the production composition root, driven by the AWS-SDK-standard
-@AWS_ENDPOINT_URL_SQS@ override pointed at the container, so this fixture runs no test-only path. -}
+-- The queue comes from the production composition root, driven by the AWS-SDK-standard
+-- @AWS_ENDPOINT_URL_SQS@ override pointed at the container, so this fixture runs no test-only path.
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
@@ -107,8 +106,8 @@ withAwsProxy container queueName body =
                 let app = application (mkServerConfig (maybeToList binding)) env
                 body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog}
 
-{- The released image resolves the backend the same way, from @AWS_ENDPOINT_URL_SQS@ and the
-standard credential keys. A one-second long poll keeps the worker loop brisk. -}
+-- The released image resolves the backend the same way, from @AWS_ENDPOINT_URL_SQS@ and the
+-- standard credential keys. A one-second long poll keeps the worker loop brisk.
 configDrivenQueue :: Container -> Text -> IO MirrorQueue
 configDrivenQueue container queueName = do
     queueUrl <- freshQueueUrl container queueName
@@ -157,8 +156,8 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 }
     pure (mountBindingFor Npm deps Nothing)
 
-{- The packument's @dist.tarball@ names this same loopback host and port, learned from the
-request's @Host@ header, so the honoured location is reachable. -}
+-- The packument's @dist.tarball@ names this same loopback host and port, learned from the
+-- request's @Host@ header, so the honoured location is reachable.
 withPublicUpstream :: (Text -> IO a) -> IO a
 withPublicUpstream k = testWithApplication (pure app) (k . localhost)
   where
@@ -187,8 +186,8 @@ sha1Shasum = hexSha1Of (toStrict tarballBytes)
 sha512Integrity :: Text
 sha512Integrity = sriSha512Of (toStrict tarballBytes)
 
-{- @1.0.0@ (2020) clears the quarantine and @2.0.0@ (two days before the fixed clock) does not.
-Both carry a real integrity digest, so the rule is the only distinguishing factor. -}
+-- @1.0.0@ (2020) clears the quarantine and @2.0.0@ (two days before the fixed clock) does not.
+-- Both carry a real integrity digest, so the rule is the only distinguishing factor.
 packument :: Text -> Value
 packument baseUrl =
     packumentValue

@@ -24,6 +24,7 @@ import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureStdout, lineMessage)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
@@ -52,7 +53,7 @@ spec = do
 privateAuthorisationSpec :: Spec
 privateAuthorisationSpec = describe "private authorisation refusal" $ do
     for_ [status401, status403] $ \upstreamStatus -> do
-        it ("logs a fixed warning without private details for HTTP " <> show (statusCode upstreamStatus)) $ do
+        it (caseLabel ("integration/origin/native-001/" <> show (statusCode upstreamStatus)) (toText ("logs a fixed warning without private details for HTTP " <> show (statusCode upstreamStatus) :: String))) $ do
             privateUp <- upstreamRespondingWith (responseLBS upstreamStatus [("WWW-Authenticate", "secret-realm")] "secret-upstream-body")
             publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
             queue <- newTestMemoryQueue
@@ -71,7 +72,7 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
             for_ ["secret-realm", "secret-upstream-body", "secret-client-token"] $ \secret ->
                 logged `shouldSatisfy` (not . T.isInfixOf secret)
 
-        it ("retains transient private failure when public metadata refuses HTTP " <> show (statusCode upstreamStatus)) $ do
+        it (caseLabel ("integration/origin/native-002/" <> show (statusCode upstreamStatus)) (toText ("retains transient private failure when public metadata refuses HTTP " <> show (statusCode upstreamStatus) :: String))) $ do
             privateUp <- failingUpstream
             publicUp <- upstreamRespondingWith (responseLBS upstreamStatus [] "public refusal")
             withProxy privateUp publicUp Nothing $ \app -> do
@@ -80,7 +81,7 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 servedVersions response `shouldBe` []
 
         for_ [False, True] $ \firstParty ->
-            it ("refuses metadata HTTP " <> show (statusCode upstreamStatus) <> ", firstParty=" <> show firstParty) $ do
+            it (caseLabel ("integration/origin/native-003/" <> show (statusCode upstreamStatus) <> "/" <> (if firstParty then "first-party" else "merged")) (toText ("refuses metadata HTTP " <> show (statusCode upstreamStatus) <> ", firstParty=" <> show firstParty :: String))) $ do
                 let metadata = encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0")
                 privateUp <- upstreamRespondingWith (responseLBS upstreamStatus [("WWW-Authenticate", "private-secret"), ("Set-Cookie", "private-secret")] metadata)
                 publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
@@ -98,7 +99,7 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                     seenAuth publicUp `shouldReturn` replicate (if firstParty then 0 else 4) Nothing
                     drainJobs env `shouldReturn` []
 
-        it ("retains metadata HTTP " <> show (statusCode upstreamStatus) <> " when its error body is truncated") $ do
+        it (caseLabel ("integration/origin/native-004/" <> show (statusCode upstreamStatus)) (toText ("retains metadata HTTP " <> show (statusCode upstreamStatus) <> " when its error body is truncated" :: String))) $ do
             privateUp <- upstreamRespondingWith (truncatedResponse upstreamStatus "short")
             publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
             withProxy privateUp publicUp Nothing $ \app -> do
@@ -106,7 +107,7 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 status response `shouldBe` 403
                 servedVersions response `shouldBe` []
 
-        it ("keeps public HTTP " <> show (statusCode upstreamStatus) <> " from withholding a private contribution") $ do
+        it (caseLabel ("integration/origin/native-005/" <> show (statusCode upstreamStatus)) (toText ("keeps public HTTP " <> show (statusCode upstreamStatus) <> " from withholding a private contribution" :: String))) $ do
             privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
             publicUp <- upstreamRespondingWith (responseLBS upstreamStatus [] "unavailable")
             withProxy privateUp publicUp Nothing $ \app -> do
@@ -114,9 +115,9 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 status response `shouldBe` 200
                 servedVersions response `shouldBe` ["1.0.0"]
 
-    for_ privateOutcomes $ \(label, makePrivateUpstream, firstPartyStatus) ->
+    for_ privateOutcomes $ \(outcomeId, label, makePrivateUpstream, firstPartyStatus) ->
         for_ [False, True] $ \firstParty ->
-            it ("preserves private " <> label <> " policy, firstParty=" <> show firstParty) $ do
+            it (caseLabel ("integration/origin/native-006/" <> (if firstParty then "first-party" else "merged") <> "/" <> outcomeId) (toText ("preserves private " <> label <> " policy, firstParty=" <> show firstParty :: String))) $ do
                 privateUp <- makePrivateUpstream
                 publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
                 queue <- newTestMemoryQueue
@@ -126,20 +127,20 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                     servedVersions response `shouldBe` ["1.0.0" | not firstParty]
                     seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
 
-{- The private outcomes a first-party name must tell apart, with the status each renders for it.
-A merged name serves the public set whichever it is. -}
-privateOutcomes :: [(String, IO Upstream, Int)]
+-- The private outcomes a first-party name must tell apart, with the status each renders for it.
+-- A merged name serves the public set whichever it is.
+privateOutcomes :: [(Text, String, IO Upstream, Int)]
 privateOutcomes =
     -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
     -- open, so both invite a retry rather than report the name as gone.
-    [ ("HTTP 404", upstreamRespondingWith (responseLBS status404 [] "not found"), 404)
-    , ("HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
-    , ("an undecodable body", servingUpstream "this is not json at all", 503)
+    [ ("absent", "HTTP 404", upstreamRespondingWith (responseLBS status404 [] "not found"), 404)
+    , ("unavailable", "HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
+    , ("malformed", "an undecodable body", servingUpstream "this is not json at all", 503)
     ]
 
 credentialSpec :: Spec
 credentialSpec = describe "credential authority (forward-to-private, strip-before-public)" $
-    it "forwards the client credential to the private upstream and NEVER to the public upstream" $ do
+    it (caseLabel "integration/origin/native-007" "forwards the client credential to the private upstream and NEVER to the public upstream") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
             servingUpstream
@@ -153,7 +154,7 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
 
 privateAuthoritySpec :: Spec
 privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $ do
-    it "re-consults the private upstream per client within the TTL -- each client's token reaches it" $ do
+    it (caseLabel "integration/origin/native-008" "re-consults the private upstream per client within the TTL -- each client's token reaches it") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
             servingUpstream
@@ -166,7 +167,7 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
             pubAuth `shouldBe` [Nothing, Nothing]
 
-    it "serves byte-identical bodies across identical repeat requests (the assembled representation is reused)" $ do
+    it (caseLabel "integration/origin/native-009" "serves byte-identical bodies across identical repeat requests (the assembled representation is reused)") $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing (Just "tokenA") app
@@ -177,7 +178,7 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             -- The reuse never skips the per-request private authorisation.
             seenAuth privateUp `shouldReturn` [Just "Bearer tokenA", Just "Bearer tokenA"]
 
-    it "never serves one client's assembled document to another with a different private view" $ do
+    it (caseLabel "integration/origin/native-010" "never serves one client's assembled document to another with a different private view") $ do
         -- The private upstream answers per credential. The assembled store is keyed by content, so
         -- client B's entry can never answer client A.
         let perToken req = case lookupAuth (requestHeaders req) of
@@ -198,7 +199,7 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
 
 namespaceTransitionSpec :: Spec
 namespaceTransitionSpec = describe "declaring a namespace after public ingestion" $
-    it "keeps the public copy and genuine private release served and protected under an identity deny" $ do
+    it (caseLabel "integration/origin/native-011" "keeps the public copy and genuine private release served and protected under an identity deny") $ do
         let retained = [StoredVersion (mkVersion Npm v) VersionServed Nothing | v <- ["1.0.0", "9.0.0"]]
             inventory = Map.singleton transitionName retained
         store <-
@@ -282,7 +283,7 @@ storedTransitionBody store req = do
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do
-    it "serves the public set when the private upstream is unavailable" $ do
+    it (caseLabel "integration/origin/native-012" "serves the public set when the private upstream is unavailable") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -292,7 +293,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["2.0.0"]
 
-    it "serves the private set when the public upstream is unavailable" $ do
+    it (caseLabel "integration/origin/native-013" "serves the private set when the public upstream is unavailable") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
@@ -300,7 +301,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "degrades a private leg whose body is unparseable, serving the public set" $ do
+    it (caseLabel "integration/origin/native-014" "degrades a private leg whose body is unparseable, serving the public set") $ do
         privateUp <- servingUpstream "this is not json at all"
         publicUp <-
             servingUpstream
@@ -310,7 +311,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["2.0.0"]
 
-    it "degrades a private leg that decodes but does not project to a packument" $ do
+    it (caseLabel "integration/origin/native-015" "degrades a private leg that decodes but does not project to a packument") $ do
         privateUp <- servingUpstream "[1, 2, 3]"
         publicUp <-
             servingUpstream
@@ -320,7 +321,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["2.0.0"]
 
-    it "drops a private leg that self-reports a different package, serving the public set (200)" $ do
+    it (caseLabel "integration/origin/native-016" "drops a private leg that self-reports a different package, serving the public set (200)") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
@@ -333,7 +334,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             servedVersions resp `shouldBe` ["2.0.0"]
             fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")
 
-    it "drops a public leg that self-reports a different package, serving the private set (200)" $ do
+    it (caseLabel "integration/origin/native-017" "drops a public leg that self-reports a different package, serving the private set (200)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
             servingUpstream

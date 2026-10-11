@@ -9,6 +9,7 @@ import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
 import Katip (
@@ -60,21 +61,18 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
-{- | Tracing against a real OTLP Collector container. A request stamps a unique marker
-into its path, and the test watches the Collector's @debug@ exporter logs for it:
-present with telemetry on, absent with telemetry off. Needs a Docker daemon.
--}
+-- | Observe request markers in the OTLP Collector logs with telemetry enabled and disabled.
 spec :: Spec
 spec =
     around (withCollector ["traces"]) $
         describe "tracing → OTLP collector" $ do
-            it "delivers a request's server span to the collector when telemetry is on" $ \collector -> do
+            it (caseLabel "integration/telemetry-traces/native-001" "delivers a request's server span to the collector when telemetry is on") $ \collector -> do
                 marker <- freshMarker
                 driveRequest collector TelemetryOn marker
                 accepted <- awaitCollectorLine collector marker 40
                 accepted `shouldBe` True
 
-            it "delivers nothing to the collector when telemetry is off" $ \collector -> do
+            it (caseLabel "integration/telemetry-traces/native-002" "delivers nothing to the collector when telemetry is off") $ \collector -> do
                 marker <- freshMarker
                 driveRequest collector TelemetryOff marker
                 accepted <- awaitCollectorLine collector marker 8
@@ -82,7 +80,7 @@ spec =
 
             -- Proves the active-span to log-line correlation: a log item built inside a real span
             -- carries a non-zero dd.trace_id and dd.span_id. The propagator owns the id format.
-            it "stamps a non-zero dd.trace_id on a log line emitted within a span" $ \collector -> do
+            it (caseLabel "integration/telemetry-traces/native-003" "stamps a non-zero dd.trace_id on a log line emitted within a span") $ \collector -> do
                 ctx <- ddContextWithinSpan collector
                 case ddSpan ctx of
                     Nothing -> expectationFailure "no active span was seen inside the span scope"
@@ -93,8 +91,8 @@ spec =
                         decodeUtf8 (encode (itemJson V2 (ddLogItem ctx)))
                             `shouldSatisfy` T.isInfixOf ("\"trace_id\":\"" <> tid <> "\"")
 
-{- Drive one request through the traced application against the collector. This
-force-flushes the tracer provider, so the export does not wait on the batch window. -}
+-- Drive one request through the traced application against the collector. This
+-- force-flushes the tracer provider, so the export does not wait on the batch window.
 driveRequest :: Collector -> TelemetrySwitch -> Text -> IO ()
 driveRequest collector switch marker =
     withSdkEnv (collectorEndpoint collector) tracesExporter $ do
@@ -114,8 +112,8 @@ driveRequest collector switch marker =
 tracesExporter :: [(String, String)]
 tracesExporter = [("OTEL_TRACES_EXPORTER", "otlp"), ("OTEL_BSP_SCHEDULE_DELAY", "200")]
 
-{- A bare npm mount with no serve or publish dependencies, the same shape the
-composition root derives from configuration. -}
+-- A bare npm mount with no serve or publish dependencies, the same shape the
+-- composition root derives from configuration.
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
@@ -135,8 +133,8 @@ freshMarker = do
     now <- getPOSIXTime
     pure ("ecltrace" <> show (round (now * 1_000_000) :: Integer))
 
-{- Build the @dd@ context inside a real SDK span, the way 'runHandler' does. This
-asserts the in-process active-span stitch, never delivery. -}
+-- Build the @dd@ context inside a real SDK span, the way 'runHandler' does. This
+-- asserts the in-process active-span stitch, never delivery.
 ddContextWithinSpan :: Collector -> IO DdContext
 ddContextWithinSpan collector =
     withSdkEnv (collectorEndpoint collector) tracesExporter $ do
@@ -154,8 +152,8 @@ ddContextWithinSpan collector =
 isNonZeroDecimal :: Text -> Bool
 isNonZeroDecimal t = not (T.null t) && T.all isDigit t && t /= "0"
 
-{- A katip log 'Item' carrying the @dd@ object as its payload, so a test renders a JSONL
-line off a 'DdContext' with no stdout dependency. -}
+-- A katip log 'Item' carrying the @dd@ object as its payload, so a test renders a JSONL
+-- line off a 'DdContext' with no stdout dependency.
 ddLogItem :: DdContext -> Item SimpleLogPayload
 ddLogItem ctx =
     Item

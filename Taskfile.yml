@@ -75,10 +75,14 @@ tasks:
     cmds:
       - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
   test-integration:
-    desc: Run integration, optionally selecting an Hspec path with MATCH
+    desc: Run complete integration groups, optionally selected by GROUP or SHARD
     env:
       ECLTEST_SHARD: integration
-      ECLTEST_INTEGRATION_MATCH: '{{.MATCH | default ""}}'
+      ECLTEST_INTEGRATION_GROUP: '{{.GROUP | default ""}}'
+      ECLTEST_INTEGRATION_SHARD: '{{.SHARD | default ""}}'
+      ECLTEST_INTEGRATION_ECOSYSTEM: '{{.ECOSYSTEM | default ""}}'
+      ECLTEST_INTEGRATION_BACKEND: '{{.BACKEND | default ""}}'
+      ECLTEST_INTEGRATION_CAPABILITY: '{{.CAPABILITY | default ""}}'
     cmds:
       - bash scripts/test-integration.sh
   test-residency:
@@ -90,13 +94,23 @@ tasks:
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
   test-contract-list:
-    desc: List the pure E2E catalogue without services
+    desc: List a pure catalogue without services (TIER=e2e or integration)
     cmds:
-      - bash scripts/e2e.sh list
+      - |
+        case '{{.TIER | default "e2e"}}' in
+          e2e) bash scripts/e2e.sh list ;;
+          integration) bash scripts/test-integration.sh list ;;
+          *) echo 'TIER must be e2e or integration' >&2; exit 2 ;;
+        esac
   test-contract-plan:
-    desc: Print the deterministic E2E partition plan
+    desc: Print a deterministic partition plan (TIER=e2e or integration)
     cmds:
-      - bash scripts/e2e.sh plan
+      - |
+        case '{{.TIER | default "e2e"}}' in
+          e2e) bash scripts/e2e.sh plan ;;
+          integration) bash scripts/test-integration.sh plan ;;
+          *) echo 'TIER must be e2e or integration' >&2; exit 2 ;;
+        esac
   test-e2e-prepare:
     desc: Build one image archive and the E2E plan
     cmds:

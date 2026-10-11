@@ -86,7 +86,7 @@ Seven native duplicate example bodies are removed. Eighteen shared serving examp
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
 Native PyPI media type, multi-file identity, exact mount-local URLs, sidecar-key removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.
-Native OriginIntegrationSpec, TarballIntegrationSpec and all pipeline core tests are unchanged.
+Native OriginIntegrationSpec and TarballIntegrationSpec retain their assertions under fixed integration case IDs. All pipeline core tests remain unchanged.
 
 ### Contract controls
 
@@ -295,3 +295,63 @@ The native module remains the registration home even when its scenario body move
 | Case ID | Original assertion |
 |---|---|
 | `mixed/alternating-clients` | serves an npm install, a pip install, and a second npm install in turn |
+
+## Integration registration and native traceability
+
+The integration runner registers 17 complete lifecycle groups and 252 unique examples.
+Of these, 21 execute canonical serving, queue, or advisory contracts.
+The other 231 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
+Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
+
+The pure catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+Removing a case, profile, or required capability fails catalogue validation.
+Mutation checks exercise every registered case and capability without constructing integration specs.
+The shared runner compares actual Hspec result IDs against each selected group's declared case set.
+A deleted action cannot satisfy the catalogue merely because its metadata remains.
+
+The previous `hspec-discover` output registered `PipelineIntegrationSpec` alongside all three modules it called.
+That wrapper added no hooks or assertions and repeated 116 examples.
+Explicit registration removes those duplicate executions and keeps every unique assertion.
+The old wrapper remains as a native source reference, but the runner does not schedule it.
+
+| Group | Native example IDs | Canonical examples | Native module |
+|---|---|---|---|
+| `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
+| `integration/pypi` | `native-001` to `native-021` (27) | 9 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
+| `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
+| `integration/npm-metadata` | `native-001` to `native-035` (37) | 9 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
+| `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
+| `integration/worker` | `native-001` to `native-008` (8) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
+| `integration/pilot` | `native-001` to `native-003` (8) | None | `Ecluse.PilotIntegrationSpec` |
+| `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
+| `integration/advisory-export` | `native-001` to `native-002` (2) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
+| `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
+| `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |
+| `integration/telemetry-metrics` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec` |
+| `integration/telemetry-scrape` | `native-001` to `native-006` (6) | None | `Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec` |
+| `integration/telemetry-traces` | `native-001` to `native-003` (3) | None | `Ecluse.Runtime.Telemetry.TracingIntegrationSpec` |
+
+Every ID labels its original Hspec example in the module listed above.
+That example retains all of its prior assertions, negative controls, and resource hooks.
+The independent obligation file enumerates every expanded parameter case.
+
+Use `task test-contract-list TIER=integration` or `task test-contract-plan TIER=integration` without Docker.
+Use `task test-integration GROUP=integration/queue-sqs` for the emulator queue group.
+Use `task test-integration SHARD=http` for the in-process HTTP groups without Docker.
+Coverage remains one full integration invocation with the same Cabal instrumentation and four total uploads.
+
+## Unit registration validation
+
+Core and runtime retain `hspec-discover` and their existing dependency boundaries.
+`UnitCatalogue` independently requires 100 canonical examples across nine actual spec roots.
+`UnitCatalogueSpec` reads labelled declaration trees without executing hooks or examples.
+Native unlabelled examples continue in their original suites.
+The audits reject missing, duplicate, and unknown IDs and missing capabilities.
+Deletion mutations cover each group, case, and profile capability.
+Production adapter registration anchors ecosystem coverage.
+The npm maintenance operations and CodeArtifact format anchor their supported maintenance profiles.
+Add a provider's obligations separately from its actual registrations.

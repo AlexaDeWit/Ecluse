@@ -11,6 +11,7 @@ module Ecluse.Runtime.Pilot.ExportIntegrationSpec (
 
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
@@ -81,7 +82,7 @@ spec = do
                 )
                 $ advisoryContract "advisory/s3" (CveDbWrongEpoch (osvSchemaEpoch + 1))
 
-            it "uploads OSV databases to S3" $ \container -> do
+            it (caseLabel "integration/advisory-export/native-001" "uploads OSV databases to S3") $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
                         createdBucket container "s3://test-osv-bucket"
@@ -102,7 +103,7 @@ spec = do
                         [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
                         _ -> fail ("Expected 1 object, got " <> show (length objects))
 
-            it "uploads again when the artifact's bytes have not changed" $ \container -> do
+            it (caseLabel "integration/advisory-export/native-002" "uploads again when the artifact's bytes have not changed") $ \container -> do
                 -- Republishing one accepted artifact preserves its bytes, including built_at.
                 withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
                     Store{stEndpoint = endpoint, stAws = base, stStore = store} <-

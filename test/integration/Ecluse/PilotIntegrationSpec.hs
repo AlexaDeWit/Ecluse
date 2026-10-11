@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Pilot publication against the S3 emulator. A refused compile, OSV or required EPSS, leaves the
-previous object's identity and modification time as they were. An EPSS failure where the mount's
-rules do not depend on it still publishes the OSV data, in both the one-shot and scheduled modes.
+{- | Pilot publication preserves the prior S3 generation after refused compilation.
+EPSS failure blocks only mounts whose rules require it.
 -}
 module Ecluse.PilotIntegrationSpec (spec) where
 
@@ -16,6 +15,7 @@ import Codec.Compression.GZip qualified as GZip
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types.Status (status200, status404)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -49,7 +49,7 @@ spec = aroundAll withMinistack $ do
     describe "Pilot refuses zero relevant rows before S3 publication" $
         for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
             for_ [False, True] $ \hasPrevious ->
-                it (label <> " archive, previous=" <> show hasPrevious) $ \container ->
+                it (caseLabel ("integration/pilot/native-001/" <> toText label <> "/" <> (if hasPrevious then "replacement" else "first")) (toText (label <> " archive, previous=" <> show hasPrevious :: String))) $ \container ->
                     withSystemTempDirectory "ecluse-pilot-rejected" $ \outDir -> do
                         let endpoint = endpointFor container
                             bucket = "pilot-" <> toText label <> if hasPrevious then "-replacement" else "-first"
@@ -77,7 +77,7 @@ spec = aroundAll withMinistack $ do
 
     describe "one-shot EPSS failure under the mount's rules" $
         for_ [True, False] $ \epssRule ->
-            it ("publishes only where no rule depends on EPSS, EPSS rule=" <> show epssRule) $ \container ->
+            it (caseLabel ("integration/pilot/native-002/" <> (if epssRule then "epss-required" else "epss-unused")) (toText ("publishes only where no rule depends on EPSS, EPSS rule=" <> show epssRule :: String))) $ \container ->
                 withSystemTempDirectory "ecluse-pilot-epss-upload" $ \outDir -> do
                     let endpoint = endpointFor container
                         bucket = if epssRule then "pilot-epss-required" else "pilot-epss-optional"
@@ -110,7 +110,7 @@ spec = aroundAll withMinistack $ do
 
     describe "scheduled EPSS enrichment per ecosystem" $
         for_ [True, False] $ \feedUp ->
-            it ("keeps each ecosystem's loop to its own requirement, feed up=" <> show feedUp) $ \container ->
+            it (caseLabel ("integration/pilot/native-003/" <> (if feedUp then "feed-up" else "feed-down")) (toText ("keeps each ecosystem's loop to its own requirement, feed up=" <> show feedUp :: String))) $ \container ->
                 withSystemTempDirectory "ecluse-pilot-epss-scheduled" $ \dir -> do
                     let endpoint = endpointFor container
                         bucket = if feedUp then "pilot-scheduled-up" else "pilot-scheduled-down"

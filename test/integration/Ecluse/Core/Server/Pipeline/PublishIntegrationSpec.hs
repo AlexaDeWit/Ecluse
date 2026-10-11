@@ -9,6 +9,7 @@ module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (hAuthorization, hContentType, methodPut, mkStatus)
 import Network.Wai (
     Application,
@@ -129,7 +130,7 @@ mismatchedVersionNameBody =
 -- | Publish guards and the target-visible request and response contract.
 spec :: Spec
 spec = describe "first-party publish path → publication target (S52)" $ do
-    it "503s a publish shed at the aggregate body-byte budget while the capacity is held" $ do
+    it (caseLabel "integration/publication/native-001" "503s a publish shed at the aggregate body-byte budget while the capacity is held") $ do
         -- A target that parks the first publish while it holds the whole budget. With zero
         -- waiter room the second sheds at the door, and the first completes once released.
         gate <- newEmptyMVar
@@ -154,21 +155,21 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             putMVar gate ()
             wait firstPublish >>= \firstResp -> status firstResp `shouldBe` 201
 
-    it "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)" $ do
+    it (caseLabel "integration/publication/native-002" "answers an over-cap chunked publish with the documented 413, not the perimeter's neutral 500 (issue #849)") $ do
         -- A chunked body declares no length, so the counted bounded read enforces the cap as a
         -- value: a fail-closed 413, never a throw through the perimeter's neutral 500.
         app <- cappedProxyWith 8
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
 
-    it "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)" $ do
+    it (caseLabel "integration/publication/native-003" "answers an over-cap known-length publish with the documented 413 (Content-Length fast-fail)") $ do
         -- A declared Content-Length over the cap fails closed before the route reads a byte.
         -- Both over-cap shapes render the same 413 through the route contract.
         app <- cappedProxyWith 8
         resp <- putPublishKnownLength "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 413
 
-    it "relays an in-scope publish with the publisher's forwarded credential and returns the target's response" $
+    it (caseLabel "integration/publication/native-004" "relays an in-scope publish with the publisher's forwarded credential and returns the target's response") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
@@ -178,13 +179,13 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             seen `shouldBe` [(Just "Bearer publisher-token", LBS.toStrict publishBody)]
 
     forM_
-        [ ("substitutes the static publish token after authenticating the edge token", Just "edge-token", Just "publish-token", Just "edge-token", Just "Bearer publish-token")
-        , ("preserves a closed-edge token when no static publish token is configured", Just "edge-token", Nothing, Just "edge-token", Just "Bearer edge-token")
-        , ("preserves the caller token on an open edge even with static publish dependencies", Nothing, Just "publish-token", Just "publisher-token", Just "Bearer publisher-token")
-        , ("keeps a tokenless open-edge publish anonymous even with static publish dependencies", Nothing, Just "publish-token", Nothing, Nothing)
+        [ ("route-1", "substitutes the static publish token after authenticating the edge token", Just "edge-token", Just "publish-token", Just "edge-token", Just "Bearer publish-token")
+        , ("route-2", "preserves a closed-edge token when no static publish token is configured", Just "edge-token", Nothing, Just "edge-token", Just "Bearer edge-token")
+        , ("route-3", "preserves the caller token on an open edge even with static publish dependencies", Nothing, Just "publish-token", Just "publisher-token", Just "Bearer publisher-token")
+        , ("route-4", "keeps a tokenless open-edge publish anonymous even with static publish dependencies", Nothing, Just "publish-token", Nothing, Nothing)
         ]
-        $ \(label, edgeToken, staticToken, presented, expected) ->
-            it label $
+        $ \(routeId, label, edgeToken, staticToken, presented, expected) ->
+            it (caseLabel ("integration/publication/native-005/" <> routeId) (toText (label :: String))) $
                 withTarget 201 "{\"success\":true}" $ \targetPort target -> do
                     app <- proxyWith (Just (\budget -> (publishDepsAt targetPort (mkSecret <$> staticToken) budget){pubInboundToken = mkSecret <$> edgeToken}))
                     resp <- putPublish "/npm/@acme/widget" presented publishBody app
@@ -193,14 +194,14 @@ spec = describe "first-party publish path → publication target (S52)" $ do
 
     forM_ [Nothing, Just (mkSecret "publish-token")] $ \staticToken ->
         forM_ [Nothing, Just "wrong-token"] $ \presented ->
-            it ("refuses an unauthenticated closed-edge publish before relay: " <> show (staticToken, presented)) $
+            it (caseLabel ("integration/publication/native-006/" <> (if isJust staticToken then "static" else "forwarded") <> "/" <> (if isJust presented then "wrong" else "absent")) (toText ("refuses an unauthenticated closed-edge publish before relay: " <> show (staticToken, presented) :: String))) $
                 withTarget 201 "{}" $ \targetPort target -> do
                     app <- proxyWith (Just (\budget -> (publishDepsAt targetPort staticToken budget){pubInboundToken = Just (mkSecret "edge-token")}))
                     resp <- putPublish "/npm/@acme/widget" presented publishBody app
                     status resp `shouldBe` 401
                     targetSaw target `shouldReturn` []
 
-    it "refuses Basic authentication on the npm publish route before relay" $
+    it (caseLabel "integration/publication/native-007" "refuses Basic authentication on the npm publish route before relay") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (\budget -> (publishDepsAt targetPort (Just (mkSecret "publish-token")) budget){pubInboundToken = Just (mkSecret "edge-token")}))
             let req = setPath defaultRequest{requestMethod = methodPut, requestHeaders = [(hAuthorization, "Basic dXNlcjplZGdlLXRva2Vu")]} "/npm/@acme/widget"
@@ -208,28 +209,28 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 401
             targetSaw target `shouldReturn` []
 
-    it "refuses an out-of-scope publish with 403 BEFORE any upstream write (anti-shadowing guard)" $
+    it (caseLabel "integration/publication/native-008" "refuses an out-of-scope publish with 403 BEFORE any upstream write (anti-shadowing guard)") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@other/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "refuses an unscoped publish with 403 (an unscoped name is within no scope)" $
+    it (caseLabel "integration/publication/native-009" "refuses an unscoped publish with 403 (an unscoped name is within no scope)") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) -- exact match" $
+    it (caseLabel "integration/publication/native-010" "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) -- exact match") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme-evil/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "sends no Authorization header for an anonymous in-scope publish without a static token" $
+    it (caseLabel "integration/publication/native-011" "sends no Authorization header for an anonymous in-scope publish without a static token") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" Nothing publishBody app
@@ -237,7 +238,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             seen <- targetSaw target
             map fst seen `shouldBe` [Nothing]
 
-    it "405s a publish when no publication target is configured (the opt-in is off)" $
+    it (caseLabel "integration/publication/native-012" "405s a publish when no publication target is configured (the opt-in is off)") $
         withTarget 201 "{\"success\":true}" $ \_targetPort target -> do
             app <- proxyWith Nothing
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
@@ -249,7 +250,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             body `shouldSatisfy` T.isInfixOf "publish directly to the registry you intend to publish to"
             targetSaw target `shouldReturn` []
 
-    it "relays the publication target's own error status (e.g. a 409 the registry returns) to the client" $
+    it (caseLabel "integration/publication/native-013" "relays the publication target's own error status (e.g. a 409 the registry returns) to the client") $
         withTarget 409 "{\"error\":\"version already exists\"}" $ \targetPort _target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
@@ -258,12 +259,12 @@ spec = describe "first-party publish path → publication target (S52)" $ do
 
     -- An unformable target URL is this proxy's own misconfiguration (500). A target that
     -- never answers is an upstream outage (502). Both legs of that split are pinned here.
-    it "500s a publish whose publication target URL cannot be formed (a misconfiguration, not an outage)" $ do
+    it (caseLabel "integration/publication/native-014" "500s a publish whose publication target URL cannot be formed (a misconfiguration, not an outage)") $ do
         app <- proxyWith (Just (\budget -> (publishDepsAt 1 Nothing budget){pubTargetUrl = loopbackRegistryUrl ""}))
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
         status resp `shouldBe` 500
 
-    it "502s a publish the publication target never answers (an outage, not a misconfiguration)" $ do
+    it (caseLabel "integration/publication/native-015" "502s a publish the publication target never answers (an outage, not a misconfiguration)") $ do
         -- Port 1 is an unconnectable placeholder, so the relay reports a transport fault.
         app <- proxyWith (Just (publishDepsAt 1 Nothing))
         resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
@@ -271,28 +272,28 @@ spec = describe "first-party publish path → publication target (S52)" $ do
 
     -- An in-scope URL whose body declares a different package would publish a name the scope
     -- guard never authorised, so the guard checks @_id@, @name@, and @versions[].name@ first.
-    it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
+    it (caseLabel "integration/publication/native-016" "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedIdBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "refuses a publish whose body top-level name disagrees with the in-scope URL name (403 before any relay)" $
+    it (caseLabel "integration/publication/native-017" "refuses a publish whose body top-level name disagrees with the in-scope URL name (403 before any relay)") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedNameBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "refuses a publish whose body versions[].name disagrees with the in-scope URL name (403 before any relay)" $
+    it (caseLabel "integration/publication/native-018" "refuses a publish whose body versions[].name disagrees with the in-scope URL name (403 before any relay)") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedVersionNameBody app
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "relays an in-scope publish whose body _id / name / versions[].name all agree with the URL name" $
+    it (caseLabel "integration/publication/native-019" "relays an in-scope publish whose body _id / name / versions[].name all agree with the URL name") $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort Nothing))
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") matchingVersionBody app
