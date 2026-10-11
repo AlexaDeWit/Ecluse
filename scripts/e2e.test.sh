@@ -163,10 +163,13 @@ reject bash "$script" load
 cp "$work/plan.json" "$ECLTEST_ARTIFACT_DIR/plan.json"
 printf 'corrupt' >> "$ECLTEST_ARTIFACT_DIR/docker-image.tar"
 reject bash "$script" load
-bash "$here/e2e-matrix.sh" "$work/plan.json" > "$work/matrix"
+env -u GITHUB_OUTPUT bash "$here/e2e-matrix.sh" "$work/plan.json" > "$work/matrix"
+GITHUB_OUTPUT="$work/github-output" bash "$here/e2e-matrix.sh" "$work/plan.json" > "$work/github-stdout"
+[ ! -s "$work/github-stdout" ]
+cmp "$work/matrix" "$work/github-output"
 grep -q 'partitions=\["npm-serving","npm-writes","pypi","shared-system"\]' "$work/matrix"
 for bad in '{"partitions":[]}' '{"partitions":["pypi","pypi"]}' '{"partitions":["../escape"]}' '{}'; do
   printf '%s\n' "$bad" > "$work/bad.json"
-  reject bash "$here/e2e-matrix.sh" "$work/bad.json"
+  reject env -u GITHUB_OUTPUT bash "$here/e2e-matrix.sh" "$work/bad.json"
 done
 printf 'ok - immutable inputs, current-attempt evidence, overlap and execution identities\n'
