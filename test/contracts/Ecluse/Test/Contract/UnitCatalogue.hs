@@ -1,0 +1,160 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Independent obligations for canonical unit contracts, separate from their Hspec registrations.
+module Ecluse.Test.Contract.UnitCatalogue (
+    coreUnitCatalogue,
+    unitRegistration,
+    unitObligation,
+    unitCoverageSpec,
+) where
+
+import Data.Universe.Class (Universe (universe))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
+import Ecluse.Test.Contract.Catalogue (validateCatalogue)
+import Ecluse.Test.Contract.Types
+import Test.Hspec
+import Prelude hiding (universe)
+
+-- | Production registration determines supported ecosystems even when no fixture exists for one.
+coreUnitCatalogue :: [Group] -> Catalogue
+coreUnitCatalogue groups =
+    Catalogue
+        { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
+        , catalogueProfiles =
+            [ Profile "unit/metadata" ["npm", "pypi"] [] ["metadata-read", "metadata-projection"]
+            , Profile "unit/memory" [] ["memory"] ["payload", "ephemeral-delivery"]
+            , Profile "unit/static" [] ["static"] ["token"]
+            , Profile "unit/protocol" ["npm"] ["verdaccio"] protocolCapabilities
+            ]
+        , catalogueObligations =
+            [ unitObligation
+                "core/metadata/fetch"
+                "metadata-fetch"
+                "unit/metadata"
+                ["metadata-read"]
+                ["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi"], suffix <- fetchCases]
+            , unitObligation "core/metadata/projection/npm" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "npm")
+            , unitObligation "core/metadata/projection/pypi" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "pypi")
+            , unitObligation
+                "core/queue/memory"
+                "queue"
+                "unit/memory"
+                ["payload", "ephemeral-delivery"]
+                ["queue/memory/payload", "queue/memory/destructive-receive", "queue/memory/terminal-drop"]
+            , unitObligation
+                "core/credential/static"
+                "credential"
+                "unit/static"
+                ["token"]
+                ["credential/static/permanent/token", "credential/static/expiring/token"]
+            , unitObligation
+                "core/maintenance/protocol"
+                "maintenance"
+                "unit/protocol"
+                ["maintenance-facts", "maintenance-consent", "maintenance-inventory", "maintenance-delete"]
+                [ "maintenance/protocol/facts/identity-ceiling"
+                , "maintenance/protocol/facts/completion-refill"
+                , "maintenance/protocol/facts/inventory-capability"
+                , "maintenance/protocol/consented/consent"
+                , "maintenance/protocol/withheld/consent"
+                , "maintenance/protocol/inventory/packages"
+                , "maintenance/protocol/inventory/versions"
+                , "maintenance/protocol/delete/removed"
+                ]
+            ]
+        , catalogueGroups = groups
+        }
+  where
+    maintenance = adapterMaintenance <$> adapterFor Npm
+    protocolCapabilities =
+        ["maintenance-facts", "maintenance-consent"]
+            <> ["maintenance-inventory" | isJust (maintenance >>= maintenanceListing)]
+            <> ["maintenance-delete" | isJust (maintenance >>= maintenanceVersionDelete)]
+
+-- | Case IDs must come from the actual specification, never the obligation table.
+unitRegistration :: Text -> Text -> Text -> [Text] -> [Text] -> Group
+unitRegistration identifier contract profile capabilities identifiers =
+    Group
+        { groupId = identifier
+        , groupContractId = contract
+        , groupProfileId = profile
+        , groupTier = Unit
+        , groupPartition = "unit"
+        , groupCases = [Case caseIdentifier [identifier] | caseIdentifier <- identifiers]
+        , groupCapabilities = capabilities
+        , groupPrerequisites = []
+        , groupResources = []
+        , groupIsolation = []
+        }
+
+-- | Declare supported coverage independently of the specification used to satisfy it.
+unitObligation :: Text -> Text -> Text -> [Text] -> [Text] -> Obligation
+unitObligation identifier contract profile =
+    Obligation identifier profile contract Supported
+
+projectionCases :: Text -> [Text]
+projectionCases ecosystem =
+    map
+        ("core.metadata.projection." <> ecosystem <> "." <>)
+        ["malformed", "missing-name", "name-mismatch", "version-bound", "artifact-bound", "missing-version", "selected-parity"]
+
+fetchCases :: [Text]
+fetchCases =
+    [ "status-200"
+    , "status-201"
+    , "status-299"
+    , "status-401"
+    , "status-403"
+    , "status-404"
+    , "status-301"
+    , "status-304"
+    , "status-400"
+    , "status-408"
+    , "status-410"
+    , "status-429"
+    , "status-500"
+    , "status-503"
+    , "status-599"
+    , "full-charge"
+    , "oversized-auth-401"
+    , "oversized-auth-403"
+    , "exact-byte-bound"
+    , "gzip-bytes"
+    , "gzip-charge"
+    , "gzip-bound"
+    , "decode-span-empty-url"
+    , "decode-span-refused-connection"
+    , "empty-url-fault"
+    , "transport-fault"
+    , "no-redirect"
+    , "held-parity"
+    , "held-byte-bound"
+    , "held-malformed"
+    , "held-name-mismatch"
+    , "held-version-bound"
+    ]
+
+-- | Audit actual registrations and prove that each required case and capability remains mandatory.
+unitCoverageSpec :: IO Catalogue -> Spec
+unitCoverageSpec inspect = do
+    it "covers every independently required case with an actual Hspec registration" $ do
+        catalogue <- inspect
+        validateCatalogue catalogue `shouldBe` Right catalogue
+    it "rejects removal of each group, case, or supported capability" $ do
+        catalogue <- inspect
+        for_ (catalogueGroups catalogue) $ \group -> do
+            validateCatalogue catalogue{catalogueGroups = filter ((/= groupId group) . groupId) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
+            for_ (groupCases group) $ \item ->
+                validateCatalogue catalogue{catalogueGroups = map (removeCase (caseId item)) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
+        for_ (catalogueProfiles catalogue) $ \profile ->
+            for_ (profileCapabilities profile) $ \capability ->
+                validateCatalogue catalogue{catalogueProfiles = map (removeCapability (profileId profile) capability) (catalogueProfiles catalogue)} `shouldSatisfy` isLeft
+  where
+    removeCase identifier group = group{groupCases = filter ((/= identifier) . caseId) (groupCases group)}
+    removeCapability identifier capability profile
+        | profileId profile == identifier = profile{profileCapabilities = filter (/= capability) (profileCapabilities profile)}
+        | otherwise = profile
