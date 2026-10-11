@@ -18,6 +18,7 @@ module Ecluse.Core.Registry.Json.Shape (
     listedMember,
     Mode (..),
     MemberKey (..),
+    memberText,
     Build (..),
     Trees (..),
     readShape,

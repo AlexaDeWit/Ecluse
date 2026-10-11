@@ -2,14 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm wire JSON types and their decoders: the decode-only protocol boundary.
-
-Every decoder is lenient in the ways the public registry requires. Unknown keys are
-ignored, @license@ and a person arrive as a string or an object, @deprecated@ as a string
-or a boolean, and an undecodable advisory @unpackedSize@ reads as absent rather than
-failing the version. The shapes come from live captures of @registry.npmjs.org@, kept as
-fixtures under @core\/test\/unit\/fixtures\/npm\/@.
--}
+-- | npm wire types shared by tree decoding and typed extraction during packing.
 module Ecluse.Core.Registry.Npm.Wire (
     -- * Shared scalars
     Person (..),
@@ -21,6 +14,7 @@ module Ecluse.Core.Registry.Npm.Wire (
 
     -- * Per-version manifest
     VersionManifest (..),
+    availability,
 ) where
 
 import Data.Aeson (
@@ -35,9 +29,7 @@ import Data.Aeson (
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 import Ecluse.Core.Package (Availability (Available, Deprecated))
 
-{- | A person on a package: an author, maintainer, contributor, or a version's publisher.
-A packed @"Name \<email\> (url)"@ string, npm's other form, stays verbatim in 'personName'.
--}
+-- | A publisher or contributor. Packed person strings stay verbatim in 'personName'.
 data Person = Person
     { personName :: Text
     -- ^ The name, or the whole packed string as sent.
@@ -73,9 +65,7 @@ instance FromJSON License where
                 <*> o .:? "url"
         other -> typeMismatchOneOf "License (object or string)" other
 
-{- | The artifact descriptor every version manifest carries. A client fails the install
-when the bytes mismatch, so a mirror or a URL rewrite preserves the digests byte for byte.
--}
+-- | Artifact coordinates and digests that serving and mirroring preserve.
 data Dist = Dist
     { distTarball :: Text
     -- ^ Absolute URL of the @.tgz@ artifact. Always present.
@@ -84,9 +74,7 @@ data Dist = Dist
     , distIntegrity :: Maybe Text
     -- ^ The Subresource-Integrity string (@"sha512-..."@), preferred over the shasum.
     , distUnpackedSize :: Maybe Int
-    {- ^ Unpacked size in bytes. Advisory, so a fractional, huge, or wrong-typed value
-    reads as 'Nothing' instead of denying the whole packument.
-    -}
+    -- ^ Advisory bytes. Fractional, huge or wrong-typed values read as 'Nothing'.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -102,9 +90,7 @@ instance FromJSON Dist where
             <*> o .:? "integrity"
             <*> lenientOptional o "unpackedSize"
 
-{- | One version's manifest, decoding all three wire forms alike. The dependency maps and
-the maintainer list stay unparsed: nothing reads them, and the cost falls on every version.
--}
+-- | A release's policy inputs. Dependency maps and maintainers stay outside the typed facts.
 data VersionManifest = VersionManifest
     { vmName :: Text
     -- ^ The package name as sent, possibly scoped (@"\@scope\/name"@).
@@ -132,6 +118,7 @@ instance FromJSON VersionManifest where
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
 
+-- | Only a nonempty string or @true@ declares deprecation. Other values remain available.
 availability :: Maybe Value -> Availability
 availability = \case
     Just (String "") -> Available

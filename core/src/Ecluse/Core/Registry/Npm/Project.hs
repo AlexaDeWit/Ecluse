@@ -9,6 +9,8 @@ module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
     versionListParser,
     projectVersionEntryResult,
+    projectVersionManifest,
+    installHooks,
 
     -- * Name validation
     projectName,
@@ -81,6 +83,11 @@ versionListParser limits = J.objectFound VersionListObject VersionListObject (J.
 -- Every field is evaluated here, so a retained release never keeps its decoded manifest alive.
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
 projectDetails name version publishedAt (VersionEntry vm) =
+    projectVersionManifest name version publishedAt vm
+
+-- | Project already decoded facts using the version-map key as the artifact identity.
+projectVersionManifest :: PackageName -> Version -> Maybe UTCTime -> VersionManifest -> PackageDetails
+projectVersionManifest name version publishedAt vm =
     PackageDetails
         { pkgName = name
         , pkgVersion = version
@@ -90,8 +97,7 @@ projectDetails name version publishedAt (VersionEntry vm) =
         , pkgArtifacts = (:| []) $! projectArtifact version (vmDist vm)
         }
 
-{- Fail closed across two independent wire signals: a @false@ @hasInstallScript@ cannot hide a
-hook the @scripts@ map declares. -}
+-- A @false@ flag cannot hide a hook declared by the scripts map.
 installCode :: VersionManifest -> CodeExecSignal
 installCode vm
     | not (null hooks) =
@@ -102,12 +108,11 @@ installCode vm
   where
     hooks = filter (`Map.member` vmScripts vm) installHooks
 
--- The lifecycle script names whose presence means installation runs code.
+-- | Hook presence declares install code, including an empty command.
 installHooks :: [Text]
 installHooks = ["preinstall", "install", "postinstall"]
 
-{- The @tarball@ URL stays verbatim: "Ecluse.Core.Package.Filter" folds its scheme against the
-https-only egress policy afterward. -}
+-- The filter applies the https-only egress policy after projection.
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =
     Artifact
@@ -132,9 +137,7 @@ tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
     fromMaybe (renderVersion version <> ".tgz") (urlFilename url)
 
-{- | Parse an npm package name into the domain 'PackageName': the one splitter every npm entry
-point reads a name through. A bare @\@foo@ is a malformed scoped name, never an unscoped one.
--}
+-- | Parse a package name. A bare @\@foo@ never falls back to an unscoped name.
 projectName :: Text -> Either ParseError PackageName
 projectName raw = do
     withinNpmNameLimit raw
@@ -142,8 +145,7 @@ projectName raw = do
         then scopedName raw
         else mkPackageName Npm Nothing <$> nameComponent raw
 
-{- Split a scoped @\@scope\/name@ at its one separator. A scope with nothing after it is a
-malformed scoped name, so the whole string never falls back to an unscoped reading. -}
+-- A scope with no package component never falls back to an unscoped name.
 scopedName :: Text -> Either ParseError PackageName
 scopedName raw = case T.stripPrefix "/" afterScope of
     Nothing -> Left (ParseError ("scoped npm name with no package name: " <> show raw))
@@ -153,9 +155,7 @@ scopedName raw = case T.stripPrefix "/" afterScope of
   where
     (scopeWire, afterScope) = T.break (== '/') raw
 
-{- | Parse an npm scope, with or without its leading @\@@ (@\@myorg@ and @myorg@ both give the
-scope @myorg@).
--}
+-- | Parse a scope with or without its leading @\@@.
 projectScope :: Text -> Either ParseError Scope
 projectScope raw = do
     -- Measure after the strip, so @myorg and myorg stay one scope at the cap as well as below it.
@@ -164,8 +164,7 @@ projectScope raw = do
   where
     bare = fromMaybe raw (T.stripPrefix "@" raw)
 
-{- One component of an npm name, the scope or the bare name. It sits on the shared name floor
-and adds npm's own grammar. 'projectName' and 'projectScope' own the length cap. -}
+-- The package and scope parsers apply the length cap before parsing a component.
 nameComponent :: Text -> Either ParseError Text
 nameComponent = nameComponentWith "npm name component" usableComponent
 
@@ -184,9 +183,7 @@ npmNameChar ch = isAsciiUpper ch || isAsciiLower ch || isDigit ch || ch `elem` n
 npmNameSpecials :: [Char]
 npmNameSpecials = "-_.!~*'()"
 
-{- | Every character an npm package name may begin with, sieved out of ASCII by the grammar
-above so the store walk's bucket alphabet cannot drift from what this module parses.
--}
+-- | The store walk's bucket alphabet follows the package-name grammar.
 npmNameLeadChars :: [Char]
 npmNameLeadChars = [ch | ch <- ['\0' .. '\127'], npmNameChar ch, usableComponent (T.singleton ch)]
 
@@ -194,8 +191,7 @@ npmNameLeadChars = [ch | ch <- ['\0' .. '\127'], npmNameChar ch, usableComponent
 reservedNames :: [Text]
 reservedNames = ["node_modules", "favicon.ico"]
 
-{- Refuse a name over npm's own cap. 'projectName' measures the whole name including any scope
-prefix, and 'projectScope' measures a bare scope. -}
+-- The package cap includes its scope prefix. The scope cap measures the bare scope.
 withinNpmNameLimit :: Text -> Either ParseError ()
 withinNpmNameLimit = withinNameLimit "npm name" npmNameLimit
 
