@@ -146,15 +146,15 @@ unitCoverageSpec inspect = do
         validateCatalogue catalogue `shouldBe` Right catalogue
     it "rejects removal of each group, case, or supported capability" $ do
         catalogue <- inspect
-        for_ (catalogueGroups catalogue) $ \group -> do
-            validateCatalogue catalogue{catalogueGroups = filter ((/= groupId group) . groupId) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
-            for_ (groupCases group) $ \item ->
+        for_ (catalogueGroups catalogue) $ \scenarioGroup -> do
+            validateCatalogue catalogue{catalogueGroups = filter ((/= groupId scenarioGroup) . groupId) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
+            for_ (groupCases scenarioGroup) $ \item ->
                 validateCatalogue catalogue{catalogueGroups = map (removeCase (caseId item)) (catalogueGroups catalogue)} `shouldSatisfy` isLeft
         for_ (catalogueProfiles catalogue) $ \profile ->
             for_ (profileCapabilities profile) $ \capability ->
                 validateCatalogue catalogue{catalogueProfiles = map (removeCapability (profileId profile) capability) (catalogueProfiles catalogue)} `shouldSatisfy` isLeft
   where
-    removeCase identifier group = group{groupCases = filter ((/= identifier) . caseId) (groupCases group)}
+    removeCase identifier scenarioGroup = scenarioGroup{groupCases = filter ((/= identifier) . caseId) (groupCases scenarioGroup)}
     removeCapability identifier capability profile
         | profileId profile == identifier = profile{profileCapabilities = filter (/= capability) (profileCapabilities profile)}
         | otherwise = profile
