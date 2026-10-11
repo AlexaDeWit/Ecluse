@@ -6,6 +6,7 @@
 module Ecluse.Test.Corpus.AdvisoriesSpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -14,11 +15,16 @@ import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveL
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package (PackageInfo (infoVersions), mkPackageName)
+import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailDeny), Rule (AllowIfOlderThan, DenyIfCve), completeEvidence)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.OsvDb (withServedArtifact)
-import Ecluse.Test.Rules (inertRuleDeps, servingRuleDeps)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isBlockedByDefault, servingRuleDeps)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -33,6 +39,23 @@ spec = do
                         covered <- cveCoveredNames (cveDbLookup db)
                         sort (filter (`elem` covered) (map cpName captures)) `shouldBe` advised
                         checkCapturesServed deps [mkPackageName eco Nothing "ecluse-not-advised"] `shouldReturn` Left "the served advisories cover none of the captures"
+
+    describe "real Requests advisory remediation" $
+        it "admits the captured 2.33.0 fix during quarantine and refuses its affected predecessor" $
+            withSystemTempDirectory "ecluse-real-requests-remediation" $ \dir -> do
+                compiled <- compileCorpusAdvisories PyPI dir
+                bytes <- readFileBS "bench/corpus/pypi/requests.simple.json"
+                (info, _) <- expectRight (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests") bytes)
+                fix <- maybe (fail "the capture has no 2.33 release") pure (Map.lookup "2.33" (infoVersions info))
+                affected <- maybe (fail "the capture has no 2.32.5 release") pure (Map.lookup "2.32.5" (infoVersions info))
+                let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
+                withServedArtifact PyPI compiled $ \deps _ -> do
+                    enabled <- prepare deps shippedPolicy
+                    admittedBy <$> evalRules ctx enabled (completeEvidence fix) `shouldReturn` Just "AllowIfRemediatesCve"
+                    disabled <- prepare deps [atDefaultPrecedence (AllowIfOlderThan 604800)]
+                    evalRules ctx disabled (completeEvidence fix) >>= (`shouldSatisfy` isBlockedByDefault)
+                    denies <- prepare deps (shippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
+                    blockedBy <$> evalRules ctx denies (completeEvidence affected) `shouldReturn` Just "DenyIfCve"
 
     describe "checkCapturesServed" $ do
         let react = mkPackageName Npm Nothing "react"
