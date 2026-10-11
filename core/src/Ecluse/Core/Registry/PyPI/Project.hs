@@ -227,12 +227,36 @@ filenameParts project file = wheelParts project file <|> sdistParts project file
 wheelParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 wheelParts project file = do
     stem <- T.stripSuffix ".whl" file
-    let (name, afterName) = T.breakOn "-" stem
-        (version, tags) = T.breakOn "-" (T.drop 1 afterName)
-        separators = T.count "-" tags
-    guard (separators == 3 || separators == 4)
+    let (name, afterName) = T.break (== '-') stem
+        (version, tags) = T.break (== '-') (T.drop 1 afterName)
+    guard (wheelTailFits tags)
     guard (canonicalise PyPI name == fpCanonical project)
     pure (version, Wheel)
+
+data WheelDelimiterCount
+    = ZeroDelimiters
+    | OneDelimiter
+    | TwoDelimiters
+    | ThreeDelimiters
+    | FourDelimiters
+    | ExcessDelimiters
+
+wheelTailFits :: Text -> Bool
+wheelTailFits tags = case T.foldl' advanceCount ZeroDelimiters tags of
+    ThreeDelimiters -> True
+    FourDelimiters -> True
+    _ -> False
+  where
+    advanceCount delimiterCount character
+        | character /= '-' = delimiterCount
+        | otherwise = case delimiterCount of
+            ZeroDelimiters -> OneDelimiter
+            OneDelimiter -> TwoDelimiters
+            TwoDelimiters -> ThreeDelimiters
+            ThreeDelimiters -> FourDelimiters
+            FourDelimiters -> ExcessDelimiters
+            ExcessDelimiters -> ExcessDelimiters
+{-# INLINE wheelTailFits #-}
 
 -- Legacy project names and versions can share separators. Keep the longest matching project prefix.
 sdistParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
