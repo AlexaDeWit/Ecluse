@@ -2,12 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Reachable breaker transitions and ownership laws.
 module Ecluse.Core.BreakerSpec (spec) where
 
-import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
-
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Hedgehog (forAll, (===))
-import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -16,114 +15,113 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Breaker
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
--- | A fixed instant so the cooldown arithmetic is deterministic.
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 23) 0
 
--- | The trip threshold and cooldown for the example tests.
-threshold :: Int
-threshold = 3
+failed :: Int -> Breaker -> Breaker
+failed threshold breaker = case admit now breaker of
+    (Just ticket, claimed) -> recordFailure threshold 30 now ticket claimed
+    (Nothing, unchanged) -> unchanged
 
-cooldown :: NominalDiffTime
-cooldown = 30
+tripped :: Breaker
+tripped = failed 1 initialBreaker
 
--- | 'recordFailure' specialised to the example threshold and cooldown at 'now'.
-failAt :: UTCTime -> Breaker -> Breaker
-failAt = recordFailure threshold cooldown
+withAttempt :: UTCTime -> Breaker -> (Attempt -> Breaker -> Expectation) -> Expectation
+withAttempt clock breaker use = case admit clock breaker of
+    (Just ticket, claimed) -> use ticket claimed
+    (Nothing, _) -> expectationFailure "expected an admitted attempt"
 
 spec :: Spec
 spec = do
-    describe "initialBreaker" $
-        it "starts healthy with no failures recorded" $
-            initialBreaker `shouldBe` Closed 0
+    describe "owned recovery" $ do
+        it "refuses during cooldown and admits exactly one at its boundary" $ do
+            admit now tripped `shouldBe` (Nothing, tripped)
+            withAttempt (addUTCTime 30 now) tripped $ \ticket claimed -> do
+                breakerPhase claimed `shouldBe` HalfOpen
+                admit (addUTCTime 100 now) claimed `shouldBe` (Nothing, claimed)
+                breakerPhase (recordSuccess ticket claimed) `shouldBe` Closed 0
 
-    describe "admit" $ do
-        it "admits a half-open breaker unchanged (the probe is in flight)" $
-            admit now HalfOpen `shouldBe` (True, HalfOpen)
+        it "starts a fresh cooldown from a genuine probe failure" $
+            withAttempt (addUTCTime 30 now) tripped $ \ticket claimed ->
+                breakerPhase (recordFailure 3 30 (addUTCTime 50 now) ticket claimed)
+                    `shouldBe` Open (addUTCTime 80 now)
 
-        it "denies an open breaker while the cooldown has not elapsed, unchanged" $ do
-            let until' = addUTCTime cooldown now
-            admit now (Open until') `shouldBe` (False, Open until')
+        it "releases cancellation for immediate retry without a failure or cooldown" $
+            withAttempt (addUTCTime 30 now) tripped $ \ticket claimed -> do
+                let ready = release ticket claimed
+                breakerPhase ready `shouldBe` RecoveryReady
+                breakerState ready `shouldBe` Metric.HalfOpen
+                withAttempt (addUTCTime 30 now) ready $ \next owned -> do
+                    next `shouldNotBe` ticket
+                    admit (addUTCTime 30 now) owned `shouldBe` (Nothing, owned)
 
-        it "half-opens and admits one probe at the cooldown instant and after it" $ do
-            -- At exactly the cooldown instant the deadline is no longer in the future,
-            -- so the probe passes and the state advances to half-open.
-            let until' = addUTCTime cooldown now
-            admit now (Open now) `shouldBe` (True, HalfOpen)
-            admit (addUTCTime 1 until') (Open until') `shouldBe` (True, HalfOpen)
+        it "fences old recovery settlement and repeated cleanup from a newer owner" $
+            withAttempt (addUTCTime 30 now) tripped $ \old claimed ->
+                withAttempt (addUTCTime 30 now) (release old claimed) $ \current owned -> do
+                    recordSuccess old owned `shouldBe` owned
+                    recordFailure 1 30 now old owned `shouldBe` owned
+                    release old owned `shouldBe` owned
+                    breakerPhase (recordSuccess current owned) `shouldBe` Closed 0
 
-    describe "recordSuccess" $ do
-        it "resets a failure-counting closed breaker to healthy" $
-            recordSuccess (Closed 2) `shouldBe` Closed 0
+        it "fences a completed probe from another probe and from its healthy successors" $
+            withAttempt (addUTCTime 30 now) tripped $ \old claimed -> do
+                let healthy = recordSuccess old claimed
+                recordFailure 1 30 now old healthy `shouldBe` healthy
+                release old healthy `shouldBe` healthy
+                withAttempt (addUTCTime 30 now) (failed 1 healthy) $ \_ owned -> do
+                    recordSuccess old owned `shouldBe` owned
+                    recordFailure 1 30 now old owned `shouldBe` owned
+                    release old owned `shouldBe` owned
 
-        it "closes a half-open breaker (a successful recovery probe)" $
-            recordSuccess HalfOpen `shouldBe` Closed 0
+        it "fences late healthy outcomes after a recovery generation starts" $
+            withAttempt now initialBreaker $ \old healthy ->
+                withAttempt (addUTCTime 30 now) (recordFailure 1 30 now old healthy) $ \_ owned -> do
+                    recordSuccess old owned `shouldBe` owned
+                    recordFailure 1 30 now old owned `shouldBe` owned
+                    release old owned `shouldBe` owned
 
-        it "closes an open breaker" $
-            recordSuccess (Open (addUTCTime cooldown now)) `shouldBe` Closed 0
+    describe "ordinary outcomes" $ do
+        it "keeps healthy admission concurrent and counts consecutive genuine failures" $ do
+            let twice = failed 3 (failed 3 initialBreaker)
+            breakerPhase twice `shouldBe` Closed 2
+            withAttempt now twice $ \ticket claimed -> do
+                snd (admit now claimed) `shouldBe` claimed
+                breakerPhase (recordSuccess ticket claimed) `shouldBe` Closed 0
+                breakerPhase (recordFailure 3 30 now ticket claimed) `shouldBe` Open (addUTCTime 30 now)
 
-    describe "recordFailure" $ do
-        it "trips open for the cooldown once the count reaches the threshold" $
-            -- Two failures already counted (Closed 2). The third reaches threshold 3.
-            failAt now (Closed (threshold - 1)) `shouldBe` Open (addUTCTime cooldown now)
-
-        it "re-opens for a fresh cooldown when a half-open probe fails" $
-            failAt now HalfOpen `shouldBe` Open (addUTCTime cooldown now)
-
-        it "re-opens for a fresh cooldown from an already-open state" $ do
-            -- A failure folded in while already open re-opens against the new instant.
-            let later = addUTCTime 100 now
-            failAt later (Open now) `shouldBe` Open (addUTCTime cooldown later)
-
-        it "trips after exactly threshold consecutive failures from healthy" $ do
-            -- initialBreaker, then `threshold` failures: the last one trips it open.
-            let stepN k = foldl' (\br _ -> failAt now br) initialBreaker [1 .. k]
-            stepN threshold `shouldBe` Open (addUTCTime cooldown now)
-            stepN (threshold - 1) `shouldBe` Closed (threshold - 1)
-
-    describe "breakerState" $
-        it "projects the breaker onto the bounded gauge value" $ do
-            breakerState (Closed 0) `shouldBe` Metric.Closed
-            breakerState (Closed 7) `shouldBe` Metric.Closed -- the failure tally is not observable
-            breakerState HalfOpen `shouldBe` Metric.HalfOpen
-            breakerState (Open now) `shouldBe` Metric.Open
+        it "retains ordinary outcome folds during cooldown until a recovery generation starts" $
+            withAttempt now initialBreaker $ \ticket healthy -> do
+                let opened = recordFailure 1 30 now ticket healthy
+                breakerPhase (recordSuccess ticket opened) `shouldBe` Closed 0
+                breakerPhase (recordFailure 1 30 (addUTCTime 5 now) ticket opened)
+                    `shouldBe` Open (addUTCTime 35 now)
 
     describe "properties" $ do
-        it "recordSuccess always lands on the healthy initial state" $
+        it "trips at exactly the configured threshold in reachable states" $
             hedgehog $ do
-                br <- forAll genBreaker
-                recordSuccess br === initialBreaker
+                threshold <- forAll (Gen.int (Range.linear 1 20))
+                let step count = foldl' (\br _ -> failed threshold br) initialBreaker [1 .. count]
+                breakerPhase (step (threshold - 1)) === Closed (threshold - 1)
+                breakerPhase (step threshold) === Open (addUTCTime 30 now)
 
-        it "a closed breaker is always admitted unchanged" $
+        it "admits recovery exactly at or after the cooldown" $
             hedgehog $ do
-                n <- forAll (Gen.int (Range.linear 0 10))
-                t <- forAll genInstant
-                admit t (Closed n) === (True, Closed n)
+                offset <- forAll (Gen.int (Range.linear (-50) 50))
+                let (ticket, claimed) = admit (addUTCTime (fromIntegral (30 + offset)) now) tripped
+                isJust ticket === (offset >= 0)
+                when (isJust ticket) $ fst (admit (addUTCTime 100 now) claimed) === Nothing
 
-        it "an open breaker is denied iff the clock is before its instant" $
-            hedgehog $ do
-                offset <- forAll (Gen.integral (Range.linearFrom 0 (-600) 600))
-                let until' = addUTCTime cooldown now
-                    clk = addUTCTime (fromInteger offset) until'
-                    (admitted, _) = admit clk (Open until')
-                admitted === (clk >= until')
-
-        it "recordFailure below the threshold only ever increments the count" $
-            hedgehog $ do
-                -- A count strictly below `threshold - 1` cannot trip yet.
-                n <- forAll (Gen.int (Range.linear 0 (threshold - 2)))
-                t <- forAll genInstant
-                recordFailure threshold cooldown t (Closed n) === Closed (n + 1)
-  where
-    genInstant :: H.Gen UTCTime
-    genInstant = do
-        offset <- Gen.integral (Range.linearFrom 0 (-100_000) 100_000)
-        pure (addUTCTime (fromInteger offset) now)
-
-    genBreaker :: H.Gen Breaker
-    genBreaker =
-        Gen.choice
-            [ Closed <$> Gen.int (Range.linear 0 10)
-            , Open <$> genInstant
-            , pure HalfOpen
-            ]
+    describe "observations" $
+        it "suppresses count, release and generation changes and retains three gauge values" $ do
+            reports <- newIORef []
+            let reporter = BreakerReporter (\br -> modifyIORef' reports (<> [breakerState br]))
+            reportBreakerChange reporter initialBreaker (failed 3 initialBreaker)
+            reportBreakerChange reporter initialBreaker tripped
+            withAttempt (addUTCTime 30 now) tripped $ \ticket claimed -> do
+                reportBreakerChange reporter tripped claimed
+                let ready = release ticket claimed
+                reportBreakerChange reporter claimed ready
+                withAttempt (addUTCTime 30 now) ready $ \next owned -> do
+                    reportBreakerChange reporter ready owned
+                    reportBreakerChange reporter owned (recordSuccess next owned)
+            readIORef reports `shouldReturn` [Metric.Open, Metric.HalfOpen, Metric.Closed]

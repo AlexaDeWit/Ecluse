@@ -79,6 +79,14 @@ defaults are a 2-second per-attempt timeout, two retries at 100ms then 250ms. Th
 after 5 consecutive failed requests and cools for 30 seconds. The timeout cannot interrupt SQLite
 during one step of the query, so it takes effect when that step returns.
 
+After cooldown, one caller owns recovery for that breaker's complete retry run. Other callers
+receive the existing breaker-open outcome under each rule's own failure alignment. Success closes
+the breaker. An exhausted source failure starts a fresh cooldown at failure commit. Cancellation
+propagates and releases recovery without counting a source failure or adding a cooldown. A later
+caller can probe immediately. Generation tickets prevent older outcomes or cleanup from changing a
+newer probe. Healthy reads remain concurrent. Each prepared rule keeps its own breaker per mount,
+separate from credential providers.
+
 A fault the harness observes becomes `Unavailable` for every version of the request, under each
 advisory rule's own alignment. A rule reports a deterministic in-process absence as `CannotVet`, for
 example no advisory database loaded. The harness takes that at face value: no retry, no breaker

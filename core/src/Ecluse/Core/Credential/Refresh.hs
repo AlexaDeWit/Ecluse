@@ -2,19 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The refresh, cache, expiry, and concurrency policy behind a
-'Ecluse.Core.Credential.CredentialProvider'.
-
-The policy is identical for every cloud, so it lives here once, parameterised over a per-cloud
-'rcMint' leaf and an injected 'rcClock'. Only 'rcMint' touches a network.
-"Ecluse.Core.Credential.Refresh.Internal" implements it.
-
-== What reaches a caller
-
-It serves a cached token, refreshes it in the background under a single-flight claim before
-expiry, and keeps serving a valid one through a mint outage behind a circuit breaker, so only
-an expired token with a still-failing mint reaches a caller as an exception
-(@docs\/architecture\/cloud-backends.md@).
+{- | Cached credentials with serial minting and one recovery owner per provider.
+Valid tokens remain available during outages. Expired callers wait for healthy mints,
+but receive 'BreakerOpen' during owned recovery. Cancellation releases ownership without
+counting a mint failure. See @docs/architecture/cloud-backends.md@ for operator policy.
 -}
 module Ecluse.Core.Credential.Refresh (
     -- * Configuration

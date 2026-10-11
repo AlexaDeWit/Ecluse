@@ -26,7 +26,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import UnliftIO.Exception (finally, throwIO)
 
-import Ecluse.Core.Breaker (Breaker, initialBreaker, recordFailure)
+import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -174,7 +174,9 @@ openBreakerOn rule = case prepResilience rule of
 trippedBreaker :: EffectfulConfig -> Breaker
 trippedBreaker cfg = foldl' recordOne initialBreaker [1 .. ecBreakerThreshold cfg]
   where
-    recordOne breaker _ = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg) now breaker
+    recordOne breaker _ = case admit now breaker of
+        (Just ticket, claimed) -> recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg) now ticket claimed
+        (Nothing, unchanged) -> unchanged
 
 expirySpec :: Spec
 expirySpec = describe "an expired advisory push" $ do

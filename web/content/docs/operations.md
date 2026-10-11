@@ -407,6 +407,11 @@ Five consecutive mint failures open the breaker for 60 seconds. Requests during 
 cannot mint, and refusals do not count as completed refresh attempts. Collection still measures
 the cached token's lifetime, including when it expires during the cooldown.
 
+After cooldown, one mint tests recovery for that provider. Other expired callers receive
+`BreakerOpen` immediately. Valid cached tokens remain available while the probe runs. Cancellation
+releases the probe for an immediate retry and emits no completed refresh outcome. Only the current
+owner can settle or release its claim.
+
 Refresh is demand-driven. An idle credential can expire without a provider fault, so zero TTL
 alone is not an outage signal. `ecluse.credential.refresh` counts completed attempts by `provider`
 and `result`. Read those outcomes alongside credential demand and failures of mirror writes.

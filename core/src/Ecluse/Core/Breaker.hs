@@ -2,21 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The circuit-breaker state machine fronting a call that can fail or hang: minting an
-outbound credential, or consulting an effectful rule source.
-
-Every transition takes the caller's @now@, so no wall clock is read here. The two policy
-knobs, the trip threshold and the cooldown, are the caller's and reach 'recordFailure' per
-call, and so are storage and concurrency. These functions only fold one state into the next.
+{- | A clock-injected circuit breaker for advisory reads and credential mints.
+Recovery admits one owner for a complete run. Tickets fence older outcomes and cleanup.
+Callers commit transitions atomically and release tickets on every exit.
 -}
 module Ecluse.Core.Breaker (
-    Breaker (..),
+    -- * State and phase
+    Breaker,
+    BreakerPhase (..),
     initialBreaker,
+    breakerPhase,
+
+    -- * Owned attempts
+    Attempt,
     admit,
     recordSuccess,
     recordFailure,
+    release,
 
-    -- * Observing transitions
+    -- * Observations
     BreakerReporter (..),
     noBreakerReporter,
     reportBreakerChange,
@@ -27,69 +31,88 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
--- | The breaker's state, gating whether the guarded operation may be attempted.
-data Breaker
-    = -- | Healthy: the consecutive-failure count so far, up to the trip threshold.
-      Closed Int
-    | -- | Tripped until the given instant: attempts fast-fail until then.
-      Open UTCTime
-    | -- | Cooldown elapsed: 'admit' lets one probe attempt through to test recovery.
-      HalfOpen
+-- | Opaque state retaining its generation through settlement and cancellation.
+data Breaker = Breaker Integer BreakerPhase
     deriving stock (Eq, Show)
 
--- | A fresh, healthy breaker with no failures recorded.
+-- | A ticket for an admitted run. Only its recovery generation can settle an owned probe.
+data Attempt = Ordinary Integer | Recovery Integer
+    deriving stock (Eq, Show)
+
+-- | The phase view excludes the generation used to fence stale owners.
+data BreakerPhase
+    = -- | Healthy, with its consecutive failure count.
+      Closed Int
+    | -- | Refuses calls before this cooldown deadline.
+      Open UTCTime
+    | -- | One admitted run owns recovery.
+      HalfOpen
+    | -- | Cancelled recovery permits another probe immediately.
+      RecoveryReady
+    deriving stock (Eq, Show)
+
+-- | A healthy breaker with no failures.
 initialBreaker :: Breaker
-initialBreaker = Closed 0
+initialBreaker = Breaker 0 (Closed 0)
 
-{- | Decide whether the guarded operation may be attempted at @now@. The caller must commit the
-returned breaker state, or the move from 'Open' to 'HalfOpen' never takes effect.
--}
-admit :: UTCTime -> Breaker -> (Bool, Breaker)
-admit now = \case
-    Open until' | now < until' -> (False, Open until')
-    Open _ -> (True, HalfOpen)
-    healthy -> (True, healthy)
+-- | Observe the phase without exposing an ownership ticket.
+breakerPhase :: Breaker -> BreakerPhase
+breakerPhase (Breaker _ phase) = phase
 
--- | Fold a successful attempt into the breaker: reset it to healthy from any state.
-recordSuccess :: Breaker -> Breaker
-recordSuccess Closed{} = initialBreaker
-recordSuccess Open{} = initialBreaker
-recordSuccess HalfOpen = initialBreaker
-
-{- | Fold a failed attempt into the breaker, given the caller's trip @threshold@ and @cooldown@.
-A 'Closed' breaker counts up and trips at the threshold, and any other state opens a fresh cooldown.
--}
-recordFailure :: Int -> NominalDiffTime -> UTCTime -> Breaker -> Breaker
-recordFailure threshold cooldown now = \case
-    Closed n | n + 1 >= threshold -> tripped
-    Closed n -> Closed (n + 1)
-    Open{} -> tripped
-    HalfOpen -> tripped
+-- | Commit the returned state atomically and release the admitted ticket on every exit.
+admit :: UTCTime -> Breaker -> (Maybe Attempt, Breaker)
+admit now br@(Breaker generation phase) = case phase of
+    Open until' | now < until' -> (Nothing, br)
+    HalfOpen -> (Nothing, br)
+    Closed{} -> (Just (Ordinary generation), br)
+    _ -> (Just (Recovery next), Breaker next HalfOpen)
   where
-    tripped = Open (addUTCTime cooldown now)
+    next = generation + 1
 
-{- | An observer of breaker state changes. The callback takes the breaker itself, so no
-instrument handle reaches here, and the composition root installs the live observer.
--}
+-- | Matching success closes the breaker. An older outcome leaves it unchanged.
+recordSuccess :: Attempt -> Breaker -> Breaker
+recordSuccess ticket br@(Breaker generation _)
+    | owns ticket br = Breaker generation (Closed 0)
+    | otherwise = br
+
+-- | Count an admitted failure once per exhausted run, with a fresh cooldown after a failed probe.
+recordFailure :: Int -> NominalDiffTime -> UTCTime -> Attempt -> Breaker -> Breaker
+recordFailure threshold cooldown now ticket br@(Breaker generation phase)
+    | not (owns ticket br) = br
+    | Closed n <- phase, n + 1 < threshold = Breaker generation (Closed (n + 1))
+    | otherwise = Breaker generation (Open (addUTCTime cooldown now))
+
+-- | Release unsettled recovery without adding a failure or cooldown. Stale releases do nothing.
+release :: Attempt -> Breaker -> Breaker
+release (Recovery ticket) (Breaker generation HalfOpen)
+    | ticket == generation = Breaker generation RecoveryReady
+release _ br = br
+
+owns :: Attempt -> Breaker -> Bool
+owns (Ordinary ticket) (Breaker generation phase) =
+    ticket == generation && case phase of
+        Closed{} -> True
+        Open{} -> True
+        _ -> False
+owns (Recovery ticket) (Breaker generation phase) = ticket == generation && phase == HalfOpen
+
+-- | Observe changes through the composition root's instrument adapter.
 newtype BreakerReporter = BreakerReporter (Breaker -> IO ())
 
--- | The inert reporter: discards the state, recording nothing.
+-- | Discard transitions.
 noBreakerReporter :: BreakerReporter
 noBreakerReporter = BreakerReporter (const pass)
 
-{- | Report a transition through the observer, but only when @old@ and @new@ differ observably.
-The failure tally inside 'Closed' is not observable, so advancing it alone fires nothing.
--}
+-- | Report coarse phase changes. Failure counts and ownership generations do not emit events.
 reportBreakerChange :: BreakerReporter -> Breaker -> Breaker -> IO ()
 reportBreakerChange (BreakerReporter report) old new
     | breakerState old == breakerState new = pass
     | otherwise = report new
 
-{- | The breaker's coarse observable state, the bounded value the @ecluse.rule.breaker.state@
-gauge records. It drops the failure tally, so two 'Closed' breakers project alike.
--}
+-- | Project the phase onto the existing three gauge values.
 breakerState :: Breaker -> Metric.BreakerState
-breakerState = \case
+breakerState br = case breakerPhase br of
     Closed{} -> Metric.Closed
-    HalfOpen -> Metric.HalfOpen
     Open{} -> Metric.Open
+    HalfOpen -> Metric.HalfOpen
+    RecoveryReady -> Metric.HalfOpen

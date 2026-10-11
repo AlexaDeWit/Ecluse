@@ -26,6 +26,7 @@ module Ecluse.Core.Credential.Refresh.Internal (
 
     -- * State and pure\/transition helpers (exposed for direct testing)
     CacheState (..),
+    MintClaim,
     ServeAction (..),
     decide,
     refreshDueAt,
@@ -38,16 +39,20 @@ import Control.Concurrent.STM (retry)
 import Data.Ord (clamp)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (asyncWithUnmask, throwIO, try)
-import UnliftIO.Exception (mask)
+import UnliftIO.Exception (mask, onException)
 
 import Ecluse.Core.Breaker (
+    Attempt,
     Breaker,
+    BreakerPhase (HalfOpen),
     BreakerReporter,
     admit,
+    breakerPhase,
     initialBreaker,
     noBreakerReporter,
     recordFailure,
     recordSuccess,
+    release,
     reportBreakerChange,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..))
@@ -96,21 +101,15 @@ data RefreshConfig = RefreshConfig
     , rcClock :: IO UTCTime
     -- ^ Injected so a test drives refresh timing without real time passing.
     , rcJitter :: IO Double
-    {- ^ A fraction in @[0, 1)@, sampled once per token, pulling the refresh instant
-    /earlier/. It desynchronises a cohort of instances.
-    -}
+    -- ^ A fraction in @[0, 1)@, sampled per token to advance refresh.
     , rcRefreshAt :: Double
     -- ^ The fraction of a token's lifetime to refresh at, before jitter. Clamped to @[0, 1]@.
     , rcRefreshFloor :: NominalDiffTime
-    {- ^ Seconds before expiry the refresh may never be scheduled past, so a short-lived token
-    still refreshes ahead of its deadline.
-    -}
+    -- ^ Seconds before expiry that bound the latest refresh instant.
     , rcBreakerThreshold :: Int
     -- ^ Consecutive mint failures that trip the circuit breaker.
     , rcBreakerCooldown :: NominalDiffTime
-    {- ^ How long the breaker stays open, fast-failing mints, before one half-open probe tests
-    recovery.
-    -}
+    -- ^ Cooldown in seconds before one owned recovery mint.
     , rcReporters :: CredentialReporters
     -- ^ Inert by default. The composition root installs the live pair.
     }
@@ -138,8 +137,10 @@ data CacheState = CacheState
     -- ^ The token currently served.
     , csRefreshDue :: Maybe UTCTime
     -- ^ When the background refresh fires. 'Nothing' for a token with no expiry.
-    , csRefreshing :: Bool
-    -- ^ Whether a mint is in flight (the single-flight flag).
+    , csMintClaim :: Maybe MintClaim
+    -- ^ The current mint owner, absent when idle.
+    , csClaimCounter :: Integer
+    -- ^ Retained across cleanup to fence older mint owners.
     , csBreaker :: Breaker
     -- ^ The circuit-breaker state.
     }
@@ -154,171 +155,140 @@ refreshingProviderWith afterClaim cfg = do
     now <- rcClock cfg
     token <- rcMint cfg
     due <- refreshDueAt cfg now token
-    stateVar <- newTVarIO (CacheState token due False initialBreaker)
+    stateVar <- newTVarIO (CacheState token due Nothing 0 initialBreaker)
     pure CredentialProvider{currentToken = serve afterClaim cfg stateVar}
 
--- | What a 'serve'\/'decide' decision resolves to.
-data ServeAction
-    = -- | The cached token is valid and no refresh is due: serve it.
-      ServeCached AuthToken
-    | -- | Valid but past the refresh threshold: serve it, refresh in background.
-      ServeAndRefresh AuthToken
-    | -- | Expired: the caller must mint synchronously (the slow path).
-      MintNow
+-- | A mint identity and its atomically admitted breaker ticket.
+data MintClaim = MintClaim Integer Attempt Breaker Breaker
     deriving stock (Eq, Show)
 
-{- An async exception between the single-flight claim and the run that releases it would
-wedge every later expired caller on the 'decide' 'retry', so both stay in one masked scope. -}
+-- | Whether a caller serves the cache, owns a mint, or receives a breaker refusal.
+data ServeAction
+    = -- | Serve a valid cached token.
+      ServeCached AuthToken
+    | -- | Serve the token and transfer the claim to a background worker.
+      ServeAndRefresh AuthToken MintClaim
+    | -- | Run the claimed mint synchronously for an expired token.
+      MintNow MintClaim
+    | -- | Refuse an expired caller during cooldown or owned recovery.
+      RefuseMint
+    deriving stock (Eq, Show)
+
 serve :: IO () -> RefreshConfig -> TVar CacheState -> IO AuthToken
 serve afterClaim cfg stateVar = mask $ \restore -> do
     now <- rcClock cfg
     atomically (decide stateVar now) >>= \case
         ServeCached token -> pure token
-        ServeAndRefresh token -> token <$ forkRefresh afterClaim cfg stateVar
-        MintNow ->
-            -- The flag was claimed under 'mask'. 'guardInFlight' releases it on every
-            -- exit and runs the synchronous mint under @restore@ so it stays cancellable.
-            guardInFlight restore noWaiter (releaseSingleFlight stateVar) (afterClaim >> mintSynchronously cfg stateVar)
+        ServeAndRefresh token claim -> token <$ forkRefresh afterClaim cfg stateVar claim
+        MintNow claim ->
+            guardInFlight restore (const pass) (releaseSingleFlight stateVar claim) $
+                startMint afterClaim cfg claim >> mintSynchronously cfg stateVar claim
+        RefuseMint -> throwIO BreakerOpen
 
-{- The masked fork installs the child's flag release before the parent can receive an
-interruption, and 'backgroundRefresh' catches the mint's own failures. -}
-forkRefresh :: IO () -> RefreshConfig -> TVar CacheState -> IO ()
-forkRefresh afterClaim cfg stateVar =
-    void $
-        asyncWithUnmask $ \unmask ->
-            guardInFlight unmask noWaiter (releaseSingleFlight stateVar) (afterClaim >> backgroundRefresh cfg stateVar)
+forkRefresh :: IO () -> RefreshConfig -> TVar CacheState -> MintClaim -> IO ()
+forkRefresh afterClaim cfg stateVar claim =
+    void
+        ( asyncWithUnmask $ \unmask ->
+            guardInFlight unmask (const pass) (releaseSingleFlight stateVar claim) $
+                startMint afterClaim cfg claim >> void (attemptMint cfg stateVar claim)
+        )
+        `onException` releaseSingleFlight stateVar claim
 
--- Waiters re-decide against the freed flag (the 'decide' STM 'retry'), not on a result
--- promise, so the orphan hand-off has nothing to unblock.
-noWaiter :: SomeException -> IO ()
-noWaiter = const pass
+startMint :: IO () -> RefreshConfig -> MintClaim -> IO ()
+startMint afterClaim cfg (MintClaim _ _ old new) = do
+    afterClaim
+    reportBreakerChange (crBreakerReporter (rcReporters cfg)) old new
 
-{- | Claim a mint atomically when one is due, or block until an in-flight refresh frees the
-flag. The caller must release a claim with 'releaseSingleFlight'.
--}
+-- | Claim mint and breaker ownership together. Healthy expired followers wait, recovery followers refuse.
 decide :: TVar CacheState -> UTCTime -> STM ServeAction
-decide stateVar now = readTVar stateVar >>= decideFrom stateVar now
+decide stateVar now = do
+    st <- readTVar stateVar
+    if not (tokenValid now (csToken st))
+        then case csMintClaim st of
+            Just _ | breakerPhase (csBreaker st) == HalfOpen -> pure RefuseMint
+            Just _ -> retry
+            Nothing -> claimMint stateVar now st MintNow RefuseMint
+        else
+            if refreshNeeded now st && isNothing (csMintClaim st)
+                then claimMint stateVar now st (ServeAndRefresh (csToken st)) (ServeCached (csToken st))
+                else pure (ServeCached (csToken st))
 
--- An expired token with a mint already in flight waits for it (the STM 'retry') and
--- re-decides, rather than launching a second one.
-decideFrom :: TVar CacheState -> UTCTime -> CacheState -> STM ServeAction
-decideFrom stateVar now st
-    | not (tokenValid now (csToken st)) =
-        if csRefreshing st then retry else claimSingleFlight stateVar st MintNow
-    | refreshNeeded now st && not (csRefreshing st) =
-        claimSingleFlight stateVar st (ServeAndRefresh (csToken st))
-    | otherwise = pure (ServeCached (csToken st))
+claimMint :: TVar CacheState -> UTCTime -> CacheState -> (MintClaim -> ServeAction) -> ServeAction -> STM ServeAction
+claimMint stateVar now st claimed refused = case admit now (csBreaker st) of
+    (Nothing, _) -> pure refused
+    (Just ticket, breaker) -> do
+        let next = csClaimCounter st + 1
+            claim = MintClaim next ticket (csBreaker st) breaker
+        writeTVar stateVar st{csMintClaim = Just claim, csClaimCounter = next, csBreaker = breaker}
+        pure (claimed claim)
 
-claimSingleFlight :: TVar CacheState -> CacheState -> ServeAction -> STM ServeAction
-claimSingleFlight stateVar st action = action <$ writeTVar stateVar st{csRefreshing = True}
-
--- What one gated mint attempt concluded, after its outcome is folded into the cache.
 data MintOutcome
-    = BreakerRefused
-    | Minted AuthToken
+    = Minted AuthToken
     | MintedExpired
     | MintThrew SomeException
 
--- It never throws, so each caller decides for itself what an outcome surfaces as.
-attemptMint :: RefreshConfig -> TVar CacheState -> IO MintOutcome
-attemptMint cfg stateVar = do
+attemptMint :: RefreshConfig -> TVar CacheState -> MintClaim -> IO MintOutcome
+attemptMint cfg stateVar claim = do
+    result <- try (rcMint cfg)
     now <- rcClock cfg
-    permitted <- gatedMint cfg stateVar now
-    if permitted
-        then do
-            result <- try (rcMint cfg)
-            now' <- rcClock cfg
-            case result of
-                Right token | tokenValid now' token -> do
-                    recordMintSuccess cfg stateVar now' token
-                    pure (Minted token)
-                Right _ -> do
-                    recordMintFailure cfg stateVar now'
-                    pure MintedExpired
-                Left (e :: SomeException) -> do
-                    recordMintFailure cfg stateVar now'
-                    pure (MintThrew e)
-        else pure BreakerRefused
+    case result of
+        Right token | tokenValid now token -> do
+            due <- refreshDueAt cfg now token
+            committed <- commitBreakerFold cfg stateVar claim (onMintSuccess claim token due)
+            when committed (onRefreshSucceeded (crRefreshReporter (rcReporters cfg)) (authExpiresAt token))
+            pure (Minted token)
+        Right _ -> do
+            recordMintFailure cfg stateVar claim now
+            pure MintedExpired
+        Left (e :: SomeException) -> do
+            recordMintFailure cfg stateVar claim now
+            pure (MintThrew e)
 
--- It discards the outcome, so a failed background mint never reaches a caller.
-backgroundRefresh :: RefreshConfig -> TVar CacheState -> IO ()
-backgroundRefresh cfg stateVar = void (attemptMint cfg stateVar)
-
-{- The one path where a mint failure surfaces to the caller. It rethrows the mint's own
-exception, so a caller can dispatch on the cause. -}
-mintSynchronously :: RefreshConfig -> TVar CacheState -> IO AuthToken
-mintSynchronously cfg stateVar =
-    attemptMint cfg stateVar >>= \case
+mintSynchronously :: RefreshConfig -> TVar CacheState -> MintClaim -> IO AuthToken
+mintSynchronously cfg stateVar claim =
+    attemptMint cfg stateVar claim >>= \case
         Minted token -> pure token
-        BreakerRefused -> throwIO BreakerOpen
         MintedExpired -> throwIO MintedTokenAlreadyExpired
         MintThrew e -> throwIO e
 
-{- | Release the single-flight flag. 'serve' runs it under 'guardInFlight' inside the masked
-scope that claimed it, so the flag clears on every exit, an async cancel included.
--}
-releaseSingleFlight :: TVar CacheState -> IO ()
-releaseSingleFlight stateVar =
-    atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
+-- | Release only this mint's ownership and its unsettled recovery ticket, on every exit.
+releaseSingleFlight :: TVar CacheState -> MintClaim -> IO ()
+releaseSingleFlight stateVar claim@(MintClaim _ ticket _ _) = atomically $
+    modifyTVar' stateVar $ \st ->
+        if csMintClaim st == Just claim
+            then st{csMintClaim = Nothing, csBreaker = release ticket (csBreaker st)}
+            else st
 
--- Returns the old and new breaker states so 'gatedMint' can report the transition.
-admitMintTxn :: TVar CacheState -> UTCTime -> STM (Bool, Breaker, Breaker)
-admitMintTxn stateVar now = do
-    st <- readTVar stateVar
-    let old = csBreaker st
-        (permitted, new) = admit now old
-    writeTVar stateVar st{csBreaker = new}
-    pure (permitted, old, new)
-
--- The admission gate plus its breaker-state report, which never blocks or throws.
-gatedMint :: RefreshConfig -> TVar CacheState -> UTCTime -> IO Bool
-gatedMint cfg stateVar now = do
-    (permitted, old, new) <- atomically (admitMintTxn stateVar now)
-    reportBreakerChange (crBreakerReporter (rcReporters cfg)) old new
-    pure permitted
-
--- Report the breaker reset and the new token's expiry, after the cache fold.
-recordMintSuccess :: RefreshConfig -> TVar CacheState -> UTCTime -> AuthToken -> IO ()
-recordMintSuccess cfg stateVar now' token = do
-    due <- refreshDueAt cfg now' token
-    commitBreakerFold cfg stateVar (onMintSuccess token due)
-    onRefreshSucceeded (crRefreshReporter (rcReporters cfg)) (authExpiresAt token)
-
--- Report any breaker trip and the still-cached token's expiry, after the cache fold.
-recordMintFailure :: RefreshConfig -> TVar CacheState -> UTCTime -> IO ()
-recordMintFailure cfg stateVar now' = do
+recordMintFailure :: RefreshConfig -> TVar CacheState -> MintClaim -> UTCTime -> IO ()
+recordMintFailure cfg stateVar claim now = do
     cached <- csToken <$> readTVarIO stateVar
-    commitBreakerFold cfg stateVar (onMintFailure cfg now')
-    onRefreshFailed (crRefreshReporter (rcReporters cfg)) (authExpiresAt cached)
+    committed <- commitBreakerFold cfg stateVar claim (onMintFailure claim cfg now)
+    when committed (onRefreshFailed (crRefreshReporter (rcReporters cfg)) (authExpiresAt cached))
 
--- One transaction reads the breaker before and after, so the report reflects exactly the
--- transition it committed.
-commitBreakerFold :: RefreshConfig -> TVar CacheState -> (CacheState -> CacheState) -> IO ()
-commitBreakerFold cfg stateVar step = do
-    (old, new) <- atomically $ do
+commitBreakerFold :: RefreshConfig -> TVar CacheState -> MintClaim -> (CacheState -> CacheState) -> IO Bool
+commitBreakerFold cfg stateVar claim step = do
+    (committed, old, new) <- atomically $ do
         st <- readTVar stateVar
-        let st' = step st
+        let matches = csMintClaim st == Just claim
+            st' = if matches then step st else st
         writeTVar stateVar st'
-        pure (csBreaker st, csBreaker st')
+        pure (matches, csBreaker st, csBreaker st')
     reportBreakerChange (crBreakerReporter (rcReporters cfg)) old new
+    pure committed
 
-{- | Fold a successful mint into the cache. 'guardInFlight' releases the single-flight flag
-around the mint, not this fold, so the flag clears even on an async exception.
--}
-onMintSuccess :: AuthToken -> Maybe UTCTime -> CacheState -> CacheState
-onMintSuccess token due st =
-    st
-        { csToken = token
-        , csRefreshDue = due
-        , csBreaker = recordSuccess (csBreaker st)
-        }
+-- | Install a matching owner's token and settle its breaker. Cleanup releases the mint claim.
+onMintSuccess :: MintClaim -> AuthToken -> Maybe UTCTime -> CacheState -> CacheState
+onMintSuccess claim@(MintClaim _ ticket _ _) token due st
+    | csMintClaim st == Just claim =
+        st{csToken = token, csRefreshDue = due, csBreaker = recordSuccess ticket (csBreaker st)}
+    | otherwise = st
 
-{- | Fold a failed mint into the cache. The cached token stays in place and the breaker
-advances under the configured threshold and cooldown.
--}
-onMintFailure :: RefreshConfig -> UTCTime -> CacheState -> CacheState
-onMintFailure cfg now st =
-    st{csBreaker = recordFailure (rcBreakerThreshold cfg) (rcBreakerCooldown cfg) now (csBreaker st)}
+-- | Count a matching owner's genuine failure without replacing the cached token.
+onMintFailure :: MintClaim -> RefreshConfig -> UTCTime -> CacheState -> CacheState
+onMintFailure claim@(MintClaim _ ticket _ _) cfg now st
+    | csMintClaim st == Just claim =
+        st{csBreaker = recordFailure (rcBreakerThreshold cfg) (rcBreakerCooldown cfg) now ticket (csBreaker st)}
+    | otherwise = st
 
 tokenValid :: UTCTime -> AuthToken -> Bool
 tokenValid now token = case authExpiresAt token of
@@ -330,9 +300,7 @@ refreshNeeded now st = case csRefreshDue st of
     Nothing -> False
     Just due -> now >= due
 
-{- | When a freshly minted token's refresh should fire. Jitter only pulls the 'rcRefreshAt'
-fraction of the token's lifetime earlier, never later.
--}
+-- | Jitter advances the refresh fraction. The floor bounds the latest instant before expiry.
 refreshDueAt :: RefreshConfig -> UTCTime -> AuthToken -> IO (Maybe UTCTime)
 refreshDueAt cfg issuedAt token = case authExpiresAt token of
     Nothing -> pure Nothing

@@ -5,8 +5,10 @@
 -- | The resilience harness around the advisory read, and the engine over rules sharing that read.
 module Ecluse.Core.Rules.EffectfulSpec (spec) where
 
+import Control.Concurrent.STM (check)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
+import UnliftIO (cancel, mapConcurrently, timeout, wait, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
@@ -17,7 +19,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), noBreakerReporter)
+import Ecluse.Core.Breaker (Breaker, BreakerPhase (..), BreakerReporter (..), admit, breakerPhase, initialBreaker, noBreakerReporter, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
@@ -50,8 +52,12 @@ import Ecluse.Core.Rules.Effectful (
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh), AdvisoryPublication (PublishedAt), assessAdvisoryAge)
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
+import Ecluse.Core.Server.Admission.Meter (MeterSettings (..), meterSnapshot, newMemoryMeter, withMemoryEntry)
+import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
+import Ecluse.Core.Server.Admission.Weighted (AdmissionObservers (..), newWeightedAdmission, withWeightedAdmission)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (fakeCveDb, fakeCveLookup)
+import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (
     admittedBy,
     atDefaultPrecedence,
@@ -75,7 +81,6 @@ import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestCloc
 import Ecluse.Core.Rules.Types
 import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
--- | A config with no retries, so a test never waits on a backoff.
 fastConfig :: EffectfulConfig
 fastConfig =
     defaultEffectfulConfig
@@ -84,31 +89,25 @@ fastConfig =
         , ecBreakerCooldown = 30
         }
 
--- | A fresh policy on the given breaker clock and observer.
 resilienceWith :: IO UTCTime -> BreakerReporter -> EffectfulConfig -> IO Resilience
 resilienceWith clock reporter cfg = do
     breaker <- newBreaker
     pure (Resilience cfg breaker reporter clock)
 
--- | A fresh policy at the fixed instant, observed by nothing.
 resilience :: EffectfulConfig -> IO Resilience
 resilience = resilienceWith (pure now) noBreakerReporter
 
--- | A resilient advisory rule whose read runs the effect, then gives every version the verdict.
 mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO () -> RuleVerdict -> IO PreparedRule
 mkRule name prec cfg align effect verdict = do
     res <- resilience cfg
     pure (packageRule name prec align (Just res) effect verdict)
 
--- | A resilient advisory rule whose read always succeeds.
 constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleVerdict -> IO PreparedRule
 constRule name prec cfg align = mkRule name prec cfg align pass
 
--- | A resilient advisory rule whose read always throws (its source is down).
 failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO PreparedRule
 failingRule name prec cfg align = mkRule name prec cfg align (throwIO TestSourceUnavailable) (NoDecision FixesNoAdvisory)
 
--- | A built-in rule at a precedence, decided per version.
 pureAt :: Int -> Rule -> PreparedRule
 pureAt prec rule =
     PreparedRule
@@ -117,21 +116,16 @@ pureAt prec rule =
         , prepEval = PerVersion (\evalCtx -> evalRule inertRuleDeps evalCtx rule)
         }
 
--- | A capturing breaker reporter appending each reported state to its log (oldest first).
 capturingBreakerReporter :: IO (IORef [Breaker], BreakerReporter)
 capturingBreakerReporter = do
     breakerLog <- newIORef []
     pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
 
--- | A source reporter collecting reports in the returned ref, newest first.
 capturingSourceReporter :: IO (IORef [SourceHealth], SourceReporter)
 capturingSourceReporter = do
     captured <- newIORef []
     pure (captured, noSourceReporter{reportSource = \h -> modifyIORef' captured (h :)})
 
-{- | The three decisive outcomes that compete in an equal-precedence tie: an allow, a deny,
-and a fail-closed 'CannotVet'.
--}
 genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
     Gen.element
@@ -140,17 +134,14 @@ genTieOutcome =
         , CannotVet FailDeny NoDatabaseLoaded
         ]
 
--- | Count the calls an action makes, returning the action and the counter.
 counting :: IO a -> IO (IO a, IORef Int)
 counting act = do
     calls <- newIORef 0
     pure (modifyIORef' calls (+ 1) *> act, calls)
 
--- | The fault the harness gives up with once its retries are spent, with the given detail.
 spentFault :: Inability -> ReadFault
 spentFault = ReadFault (WillResolve Nothing) EvaluationFailed
 
--- | Whether a read was given up after it threw, with the throw in the detail and not the reason.
 threwSpent :: Either ReadFault () -> Bool
 threwSpent = \case
     Left fault ->
@@ -161,26 +152,24 @@ threwSpent = \case
 breakerOpenFault :: ReadFault
 breakerOpenFault = ReadFault (WillResolve Nothing) SourceBreakerOpen SourceBreakerOpen
 
--- | Expect the decision, and the sentences a reader sees for its reasons.
 shouldResolve :: IO Decision -> (Decision, [Text]) -> Expectation
 shouldResolve decided (decision, reasons) = do
     actual <- decided
     actual `shouldBe` decision
     sentences actual `shouldBe` reasons
 
--- | Expect every decision to be the given one, reading as the given sentences.
 shouldAllResolve :: [Decision] -> (Decision, [Text]) -> Expectation
 shouldAllResolve decisions (decision, reasons) = do
     decisions `shouldSatisfy` all (== decision)
     map sentences decisions `shouldSatisfy` all (== reasons)
 
--- | The decision an advisory deny reaches on one affecting advisory.
 deniedBy :: Text -> Text -> AdvisoryScore -> Double -> Text -> Decision
 deniedBy rule etag score threshold advisory = Blocked rule (Just (DbEtag etag)) (AffectedBy score threshold (mkAdvisoryIds (advisory :| [])))
 
 spec :: Spec
 spec = do
     harnessSpec
+    recoverySpec
     engineSpec
     provenanceSpec
     oncePerRequestSpec
@@ -306,11 +295,11 @@ harnessSpec = describe "runResilient, the harness around one read" $ do
         res <- resilienceWith clock reporter fastConfig{ecBreakerThreshold = 1}
         let probe = readIORef recovered >>= \ok -> if ok then pure () else throwIO TestSourceUnavailable
         void (runResilient res probe)
-        readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now)]
+        (map breakerPhase <$> readIORef breakerLog) `shouldReturn` [Open (addUTCTime 30 now)]
         writeIORef recovered True
         setClock (addUTCTime 31 now)
         runResilient res probe `shouldReturn` Right ()
-        readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
+        (map breakerPhase <$> readIORef breakerLog) `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
 
 engineSpec :: Spec
 engineSpec = do
@@ -461,7 +450,7 @@ engineSpec = do
                 admittedBy decision === Just "AllowScope"
 
 data TestSourceUnavailable = TestSourceUnavailable
-    deriving stock (Show)
+    deriving stock (Eq, Show)
 
 instance Exception TestSourceUnavailable
 
@@ -491,19 +480,15 @@ advisoryRuleDeps etag identifier beforeQuery = servingRuleDeps (DbEtag etag) loo
 cveRule :: Rule
 cveRule = DenyIfCve (DenyIfCveParams 7.0 FailDeny)
 
--- | Version @v@ of the fixture package, published long enough ago for the quarantine to admit it.
 thingAt :: Text -> RuleEvidence
 thingAt v = (pkg Nothing 30){evVersion = mkVersion Npm v}
 
--- | One request's worth of versions of the fixture package.
 requestVersions :: [RuleEvidence]
 requestVersions = [thingAt ("1." <> show minor <> "." <> show patch) | minor <- [0 .. 7 :: Int], patch <- [0 .. 4 :: Int]]
 
--- | Rows that affect every version of the fixture package, above every threshold under test.
 affectingEvery :: [(Text, AdvisoryRange)]
 affectingEvery = [("thing", AdvisoryRange "GHSA-every-0001" (Just 9.8) Nothing Unbounded (Just 0.95))]
 
--- | Each advisory rule under its shipped or configured alignment, the set the per-request tests cover.
 advisoryRules :: [Rule]
 advisoryRules =
     [ AllowIfRemediatesCve
@@ -513,25 +498,21 @@ advisoryRules =
     , DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)
     ]
 
--- | The label a per-rule case carries, with the alignment a deny is configured with.
 ruleLabel :: Rule -> String
 ruleLabel = \case
     DenyIfCve params -> "DenyIfCve " <> show (dicOnUnavailable params)
     DenyIfEpss params -> "DenyIfEpss " <> show (dieOnUnavailable params)
     other -> toString (ruleName other)
 
--- | The quarantine every per-request policy carries, which admits the fixture's versions.
 quarantine :: Rule
 quarantine = AllowIfOlderThan (7 * nominalDay)
 
--- | What one request did to the advisory source: push-age reads, generation pins, and row reads.
 data SourceCalls = SourceCalls
     { scFreshness :: IORef Int
     , scPins :: IORef Int
     , scReads :: IORef Int
     }
 
--- | Rule capabilities over a fake generation of the given rows, counting each call the rules make.
 countingDeps :: [(Text, AdvisoryRange)] -> IO (RuleDeps, SourceCalls)
 countingDeps rows = do
     calls <- SourceCalls <$> newIORef 0 <*> newIORef 0 <*> newIORef 0
@@ -547,15 +528,12 @@ countingDeps rows = do
 callCounts :: SourceCalls -> IO (Int, Int, Int)
 callCounts calls = (,,) <$> readIORef (scFreshness calls) <*> readIORef (scPins calls) <*> readIORef (scReads calls)
 
--- | Decide every version of one request through one evaluator.
 decideRequest :: [PreparedRule] -> [RuleEvidence] -> IO [Decision]
 decideRequest rules versions = newEvaluator ctx rules >>= \decide -> traverse decide versions
 
--- | Set every prepared read's knobs and pin its breaker clock to 'now'.
 withKnobs :: EffectfulConfig -> [PreparedRule] -> [PreparedRule]
 withKnobs cfg = map (mapResilience (\res -> res{resConfig = cfg, resClock = pure now}))
 
--- | Prepare each rule on its own breaker clock, returning the rules and each clock's read count.
 withClockCounts :: RuleDeps -> [Rule] -> IO ([PreparedRule], [IORef Int])
 withClockCounts deps rules = fmap (\pairs -> (concatMap fst pairs, map snd pairs)) . forM rules $ \rule -> do
     clockReads <- newIORef 0
@@ -628,7 +606,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
         let deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> throwIO TestSourceUnavailable)}
         rules <- withKnobs fastConfig{ecBreakerThreshold = 5} <$> prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowIfRemediatesCve, quarantine])
         void (decideRequest rules requestVersions)
-        traverse (readTVarIO . resBreaker) (mapMaybe prepResilience rules) `shouldReturn` [Closed 1, Closed 0, Closed 0]
+        traverse (fmap breakerPhase . readTVarIO . resBreaker) (mapMaybe prepResilience rules) `shouldReturn` [Closed 1, Closed 0, Closed 0]
 
     it "reads nothing with no database, and decides the policy as before the first sync" $ do
         freshness <- newIORef (0 :: Int)
@@ -648,11 +626,9 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
                     ]
                 )
 
--- | How a read can fail to answer: it hangs, it throws, the breaker is open, or the push expired.
 data Fault = Hangs | Throws | BreakerOpen | PushExpired
     deriving stock (Bounded, Enum, Show)
 
--- | A policy prepared so its advisory read meets the given fault, with the pins the read takes.
 faultedPolicy :: Fault -> [PrecededRule] -> IO ([PreparedRule], IORef Int)
 faultedPolicy fault policy = do
     pins <- newIORef 0
@@ -672,21 +648,23 @@ faultedPolicy fault policy = do
         PushExpired -> pure rules
     pure (opened, pins)
 
--- | A database whose every borrow counts one pin before running the given access.
 countedDatabase :: IORef Int -> (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a) -> AdvisoryDatabase
 countedDatabase pins access = AdvisoryDatabase (\use -> modifyIORef' pins (+ 1) *> access use)
 
--- | Open the first-reading advisory rule's breaker, so every later rule can only reuse its fault.
 openReaderBreaker :: [PreparedRule] -> IO [PreparedRule]
 openReaderBreaker rules = do
-    tripped <- newTVarIO (Open (addUTCTime 30 now))
+    tripped <-
+        newTVarIO
+            ( case admit now initialBreaker of
+                (Just ticket, claimed) -> recordFailure 1 30 now ticket claimed
+                (Nothing, unchanged) -> unchanged
+            )
     let firstReader = prepName <$> find (isJust . prepResilience) (bootOrder rules)
         open rule
             | Just (prepName rule) == firstReader = mapResilience (\res -> res{resBreaker = tripped}) rule
             | otherwise = rule
     pure (map open rules)
 
--- | The alignment a rule resolves a fault to: fixed on an expired push, else as configured.
 faultAlignment :: Fault -> Rule -> FailureAlignment
 faultAlignment fault = \case
     AllowIfRemediatesCve -> FailNoDecision
@@ -700,7 +678,6 @@ faultAlignment fault = \case
         Throws -> configured
         BreakerOpen -> configured
 
--- | The generation pins a fault leaves: every attempt for a read that runs, none for one that never starts.
 faultPins :: Fault -> Int
 faultPins = \case
     Hangs -> 3
@@ -708,9 +685,6 @@ faultPins = \case
     BreakerOpen -> 0
     PushExpired -> 0
 
-{- | The decision a policy of advisory rules above the quarantine reaches when the read faults: the
-first fail-closed rule refuses, and otherwise the quarantine admits with every rule skipped.
--}
 expectedUnder :: Fault -> [Rule] -> Decision -> Bool
 expectedUnder fault rules decision = case find ((== FailDeny) . faultAlignment fault) rules of
     Just refusing -> case decision of
@@ -722,9 +696,6 @@ expectedUnder fault rules decision = case find ((== FailDeny) . faultAlignment f
         SkippedUnavailable rule _ -> Just rule
         Unreached _ -> Nothing
 
-{- | The advisory policies the fault cases cover, in boot order: each rule alone, pairs, and all
-three, with the remediation allow reading last at its default precedence or first at 300.
--}
 faultPolicies :: [[PrecededRule]]
 faultPolicies =
     map (pure . atDefaultPrecedence) advisoryRules
@@ -772,15 +743,15 @@ breakerSpec = describe "the breaker counts requests" $ do
     it "counts a request of many versions as one failure" $ do
         rules <- faultingDeny
         void (decideRequest rules requestVersions)
-        breakerOf rules `shouldReturn` Just (Closed 1)
+        (fmap breakerPhase <$> breakerOf rules) `shouldReturn` Just (Closed 1)
 
     it "trips after five consecutive failed requests, then fast-fails the next without reading" $ do
         readCount <- newIORef (0 :: Int)
         rules <- withKnobs defaultEffectfulConfig{ecBackoff = []} <$> prepare (faultingDeps readCount) [atDefaultPrecedence cveRule]
         replicateM_ 4 (decideRequest rules requestVersions)
-        breakerOf rules `shouldReturn` Just (Closed 4)
+        (fmap breakerPhase <$> breakerOf rules) `shouldReturn` Just (Closed 4)
         void (decideRequest rules requestVersions)
-        breakerOf rules `shouldReturn` Just (Open (addUTCTime 30 now))
+        (fmap breakerPhase <$> breakerOf rules) `shouldReturn` Just (Open (addUTCTime 30 now))
         readIORef readCount `shouldReturn` 5
         decisions <- decideRequest rules requestVersions
         decisions `shouldAllResolve` (Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" SourceBreakerOpen), ["DenyIfCve: the rule source circuit breaker is open"])
@@ -791,11 +762,12 @@ breakerSpec = describe "the breaker counts requests" $ do
     breakerOf rules = traverse (readTVarIO . resBreaker) (listToMaybe (mapMaybe prepResilience rules))
 
 generationSpec :: Spec
-generationSpec = describe "one response reads one generation" $ do
+generationSpec = forM_ [False, True] $ \recovering -> describe ("one response reads one generation, recovery = " <> show recovering) $ do
     it "decides every version against the generation its first read pinned, across a swap" $ do
         slot <- newCveSlot
         swapIn slot (DbEtag "first") Nothing (fakeCveDb [("thing", AdvisoryRange "FIRST" (Just 9.8) Nothing Unbounded Nothing)])
-        rules <- prepare inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
+        prepared <- prepare inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
+        rules <- recoveryRules recovering prepared
         decide <- newEvaluator ctx rules
         let first' = deniedBy "DenyIfCve" "first" Cvss 7.0 "FIRST"
         decide (thingAt "1.0.0") `shouldResolve` (first', ["affected by FIRST (CVSS >= 7.0)"])
@@ -814,9 +786,236 @@ generationSpec = describe "one response reads one generation" $ do
                 unlessM (atomicModifyIORef' swapped (True,)) $
                     swapIn slot (DbEtag "b") Nothing (fakeCveDb [("thing", AdvisoryRange "B-0001" (Just 7.5) Nothing Unbounded (Just 0.4))])
             deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
-        rules <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
+        prepared <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
+        rules <- recoveryRules recovering prepared
         decideRequest rules requestVersions
             >>= (`shouldAllResolve` (deniedBy "DenyIfEpss" "a" Epss 0.5 "A-0001", ["affected by A-0001 (EPSS >= 0.5)"]))
         readIORef swapped `shouldReturn` True
         evalRules ctx rules (thingAt "1.0.0")
             `shouldResolve` (deniedBy "DenyIfCve" "b" Cvss 7.0 "B-0001", ["affected by B-0001 (CVSS >= 7.0)"])
+
+recoverySpec :: Spec
+recoverySpec = describe "owned advisory recovery" $ do
+    it "elects one recovery owner when concurrent callers cross the cooldown together" $ do
+        (res, _) <- recoveryResilience []
+        ready <- newTVarIO (0 :: Int)
+        start <- newEmptyTMVarIO
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        completed <- newTVarIO []
+        calls <- newTVarIO (0 :: Int)
+        let probe = atomically (modifyTVar' calls (+ 1) >> putTMVar entered ()) >> atomically (readTMVar gate)
+            request = do
+                atomically (modifyTVar' ready (+ 1))
+                atomically (readTMVar start)
+                outcome <- runResilient res probe
+                atomically (modifyTVar' completed (outcome :))
+                pure outcome
+        withAsync (mapConcurrently (const request) [1 .. 8 :: Int]) $ \workers -> do
+            timeout 1_000_000 (atomically (readTVar ready >>= check . (== 8))) `shouldReturn` Just ()
+            atomically (putTMVar start ())
+            timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+            timeout 1_000_000 (atomically (readTVar completed >>= check . ((== 7) . length))) `shouldReturn` Just ()
+            readTVarIO calls `shouldReturn` 1
+            readTVarIO completed `shouldReturn` replicate 7 (Left breakerOpenFault)
+            atomically (putTMVar gate ())
+            wait workers >>= (`shouldMatchList` (Right () : replicate 7 (Left breakerOpenFault)))
+
+    it "admits one blocked probe and refuses a concurrent burst before the winner completes" $ do
+        (res, _) <- recoveryResilience []
+        started <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        calls <- newIORef (0 :: Int)
+        let probe = modifyIORef' calls (+ 1) >> atomically (putTMVar started ()) >> atomically (takeTMVar gate)
+        withAsync (runResilient res probe) $ \winner -> do
+            timeout 1_000_000 (atomically (takeTMVar started)) `shouldReturn` Just ()
+            timeout 1_000_000 (mapConcurrently (const (runResilient res (pure ()))) [1 .. 8 :: Int])
+                `shouldReturn` Just (replicate 8 (Left breakerOpenFault))
+            readIORef calls `shouldReturn` 1
+            atomically (putTMVar gate ())
+            wait winner `shouldReturn` Right ()
+        assertHealthyConcurrency res
+
+    it "owns the complete retry run and counts its exhausted fault once" $ do
+        (res, _) <- recoveryResilience [0, 0]
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        calls <- newIORef (0 :: Int)
+        let probe = do
+                n <- atomicModifyIORef' calls (\count -> (count + 1, count + 1))
+                atomically (putTMVar entered n)
+                atomically (takeTMVar gate)
+                throwIO TestSourceUnavailable :: IO ()
+        withAsync (runResilient res probe) $ \winner -> do
+            forM_ [1 .. 3] $ \attempt -> do
+                timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just attempt
+                runResilient res (pure ()) `shouldReturn` Left breakerOpenFault
+                atomically (putTMVar gate ())
+            wait winner >>= (`shouldSatisfy` threwSpent)
+        readIORef calls `shouldReturn` 3
+        breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` Open (addUTCTime 60 now)
+
+    forM_ [False, True] $ \afterFault ->
+        it ("releases cancelled recovery without a failure, after retry fault = " <> show afterFault) $ do
+            (res, _) <- recoveryResilience [0]
+            entered <- newEmptyTMVarIO
+            gate <- newEmptyTMVarIO
+            calls <- newIORef (0 :: Int)
+            let probe :: IO ()
+                probe = do
+                    n <- atomicModifyIORef' calls (\count -> (count + 1, count + 1))
+                    if afterFault && n == 1
+                        then throwIO TestSourceUnavailable
+                        else atomically (putTMVar entered ()) >> atomically (takeTMVar gate)
+            withAsync (runResilient res probe) $ \winner -> do
+                timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+                cancel winner
+                waitCatch winner >>= (`shouldSatisfy` isLeft)
+            breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` RecoveryReady
+            runResilient res (pure ()) `shouldReturn` Right ()
+            breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` Closed 0
+
+    it "releases cancellation at admission reporting before evaluation" $ do
+        (res, _) <- recoveryResilience []
+        reached <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        calls <- newIORef (0 :: Int)
+        let reporter = BreakerReporter $ \breaker ->
+                when (breakerPhase breaker == HalfOpen) $
+                    atomically (putTMVar reached ()) >> atomically (takeTMVar gate)
+        withAsync (runResilient res{resBreakerReporter = reporter} (modifyIORef' calls (+ 1))) $ \winner -> do
+            timeout 1_000_000 (atomically (takeTMVar reached)) `shouldReturn` Just ()
+            cancel winner
+        readIORef calls `shouldReturn` 0
+        breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` RecoveryReady
+        runResilient res (pure ()) `shouldReturn` Right ()
+
+    it "releases a throwing reporter without converting it to a source fault" $ do
+        (res, _) <- recoveryResilience []
+        let reporter = BreakerReporter (const (throwIO TestSourceUnavailable))
+        runResilient res{resBreakerReporter = reporter} (pure ()) `shouldThrow` (== TestSourceUnavailable)
+        breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` RecoveryReady
+        runResilient res (pure ()) `shouldReturn` Right ()
+
+    it "returns refused followers' CPU and memory capacity while recovery remains blocked" $ do
+        (res, _) <- recoveryResilience []
+        meter <- newMemoryMeter MeterSettings{msBudgetBytes = 20, msStepBytes = 10, msEntryRoom = 0, msEntryWaitMicros = 0}
+        cpu <- newWeightedAdmission 2 0 0
+        inFlight <- newIORef (0 :: Int)
+        let observers = AdmissionObservers pass pass (\delta -> modifyIORef' inFlight (+ delta))
+            admitted action = withMemoryEntry noopMetricsPort meter (const (withWeightedAdmission observers cpu 1 action))
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        withAsync (admitted (runResilient res (atomically (putTMVar entered ()) >> atomically (takeTMVar gate)))) $ \winner -> do
+            timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+            replicateM_ 8 $ admitted (runResilient res (pure ())) `shouldReturn` Just (Just (Left breakerOpenFault))
+            snChargedBytes <$> meterSnapshot meter `shouldReturn` 10
+            readIORef inFlight `shouldReturn` 1
+            admitted (pure ()) `shouldReturn` Just (Just ())
+            cancel winner
+        snChargedBytes <$> meterSnapshot meter `shouldReturn` 0
+        readIORef inFlight `shouldReturn` 0
+        admitted (runResilient res (pure ())) `shouldReturn` Just (Just (Right ()))
+
+    it "reuses one recovering read across versions and keeps each rule's refusal alignment" $ do
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        readCount <- newIORef (0 :: Int)
+        let query = modifyIORef' readCount (+ 1) >> atomically (putTMVar entered ()) >> atomically (takeTMVar gate)
+            deps = advisoryRuleDeps "recovering" "RECOVERED" query
+            policy = [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
+        prepared <- prepare deps (map atDefaultPrecedence policy)
+        rules <- recoveryRules True prepared
+        case mapMaybe prepResilience rules of
+            readerRes : later -> do
+                forM_ later $ \res -> atomically (writeTVar (resBreaker res) initialBreaker)
+                withAsync (decideRequest rules requestVersions) $ \winner -> do
+                    timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+                    timeout 1_000_000 (decideRequest rules requestVersions) >>= \case
+                        Just decisions -> do
+                            decisions
+                                `shouldSatisfy` all
+                                    ( \case
+                                        Undecidable _ (RuleUnable "DenyIfEpss" SourceBreakerOpen) -> True
+                                        _ -> False
+                                    )
+                        Nothing -> expectationFailure "followers waited behind recovery"
+                    readIORef readCount `shouldReturn` 1
+                    atomically (putTMVar gate ())
+                    decisions <- wait winner
+                    decisions `shouldSatisfy` all ((== Just "DenyIfCve") . blockedBy)
+                readIORef readCount `shouldReturn` 1
+                breakerPhase <$> readTVarIO (resBreaker readerRes) `shouldReturn` Closed 0
+                forM_ later $ \res -> breakerPhase <$> readTVarIO (resBreaker res) `shouldReturn` Closed 0
+            [] -> expectationFailure "expected prepared advisory breakers"
+
+    it "emits no source failure report when an engine recovery read is cancelled" $ do
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        armed <- newIORef True
+        (reports, reporter) <- capturingSourceReporter
+        let query = whenM (readIORef armed) (atomically (putTMVar entered ()) >> atomically (takeTMVar gate))
+            deps = (advisoryRuleDeps "cancelled" "RESUMED" query){rdSourceReporter = reporter}
+        prepared <- prepare deps [atDefaultPrecedence cveRule]
+        rules <- recoveryRules True prepared
+        withAsync (decideRequest rules requestVersions) $ \winner -> do
+            timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+            cancel winner
+        readIORef reports `shouldReturn` []
+        writeIORef armed False
+        decisions <- decideRequest rules requestVersions
+        decisions `shouldSatisfy` all ((== Just "DenyIfCve") . blockedBy)
+        readIORef reports `shouldReturn` [SourceAnswered "DenyIfCve"]
+
+    it "leaves healthy reads concurrent before any failure" $ do
+        res <- resilience fastConfig
+        assertHealthyConcurrency res
+
+    it "does not claim another prepared rule or another mount's recovery" $ do
+        (clock, setClock) <- newTestClock now
+        let deps = advisoryRuleDeps "isolation" "ISOLATED" pass
+        firstMount <- prepare deps (map atDefaultPrecedence [cveRule, DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)])
+        secondMount <- prepare deps [atDefaultPrecedence cveRule]
+        let policies = mapMaybe prepResilience (firstMount <> secondMount)
+        forM_ policies $ \policy -> atomically (writeTVar (resBreaker policy) (trippedRuleBreaker now))
+        setClock (addUTCTime 30 now)
+        let configured = map (\policy -> policy{resClock = clock, resConfig = fastConfig}) policies
+        case configured of
+            owner : others -> do
+                entered <- newEmptyTMVarIO
+                gate <- newEmptyTMVarIO
+                withAsync (runResilient owner (atomically (putTMVar entered ()) >> atomically (takeTMVar gate))) $ \winner -> do
+                    timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+                    forM_ others $ \policy -> runResilient policy (pure ()) `shouldReturn` Right ()
+                    atomically (putTMVar gate ())
+                    wait winner `shouldReturn` Right ()
+            [] -> expectationFailure "expected per-rule prepared breakers"
+
+recoveryResilience :: [Int] -> IO (Resilience, IO UTCTime)
+recoveryResilience backoff = do
+    (clock, setClock) <- newTestClock now
+    res <- resilienceWith clock noBreakerReporter fastConfig{ecBreakerThreshold = 1, ecBackoff = backoff}
+    void (runResilient res (throwIO TestSourceUnavailable :: IO ()))
+    setClock (addUTCTime 30 now)
+    pure (res, clock)
+
+trippedRuleBreaker :: UTCTime -> Breaker
+trippedRuleBreaker clock = case admit clock initialBreaker of
+    (Just ticket, claimed) -> recordFailure 1 30 clock ticket claimed
+    (Nothing, unchanged) -> unchanged
+
+assertHealthyConcurrency :: Resilience -> Expectation
+assertHealthyConcurrency res = do
+    entered <- newTVarIO (0 :: Int)
+    gate <- newEmptyTMVarIO
+    let readBody = atomically (modifyTVar' entered (+ 1)) >> atomically (readTMVar gate)
+    withAsync (mapConcurrently (const (runResilient res readBody)) [1 .. 4 :: Int]) $ \workers -> do
+        timeout 1_000_000 (atomically (readTVar entered >>= check . (== 4))) `shouldReturn` Just ()
+        atomically (putTMVar gate ())
+        wait workers `shouldReturn` replicate 4 (Right ())
+
+recoveryRules :: Bool -> [PreparedRule] -> IO [PreparedRule]
+recoveryRules False rules = pure rules
+recoveryRules True rules = do
+    forM_ (mapMaybe prepResilience rules) $ \res -> atomically (writeTVar (resBreaker res) (trippedRuleBreaker now))
+    pure (map (mapResilience (\res -> res{resClock = pure (addUTCTime 30 now)})) rules)
