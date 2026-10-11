@@ -31,7 +31,8 @@ import Ecluse.Composition.BootError (
         ProgressWindowNotBelowServeCap,
         ProgressWindowNotPositive,
         PublicationTargetWithoutPublish,
-        PublishStaticCredentialNeedsEdge
+        PublishStaticCredentialNeedsEdge,
+        RuleBlockedOnMount
     ),
  )
 import Ecluse.Composition.Endpoints (
@@ -59,13 +60,15 @@ import Ecluse.Config (
     StoreTag,
     Target (tgtTag, tgtUrl),
     mountAdvisoryDenials,
+    mountPolicy,
     mountRegistries,
     regMirrorTarget,
  )
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), ruleType)
 import Ecluse.Core.Security (
     ProgressFloor,
     ProgressFloorError (MinBytesNotPositive, WindowNotBelowServeCap, WindowNotPositive),
@@ -123,6 +126,7 @@ vetBoot config =
         <*> vetProgressFloor app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
+        <* vetRuleBlocks config
         <* vetQuotaOverrides config
         <* vetQuotaScopes app
   where
@@ -173,6 +177,19 @@ vetAdvisoryStore config =
     denyingWithoutStore (eco, mount)
         | stored = Nothing
         | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
+
+-- A blocked declaration refuses every role, even when another rule outranks it.
+vetRuleBlocks :: Config -> Vet ()
+vetRuleBlocks config = traverse_ vetMountRules (activeMounts config)
+  where
+    vetMountRules (eco, (mount, _)) =
+        traverse_ (rule (const (Refuse (uncurry (RuleBlockedOnMount eco)))) blocked) (mountPolicy mount)
+      where
+        blocked preceded = do
+            adapter <- adapterFor eco
+            let ty = ruleType (prRule preceded)
+            reason <- Map.lookup ty (adapterRuleBlocks adapter)
+            pure (ty, reason)
 
 {- A declared capacity that matches no store paces nothing. It advises rather than refuses,
 because an endpoint renamed under a running Dredger would otherwise stop the role outright. -}

@@ -3,14 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
-{- | Resolve a declared @rules@ patch against a base policy.
-
-A patch entry names a rule: it adds one, refines an existing one key by key, or disables one with
-@enabled: false@. Refusals accumulate across entries, so one load reports every malformed rule
-rather than the first. A patch that names no default and gives no @type@ is refused, as is a
-parameter the named type does not read, because an ignored parameter reads on a deny gate as a
-setting the operator made and Écluse did not apply. @appliesTo@ names the phases a rule applies
-at, and a patch that does not restate it keeps the patched rule's phases.
+{- | Resolve named rule patches against a base policy, accumulating malformed entries.
+Mount patches keep unspecified parameters and phases, or remove an entry with @enabled: false@.
 -}
 module Ecluse.Config.Rule (
     -- * Policies
@@ -31,6 +25,7 @@ module Ecluse.Config.Rule (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
+import Data.Universe.Class (Universe (universe))
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Core.Package (mkScope)
@@ -41,10 +36,12 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
     RuleReach (..),
+    RuleType,
     defaultPrecedence,
     ruleDenies,
     ruleName,
  )
+import Ecluse.Core.Wire (renderWire)
 
 -- | A resolved rule set, keyed by the rule name an operator patches it under.
 newtype RulePolicy = RulePolicy
@@ -157,16 +154,7 @@ checkRestatedType name entry rule = case entryType entry of
 mismatched 'MalformedRule', and anything else as an 'UnknownRuleType'.
 -}
 knownRuleTypes :: [Text]
-knownRuleTypes =
-    [ "AllowScope"
-    , "AllowIfOlderThan"
-    , "AllowByIdentity"
-    , "AllowIfRemediatesCve"
-    , "DenyIfCve"
-    , "DenyIfEpss"
-    , "DenyInstallTimeExecution"
-    , "DenyByIdentity"
-    ]
+knownRuleTypes = map renderWire (universe :: [RuleType])
 
 -- Refuse a parameter the rule type does not read. Ignored, a threshold or an @onUnavailable@
 -- under the wrong type reads on a deny gate as a setting the operator made and Écluse did not apply.

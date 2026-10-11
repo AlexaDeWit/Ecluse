@@ -341,6 +341,53 @@ Mount rules resolve over the shared policy, then the shipped mount rules, then y
 To extend the npm deny to stored copies, set
 `deny-scripts: {appliesTo: [admission, revocation]}` under `mounts.npm.rules`.
 
+Each adapter declares the rule types its ecosystem blocks, with a reason.
+Boot and `ecluse check-config` refuse every blocked entry in each active mount's resolved policy.
+A higher allow or an admission-only phase does not clear a blocked entry.
+Disabled mounts and rules removed with `enabled: false` produce no block refusal.
+npm blocks none of the built-in types. PyPI blocks these two:
+
+| Ecosystem | Blocked type | Reason |
+|---|---|---|
+| pypi | `DenyInstallTimeExecution` | Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release. |
+| pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
+
+Move either type from shared `rules` into `mounts.npm.rules`:
+
+```yaml
+mounts:
+  npm:
+    rules:
+      custom-code:
+        type: DenyInstallTimeExecution
+      custom-scope:
+        type: AllowScope
+        scope: acme
+```
+
+To keep a shared entry for npm, disable the same configured key under `mounts.pypi.rules`:
+
+```yaml
+rules:
+  custom-code:
+    type: DenyInstallTimeExecution
+  custom-scope:
+    type: AllowScope
+    scope: acme
+mounts:
+  pypi:
+    rules:
+      custom-code:
+        enabled: false
+      custom-scope:
+        enabled: false
+```
+
+`ECLUSE_MOUNTS__PYPI__RULES` takes that mount patch as JSON, for example
+`'{"custom-code":{"enabled":false},"custom-scope":{"enabled":false}}'`.
+The shipped npm default remains under `mounts.npm.rules.deny-scripts`.
+PyPI's install-code signal and the served source distributions and wheels remain unchanged.
+
 The advisory rules carry details the table leaves out:
 
 - `remediation-fast-track` abstains until a first advisory database syncs, so without one only the

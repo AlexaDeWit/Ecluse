@@ -9,6 +9,7 @@ rules that apply at revocation must never block a version the whole policy admit
 module Ecluse.Core.Rules.TypesSpec (spec) where
 
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
+import Data.Universe.Class (Universe (universe))
 import Hedgehog (Gen, forAll)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -56,17 +57,46 @@ import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI,
 import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
+import Ecluse.Core.Rules.Types qualified as Types
+import Ecluse.Core.Wire (WireVocab (wireTable), lookupWire, renderWire)
+
 published :: UTCTime
 published = UTCTime (fromGregorian 2026 3 1) 0
 
 spec :: Spec
 spec = do
+    vocabularySpec
     completeSpec
     identitySpec
     distinctionSpec
     ruleDeniesSpec
     revocationSpec
     advisoryIdsSpec
+
+vocabularySpec :: Spec
+vocabularySpec = describe "RuleType" $ do
+    let vocabulary =
+            [ (Types.AllowScopeType, "AllowScope", AllowScope (mkScope "acme"))
+            , (Types.AllowIfOlderThanType, "AllowIfOlderThan", AllowIfOlderThan nominalDay)
+            , (Types.AllowByIdentityType, "AllowByIdentity", AllowByIdentity "thing")
+            , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", AllowIfRemediatesCve)
+            , (Types.DenyIfCveType, "DenyIfCve", DenyIfCve (DenyIfCveParams 8 FailDeny))
+            , (Types.DenyIfEpssType, "DenyIfEpss", DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
+            , (Types.DenyInstallTimeExecutionType, "DenyInstallTimeExecution", DenyInstallTimeExecution)
+            , (Types.DenyByIdentityType, "DenyByIdentity", DenyByIdentity "thing")
+            ]
+    it "covers the typed universe and the wire table exactly" $ do
+        let types = [ty | (ty, _, _) <- vocabulary]
+        (universe :: [Types.RuleType]) `shouldMatchList` types
+        (toList wireTable :: [(Types.RuleType, Text)]) `shouldMatchList` [(ty, name) | (ty, name, _) <- vocabulary]
+    for_ vocabulary $ \(ty, name, configured) ->
+        it ("keeps the wire spelling and type identity for " <> toString name) $ do
+            renderWire ty `shouldBe` name
+            lookupWire name `shouldBe` Just ty
+            Types.ruleType configured `shouldBe` ty
+            Types.ruleName configured `shouldBe` name
+    it "rejects an unknown wire spelling" $
+        (lookupWire "DenyInstallTimeExecutio" :: Maybe Types.RuleType) `shouldBe` Nothing
 
 completeSpec :: Spec
 completeSpec = describe "completeEvidence" $ do

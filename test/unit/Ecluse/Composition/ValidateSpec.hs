@@ -23,6 +23,7 @@ import Ecluse.Composition.BootError (
         PublicationTargetOnPublicUpstream,
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
+        RuleBlockedOnMount,
         StoreTagConflict
     ),
  )
@@ -34,6 +35,7 @@ import Ecluse.Composition.Support (
     expectConfig,
     noMaintenanceBackend,
     overrideEnv,
+    publicGateEnv,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
@@ -42,7 +44,7 @@ import Ecluse.Composition.Support (
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpProgressFloor, vpPublications, vpSettings),
-    VettedMount (vmEcosystem),
+    VettedMount (vmEcosystem, vmMount),
     VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
     vetBoot,
  )
@@ -53,22 +55,90 @@ import Ecluse.Config (
     FirstParty (FirstPartyNpmScopes),
     MountConfig (mntMirrorTarget),
     StoreTag (TagRegistry),
+    mountPolicy,
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
 spec = do
+    ruleBlocksSpec
     clearedSpec
     refusalSpec
     advisoryStoreSpec
     firstPartyAuthoritySpec
     privatePublicationSpec
+
+ruleBlocksSpec :: Spec
+ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
+    for_ [([Npm], publicGateEnv), ([PyPI], overrideEnv "ECLUSE_MOUNTS__NPM__ENABLED" "false" bothMounts), ([Npm, PyPI], bothMounts)] $ \(ecosystems, env) ->
+        it ("clears shipped defaults for " <> show ecosystems) $ do
+            plan <- expectVetted MirrorWriter env
+            map vmEcosystem (vpMounts plan) `shouldBe` ecosystems
+            for_ (vpMounts plan) $ \mount ->
+                map (ruleName . prRule) (mountPolicy (vmMount mount))
+                    `shouldMatchList` (["AllowIfOlderThan", "AllowIfRemediatesCve"] <> ["DenyInstallTimeExecution" | vmEcosystem mount == Npm])
+
+    for_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
+        it "refuses a shared install-code deny" $
+            refusalsFor role (overrideEnv "ECLUSE_RULES" installRule bothMounts)
+                `shouldReturn` [installBlock]
+        it "refuses a shared scope allow" $
+            refusalsFor role (overrideEnv "ECLUSE_RULES" scopeRule bothMounts)
+                `shouldReturn` [scopeBlock]
+        it "refuses an aliased mount rule even below a higher allow and at admission only" $
+            refusalsFor
+                role
+                ( overrideEnv
+                    "ECLUSE_MOUNTS__PYPI__RULES"
+                    "{\"another-name\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":1,\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"flask\",\"precedence\":999}}"
+                    bothMounts
+                )
+                `shouldReturn` [installBlock]
+        it "accumulates every entry beside an independent advisory-store refusal" $ do
+            let shared = "{\"code-a\":{\"type\":\"DenyInstallTimeExecution\"},\"code-b\":{\"type\":\"DenyInstallTimeExecution\"},\"scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
+                npmDeny = "{\"cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" npmDeny (overrideEnv "ECLUSE_RULES" shared bothMounts))
+            errors `shouldMatchList` [AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []), installBlock, installBlock, scopeBlock]
+        it "keeps a missing adapter independent of PyPI blocks" $ do
+            errors <- refusalsFor role (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
+            errors `shouldMatchList` [MissingAdapter RubyGems, installBlock]
+        it "clears the same-key suppression in the PyPI patch" $
+            refusalsFor
+                role
+                ( overrideEnv
+                    "ECLUSE_MOUNTS__PYPI__RULES"
+                    "{\"custom-code\":{\"enabled\":false},\"custom-scope\":{\"enabled\":false}}"
+                    (overrideEnv "ECLUSE_RULES" "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"},\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}" bothMounts)
+                )
+                `shouldReturn` []
+        it "clears both types when they live under npm alone" $
+            refusalsFor
+                role
+                ( overrideEnv
+                    "ECLUSE_MOUNTS__NPM__RULES"
+                    "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"},\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
+                    bothMounts
+                )
+                `shouldReturn` []
+        it "ignores a disabled PyPI mount's blocked declaration" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "false" (overrideEnv "ECLUSE_RULES" installRule bothMounts))
+                `shouldReturn` []
+        it "preserves suppression of the shipped npm default" $
+            refusalsFor role (overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"deny-scripts\":{\"enabled\":false}}" bothMounts)
+                `shouldReturn` []
+  where
+    bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
+    installRule = "{\"custom-code\":{\"type\":\"DenyInstallTimeExecution\"}}"
+    scopeRule = "{\"custom-scope\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}"
+    installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
+    scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
 
 {- An advisory deny cannot decide without a database, so the pairing is a refusal in every role
 that evaluates rules, whatever the rule's own onUnavailable setting says. -}

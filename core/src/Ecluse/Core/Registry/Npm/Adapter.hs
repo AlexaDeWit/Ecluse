@@ -10,6 +10,8 @@ module Ecluse.Core.Registry.Npm.Adapter (
     npmPublish,
 ) where
 
+import Data.Map.Strict qualified as Map
+
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
@@ -33,6 +35,7 @@ npmAdapter :: RegistryAdapter
 npmAdapter =
     RegistryAdapter
         { adapterEcosystem = Npm
+        , adapterRuleBlocks = Map.empty
         , adapterServe =
             AdapterServe
                 { serveRouter = NpmRoute.npmRouter

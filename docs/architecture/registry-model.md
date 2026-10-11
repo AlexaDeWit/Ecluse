@@ -416,6 +416,10 @@ consumes. Its shape follows the npm protocol. Three principles govern it:
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs RubyGems.
   Adapters project each wire format into normalised signals: a rule sees `CodeExecSignal`,
   `Availability`, never `hasInstallScript`, `packagetype`, or `extensions`.
+- **Adapters declare rule blocks.** Every rule applies unless the adapter blocks its typed identity
+  with a reason. A block covers unsuitable meaning or a required fact the ecosystem can never
+  determine. Boot checks each active mount's resolved policy and accumulates every blocked entry
+  beside independent refusals. The engine still evaluates only core evidence.
 - **Signal availability is explicit.** A signal the adapter has not determined, or cannot
   determine cheaply, has its own representation (`CodeExecUnknown`, `Nothing`).
   A pure rule then yields no decision rather than guessing, and an effectful rule can resolve it

@@ -11,6 +11,11 @@ testing side is in
 and the checklist of tests, benchmarks and fixtures is in
 [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem).
 
+Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
+Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.
+Boot refuses each blocked entry in an active mount's resolved policy.
+The [operator rule policy](https://ecluse-proxy.com/docs/configuration/#rule-policy) records the current blocks and remedies.
+
 Two constraints hold through every step:
 
 - A performance change never changes what Écluse serves or decides. Served bytes, ETags, verdicts

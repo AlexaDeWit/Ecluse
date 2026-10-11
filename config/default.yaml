@@ -424,6 +424,11 @@ mounts:
   # A pypi mount serves reads: the PEP 691 Simple index and the distribution files
   # under it. It publishes nothing, so a publicationTarget or a mirrorTarget on it
   # refuses the boot naming the ecosystem and the key.
+  # pypi blocks these rule types at boot, even through shared rules:
+  # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
+  # AllowScope: A PyPI project name has no scope, so this rule can never match one.
+  # Move either type from shared rules into mounts.npm.rules, or disable its configured
+  # entry with enabled: false under mounts.pypi.rules (ECLUSE_MOUNTS__PYPI__RULES).
   pypi:
     publicUpstream:
       registry:
