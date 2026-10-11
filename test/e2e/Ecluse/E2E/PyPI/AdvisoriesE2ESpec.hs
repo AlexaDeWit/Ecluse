@@ -101,8 +101,11 @@ assertPipRefused e2e name version = do
 
 assertDenial :: E2E -> Text -> Text -> Text -> Maybe Text -> Expectation
 assertDenial e2e name version rule advisory = do
+    proxyStatus e2e ("/pypi/simple/" <> name <> "/" <> pypiWheelFor name version) `shouldReturn` 403
     logged <- awaitProxyLog e2e (any matches . T.lines) 120
-    logged `shouldBe` True
+    unless logged $ do
+        logs <- proxyContainerLogs e2e
+        expectationFailure (toString ("the refused wheel never produced its named denial. Last proxy log lines:\n" <> logTail logTailLines logs))
   where
     matches line = case Aeson.decodeStrict' (encodeUtf8 line) :: Maybe Value of
         Nothing -> False
