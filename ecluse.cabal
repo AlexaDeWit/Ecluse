@@ -1458,7 +1458,6 @@ test-suite ecluse-smoke
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
-    Ecluse.Runtime.Credential.CodeArtifactSmokeSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

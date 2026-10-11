@@ -15,11 +15,12 @@ before you choose a new test's home.
 
 ## Unit tests: `ecluse-core-unit`, `ecluse-runtime-unit`, `ecluse-unit` (gating)
 
-Pure, fast, deterministic `hspec` and `hedgehog` tests over all pure logic: the rules engine,
-parsers, and configuration. No IO, no Docker. They run on every push in milliseconds. Properties
-exercise the rules engine: deny-by-default, deny-precedence over allows, and per-rule predicates.
+Deterministic `hspec` and `hedgehog` tests cover pure logic and local stubs, including the rules
+engine, parsers, and configuration. They run on every push without Docker or live external services.
+Properties exercise the rules engine: deny-by-default, deny-precedence over allows, and per-rule
+predicates.
 This tier tests the credential provider's refresh, cache, and expiry policy with an injected clock
-and a fake `mintToken`. The real mint runs only in smoke (see that caveat below).
+and a fake `mintToken`. A local HTTP stub tests CodeArtifact token and expiry extraction.
 Proxy request-lifecycle tests run against an in-process WAI stub, so they assert the full
 fetch → parse → rules → mirror path without a network.
 
@@ -57,11 +58,10 @@ The tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides 
 install Docker: Nix ships the toolchain, not the daemon. Run: `cabal test ecluse-integration` (or
 `task test-integration`).
 
-> **Token-mint caveat.** No emulator covers the managed-registry token API (CodeArtifact's
-> `GetAuthorizationToken`). The only un-emulable part is the `mintToken` leaf of the
-> `CredentialProvider`, so this tier mocks it at that handle. The unit tier covers the generic
-> refresh, cache, and expiry policy around it with an injected clock. The real mint runs end-to-end
-> only in the non-gating smoke tier.
+> **Token-mint caveat.** No emulator covers CodeArtifact's `GetAuthorizationToken` API.
+> The [unit spec](../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs)
+> asserts the token and expiry extracted from a stubbed response. Other unit tests cover refresh,
+> cache, and expiry with an injected clock and fake mint. No automatic test verifies a real AWS mint.
 
 ## Residency gate: `ecluse-residency` (gating)
 
@@ -591,15 +591,6 @@ the bytes against the advertised integrity. Only transport unavailability makes 
 The cases depend on uncontrolled external services, so an occasional failure is normal
 and never blocks a merge. The CI `gate` does not depend on them. Treat a failure as a
 prompt to investigate (protocol drift or flakiness?), not a blocker. Run: `cabal test ecluse-smoke`.
-
-This tier is also where the one un-emulable cloud surface runs end-to-end: the real token *mint*
-(`CredentialProvider`'s `mintToken`) against the live cloud. It needs real external access, so it is
-allowed to fail and stays isolated to one small function, an accepted residual risk.
-
-The telemetry Datadog check lives here too. With Datadog API credentials in the environment, it emits
-a uniquely stamped span and metric through the real export path. It then polls the Datadog API until
-they appear. It is secret-gated (skipped without credentials) and non-gating, so a Datadog outage or
-ingestion lag never blocks a merge. It is the only telemetry check that reaches the Datadog SaaS.
 
 The hermetic span and metric assertions run in `ecluse-integration`. A request drives an in-process
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
