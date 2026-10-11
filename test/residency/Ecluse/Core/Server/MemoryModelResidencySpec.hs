@@ -35,9 +35,7 @@ import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CaptureRecord (crBytes, crSha256), CorpusPackage (cpPackage, cpPath), cpName, readCaptureRecords)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 
-{- | Reject unauthenticated captures, roots that do not survive or release across collections, and
-listings, of one source or two, whose reads or render outgrow what the memory gate charges.
--}
+-- | Reject unauthenticated captures, failed retention or release, and listings that outgrow admission charges.
 spec :: Spec
 spec = do
     describe "metadata retained heap" $ do
@@ -81,7 +79,6 @@ spec = do
                         checkOutputCharge factors peaks
                         checkOutputLimit limits peaks
                     when (entryBelowSource (pkgEcosystem (cpPackage package))) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
-                    -- A document holds heap, and its weight, as a cache expands it, covers that heap.
                     singleDocumentLive single `shouldSatisfy` (> 0)
                     singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
     describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
@@ -96,14 +93,12 @@ spec = do
                     for_ (listingBounds package) $ \(factors, limits) -> do
                         checkPaid factors peaks
                         checkOutputCharge factors peaks
-                        -- Only the realistic shapes answer to the regression limit.
                         when (realisticShape shape) (checkOutputLimit limits peaks)
 
 merges :: [(CorpusPackage, MergeShape)]
 merges = [(package, shape) | package <- packages, shape <- [minBound .. maxBound]]
 
-{- Each merge child is its own process on one capability, and its collections follow its own
-allocation, so the children run side by side, one per processor. -}
+-- Each child samples its own collections on one capability, so one child per processor can run.
 measureMerges :: IO (Map (FilePath, MergeShape) (Either String ListingPeaks))
 measureMerges = do
     jobs <- getNumProcessors
@@ -125,13 +120,11 @@ checkMeasurement ecosystem shape size result = do
     (10 * residual) `shouldSatisfy` (<= retained)
     (1000 * retained) `shouldSatisfy` (<= envelopePermille ecosystem shape * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
-    -- A listing's full read holds a shared entry, and its output holds the encoding and a strict copy.
     when (shape == Shared) $ for_ (chargeFactors ecosystem) $ \factors -> do
         (1000 * retained) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         (2000 * toInteger (compactBytes result)) `shouldSatisfy` (<= toInteger (cfOutputPermille factors) * toInteger size)
 
-{- A shared entry's gate is a regression limit above its measured maximum. Separately, it must stay
-within the memory gate's full-read charge, so a representation cannot outgrow what admission charges. -}
+-- Retained gates stay independent of admission. Shared entries must also fit the full-read charge.
 envelopePermille :: Ecosystem -> Shape -> Integer
 envelopePermille Npm Typed = 500
 envelopePermille Npm Shared = 1000
@@ -143,8 +136,7 @@ envelopePermille _ shape = case shape of
     Typed -> 2250
     Shared -> 7500
 
-{- The old generation may not outgrow its live data and the nursery holds 128 KiB, so nearly every
-collection is major and the high-water samples live data at least once per 128 KiB allocated. -}
+-- A fixed old generation and 128 KiB nursery sample live data at nearly every collection.
 majorSampling :: [String]
 majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
@@ -155,16 +147,14 @@ data PeakLimits = PeakLimits
     -- ^ Per byte of the output basis.
     }
 
-{- From one meter step up, a read's peak and a realistic listing's output working set fail the tier
-past these limits. Each is the smallest quarter step at least 8% above its measured maximum. -}
+-- From one meter step up, limits round 1.08 times the measured maximum up to a quarter step.
 peakLimits :: Ecosystem -> Maybe PeakLimits
 peakLimits = \case
     Npm -> Just PeakLimits{readPeakLimit = 1000, outputLimit = 1750}
-    PyPI -> Just PeakLimits{readPeakLimit = 3500, outputLimit = 1500}
+    PyPI -> Just PeakLimits{readPeakLimit = 2750, outputLimit = 1500}
     RubyGems -> Nothing
 
-{- Whether a listing's held entry stays smaller than the source it was read from. A PyPI entry holds each
-file as aeson's tree beside its typed view, which outgrows the file. -}
+-- PyPI's packed files and typed facts still outgrow their source, so only npm has this bound.
 entryBelowSource :: Ecosystem -> Bool
 entryBelowSource = \case
     Npm -> True
@@ -176,8 +166,7 @@ listingBounds package = (,) <$> chargeFactors ecosystem <*> peakLimits ecosystem
   where
     ecosystem = pkgEcosystem (cpPackage package)
 
-{- A listing pays whole meter steps from its entry step on, for its reads and then its render. The
-output's own steps hold its working set whatever the capture's size or shape. -}
+-- Whole meter steps cover sub-step sources and output bases, including the entry step.
 checkPaid :: ChargeFactors -> ListingPeaks -> Expectation
 checkPaid factors peaks = do
     rise listingReadPeak listingBaseline peaks `shouldSatisfy` (<= paid fullRead)

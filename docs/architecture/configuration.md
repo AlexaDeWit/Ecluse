@@ -162,6 +162,51 @@ for packages that differ from the corpus. The all-shape figure is the smallest t
 the highest peak among all the listings. Those add the heavy bases, merges whose private document
 holds far more text than its version count suggests.
 
+Native qualification of packed source `62b458ab54dbdff7a296458ed094be74621ec20b` against actual main
+`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` gives a PyPI full-read charge of 3.2 and read limit of 2.75.
+npm retains its charge of 1.1 and read limit of 1.0. Output charges and independent retained limits stay unchanged.
+The [qualified calibration](../testing.md#qualified-packed-integration) records the exact arithmetic and source context.
+The factor-update candidate still requires fresh review, CI, native measurements and default npm and PyPI loads.
+The following historical snapshots retain their original measurements and charge conclusions.
+
+#### Packed-file qualification before parser integration
+
+The table uses the qualified native arm64 Build job of
+[CI run 38103656822](https://github.com/AlexaDeWit/Ecluse/actions/runs/38103656822/job/114364621043).
+Its synthetic checkout `245113a792af38b0206d8bee11581b527ec447f0` has literal parents
+`7f214208ea93a54584f0687bef6870d68f7ac8a8` (actual `main`) and
+`bb3a29d7b47bf5af0cef82a47007c66244f19f86` (PR #1619's runtime source).
+It does not measure a merged PR on `main`. The matching literal-main baseline is
+[CI run 38102664684](https://github.com/AlexaDeWit/Ecluse/actions/runs/38102664684/job/114362617303).
+The maxima include listings of at least one step. They display six decimal places, but the rules
+use measured byte counts before rounding. The last row is the limit for a single document's read.
+
+| Figure | npm | PyPI |
+|---|---|---|
+| Highest peak among the realistic listings | 0.953751 (express, publish order) | 2.628749 (boto3, single document) |
+| Margin figure | 1.2 | 3.3 |
+| Highest peak among all the listings | 1.071052 (express, oldest heavy base) | 2.628749 (boto3, single document) |
+| All-shape figure | 1.1 | 2.7 |
+| Full-read charge | 1.2 | 3.3 |
+| Highest peak among single documents | 0.862843 (react) | 2.628749 (boto3) |
+| Read limit | 1.0 | 3.0 |
+
+A capture under one step can peak above the per-byte charge, up to 1.67 for npm (lodash) and 3.91
+for PyPI (requests). What the meter holds for one such read, whole steps and at least the 1 MiB
+entry step, covers every capture the tier measures. A request for a name that is not first-party
+reads its private and public documents at once on one ticket, so two such reads can exceed what
+the meter holds by a fraction of a step. The sampler's measurement of live data outside the
+charges absorbs that excess.
+
+The charges come from the committed corpus and its merges, so a document shaped or sized unlike
+them can hold more than it pays for. Écluse treats such documents as rare. Two things absorb the
+excess. The sampler measures it as live data outside the charges after the next major collection,
+and the ceiling the budget may reach, set out below, falls as that remainder grows.
+
+#### Native-parser qualification before packed-file integration
+
+This snapshot belongs to the merged parser source identities it names.
+
 The table gives heap bytes per source byte from the native arm64 Build job of
 [CI run 38107103485](https://github.com/AlexaDeWit/Ecluse/actions/runs/38107103485/job/114374944192).
 Its PR merge `3f63e1e7912aa0b118ea39044e32c368380f9a58` has the same tree as
@@ -213,8 +258,8 @@ The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails whe
 or render outgrow what the meter holds for them, so a representation change cannot silently
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
-least 8% above its measured maximum. The read limits in the table above sit 0.1 under npm's charge
-and 0.4 under PyPI's. The output limits, set over the realistic shapes, are 1.75 per basis byte for
+least 8% above its measured maximum. The current read limits sit 0.1 under npm's charge
+and 0.45 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
 npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler

@@ -18,12 +18,15 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.Json.Packed (docTable)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, packedSimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), pypiCorpusPackages)
 import Ecluse.Test.Json (genKey, genValue)
+import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Registry.PyPI (simpleFile)
-import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIPackedChunks, simpleValue)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -76,6 +79,19 @@ spec = describe "simpleEncoding" $ do
                 bytes <- readFileBS (cpPath package)
                 (_, document) <- expectRight (projectPyPIIndex defaultLimits (cpPackage package) bytes)
                 encoded document `shouldBe` previousBytes document
+
+    it "keeps record updates on materialised documents and original positions on packed documents" $ do
+        let body = "{\"name\":\"requests\",\"files\":[null,{\"filename\":\"requests-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\"}]}"
+        (_, packed) <- expectRight (projectPyPIPackedChunks defaultLimits requestsName [body] >>= projectPyPIPacked defaultLimits requestsName)
+        document <- maybe (expectationFailure "packed document did not materialise" >> pure (simpleDocument mempty [])) pure (packedSimpleDocument packed)
+        map fst (simpleFiles document) `shouldBe` [ArrayEntry 1]
+        let updated = document{simpleFiles = reverse (simpleFiles document), simpleEnvelope = KeyMap.insert "files" Null (simpleEnvelope document)}
+        encoded updated `shouldBe` encode (simpleValue updated)
+
+    it "refuses a packed file whose table is missing a referenced string" $ do
+        let body = "{\"name\":\"requests\",\"files\":[{\"filename\":\"requests-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\"}]}"
+        (_, packed) <- expectRight (projectPyPIPackedChunks defaultLimits requestsName [body] >>= projectPyPIPacked defaultLimits requestsName)
+        packedSimpleDocument packed{packedTable = docTable mempty} `shouldBe` Nothing
 
     describe "properties" $
         it "writes the bytes of the rendered JSON object for any envelope and files" $

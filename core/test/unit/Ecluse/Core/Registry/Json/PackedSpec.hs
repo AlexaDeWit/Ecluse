@@ -23,7 +23,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, hasHole, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
@@ -70,6 +70,8 @@ spec = modifyMaxSuccess (const 2000) $ do
                     value = at path (String url) others
                     expected = toStrict (encode (at path (String (prefix <> urlFilenameComponent url)) others))
                 (table, form) <- packedOf (packValue (Generic limit) path value)
+                hasHole form === True
+                hasHole (withoutHole form) === False
                 renderAlone table (Just (urlPrefix prefix)) form === Just expected
                 renderAlone table Nothing form === Just (toStrict (encode value))
                 renderAlone table (Just (urlPrefix prefix)) (withoutHole form) === Just (toStrict (encode value))
@@ -79,6 +81,7 @@ spec = modifyMaxSuccess (const 2000) $ do
                 member <- forAll (Gen.element [Null, Number 7, Bool True, Object (KeyMap.singleton "url" "x"), Array (V.singleton "x")])
                 let value = Object (KeyMap.fromList [("url", member), ("name", "y")])
                 (table, form) <- packedOf (packValue (Generic limit) ["url"] value)
+                hasHole form === False
                 renderAlone table (Just (urlPrefix "https://mirror/")) form === Just (toStrict (encode value))
 
         it "refuses a value that names a string its table lacks, rather than render or decode it short" $
