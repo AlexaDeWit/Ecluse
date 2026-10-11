@@ -16,7 +16,7 @@ import UnliftIO.Exception (mask_)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotGeneration, withSlotGenerationSource)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotGeneration)
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
@@ -31,20 +31,20 @@ fakeDb tag closeLog =
         , cveDbProvenance = noProvenance
         }
 
-generationSeen :: Maybe (DbEtag, CveLookup) -> IO (Maybe Bool)
-generationSeen = traverse (\(_, l) -> namesFix l "gen-b" "1.0.0")
+generationSeen :: Maybe (DbEtag, CveLookup, AdvisorySource) -> IO (Maybe Bool)
+generationSeen = traverse (\(_, l, _) -> namesFix l "gen-b" "1.0.0")
 
 spec :: Spec
 spec = describe "CveSlot" $ do
     it "hands Nothing before the first swap (the pre-first-sync abstain path)" $ do
         slot <- newCveSlot
-        withSlotGeneration slot (pure . fmap fst) `shouldReturn` Nothing
+        withSlotGeneration slot (pure . fmap (\(etag, _, _) -> etag)) `shouldReturn` Nothing
 
     it "hands the installed generation's view after a swap" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
         swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
-        withSlotGeneration slot (traverse (\(_, l) -> namesFix l "gen-a" "1.0.0"))
+        withSlotGeneration slot (traverse (\(_, l, _) -> namesFix l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         readIORef closeLog `shouldReturn` []
 
@@ -53,15 +53,15 @@ spec = describe "CveSlot" $ do
         slot <- newCveSlot
         let oldStamp = Just (UTCTime (fromGregorian 2026 9 1) 0)
             newStamp = Just (UTCTime (fromGregorian 2026 9 2) 0)
-        withSlotGenerationSource slot (pure . isNothing) `shouldReturn` True
+        withSlotGeneration slot (pure . isNothing) `shouldReturn` True
         swapIn slot (DbEtag "gen-a") oldStamp (fakeDb "gen-a" closeLog)
         installed <- generationInstalledAt slot
-        withSlotGenerationSource slot $ \borrowed -> do
+        withSlotGeneration slot $ \borrowed -> do
             observeAdvisoryPublication slot (DbEtag "gen-a") newStamp
             fmap (\(etag, _, source) -> (etag, asPushedAt source)) borrowed `shouldBe` Just (DbEtag "gen-a", oldStamp)
             traverse (\(_, lookup, _) -> namesFix lookup "gen-a" "1.0.0") borrowed `shouldReturn` Just True
             readIORef closeLog `shouldReturn` []
-        withSlotGenerationSource slot (pure . fmap (\(_, _, source) -> asPushedAt source)) `shouldReturn` Just newStamp
+        withSlotGeneration slot (pure . fmap (\(_, _, source) -> asPushedAt source)) `shouldReturn` Just newStamp
         generationInstalledAt slot `shouldReturn` installed
 
     it "observes publication only for an installed ETag and retains retirement ownership" $ do
@@ -118,7 +118,7 @@ spec = describe "CveSlot" $ do
                 ( withSlotGeneration slot $ \acquired -> do
                     putMVar insideReader ()
                     takeMVar releaseReader
-                    fmap fst acquired `shouldBe` Just (DbEtag "gen-a")
+                    fmap (\(etag, _, _) -> etag) acquired `shouldBe` Just (DbEtag "gen-a")
                     generationSeen acquired `shouldReturn` Just False
                 )
                 $ \pinned -> do
@@ -132,7 +132,7 @@ spec = describe "CveSlot" $ do
                             takeMVar insideSwapper
                             timeout 1_000_000 (cancel swapper) `shouldReturn` Just ()
                             currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-b")
-                            withSlotGeneration slot (pure . fmap fst) `shouldReturn` Just (DbEtag "gen-b")
+                            withSlotGeneration slot (pure . fmap (\(etag, _, _) -> etag)) `shouldReturn` Just (DbEtag "gen-b")
                             withSlotGeneration slot generationSeen `shouldReturn` Just True
                             readIORef closeLog `shouldReturn` []
                             if cancelReader

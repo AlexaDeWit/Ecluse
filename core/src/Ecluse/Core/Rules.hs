@@ -100,13 +100,9 @@ withCveLookup deps use = case rdAdvisoryDatabase deps of
 -- | One package's advisory rows and the generation that served them, or 'Nothing' while none is loaded.
 type AdvisoryRows = Maybe (DbEtag, PackageAdvisories)
 
--- | Pin a generation and parse its package rows once for all versions. Query faults escape.
-readAdvisories :: RuleDeps -> PackageName -> IO AdvisoryRows
-readAdvisories deps name =
-    withCveLookup deps (readGenerationAdvisories name)
-
-readGenerationAdvisories :: PackageName -> Maybe (DbEtag, CveLookup) -> IO AdvisoryRows
-readGenerationAdvisories name =
+-- | Parse one borrowed generation's package rows once for all versions. Query faults escape.
+readAdvisories :: PackageName -> Maybe (DbEtag, CveLookup) -> IO AdvisoryRows
+readAdvisories name =
     traverse (\(etag, cve) -> (etag,) . packageAdvisories (pkgEcosystem name) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name)))
 
 -- | Where a built-in rule's verdict comes from.
@@ -260,7 +256,7 @@ advisoryRead deps alignment verdict = do
 withAdvisoryRead :: RuleDeps -> PackageName -> (AdvisoryFreshness -> IO AdvisoryRows -> IO a) -> IO a
 withAdvisoryRead deps package use = case rdAdvisoryDatabase deps of
     AdvisoryDatabase borrow ->
-        borrow (\generation -> agFreshness generation >>= \freshness -> use freshness (agLookup generation (readGenerationAdvisories package)))
+        borrow (\generation -> agFreshness generation >>= \freshness -> use freshness (agLookup generation (readAdvisories package)))
     NoAdvisoryDatabase -> rdAdvisoryFreshness deps >>= \freshness -> use freshness (pure Nothing)
 
 newResilience :: RuleDeps -> IO Resilience

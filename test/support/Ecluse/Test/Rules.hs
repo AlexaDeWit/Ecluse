@@ -84,6 +84,7 @@ import Ecluse.Core.Rules (
     prepare,
     readAdvisories,
     verdictSource,
+    withCveLookup,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
@@ -123,7 +124,17 @@ servingRuleDeps etag cve = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryData
 
 -- | Read a fixture slot whose publications are always treated as fresh.
 slotRuleDeps :: CveSlot -> RuleDeps
-slotRuleDeps slot = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+slotRuleDeps slot =
+    inertRuleDeps
+        { rdAdvisoryDatabase = AdvisoryDatabase $ \use ->
+            withSlotGeneration slot $ \generation ->
+                use
+                    AdvisoryGeneration
+                        { agFreshness = pure AdvisoryFresh
+                        , agLookup = \readLookup -> readLookup ((\(etag, lookup, _) -> (etag, lookup)) <$> generation)
+                        }
+        , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
+        }
 
 -- | Inject a fixed age with a test lookup that carries no publication metadata.
 staticAdvisoryDatabase :: IO AdvisoryFreshness -> (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a) -> AdvisoryDatabase
@@ -155,7 +166,7 @@ admissionOnly (PrecededRule prec _ rule) = PrecededRule prec AdmissionOnly rule
 evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
 evalRule deps ctx rule ev = case verdictSource rule of
     FromEvidence verdict -> pure (verdict ctx ev)
-    FromAdvisories _ verdict -> (`verdict` ev) <$> readAdvisories deps (evName ev)
+    FromAdvisories _ verdict -> (`verdict` ev) <$> withCveLookup deps (readAdvisories (evName ev))
 
 -- | Return a fixed verdict for any version.
 constRule :: Text -> RuleVerdict -> PreparedRule

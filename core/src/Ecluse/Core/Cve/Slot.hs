@@ -9,7 +9,6 @@ module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
     withSlotGeneration,
-    withSlotGenerationSource,
     currentAdvisoryEtag,
     AdvisorySource (..),
     currentAdvisorySource,
@@ -51,13 +50,9 @@ newtype CveSlot = CveSlot {slotCell :: TVar (Maybe Generation)}
 newCveSlot :: IO CveSlot
 newCveSlot = CveSlot <$> newTVarIO Nothing
 
--- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
-withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
-withSlotGeneration slot use = withSlotGenerationSource slot (use . fmap (\(etag, lookup, _) -> (etag, lookup)))
-
--- | Borrow a generation's lookup, ETag and publication metadata together until the action returns.
-withSlotGenerationSource :: CveSlot -> (Maybe (DbEtag, CveLookup, AdvisorySource) -> IO a) -> IO a
-withSlotGenerationSource slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g), genSource g)))
+-- | Borrow a generation's lookup, ETag and publication metadata until the action returns or is cancelled.
+withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup, AdvisorySource) -> IO a) -> IO a
+withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g), genSource g)))
   where
     acquire = atomically $ do
         mGen <- readTVar (slotCell slot)

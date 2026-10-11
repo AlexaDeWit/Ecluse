@@ -90,7 +90,6 @@ spec = do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
                     syncStoreRef (csEnv handle) `shouldBe` "s3://advisories"
-                    -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
                     withSlotGeneration (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema4.db.tmp") `shouldReturn` False
@@ -155,19 +154,16 @@ spec = do
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter (\eco r -> modifyIORef' captured ((eco, r) :))
             rules <- prepare (deps Npm) skipPolicy
             decisions <- replicateM 20 (evalRules evalCtx rules oldVersion)
-            -- Every admission carries the evidence, and the outage reports once.
             forM_ decisions $ \case
                 Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
                 other -> expectationFailure ("expected the quarantine allow, got " <> show other)
             reverse <$> readIORef captured `shouldReturn` [(Npm, OutageBegan "DenyIfCve" "no advisory database loaded")]
-            -- Past the reminder gap the outage reports again, still once.
             writeIORef clock (addUTCTime outageReportPeriod alarmNow)
             replicateM_ 5 (evalRules evalCtx rules oldVersion)
             reverse <$> readIORef captured
                 `shouldReturn` [ (Npm, OutageBegan "DenyIfCve" "no advisory database loaded")
                                , (Npm, OutageContinues alarmNow (Map.singleton "DenyIfCve" "no advisory database loaded"))
                                ]
-            -- A synced database ends it: one recovery, and clean admissions after.
             install handle (agoDays 1)
             evalRules evalCtx rules oldVersion >>= \case
                 Admitted _ _ skipped -> skipped `shouldBe` []
@@ -397,12 +393,12 @@ pinnedPublicationSpec = describe "cveRuleDepsFor -- publication age and rows sha
                                 use freshness rows
                         }
             evaluator <- newEvaluator evalCtx (map (mapPackageRead pause) rules)
-            withAsync (replicateM 2 (evaluator oldVersion)) $ \reader -> do
+            withAsync (replicateM 2 (evaluator oldVersion)) $ \pinned -> do
                 timeout 1_000_000 (takeMVar ageRead) `shouldReturn` Just ()
                 withAsync (swapIn slot (DbEtag "replacement") replacementStamp (fakeCveDb [])) $ \swapper -> do
                     awaitUntil 1_000_000 1_000 ((== Just (DbEtag "replacement")) <$> currentAdvisoryEtag slot) `shouldReturn` True
                     putMVar queryRelease ()
-                    decisions <- wait reader
+                    decisions <- wait pinned
                     wait swapper
                     readIORef readings `shouldReturn` 1
                     traverse_ (expectPinnedPublication loaded initialStamp) decisions

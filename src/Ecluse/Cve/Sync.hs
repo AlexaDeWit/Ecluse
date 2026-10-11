@@ -41,7 +41,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Clock (secondsToMicros)
-import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGenerationSource)
+import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
 import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (..), RuleDeps (..), SourceReporter, noSourceReporter)
@@ -89,14 +89,13 @@ cveRuleDepsFor plan reporter reportOutage eco =
 
 advisoryDatabaseOf :: CveSyncHandle -> AdvisoryDatabase
 advisoryDatabaseOf handle = AdvisoryDatabase $ \use ->
-    withSlotGenerationSource (syncSlot (csEnv handle)) $ \generation ->
+    withSlotGeneration (syncSlot (csEnv handle)) $ \generation ->
         use
             AdvisoryGeneration
                 { agFreshness = assessPublicationOf handle ((\(_, _, source) -> source) <$> generation)
                 , agLookup = \readLookup -> readLookup ((\(etag, lookup, _) -> (etag, lookup)) <$> generation)
                 }
 
--- One handle's reporter, over the outage state every mount of the ecosystem shares.
 sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter
 sourceReporterOf emit handle = sourceReporter outageReportPeriod (csClock handle) (tvarOutageStore (csOutage handle)) emit
 
@@ -147,7 +146,6 @@ logPushAge logEnv eco observed =
         ErrorS
         "the advisory push age has passed half its maximum; past the maximum, CVE-based denial refuses"
 
--- The publication time the serving artifact carries, or nothing before the first sync.
 advisoryPushTime :: CveSyncHandle -> IO (Maybe UTCTime)
 advisoryPushTime handle = (asPushedAt =<<) <$> currentAdvisorySource (syncSlot (csEnv handle))
 

@@ -100,7 +100,7 @@ checkCoveredCaptures deps packages =
                 unserved <- filterM (fmap null . rowsTheRulesRead deps) named
                 pure (if null unserved then Right () else Left ("the served advisories return no row for " <> T.intercalate ", " (map renderPackageName unserved)))
 
--- The rows 'readAdvisories' fetches for a package, caught on their way out of the generation it pins.
+-- Coverage alone does not prove the generation returns rows for a capture.
 rowsTheRulesRead :: RuleDeps -> PackageName -> IO [AdvisoryRange]
 rowsTheRulesRead deps package = do
     seen <- newIORef []
@@ -112,7 +112,7 @@ rowsTheRulesRead deps package = do
                     AdvisoryDatabase borrow -> AdvisoryDatabase $ \use ->
                         borrow (\generation -> use generation{agLookup = \readLookup -> agLookup generation (readLookup . fmap (second recording))})
                 }
-    void (readAdvisories spied package)
+    void (withCveLookup spied (readAdvisories package))
     readIORef seen
 
 -- | The shipped policy: the minimum-age quarantine and the remediation fast lane.

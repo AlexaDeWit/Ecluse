@@ -21,7 +21,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Breaker (Breaker, BreakerPhase (..), BreakerReporter (..), admit, breakerPhase, initialBreaker, noBreakerReporter, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault))
-import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
+import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
@@ -74,6 +74,7 @@ import Ecluse.Test.Rules (
     revocation,
     sentences,
     servingRuleDeps,
+    slotRuleDeps,
     staticAdvisoryDatabase,
     withAdvisoryFreshness,
     withInstallScripts,
@@ -768,14 +769,13 @@ generationSpec = forM_ [False, True] $ \recovering -> describe ("one response re
     it "decides every version against the generation its first read pinned, across a swap" $ do
         slot <- newCveSlot
         swapIn slot (DbEtag "first") Nothing (fakeCveDb [("thing", AdvisoryRange "FIRST" (Just 9.8) Nothing Unbounded Nothing)])
-        prepared <- prepare inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
+        prepared <- prepare (slotRuleDeps slot) [atDefaultPrecedence cveRule]
         rules <- recoveryRules recovering prepared
         decide <- newEvaluator ctx rules
         let first' = deniedBy "DenyIfCve" "first" Cvss 7.0 "FIRST"
         decide (thingAt "1.0.0") `shouldResolve` (first', ["affected by FIRST (CVSS >= 7.0)"])
         swapIn slot (DbEtag "second") Nothing (fakeCveDb [("thing", AdvisoryRange "SECOND" (Just 9.8) Nothing Unbounded Nothing)])
         traverse decide requestVersions >>= (`shouldBe` (first' <$ requestVersions))
-        -- The next request pins the generation now serving.
         evalRules ctx rules (thingAt "1.0.0")
             `shouldResolve` (deniedBy "DenyIfCve" "second" Cvss 7.0 "SECOND", ["affected by SECOND (CVSS >= 7.0)"])
 
@@ -787,7 +787,7 @@ generationSpec = forM_ [False, True] $ \recovering -> describe ("one response re
         let swapOnce _ =
                 unlessM (atomicModifyIORef' swapped (True,)) $
                     swapIn slot (DbEtag "b") Nothing (fakeCveDb [("thing", AdvisoryRange "B-0001" (Just 7.5) Nothing Unbounded (Just 0.4))])
-            deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot), rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
+            deps = (slotRuleDeps slot){rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
         prepared <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
         rules <- recoveryRules recovering prepared
         decideRequest rules requestVersions
