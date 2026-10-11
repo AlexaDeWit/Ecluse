@@ -2,21 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Dredger lifecycle evidence from a real Verdaccio store behind the npm mount.
-Complete version snapshots connect store contents with each cycle's audit records. One group decides
-by operator identity alone, one by the advisory generation Pilot compiles, one follows what the next
-private read sees once a cleanup has run, and one rolls policy out across roles in the wrong order.
+{- | Dredger lifecycle evidence from a real Verdaccio store behind the npm mount. Complete version snapshots connect store contents with each cycle's audit records. One group decides by operator
+identity alone, one by the advisory generation Pilot compiles, one follows what the next private read sees once a cleanup has run, and one rolls policy out across roles in the wrong order.
 -}
-module Ecluse.E2E.Npm.DredgerE2ESpec (spec) where
+module Ecluse.E2E.Npm.DredgerE2ESpec (specWith) where
 
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
     corpusRevokedPkg,
@@ -34,21 +35,22 @@ import Ecluse.E2E.Fixtures.Npm (
     recoveryReadmitPkg,
  )
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 import Ecluse.Test.Package (sriSha512Of)
 
 -- | Verify store contents and audit records under operator identity denies and advisory denials.
-spec :: Spec
-spec = whenE2EAvailable $ do
-    aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
-    aroundAll withGlobalDataPlane revocationScenario
-    aroundAll withGlobalDataPlane (aroundAllWith withRecoveryStores recoveryScenarios)
-    aroundAll withGlobalDataPlane (aroundAllWith withRolloutStores rolloutScenarios)
+specWith :: PhaseRecorder -> Spec
+specWith recorder = do
+    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withSeededStore) identityScenarios)
+    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (revocationScenario recorder)
+    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withRecoveryStores) recoveryScenarios)
+    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withRolloutStores) rolloutScenarios)
 
 identityScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 identityScenarios = describe "identity denies with no advisory database" $ do
-    it "walks the seeded store through listPackagesIn, including scoped base-name buckets" $ \(_, e2e, _) -> do
+    it (caseLabel "npm/dredger/inventory" "walks the seeded store through listPackagesIn, including scoped base-name buckets") $ \(_, e2e, _) -> do
         verdaccioSnapshot e2e `shouldReturn` seededVersions
         names <- verdaccioListing e2e
         names `shouldMatchList` Map.keys seededVersions
@@ -56,7 +58,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioNamesUnder e2e "e" `shouldReturn` sort names
         verdaccioNamesUnder e2e "z" `shouldReturn` []
 
-    it "keeps every version an identity deny limited to admission names, and states the phase at boot" $ \(plane, e2e, cache) -> do
+    it (caseLabel "npm/dredger/admission-only" "keeps every version an identity deny limited to admission names, and states the phase at boot") $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnvUnder (renderRules [admissionOnlyEntry (psName dredgerPkg)]))
@@ -70,7 +72,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioSnapshot e2e `shouldReturn` initial
         verdaccioSnapshot cache `shouldReturn` privateInitial
 
-    it "deletes every denied version and preserves all other versions, including first-party versions" $ \(plane, e2e, cache) -> do
+    it (caseLabel "npm/dredger/denied-versions" "deletes every denied version and preserves all other versions, including first-party versions") $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg)
@@ -81,7 +83,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioNamesUnder e2e "" `shouldReturn` Map.keys finalStore
         verdaccioSnapshot cache `shouldReturn` privateInitial
 
-    it "previews distinct real inventories without writes and preserves first-party versions" $ \(plane, e2e, cache) -> do
+    it (caseLabel "npm/dredger/dry-run" "previews distinct real inventories without writes and preserves first-party versions") $ \(plane, e2e, cache) -> do
         for_ [psVersion dredgerDryRunPkg, "2.0.0"] $ \version ->
             void $ withPublishProject cache (psName dredgerDryRunPkg) version npmPublishIn >>= shouldSucceed
         void $ withPublishProject cache publishDredgerName publishVersion npmPublishIn >>= shouldSucceed
@@ -102,7 +104,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioSnapshot e2e `shouldReturn` initial
         verdaccioSnapshot cache `shouldReturn` privateInitial
 
-    it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e, cache) -> do
+    it (caseLabel "npm/dredger/consent-refusal" "refuses missing consent, names the key, and leaves every version intact") $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg <> [(consentKey, "false")])
@@ -112,7 +114,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioSnapshot cache `shouldReturn` privateInitial
         verdaccioSnapshot e2e `shouldReturn` initial
 
-    it "protects every first-party version even when an identity deny names one" $ \(plane, e2e, cache) -> do
+    it (caseLabel "npm/dredger/first-party" "protects every first-party version even when an identity deny names one") $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         let rules = identityRule (publishDredgerName <> "@" <> publishVersion)
@@ -123,7 +125,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioVersions e2e publishDredgerName `shouldReturn` firstPartyVersions
         verdaccioSnapshot e2e `shouldReturn` initial
 
-    it "deletes shared and cache-only versions while preserving each store's other contents" $ \(plane, mirror, cache) -> do
+    it (caseLabel "npm/dredger/two-stores" "deletes shared and cache-only versions while preserving each store's other contents") $ \(plane, mirror, cache) -> do
         -- The mirror never serves this version, so the case holds its own cache-only copy.
         void $ withPublishProject cache (psName dredgerDryRunPkg) cacheOnlyVersion npmPublishIn >>= shouldSucceed
         verdaccioHasVersion cache (psName dredgerDryRunPkg) cacheOnlyVersion `shouldReturn` True
@@ -230,11 +232,11 @@ cycleLine fields =
         <> T.intercalate ", " fields
         <> "; counted from partial evidence: 1 mount decided without an advisory generation"
 
-revocationScenario :: SpecWith GlobalDataPlane
-revocationScenario =
+revocationScenario :: PhaseRecorder -> SpecWith GlobalDataPlane
+revocationScenario recorder =
     describe "advisory compilation, mirror revocation, and the next install" $
-        aroundAllWith withAdvisoryStore $
-            it "revokes the version a new advisory generation condemns and keeps its fix installable" $ \(plane, e2e) -> do
+        aroundAllWith (timedFixtureWith recorder withAdvisoryStore) $
+            it (caseLabel "npm/dredger/advisory-revocation" "revokes the version a new advisory generation condemns and keeps its fix installable") $ \(plane, e2e) -> do
                 seeded <- seedRevocationStore e2e
                 loadSecondGeneration plane e2e
                 run <- runDredgerOnce plane ["--once"] (advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules)])
@@ -373,7 +375,7 @@ fixedVersion = "1.2.0"
 
 recoveryScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 recoveryScenarios = describe "next private reads and recovery after a grouped cleanup" $ do
-    it "serves the sibling and refuses the denied version once both stores lose it" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/denied-install" "serves the sibling and refuses the denied version once both stores lose it") $ \(plane, proxy, cache) -> do
         let name = psName recoveryPkg
             sibling = psVersion recoveryPkg
         verdaccioVersions cache name `shouldReturn` sort (psVersions recoveryPkg)
@@ -392,7 +394,7 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
         verdaccioVersions proxy name `shouldReturn` [sibling]
         verdaccioVersions cache name `shouldReturn` [sibling]
 
-    it "keeps the cache copy its backend refused and removes it on a later run" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/delete-recovery" "keeps the cache copy its backend refused and removes it on a later run") $ \(plane, proxy, cache) -> do
         let name = psName recoveryFaultPkg
             version = psVersion recoveryFaultPkg
         refused <- withPrivateCacheDeletesRefused plane (runDredgerOnce plane ["--once"] (recoverySweepEnv name))
@@ -408,7 +410,7 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
         verdaccioVersions proxy name `shouldReturn` []
         verdaccioVersions cache name `shouldReturn` []
 
-    it "mirrors the version again when the policy lifts and the public source still holds bytes" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/refill" "mirrors the version again when the policy lifts and the public source still holds bytes") $ \(plane, proxy, cache) -> do
         let name = psName recoveryReadmitPkg
             version = psVersion recoveryReadmitPkg
         run <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
@@ -422,7 +424,7 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
             verdaccioAwaitVersions relaxed name [version] `shouldReturn` [version]
             verdaccioArtifact relaxed name version >>= (`shouldSatisfy` servedBytes)
 
-    it "leaves both stores empty when the policy lifts and no source bytes remain" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/missing-source" "leaves both stores empty when the policy lifts and no source bytes remain") $ \(plane, proxy, cache) -> do
         let name = psName recoveryLostPkg
             version = psVersion recoveryLostPkg
         run <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
@@ -437,14 +439,15 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
                 verdaccioVersions relaxed name `shouldReturn` []
                 verdaccioVersions cache name `shouldReturn` []
 
-    it "removes the copies each store received after the cycle that reported them gone" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/late-copy" "removes the copies each store received after the cycle that reported them gone") $ \(plane, proxy, cache) -> do
         let name = psName recoveryLatePkg
             version = psVersion recoveryLatePkg
         removed <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
         roleExit removed `shouldBe` ExitSuccess
         verdaccioVersions proxy name `shouldReturn` []
         verdaccioVersions cache name `shouldReturn` []
-        for_ [publishingDirectly proxy, cache] $ \store ->
+        direct <- publishingDirectly proxy
+        for_ [direct, cache] $ \store ->
             void $ withPublishProject store name version npmPublishIn >>= shouldSucceed
         for_ [proxy, cache] $ \store -> do
             verdaccioAwaitVersions store name [version] `shouldReturn` [version]
@@ -534,8 +537,10 @@ privateTarget :: Text
 privateTarget = "privateUpstream " <> stubUrl PrivateCache
 
 -- npm publishes into a store directly when the store's own URL is the project's registry.
-publishingDirectly :: E2E -> E2E
-publishingDirectly e2e = e2e{e2eRegistry = e2eVerdaccio e2e}
+publishingDirectly :: E2E -> IO E2E
+publishingDirectly e2e = do
+    store <- packageStore e2e
+    pure e2e{e2eClientEndpoints = Map.singleton Npm (serviceUrl store)}
 
 -- A denied version reaches no client, whatever either store still holds.
 assertRefusedNext :: E2E -> Text -> Text -> IO ()
@@ -556,7 +561,7 @@ awaitListed e2e names =
 
 rolloutScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $ do
-    it "removes the copies an old worker mirrored after a stricter proxy started" $ \(plane, _, cache) -> do
+    it (caseLabel "npm/dredger/old-worker" "removes the copies an old worker mirrored after a stricter proxy started") $ \(plane, _, cache) -> do
         queueUrl <- sharedMirrorQueue plane
         let target = psName dredgerPkg
             version = psVersion dredgerPkg
@@ -592,7 +597,7 @@ rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $
             assertRolloutRemoved strict cache target
             verdaccioVersions strict publishDredgerName `shouldReturn` [publishVersion]
 
-    it "restores a version an old Dredger removed while the newer roles permitted it" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/old-dredger-refill" "restores a version an old Dredger removed while the newer roles permitted it") $ \(plane, proxy, cache) -> do
         let name = psName recoveryReadmitPkg
             version = psVersion recoveryReadmitPkg
         verdaccioArtifact cache name version >>= (`shouldSatisfy` servedBytes)
@@ -613,7 +618,7 @@ rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $
         (restoredStatus, sriSha512Of (toStrict restored)) `shouldBe` (200, sriSha512Of (toStrict retained))
         (fst <$> proxyGet proxy (npmTarballPath name version)) `shouldReturn` 200
 
-    it "leaves the version lost when an old Dredger removed the only remaining bytes" $ \(plane, proxy, cache) -> do
+    it (caseLabel "npm/dredger/old-dredger-loss" "leaves the version lost when an old Dredger removed the only remaining bytes") $ \(plane, proxy, cache) -> do
         let name = psName recoveryLostPkg
             version = psVersion recoveryLostPkg
         withPublicArtifactWithheld plane name version $ do

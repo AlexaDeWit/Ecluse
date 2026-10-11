@@ -19,9 +19,7 @@ module Ecluse.E2E.Harness.Proxy (
     hasPopulatedTraceId,
 ) where
 
-import Data.ByteString qualified as BS
-import Data.Char (isDigit)
-import Data.List (lookup)
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (
     Request (method),
@@ -33,13 +31,15 @@ import Network.HTTP.Client (
     responseStatus,
     withResponse,
  )
-import Network.HTTP.Types (hContentLength, statusCode)
+import Network.HTTP.Types (statusCode)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
 import Ecluse.E2E.Harness.Client (clientReport)
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Contract.Serving qualified as Serving
+import Ecluse.Test.Contract.Telemetry (hasPopulatedTraceId)
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
 proxyStatus :: E2E -> Text -> IO Int
@@ -52,22 +52,23 @@ proxyGet e2e path = do
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), responseBody resp)
 
-{- | @HEAD@ a proxy path. It returns the status, the declared @Content-Length@, and how many body
-bytes actually arrived, so a test can assert that a @HEAD@ streams no body.
--}
-proxyHead :: E2E -> Text -> IO (Int, Maybe Int, Int)
+-- | Observe the raw HEAD response, including any forbidden body bytes.
+proxyHead :: E2E -> Text -> IO Serving.ServingResponse
 proxyHead e2e path = do
     base <- parseRequest (toString (e2eBaseUrl e2e <> path))
-    let req = base{method = "HEAD"}
-    withResponse req (e2eManager e2e) $ \resp -> do
+    withResponse base{method = "HEAD"} (e2eManager e2e) $ \resp -> do
         chunks <- brConsume (responseBody resp)
-        let declared = do
-                raw <- lookup hContentLength (responseHeaders resp)
-                readMaybe (toString (decodeUtf8 raw :: Text))
-        pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
+        pure
+            Serving.ServingResponse
+                { Serving.responseStatus = statusCode (responseStatus resp)
+                , Serving.responseBody = LBS.fromChunks chunks
+                , Serving.responseHeaders = responseHeaders resp
+                , Serving.responseVersions = []
+                , Serving.responseDigests = mempty
+                }
 
-{- | An empty @PUT@ proves that a mount without a publication target refuses with @405@
-before reading the body.
+{- | An empty @PUT@ proves that a mount without a publication target refuses with @405@ before
+reading the body.
 -}
 proxyPut :: E2E -> Text -> IO Int
 proxyPut e2e path = do
@@ -114,19 +115,10 @@ proxyContainerLogs = containerLogs . e2eProxyContainer
 
 -- | The mirror store's own stdout, which carries a publish or render error the proxy cannot see.
 mirrorContainerLogs :: E2E -> IO Text
-mirrorContainerLogs = containerLogs . e2eMirrorContainer
+mirrorContainerLogs e2e = maybe (pure "no package store in this topology") (containerLogs . serviceContainer) (e2eStore e2e)
 
-{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse. Use it for an
-assertion that must await an asynchronous line.
+{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse. Use it
+for an assertion that must await an asynchronous line.
 -}
 awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
 awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
-
-{- | Whether any @dd@ object in the log text carries a __populated__ @trace_id@. The value must
-begin with a digit, so an absent or empty id does not satisfy it.
--}
-hasPopulatedTraceId :: Text -> Bool
-hasPopulatedTraceId logs =
-    any leadsWithDigit (drop 1 (T.splitOn "\"trace_id\":\"" logs))
-  where
-    leadsWithDigit seg = maybe False (isDigit . fst) (T.uncons seg)

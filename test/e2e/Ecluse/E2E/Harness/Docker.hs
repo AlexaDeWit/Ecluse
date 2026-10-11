@@ -6,6 +6,7 @@
 module Ecluse.E2E.Harness.Docker (
     e2eUnavailable,
     withGlobalDataPlane,
+    withDataPlane,
     withDredgerPrivateCache,
     withE2E,
     withE2EWith,
@@ -47,8 +48,9 @@ module Ecluse.E2E.Harness.Docker (
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time.Clock.POSIX (getPOSIXTime)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Network.HTTP.Client (
     Manager,
     Request (method),
@@ -61,26 +63,17 @@ import Network.HTTP.Client (
     responseStatus,
  )
 import Network.HTTP.Types (statusCode)
-import Network.Socket (
-    Family (AF_INET),
-    SockAddr (SockAddrInet),
-    SocketType (Stream),
-    bind,
-    close,
-    defaultProtocol,
-    getSocketName,
-    socket,
-    tupleToHostAddress,
- )
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly, renamePath)
+import System.Directory (createDirectoryIfMissing, renamePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import System.Process.Typed (proc, readProcess, readProcessStdout)
-import UnliftIO (bracket, bracket_, finally, handleAny)
+import System.Process.Typed (proc, readProcess)
+import UnliftIO (bracket_, finally, handleAny, onException)
+import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
+import Ecluse.E2E.Harness.Container
 import Ecluse.E2E.Harness.Stub (
     StubFault (..),
     StubRead,
@@ -94,12 +87,10 @@ import Ecluse.E2E.Harness.Stub (
  )
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
-    ImageRef (LocallyBuilt, PinnedExternal),
-    PinnedImageRef,
+    ImageRef (LocallyBuilt),
     collectorImage,
     ministackImage,
     nginxImage,
-    renderImageRef,
     verdaccioImage,
  )
 import Ecluse.Test.Containers (dockerLabelArgs)
@@ -109,9 +100,7 @@ import Ecluse.Test.Poll (pollUntil)
 mirrorHost :: Text
 mirrorHost = "mirror"
 
-{- | 'Nothing' when the suite can run. @Just reason@ when it must skip: no docker daemon,
-or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
--}
+-- | Explain missing infrastructure before acquiring a required group's resources.
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable =
     usingExistingPlane >>= \case
@@ -136,52 +125,46 @@ dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
 
--- Each run owns its fixture directory, so concurrent worktrees cannot remove each other's fixtures.
-withFixtureDir :: (FilePath -> IO a) -> IO a
-withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
-  where
-    acquire = do
-        tmpRoot <- getTemporaryDirectory
-        sfx <- uniqueSuffix
-        let workDir = tmpRoot </> ("ecluse-e2e-fixtures-" <> sfx)
-            htmlDir = workDir </> "html"
-        createDirectoryIfMissing True htmlDir
-        buildFixtures htmlDir fixturePackages
-        buildPyPIFixtures (workDir </> "pypi")
-        buildAdvisoryFixtures htmlDir
-        writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
-        writeFileText (workDir </> "nginx.conf") (stubConfig Nothing)
-        generateCerts (workDir </> "certs")
-        pure workDir
+-- | Build only the fixtures required by this group's mounted ecosystems.
+withFixtureDir :: Topology -> (FilePath -> IO a) -> IO a
+withFixtureDir topology action = withSystemTempDirectory "ecluse-e2e-fixtures" $ \workDir -> do
+    let htmlDir = workDir </> "html"
+        pypiDir = workDir </> "pypi"
+    createDirectoryIfMissing True htmlDir
+    createDirectoryIfMissing True pypiDir
+    when (Npm `elem` topologyMounts topology) (buildFixtures htmlDir fixturePackages)
+    when (PyPI `elem` topologyMounts topology) (buildPyPIFixtures pypiDir)
+    when (topologyAws topology) (buildAdvisoryFixtures htmlDir)
+    writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
+    writeFileText (workDir </> "nginx.conf") (stubConfig Nothing)
+    generateCerts (workDir </> "certs")
+    action workDir
 
+-- | npm's basic writing topology, with its in-process queue.
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
-withGlobalDataPlane action =
+withGlobalDataPlane = withDataPlane npmTopology
+
+-- | Acquire the concrete resources declared by a group, releasing them on every exit path.
+withDataPlane :: Topology -> (GlobalDataPlane -> IO ()) -> IO ()
+withDataPlane topology action =
     usingExistingPlane >>= \case
         True ->
-            action GlobalDataPlane{gdpNet = "", gdpStub = "upstream", gdpVerd = "verdaccio", gdpMini = "ministack", gdpVerdPort = 4873, gdpMiniPort = 4566, gdpWorkDir = ""}
+            action
+                GlobalDataPlane
+                    { gdpNet = ""
+                    , gdpStub = "upstream"
+                    , gdpStore = if topologyStore topology then Just (Service "verdaccio" 4874) else Nothing
+                    , gdpMinistack = if topologyAws topology then Just (Service "ministack" 4566) else Nothing
+                    , gdpWorkDir = ""
+                    , gdpTopology = topology
+                    }
         False -> do
             sfx <- uniqueSuffix
-            -- Every container and the network carries the reaping labels, so `task test-clean` can
-            -- sweep a run that is hard-killed past these brackets (see "Ecluse.Test.Containers").
-            labelArgs <- dockerLabelArgs "e2e"
-            withFixtureDir $ \workDir -> do
-                -- Resolve each pin up front, so an unvalidated one aborts the suite before any
-                -- pull. A tag can be re-pointed at a poisoned image, a digest cannot.
-                verdImage <- pinnedExternal verdaccioImage
+            labels <- dockerLabelArgs "e2e"
+            withFixtureDir topology $ \workDir -> do
                 stubImage <- pinnedExternal nginxImage
-                miniImage <- pinnedExternal ministackImage
-                let net = "ecluse-e2e-global-net-" <> sfx
-                    verd = "ecluse-e2e-global-verd-" <> sfx
-                    stub = "ecluse-e2e-global-stub-" <> sfx
-                    mini = "ecluse-e2e-global-mini-" <> sfx
-                    verdRun =
-                        (dockerRun verd net verdImage)
-                            { drAliases = ["verdaccio"]
-                            , drPorts = ["127.0.0.1:0:4873"]
-                            , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
-                            }
-                    -- One nginx terminates TLS for every registry stub, so it answers to every
-                    -- route's alias. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
+                let net = "ecluse-e2e-net-" <> sfx
+                    stub = "ecluse-e2e-stub-" <> sfx
                     stubRun =
                         (dockerRun stub net stubImage)
                             { drAliases = map toString stubHosts
@@ -192,20 +175,56 @@ withGlobalDataPlane action =
                                 , (workDir </> "certs", "/certs:ro")
                                 ]
                             }
-                    miniRun =
-                        (dockerRun mini net miniImage)
-                            { drAliases = ["ministack"]
-                            , drPorts = ["127.0.0.1:0:4566"]
-                            }
-                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never blocks
-                -- (see "Ecluse.Core.Security.Host"), so the image needs no escape hatch.
-                withDockerNetwork labelArgs net ["--subnet", "203.0.113.0/24"] $ \_ ->
-                    withDockerContainer labelArgs verdRun $ \_ ->
-                        withDockerContainer labelArgs stubRun $ \_ ->
-                            withDockerContainer labelArgs miniRun $ \_ -> do
-                                miniPort <- publishedPort mini "4566/tcp"
-                                verdPort <- publishedPort verd "4873/tcp"
-                                action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
+                -- The production egress guard accepts this documentation range without a bypass.
+                withDockerNetwork labels net ["--subnet", "203.0.113.0/24"] $ \_ ->
+                    withStore topology labels net workDir $ \store ->
+                        withDockerContainer labels stubRun $ \_ ->
+                            withAws topology labels net $ \aws ->
+                                action
+                                    GlobalDataPlane
+                                        { gdpNet = net
+                                        , gdpStub = stub
+                                        , gdpStore = store
+                                        , gdpMinistack = aws
+                                        , gdpWorkDir = workDir
+                                        , gdpTopology = topology
+                                        }
+
+withStore :: Topology -> [String] -> String -> FilePath -> (Maybe Service -> IO a) -> IO a
+withStore topology labels net workDir action
+    | not (topologyStore topology) = action Nothing
+    | otherwise = do
+        image <- pinnedExternal verdaccioImage
+        suffix <- uniqueSuffix
+        let name = "ecluse-e2e-store-" <> suffix
+            run =
+                (dockerRun name net image)
+                    { drAliases = ["verdaccio"]
+                    , drPorts = ["127.0.0.1:0:4873"]
+                    , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
+                    }
+        withDockerContainer labels run $ \_ -> do
+            port <- publishedPort name "4873/tcp"
+            manager <- newManager defaultManagerSettings
+            ready <- waitFor manager (serviceUrl (Service name port) <> "/-/ping") 200
+            unless ready (fail "the package store did not become ready")
+            action (Just (Service name port))
+
+withAws :: Topology -> [String] -> String -> (Maybe Service -> IO a) -> IO a
+withAws topology labels net action
+    | not (topologyAws topology) = action Nothing
+    | otherwise = do
+        image <- pinnedExternal ministackImage
+        suffix <- uniqueSuffix
+        let name = "ecluse-e2e-aws-" <> suffix
+            run =
+                (dockerRun name net image)
+                    { drAliases = ["ministack"]
+                    , drPorts = ["127.0.0.1:0:4566"]
+                    }
+        withDockerContainer labels run $ \_ -> do
+            port <- publishedPort name "4566/tcp"
+            action (Just (Service name port))
 
 -- | Run a separate Verdaccio for the Dredger preview, using the existing fixture configuration.
 withDredgerPrivateCache :: GlobalDataPlane -> E2E -> (E2E -> IO ()) -> IO ()
@@ -223,38 +242,26 @@ withDredgerPrivateCache plane mirror action = do
     withDockerContainer labels container $ \_ -> do
         port <- publishedPort name "4873/tcp"
         let url = "http://127.0.0.1:" <> show port
-            cache = mirror{e2eRegistry = url, e2eVerdaccio = url, e2eMirrorContainer = name}
+            cache = mirror{e2eClientEndpoints = Map.singleton Npm url, e2eStore = Just (Service name port)}
         ready <- waitFor (e2eManager mirror) (url <> "/-/ping") 200
         unless ready (fail "the private preview cache did not become ready")
         action cache
 
-{- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then
-tear it down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
+{- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then tear it
+down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
 -}
 withE2E :: (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2E = withE2EWith defaultE2EConfig
 
-{- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may
-stand up an OTLP collector at @otelcol@, up before the proxy so no export is missed.
+{- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may stand up
+an OTLP collector at @otelcol@, up before the proxy so no export is missed.
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2EWith cfg action gdp =
     usingExistingPlane >>= \case
         True -> do
             manager <- newManager defaultManagerSettings
-            let base = "http://127.0.0.1:4873"
-            action
-                E2E
-                    { e2eRegistry = base <> "/npm/"
-                    , e2ePypiIndex = base <> "/pypi/simple/"
-                    , e2eBaseUrl = base
-                    , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
-                    , e2ePlane = gdp
-                    , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
-                    , e2eMirrorContainer = gdpVerd gdp
-                    , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
-                    , e2eManager = manager
-                    }
+            action (environment gdp manager "http://127.0.0.1:4873" "ecluse-proxy" (if ecCollector cfg then Just "otelcol" else Nothing))
         False -> do
             image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
             sfx <- uniqueSuffix
@@ -265,13 +272,14 @@ withE2EWith cfg action gdp =
                 certsDir = gdpWorkDir gdp </> "certs"
             withOptionalCollector cfg labelArgs net coll $ \collectorName -> do
                 manager <- newManager defaultManagerSettings
-                -- The proxy routes to ministack via AWS_ENDPOINT_URL_SQS and matches the queue by
-                -- its path, so this URL's host (ministack's own `localhost:4566`) is immaterial.
-                queueUrl <-
-                    maybe
-                        (createMinistackQueue manager (gdpMiniPort gdp) ("ecluse-e2e-queue-" <> T.pack sfx))
-                        pure
-                        (ecQueueUrl cfg)
+                queueUrl <- case ecQueueUrl cfg of
+                    Just url -> pure (Just url)
+                    Nothing -> case gdpMinistack gdp of
+                        Nothing -> pure Nothing
+                        Just service
+                            | Npm `elem` topologyMounts (gdpTopology gdp) ->
+                                Just <$> createMinistackQueue manager (servicePort service) ("ecluse-e2e-queue-" <> T.pack sfx)
+                        Just _ -> pure Nothing
                 -- Pick the host port up front: ECLUSE_SERVER__PUBLIC_URL must be known before the
                 -- container starts, and it makes the proxy rewrite dist.tarball to an absolute URL.
                 proxyPort <- freeHostPort
@@ -282,52 +290,48 @@ withE2EWith cfg action gdp =
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
                             , drMounts = [(certsDir, "/certs:ro")]
                             , drTmpfs = [advisoryDataTmpfs]
-                            , drEnv = proxyEnv proxyPort queueUrl <> ecExtraEnv cfg
+                            , drEnv = proxyEnv (gdpTopology gdp) proxyPort queueUrl <> ecExtraEnv cfg
                             , drCmd = ecArgs cfg
                             }
                 withDockerContainer labelArgs proxRun $ \_ -> do
-                    let verdPort = gdpVerdPort gdp
-                        base = "http://127.0.0.1:" <> show proxyPort
-                        e2e =
-                            E2E
-                                { e2eRegistry = base <> "/npm/"
-                                , e2ePypiIndex = base <> "/pypi/simple/"
-                                , e2eBaseUrl = base
-                                , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
-                                , e2ePlane = gdp
-                                , e2eProxyContainer = prox
-                                , e2eMirrorContainer = gdpVerd gdp
-                                , e2eCollectorContainer = collectorName
-                                , e2eManager = manager
-                                }
+                    let base = "http://127.0.0.1:" <> show proxyPort
+                        e2e = environment gdp manager base prox collectorName
                     ready <- waitFor manager (base <> "/readyz") 200
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
 
--- PUBLIC_URL is the host-loopback address the npm client reaches.
-proxyEnv :: Int -> Text -> [(Text, Text)]
-proxyEnv hostPort queueUrl =
+environment :: GlobalDataPlane -> Manager -> Text -> String -> Maybe String -> E2E
+environment plane manager base proxy collector =
+    E2E
+        { e2eClientEndpoints = Map.fromList [(ecosystem, base <> mountPath ecosystem) | ecosystem <- topologyMounts (gdpTopology plane)]
+        , e2eBaseUrl = base
+        , e2eStore = gdpStore plane
+        , e2ePlane = plane
+        , e2eProxyContainer = proxy
+        , e2eCollectorContainer = collector
+        , e2eManager = manager
+        }
+  where
+    mountPath Npm = "/npm/"
+    mountPath PyPI = "/pypi/simple/"
+
+proxyEnv :: Topology -> Int -> Maybe Text -> [(Text, Text)]
+proxyEnv topology hostPort queueUrl =
     [ ("ECLUSE_SERVER__PORT", "4873")
-    , -- ECLUSE_SERVER__PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
-      -- rewriting), not a registry-egress target, so it stays http on host loopback.
-      ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
-    , -- The registry endpoints are https-only by construction, so an nginx terminator serves
-      -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror)
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
-    , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
-      -- index and the distribution files under it through the same proxy.
-      ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
+    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    , ("ECLUSE_QUEUE__URL", queueUrl)
-    , -- The SQS endpoint override (AWS-SDK-standard), aimed at the ministack alias.
-      ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , -- Fixture publishes clear quarantine. The shipped npm default supplies the install-script deny.
-      ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0}}")
+    , ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0}}")
     ]
-        <> mirrorTargetEnv
-        <> ministackAwsEnv
+        <> concatMap mountEnv (topologyMounts topology)
+        <> maybe [] (\url -> [("ECLUSE_QUEUE__URL", url), ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)]) queueUrl
+        <> [entry | topologyStore topology, entry <- mirrorTargetEnv]
+        <> [entry | topologyAws topology, entry <- ministackAwsEnv]
+  where
+    mountEnv Npm =
+        [("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)]
+            <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror) | topologyStore topology]
+    mountEnv PyPI = [("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)]
 
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
@@ -357,8 +361,8 @@ mirrorRoleEnv queueUrl rules =
 ministackEndpoint :: Text
 ministackEndpoint = "http://ministack:4566"
 
-{- | The AWS environment every role boots with. A role that is given an advisory store prepares its
-sync at boot, so each needs a credential chain and an endpoint inside the test network.
+{- | The AWS environment every role boots with. A role that is given an advisory store prepares its sync
+at boot, so each needs a credential chain and an endpoint inside the test network.
 -}
 ministackAwsEnv :: [(Text, Text)]
 ministackAwsEnv =
@@ -369,64 +373,6 @@ ministackAwsEnv =
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
-
-data DockerRun = DockerRun
-    { drName :: String
-    , drNetwork :: String
-    , drAliases :: [String]
-    , drPorts :: [String]
-    , drMounts :: [(FilePath, String)]
-    , drTmpfs :: [String]
-    , drEnv :: [(Text, Text)]
-    , drImage :: String
-    , drCmd :: [String]
-    , drAutoRemove :: Bool
-    -- A case that reads logs after exit disables auto-removal until the bracket releases them.
-    }
-
--- An invalid literal pin fails at harness startup, before pulling any image.
-pinnedExternal :: Either Text PinnedImageRef -> IO ImageRef
-pinnedExternal = fmap PinnedExternal . either (fail . toString) pure
-
--- Only a LocallyBuilt image may lack a digest pin.
-dockerRun :: String -> String -> ImageRef -> DockerRun
-dockerRun name net image =
-    DockerRun
-        { drName = name
-        , drNetwork = net
-        , drAliases = []
-        , drPorts = []
-        , drMounts = []
-        , drTmpfs = []
-        , drEnv = []
-        , drImage = toString (renderImageRef image)
-        , drCmd = []
-        , drAutoRemove = True
-        }
-
-runDetached :: [String] -> DockerRun -> IO ()
-runDetached labelArgs = commandOk "docker" . runArgs ["-d"] labelArgs
-
-runArgs :: [String] -> [String] -> DockerRun -> [String]
-runArgs extra labelArgs spec =
-    ("run" : ["--rm" | drAutoRemove spec])
-        <> extra
-        <> ["--name", drName spec, "--network", drNetwork spec]
-        <> concatMap (\a -> ["--network-alias", a]) (drAliases spec)
-        <> concatMap (\p -> ["-p", p]) (drPorts spec)
-        <> concatMap (\(h, c) -> ["-v", h <> ":" <> c]) (drMounts spec)
-        <> concatMap (\t -> ["--tmpfs", t]) (drTmpfs spec)
-        <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (drEnv spec)
-        <> labelArgs
-        <> (drImage spec : drCmd spec)
-
-withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
-withDockerContainer labelArgs spec =
-    bracket (runDetached labelArgs spec >> pure (drName spec)) removeContainer
-
-withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
-withDockerNetwork labelArgs name createArgs =
-    bracket (commandOk "docker" (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
 
 withOptionalCollector :: E2EConfig -> [String] -> String -> String -> (Maybe String -> IO a) -> IO a
 withOptionalCollector cfg labelArgs net coll body
@@ -444,21 +390,12 @@ withOptionalCollector cfg labelArgs net coll body
             unless ready (fail "OTLP collector did not become ready within the timeout")
             body (Just coll)
 
--- Force-remove a container by name. It never throws (a missing container is fine), so a
--- bracket release cannot mask the action's own result or exception.
-removeContainer :: String -> IO ()
-removeContainer c = void (readProcess (proc "docker" ["rm", "-f", c]))
-
--- Remove a network by name. It never throws, for the same reason as 'removeContainer'.
-removeNetwork :: String -> IO ()
-removeNetwork net = void (readProcess (proc "docker" ["network", "rm", net]))
-
 -- The collector's network alias on the TEST-NET. The proxy exports to it by this name.
 collectorAlias :: Text
 collectorAlias = "otelcol"
 
-{- | The in-cluster OTLP endpoint the proxy exports to, reached by the collector's network
-alias. A scenario names it through 'otlpCollectorEnv' or derives it from @DD_AGENT_HOST@.
+{- | The in-cluster OTLP endpoint the proxy exports to, reached by the collector's network alias. A
+scenario names it through 'otlpCollectorEnv' or derives it from @DD_AGENT_HOST@.
 -}
 collectorOtlpEndpoint :: Text
 collectorOtlpEndpoint = "http://" <> collectorAlias <> ":4318"
@@ -483,8 +420,8 @@ otlpCollectorEnv =
     ]
         <> telemetryExportTuning
 
-{- | The Datadog unified-service-tag identity the Datadog scenario configures and asserts
-on. Named constants, so the proxy environment and the assertions cannot drift apart.
+{- | The Datadog unified-service-tag identity the Datadog scenario configures and asserts on.
+Named constants, so the proxy environment and the assertions cannot drift apart.
 -}
 ddTagService, ddTagEnv, ddTagVersion :: Text
 ddTagService = "ecluse-e2e-dd"
@@ -514,8 +451,8 @@ collectorConfig =
         <> "traces: {receivers: [otlp], exporters: [debug]}, "
         <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
-{- | What one product-image run reported: the status a scheduler reads, and the JSONL log lines it
-wrote. The run is not detached, so it ends when the role's own work does.
+{- | What one product-image run reported: the status a scheduler reads, and the JSONL log lines
+it wrote. The run is not detached, so it ends when the role's own work does.
 -}
 data RoleRun = RoleRun
     { roleExit :: ExitCode
@@ -533,15 +470,18 @@ advisoryDataDir = "/var/lib/ecluse/advisories"
 advisoryDataTmpfs :: String
 advisoryDataTmpfs = advisoryDataDir <> ":mode=1777"
 
-{- | Run the product image to completion on the shared data plane, under the caller's environment
-and arguments. It joins the plane's network, so it addresses the same stores the proxy does.
+{- | Run the product image to completion on the shared data plane, under the caller's environment and
+arguments. It joins the plane's network, so it addresses the same stores the proxy does.
 -}
 runRoleOnce :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO RoleRun
 runRoleOnce gdp env args = do
     run <- roleRun gdp env args
     labelArgs <- dockerLabelArgs "e2e"
-    (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
-    pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
+    flip finally (removeContainerIfPresent (drName run)) $ do
+        (code, out, err) <-
+            readProcess (proc "docker" (runArgs [] labelArgs run))
+                `onException` reportContainer (drName run)
+        pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
 
 roleRun :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO DockerRun
 roleRun gdp env args = do
@@ -557,17 +497,18 @@ roleRun gdp env args = do
             , drCmd = args
             }
 
-{- | Create a mirror queue on the shared emulator and return its URL, for a scenario whose roles
-must all drain the one queue rather than each create its own.
+{- | Create a mirror queue on the shared emulator and return its URL, for a scenario whose
+roles must all drain the one queue rather than each create its own.
 -}
 sharedMirrorQueue :: GlobalDataPlane -> IO Text
 sharedMirrorQueue gdp = do
     manager <- newManager defaultManagerSettings
     sfx <- uniqueSuffix
-    createMinistackQueue manager (gdpMiniPort gdp) ("ecluse-e2e-shared-queue-" <> T.pack sfx)
+    port <- ministackPort gdp
+    createMinistackQueue manager port ("ecluse-e2e-shared-queue-" <> T.pack sfx)
 
-{- | Run a dedicated @ecluse mirror@ worker on the shared data plane for the action, removed on
-every exit path. The action gets the container name, so a case can wait on the worker's own log.
+{- | Run a dedicated @ecluse mirror@ worker on the shared data plane for the action, removed on every exit
+path. The action gets the container name, so a case can wait on the worker's own log.
 -}
 withMirrorRole :: GlobalDataPlane -> [(Text, Text)] -> (String -> IO a) -> IO a
 withMirrorRole gdp env action = do
@@ -600,12 +541,6 @@ dredgerEnv =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
-commandOk :: String -> [String] -> IO ()
-commandOk command args = do
-    (code, _, err) <- readProcess (proc command args)
-    unless (code == ExitSuccess) $
-        fail (command <> " command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
-
 -- Every stub alias needs a certificate SAN, and SSL_CERT_FILE needs the system and test CAs.
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
@@ -631,16 +566,6 @@ generateCerts dir = do
 -- proxy reaches only the test stubs over TLS in the e2e, so the test CA alone suffices.
 readBytesOrEmpty :: FilePath -> IO ByteString
 readBytesOrEmpty path = handleAny (\_ -> pure "") (readFileBS path)
-
-publishedPort :: String -> String -> IO Int
-publishedPort cname containerPort = do
-    (_, out) <- readProcessStdout (proc "docker" ["port", cname, containerPort])
-    let firstLine = fromMaybe "" (listToMaybe (lines (decodeUtf8 (LBS.toStrict out))))
-        portText = T.takeWhileEnd (/= ':') (T.strip firstLine)
-    maybe
-        (fail ("could not parse published port from " <> show firstLine))
-        pure
-        (readMaybe (toString portText))
 
 -- CreateQueue is idempotent, so the emulator warm-up can retry it.
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
@@ -686,21 +611,6 @@ waitFor manager url want = pollUntil 100 300000 id probe
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess
 
--- The window between releasing this port and Docker binding it is a loopback-test race.
-freeHostPort :: IO Int
-freeHostPort =
-    bracket (socket AF_INET Stream defaultProtocol) close $ \sock -> do
-        bind sock (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
-        getSocketName sock >>= \case
-            SockAddrInet port _ -> pure (fromIntegral port)
-            other -> fail ("unexpected socket address: " <> show other)
-
--- | A unique, monotonic-ish suffix for network/container/temp names.
-uniqueSuffix :: IO String
-uniqueSuffix = do
-    t <- getPOSIXTime
-    pure (show (round (t * 1000) :: Integer))
-
 verdaccioConfig :: Text
 verdaccioConfig =
     T.unlines
@@ -723,14 +633,14 @@ verdaccioConfig =
         , "log: { type: stdout, format: pretty, level: warn }"
         ]
 
-{- | Take both public upstreams down for the action, npm's and PyPI's: the stub closes every
-connection to them unanswered, while the mirror, the private upstream, and the private cache answer.
+{- | Take both public upstreams down for the action, npm's and PyPI's: the stub closes every connection to
+them unanswered, while the mirror, the private upstream, and the private cache answer.
 -}
 withPublicUpstreamsDown :: GlobalDataPlane -> IO a -> IO a
 withPublicUpstreamsDown plane = withStubFault plane PublicUpstreamsDown
 
-{- | Refuse every write method on the private-cache route for the duration of the action, so that
-one target's deletes fail while its reads keep answering.
+{- | Refuse every write method on the private-cache route for the duration of the action, so
+that one target's deletes fail while its reads keep answering.
 -}
 withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
 withPrivateCacheDeletesRefused plane = withStubFault plane PrivateCacheWritesRefused
@@ -757,14 +667,14 @@ reloadStub plane fault = do
 stubReadsNow :: GlobalDataPlane -> IO [StubRead]
 stubReadsNow plane = stubReads <$> containerLogs (gdpStub plane)
 
-{- | The requests the stub finished after its first @seen@, polled until they satisfy @complete@ or
-the budget lapses. The log trails a response by a moment, so a case names the reads it waits for.
+{- | The requests the stub finished after its first @seen@, polled until they satisfy @complete@ or the
+budget lapses. The log trails a response by a moment, so a case names the reads it waits for.
 -}
 awaitStubReads :: GlobalDataPlane -> Int -> ([StubRead] -> Bool) -> IO [StubRead]
 awaitStubReads plane seen complete = pollUntil 40 250000 complete (drop seen <$> stubReadsNow plane)
 
-{- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
-put the file back on every exit path.
+{- | Withhold one public artifact for the duration of the action, leaving its metadata served,
+and put the file back on every exit path.
 -}
 withPublicArtifactWithheld :: GlobalDataPlane -> Text -> Text -> IO a -> IO a
 withPublicArtifactWithheld plane name version =
@@ -772,19 +682,3 @@ withPublicArtifactWithheld plane name version =
   where
     served = artifactFile (gdpWorkDir plane </> "html") name version
     withheld = served <> ".withheld"
-
-{- | Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
-'False' means it never held inside the budget.
--}
-awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
-awaitContainerLog cname matches attempts =
-    pollUntil attempts 250000 id (matches <$> containerLogs cname)
-
-{- | A container's combined stdout+stderr so far (@docker logs@). Empty on any docker
-error, such as the container not existing yet, mid image-pull.
--}
-containerLogs :: String -> IO Text
-containerLogs cname =
-    handleAny (\_ -> pure "") $ do
-        (_, out, err) <- readProcess (proc "docker" ["logs", cname])
-        pure (decodeUtf8 (LBS.toStrict out) <> decodeUtf8 (LBS.toStrict err))

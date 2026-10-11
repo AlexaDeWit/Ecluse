@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm clients for end-to-end scenarios.
-Each project isolates npm state and disables package lifecycle scripts.
+{- | npm clients for end-to-end scenarios. Each project isolates npm state and disables package
+lifecycle scripts.
 -}
 module Ecluse.E2E.Harness.Npm (
     npmInstall,
@@ -47,6 +47,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.E2E.Fixtures.Npm (psName, publicOnlyPkg)
 import Ecluse.E2E.Harness.Client (clientReport, runClient, withClientDir)
 import Ecluse.E2E.Harness.Proxy (proxyStatus)
@@ -61,6 +62,7 @@ withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
 withProjectContents e2e packageJson npmrcContents use =
     withClientDir "npm" $ \projectDir -> do
+        registry <- clientEndpoint Npm e2e
         let cacheDir = projectDir </> cacheDirName
             prefixDir = projectDir </> "prefix"
             npmrc = projectDir </> ".npmrc"
@@ -70,7 +72,7 @@ withProjectContents e2e packageJson npmrcContents use =
         writeFileText npmrc npmrcContents
         baseEnv <- getEnvironment
         let overrides =
-                [ ("npm_config_registry", toString (e2eRegistry e2e))
+                [ ("npm_config_registry", toString registry)
                 , ("npm_config_cache", cacheDir)
                 , ("npm_config_userconfig", npmrc)
                 , ("npm_config_prefix", prefixDir)
@@ -96,11 +98,9 @@ withProjectContents e2e packageJson npmrcContents use =
 
 -- | Prepare an isolated publisher with the token npm requires before contacting the proxy.
 withPublishProject :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
-withPublishProject e2e name version =
-    withProjectContents
-        e2e
-        (publishPackageJson name version)
-        (npmAuthLine (e2eRegistry e2e) publishAuthToken)
+withPublishProject e2e name version use = do
+    registry <- clientEndpoint Npm e2e
+    withProjectContents e2e (publishPackageJson name version) (npmAuthLine registry publishAuthToken) use
 
 runNpm :: NpmProject -> [String] -> IO ClientResult
 runNpm proj = runClient (npDir proj) (npEnv proj) "npm"
@@ -131,8 +131,8 @@ npmPublishIn proj = runNpm proj ["publish"]
 npmInstall :: E2E -> Text -> IO ClientResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 
-{- | Whether the proxy can serve 'publicOnlyPkg', which only the npm public upstream holds: 'True'
-while that upstream answers the proxy, 'False' through an outage of it.
+{- | Whether the proxy can serve 'publicOnlyPkg', which only the npm public upstream holds:
+'True' while that upstream answers the proxy, 'False' through an outage of it.
 -}
 npmPublicReachable :: E2E -> IO Bool
 npmPublicReachable e2e = (== 200) <$> proxyStatus e2e ("/npm/" <> psName publicOnlyPkg)
@@ -145,8 +145,8 @@ data Resolved = Resolved
     }
     deriving stock (Eq, Ord, Show)
 
-{- | The dependency graph npm resolved for a project, as @npm ls --all@ reports it: ordinary and
-peer edges alike. 'Left' carries the client's output when the listing fails or cannot be read.
+{- | The dependency graph npm resolved for a project, as @npm ls --all@ reports it: ordinary and peer
+edges alike. 'Left' carries the client's output when the listing fails or cannot be read.
 -}
 resolvedGraph :: NpmProject -> IO (Either Text (Set Resolved))
 resolvedGraph proj = do
@@ -173,8 +173,8 @@ edgesFrom :: Text -> Listed -> [Resolved]
 edgesFrom dependent (Listed _ needs) =
     concat [Resolved dependent name version : edgesFrom name need | (name, need@(Listed version _)) <- Map.toList needs]
 
-{- | Load a package from the project with @node@ and decode what its module exports. 'Left' carries
-the runtime's output when the load fails, as it does when a package the module requires is absent.
+{- | Load a package from the project with @node@ and decode what its module exports. 'Left' carries the
+runtime's output when the load fails, as it does when a package the module requires is absent.
 -}
 loadedExport :: NpmProject -> Text -> IO (Either Text Value)
 loadedExport proj package =
@@ -216,8 +216,8 @@ lockedSources tree = fromMaybe [] $ do
     packages <- parseMaybe (.: "packages") (lockfile :: Object)
     pure (mapMaybe (parseMaybe (.: "resolved")) (Map.elems (packages :: Map Text Object)))
 
-{- | Everything in a project that could supply an install without the registry: npm cache entries,
-a lockfile, and @node_modules@. A new project holds none.
+{- | Everything in a project that could supply an install without the registry: npm cache
+entries, a lockfile, and @node_modules@. A new project holds none.
 -}
 localInstallSources :: NpmProject -> IO [FilePath]
 localInstallSources proj = do

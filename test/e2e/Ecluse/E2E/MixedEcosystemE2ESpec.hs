@@ -2,26 +2,30 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Both mounts behind one proxy, driven by a real @npm@ client and a real @pip@ client in turn.
-The modules under an ecosystem directory each send their proxies one ecosystem's traffic.
+{- | Both mounts behind one proxy, driven by a real @npm@ client and a real @pip@ client in turn. The
+modules under an ecosystem directory each send their proxies one ecosystem's traffic.
 -}
-module Ecluse.E2E.MixedEcosystemE2ESpec (spec) where
+module Ecluse.E2E.MixedEcosystemE2ESpec (specWith) where
 
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (allowPkg, psName, psVersion)
 import Ecluse.E2E.Fixtures.PyPI (pypiProject)
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
 
 -- | Drive one product image with both real clients and local stores.
-spec :: Spec
-spec = whenE2EAvailable (aroundAll withGlobalDataPlane scenarios)
+specWith :: PhaseRecorder -> Spec
+specWith recorder = aroundAll (timedFixture recorder (withDataPlane mixedTopology)) (scenarios recorder)
 
-scenarios :: SpecWith GlobalDataPlane
-scenarios =
-    aroundAllWith withE2E $
+scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
+scenarios recorder =
+    aroundAllWith (timedFixtureWith recorder withE2E) $
         describe "one proxy, both mounts" $
-            it "serves an npm install, a pip install, and a second npm install in turn" $ \e2e -> do
+            it (caseLabel "mixed/alternating-clients" "serves an npm install, a pip install, and a second npm install in turn") $ \e2e -> do
                 npmInstallsAllowed e2e
                 advertisedFiles e2e pypiProject >>= pipInstallsWheel e2e
                 -- Mirror publication does not assert which leg serves the next install.
@@ -32,5 +36,8 @@ scenarios =
 npmInstallsAllowed :: E2E -> Expectation
 npmInstallsAllowed e2e =
     withNpmProject e2e $ \proj -> do
-        void $ npmInstallIn proj (psName allowPkg) >>= shouldSucceedThroughProxy e2e
-        installedVersion proj (psName allowPkg) `shouldReturn` Just (psVersion allowPkg)
+        installsObserved
+            InstallDriver
+                { installRun = (,) <$> npmInstallIn proj (psName allowPkg) <*> installedVersion proj (psName allowPkg)
+                , installExpected = Just (psVersion allowPkg)
+                }

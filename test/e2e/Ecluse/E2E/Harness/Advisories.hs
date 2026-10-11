@@ -28,7 +28,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportBase)
 import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
 import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic, PyPIPublic), stubUrl)
-import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
+import Ecluse.E2E.Harness.Types (GlobalDataPlane, ministackPort)
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
 
@@ -47,13 +47,14 @@ advisoryStoreEnv =
 -- | Retry bucket creation while ministack warms up. Repeated owner requests are idempotent.
 createAdvisoryBucket :: GlobalDataPlane -> IO ()
 createAdvisoryBucket gdp = do
+    port <- ministackPort gdp
+    let endpoint = "http://127.0.0.1:" <> show port <> "/" <> advisoryBucket
     manager <- newManager defaultManagerSettings
     credentialScope <- s3CredentialScope
-    created <- pollUntil 60 500000 id (attempt manager credentialScope)
+    created <- pollUntil 60 500000 id (attempt endpoint manager credentialScope)
     unless created (fail "ministack S3 never accepted the advisory bucket within the timeout")
   where
-    endpoint = "http://127.0.0.1:" <> show (gdpMiniPort gdp) <> "/" <> advisoryBucket
-    attempt manager credentialScope =
+    attempt endpoint manager credentialScope =
         handleAny (\_ -> pure False) $ do
             base <- parseRequest (toString endpoint)
             resp <- httpLbs base{method = "PUT", requestHeaders = [(hAuthorization, encodeUtf8 credentialScope)]} manager
