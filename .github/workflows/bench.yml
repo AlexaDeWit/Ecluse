@@ -1,4 +1,4 @@
-name: JSON fork formatting
+name: JSON fork formatting and lint
 on:
   workflow_dispatch:
     inputs:
@@ -20,6 +20,8 @@ jobs:
       - uses: ./.github/actions/setup-toolchain
       - name: Format the candidate
         run: nix develop .#ci --command task format
+      - name: Lint the formatted candidate
+        run: nix develop .#ci --command task lint
       - name: Save the formatting patch
         if: always()
         run: git diff --binary > source-format.patch
