@@ -55,6 +55,10 @@ reasonPins =
     , (RunsOnInstall "postinstall hook", "runs code on install: postinstall hook")
     , (RunsOnInstall "", "runs code on install: ")
     , (NothingRunsOnInstall, "no install-time code execution")
+    , (VersionYanked, "version is yanked")
+    , (VersionNotYanked, "version is not yanked")
+    , (VersionDeprecated, "version is deprecated")
+    , (VersionNotDeprecated, "version is not deprecated")
     , (InstallCodeUndetermined, "install-time code execution not yet determined")
     , (IdentityRevoked "thing@1.0.0", "identity thing@1.0.0 is revoked by operator")
     , (IdentityNotRevoked "thing@1.0.0", "identity is not the revoked thing@1.0.0")
@@ -88,6 +92,7 @@ reasonPins =
 inabilityPins :: [(Inability, Text)]
 inabilityPins =
     [ (PublishTimeUnread, "the publish time is not available")
+    , (AvailabilityUnread, "the availability flag is not available")
     , (InstallSignalUnread, "the install-time execution signal is not available")
     , (NoDatabaseLoaded, "no advisory database loaded")
     , (PushPastMaximum (AdvisoryAge pushedAt (9 * nominalDay) (6 * nominalDay)), "the advisory push is 9 days old, past the maximum of 6 days (pushed at 2026-06-11T00:00:00Z)")
@@ -119,6 +124,10 @@ data ReasonTag
     | PublishTimeUnknownTag
     | RunsOnInstallTag
     | NothingRunsOnInstallTag
+    | VersionYankedTag
+    | VersionNotYankedTag
+    | VersionDeprecatedTag
+    | VersionNotDeprecatedTag
     | InstallCodeUndeterminedTag
     | IdentityRevokedTag
     | IdentityNotRevokedTag
@@ -142,6 +151,10 @@ reasonTag = \case
     PublishTimeUnknown -> PublishTimeUnknownTag
     RunsOnInstall{} -> RunsOnInstallTag
     NothingRunsOnInstall -> NothingRunsOnInstallTag
+    VersionYanked -> VersionYankedTag
+    VersionNotYanked -> VersionNotYankedTag
+    VersionDeprecated -> VersionDeprecatedTag
+    VersionNotDeprecated -> VersionNotDeprecatedTag
     InstallCodeUndetermined -> InstallCodeUndeterminedTag
     IdentityRevoked{} -> IdentityRevokedTag
     IdentityNotRevoked{} -> IdentityNotRevokedTag
@@ -158,6 +171,7 @@ reasonTag = \case
 -- | One tag for each 'Inability' constructor, under the same guard as 'ReasonTag'.
 data InabilityTag
     = PublishTimeUnreadTag
+    | AvailabilityUnreadTag
     | InstallSignalUnreadTag
     | NoDatabaseLoadedTag
     | PushPastMaximumTag
@@ -171,6 +185,7 @@ data InabilityTag
 inabilityTag :: Inability -> InabilityTag
 inabilityTag = \case
     PublishTimeUnread -> PublishTimeUnreadTag
+    AvailabilityUnread -> AvailabilityUnreadTag
     InstallSignalUnread -> InstallSignalUnreadTag
     NoDatabaseLoaded -> NoDatabaseLoadedTag
     PushPastMaximum{} -> PushPastMaximumTag
@@ -350,6 +365,10 @@ oracleReason = \case
     PublishTimeUnknown -> "publish time is unknown"
     RunsOnInstall how -> "runs code on install: " <> how
     NothingRunsOnInstall -> "no install-time code execution"
+    VersionYanked -> "version is yanked"
+    VersionNotYanked -> "version is not yanked"
+    VersionDeprecated -> "version is deprecated"
+    VersionNotDeprecated -> "version is not deprecated"
     InstallCodeUndetermined -> "install-time code execution not yet determined"
     IdentityRevoked ident -> "identity " <> ident <> " is revoked by operator"
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
@@ -374,6 +393,7 @@ oracleMetric = \case
 oracleInability :: Inability -> Text
 oracleInability = \case
     PublishTimeUnread -> "the publish time" <> " is not available"
+    AvailabilityUnread -> "the availability flag is not available"
     InstallSignalUnread -> "the install-time execution signal" <> " is not available"
     NoDatabaseLoaded -> "no advisory database loaded"
     PushPastMaximum observed ->
@@ -415,6 +435,10 @@ genReason =
         , pure PublishTimeUnknown
         , RunsOnInstall <$> genFact
         , pure NothingRunsOnInstall
+        , pure VersionYanked
+        , pure VersionNotYanked
+        , pure VersionDeprecated
+        , pure VersionNotDeprecated
         , pure InstallCodeUndetermined
         , IdentityRevoked <$> genFact
         , IdentityNotRevoked <$> genFact
@@ -433,6 +457,7 @@ genInability :: Gen Inability
 genInability =
     Gen.choice
         [ pure PublishTimeUnread
+        , pure AvailabilityUnread
         , pure InstallSignalUnread
         , pure NoDatabaseLoaded
         , PushPastMaximum <$> (AdvisoryAge <$> genInstant <*> genDuration <*> genDuration)

@@ -326,6 +326,16 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
                 `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
 
+    describe "availability rule phases" $
+        for_ [("DenyIfYanked" :: Text, DenyIfYanked), ("DenyIfDeprecated", DenyIfDeprecated)] $ \(ty, rule) ->
+            it ("preserves, widens and disables " <> toString ty) $ do
+                let added = "{\"rules\":{\"availability\":{\"type\":\"" <> encodeUtf8 ty <> "\"}}}"
+                    limited = RulePolicy (Map.singleton "availability" (admissionOnly (atPrecedence 300 rule)))
+                resolveJsonOver emptyPolicy added `shouldBe` Right [atPrecedence 300 rule]
+                resolveJsonOver limited "{\"rules\":{\"availability\":{\"precedence\":350}}}" `shouldBe` Right [admissionOnly (atPrecedence 350 rule)]
+                resolveJsonOver limited "{\"rules\":{\"availability\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}" `shouldBe` Right [atPrecedence 300 rule]
+                resolveJsonOver limited "{\"rules\":{\"availability\":{\"enabled\":false}}}" `shouldBe` Right []
+
     describe "rule-type name contract" $ do
         it "uses the canonical typed vocabulary for diagnostic names" $
             knownRuleTypes `shouldBe` map renderWire (universe :: [RuleType])
@@ -386,7 +396,7 @@ appliesToSpec = describe "appliesTo, the phases a rule applies at" $ do
 
         it "admits admission alone on each of the four deny types, and refuses it on each of the four allow types" $ do
             let limited ty = [resolveJsonOver emptyPolicy (limitedToAdmission body) | (known, body) <- knownRuleAdds, known == ty]
-                denies = ["DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
+                denies = ["DenyIfYanked", "DenyIfDeprecated", "DenyByIdentity", "DenyInstallTimeExecution", "DenyIfCve", "DenyIfEpss"]
                 allows = ["AllowByIdentity", "AllowScope", "AllowIfOlderThan", "AllowIfRemediatesCve"]
             (denies <> allows) `shouldMatchList` knownRuleTypes
             for_ denies $ \ty -> map (fmap (map ruleReach)) (limited ty) `shouldBe` [Right [AdmissionOnly]]
@@ -549,6 +559,8 @@ knownRuleAdds =
     , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
     , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}")
     , ("DenyIfEpss", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}")
+    , ("DenyIfYanked", "{\"rules\":{\"r\":{\"type\":\"DenyIfYanked\"}}}")
+    , ("DenyIfDeprecated", "{\"rules\":{\"r\":{\"type\":\"DenyIfDeprecated\"}}}")
     , ("DenyInstallTimeExecution", "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\"}}}")
     , ("DenyByIdentity", "{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}}")
     ]

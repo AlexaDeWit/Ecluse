@@ -12,6 +12,8 @@ module Ecluse.Core.Registry.Npm.Adapter (
 
 import Data.Map.Strict qualified as Map
 
+import Ecluse.Core.Rules.Types (RuleType (DenyIfYankedType))
+
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
@@ -35,7 +37,7 @@ npmAdapter :: RegistryAdapter
 npmAdapter =
     RegistryAdapter
         { adapterEcosystem = Npm
-        , adapterRuleBlocks = Map.empty
+        , adapterRuleBlocks = Map.singleton DenyIfYankedType "npm reports no yank flag. Removed releases disappear from its metadata."
         , adapterServe =
             AdapterServe
                 { serveRouter = NpmRoute.npmRouter

@@ -10,10 +10,13 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
-import Ecluse.Test.Json (fieldAt)
+import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
 import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
@@ -23,6 +26,7 @@ import UnliftIO.Exception (throwIO)
 spec :: Spec
 spec = do
     mergeSpec
+    availabilitySpec
     cacheSpec
     noSurvivorsSpec
     edgeAuthSpec
@@ -630,3 +634,20 @@ instance Exception NoETag
 -- | The validator a conditional case echoes back on its second request.
 etagOf :: SResponse -> IO ByteString
 etagOf = maybe (throwIO NoETag) pure . header "ETag"
+
+availabilitySpec :: Spec
+availabilitySpec = describe "admission-only deprecation policy" $
+    for_ [(False, "obsolete release line" :: Text, 403), (False, "", 200), (True, "obsolete release line", 200)] $ \(stored, notice, expected) ->
+        it ("serves deprecated stored=" <> show stored <> ", notice=" <> toString notice) $ do
+            let version = withKeys ["deprecated" .= notice] (plainVersion "1.0.0")
+                metadata = encodePackument (packument [("1.0.0", version)] "1.0.0" [("1.0.0", publishedDaysAgo 30)])
+            publicUp <- servingUpstream metadata
+            privateUp <- if stored then servingUpstream metadata else failingUpstream
+            queue <- newTestMemoryQueue
+            rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfDeprecated), atDefaultPrecedence (AllowIfOlderThan 0)]
+            let privateLeg = if stored then id else withPrivateBaseUrl Nothing
+            withProxyEnvQueueDeps queue privateUp publicUp Nothing (\deps -> privateLeg deps{pdRules = rules}) $ \app _ _ -> do
+                response <- getThing Nothing app
+                status response `shouldBe` expected
+                unless stored $ seenAuth privateUp `shouldReturn` []
+                when (expected == 403) $ simpleBody response `shouldSatisfy` (not . T.isInfixOf "obsolete release line" . decodeUtf8 . LBS.toStrict)

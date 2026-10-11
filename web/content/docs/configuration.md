@@ -290,7 +290,7 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships eight built-in rule types, catalogued below. A shipped name patches the rule it names,
+Écluse ships ten built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
 type's knobs, and a knob written under a type that does not read it fails the load. The table lists
 the types from the highest default precedence to the lowest, so an earlier row wins over a later
@@ -299,6 +299,8 @@ one:
 | Type | On by default | Description | Knobs |
 |---|---|---|---|
 | `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
+| `DenyIfDeprecated` | No | Denies a version carrying the npm deprecation flag, including whole packages and release lines. | None |
+| `DenyIfYanked` | No | Denies a PyPI release only when every file is yanked. | None |
 | `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides both advisory denies. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
@@ -306,6 +308,40 @@ one:
 | `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine and without consulting the advisory database. | `scope`, without the leading `@` |
 | `AllowIfRemediatesCve` | Yes | Provided by default with the name `remediation-fast-track`. Admits the exact fixed version a synced advisory names, ahead of the quarantine, if no other advisory still affects it. | None |
 | `AllowIfOlderThan` | Yes | Provided by default with the name `min-age`. Holds each new public version for the quarantine window, so a malicious publish is usually found and yanked before a build can install it. | `ageSeconds` (7 days by default) |
+
+`DenyIfYanked` and `DenyIfDeprecated` are opt-in and default to precedence 300, above every default allow.
+Both read typed flags. Refusals state the flag without quoting an upstream notice.
+An empty npm `deprecated` string clears deprecation. A PyPI release with mixed yanked and available
+files remains admitted as a whole unless another rule refuses it.
+
+Limit either deny to admission to refuse new public admission and queued mirror writes while keeping
+previously mirrored versions retrievable through trusted private reads:
+
+```yaml
+mounts:
+  npm:
+    rules:
+      deny-deprecated:
+        type: DenyIfDeprecated
+        appliesTo: [admission]
+  pypi:
+    rules:
+      deny-yanked:
+        type: DenyIfYanked
+        appliesTo: [admission]
+```
+
+Deprecation also marks obsolete packages and entire release lines. Enabling `DenyIfDeprecated`
+can refuse all versions that a dependency range selects, not only isolated withdrawn releases.
+The yank rule is the PyPI yank setting. There is no separate configuration key.
+PyPI mirroring remains tracked in [#765](https://github.com/AlexaDeWit/Ecluse/issues/765).
+
+Without `appliesTo`, either deny also applies at revocation. The Dredger reads the store's own
+metadata, so a later public yank or deprecation does not update the stored flag by itself.
+An admission-only rule never authorises deletion. Other revocation rules can still condemn the copy.
+These flags do not detect a malicious release removed from registry metadata.
+Known-malicious withdrawal ([#1128](https://github.com/AlexaDeWit/Ecluse/issues/1128)) and withdrawal
+writes ([#1098](https://github.com/AlexaDeWit/Ecluse/issues/1098)) remain separate work.
 
 The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
 The default applies only when you enable the npm mount. It does not enable a mount itself.
@@ -345,14 +381,16 @@ Each adapter declares the rule types its ecosystem blocks, with a reason.
 Boot and `ecluse check-config` refuse every blocked entry in each active mount's resolved policy.
 A higher allow or an admission-only phase does not clear a blocked entry.
 Disabled mounts and rules removed with `enabled: false` produce no block refusal.
-npm blocks none of the built-in types. PyPI blocks these two:
+The following types are blocked:
 
 | Ecosystem | Blocked type | Reason |
 |---|---|---|
 | pypi | `DenyInstallTimeExecution` | Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release. |
+| npm | `DenyIfYanked` | npm reports no yank flag. Removed releases disappear from its metadata. |
+| pypi | `DenyIfDeprecated` | The PyPI adapter supplies no deprecation flag. |
 | pypi | `AllowScope` | A PyPI project name has no scope, so this rule can never match one. |
 
-Move either type from shared `rules` into `mounts.npm.rules`:
+Move `DenyInstallTimeExecution`, `AllowScope`, or `DenyIfDeprecated` from shared `rules` into `mounts.npm.rules`:
 
 ```yaml
 mounts:

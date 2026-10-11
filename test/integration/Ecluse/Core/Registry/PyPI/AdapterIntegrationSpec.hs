@@ -26,7 +26,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfYanked))
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -38,13 +38,14 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (pypiServeDeps)
 import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, selfBaseUrl)
 
 spec :: Spec
 spec = do
     indexSpec
+    availabilitySpec
     conditionalFloorSpec
     artifactSpec
     negotiationSpec
@@ -410,3 +411,31 @@ withoutSidecars = Object . (\fields -> foldr (KeyMap.delete . Key.fromText) fiel
 
 namedKeyFailure :: Text -> SomeException -> Bool
 namedKeyFailure key = T.isInfixOf key . toText . displayException
+
+availabilitySpec :: Spec
+availabilitySpec = describe "admission-only yank policy" $ do
+    for_ [(False, status200), (True, status403)] $ \(allYanked, expected) ->
+        it ("gates listings and distribution files with all files yanked=" <> show allYanked) $ do
+            rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
+            withPyPIProxyOver (yankedIndex allYanked) publicPypiDeps $ \proxy -> do
+                let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
+                listing <- getIndex app
+                simpleStatus listing `shouldBe` expected
+                artifact <- getPath sdistPath app
+                simpleStatus artifact `shouldBe` expected
+                when allYanked $ for_ [listing, artifact] $ \response ->
+                    decodeUtf8 (LBS.toStrict (simpleBody response)) `shouldSatisfy` (not . T.isInfixOf "withdrawn notice must not enter refusals")
+    it "keeps a previously mirrored yanked release retrievable from trusted metadata" $ do
+        rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfYanked), atDefaultPrecedence (AllowIfOlderThan 0)]
+        withPrivatePyPIProxy (yankedIndex True) $ \proxy -> do
+            let app = proxyWithDeps proxy (\deps -> deps{pdRules = rules})
+            simpleStatus <$> getIndex app `shouldReturn` status200
+            simpleStatus <$> getPath sdistPath app `shouldReturn` status200
+
+yankedIndex :: Bool -> Text -> Value
+yankedIndex allYanked authority = withKeys ["files" .= files] (publicIndex authority)
+  where
+    files =
+        [ withKeys ["yanked" .= allYanked] (fileOn authority "requests-2.34.2-py3-none-any.whl")
+        , withKeys ["yanked" .= ("withdrawn notice must not enter refusals" :: Text)] (fileOn authority "requests-2.34.2.tar.gz")
+        ]

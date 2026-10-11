@@ -73,19 +73,15 @@ import Ecluse.Core.Rules.Render (renderDecision, renderInability, renderReason)
 import Ecluse.Core.Rules.Types
 import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
--- | Identity alone for the fixture package, the evidence an authenticated store listing carries.
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
 
--- | Put a rule at an explicit precedence (the operator-override form).
 at :: Int -> Rule -> PrecededRule
 at = atPrecedence
 
--- | Decide a policy through 'prepare' and 'evalRules' under the supplied capabilities.
 decideWith :: RuleDeps -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideWith deps prs ev = prepare deps prs >>= \prepared -> evalRules ctx prepared ev
 
--- | 'decideWith' for the pure built-ins, which consult no capability.
 decide :: [PrecededRule] -> RuleEvidence -> IO Decision
 decide = decideWith inertRuleDeps
 
@@ -674,6 +670,7 @@ ruleSentenceSpec = describe "the sentence each built-in rule's reason reads as" 
 
 spec :: Spec
 spec = do
+    availabilitySpec
     expirySpec
     evidenceSpec
     sourceHealthSpec
@@ -1265,3 +1262,17 @@ spec = do
         it "an affecting advisory with no EPSS score still abstains" $
             decideWith (depsWith (affecting Nothing Nothing)) [atDefaultPrecedence (denyEpssAt 0.5)] (listed Nothing)
                 >>= (`shouldSatisfy` isBlockedByDefault)
+
+availabilitySpec :: Spec
+availabilitySpec = describe "availability denies" $
+    for_ [(DenyIfYanked, Yanked, VersionYanked, VersionNotYanked), (DenyIfDeprecated, Deprecated, VersionDeprecated, VersionNotDeprecated)] $ \(rule, flag, denied, absent) -> do
+        for_ [Available, Deprecated, Yanked] $ \actual ->
+            it (toString (ruleName rule) <> " reads only its own flag: " <> show actual) $
+                evalRule inertRuleDeps ctx rule (pkg Nothing 30){evAvailability = Known actual}
+                    `shouldReturn` if actual == flag then Deny Nothing denied else NoDecision absent
+        it (toString (ruleName rule) <> " refuses unread availability") $
+            evalRule inertRuleDeps ctx rule (listed Nothing) `shouldReturn` CannotVet FailDeny AvailabilityUnread
+        it (toString (ruleName rule) <> " outranks a default identity allow and permits an explicit override") $ do
+            let evidence = (pkg Nothing 30){evAvailability = Known flag}
+            blockedBy <$> decide (map atDefaultPrecedence [rule, AllowByIdentity "thing"]) evidence `shouldReturn` Just (ruleName rule)
+            admittedBy <$> decide [atDefaultPrecedence rule, atPrecedence 350 (AllowByIdentity "thing")] evidence `shouldReturn` Just "AllowByIdentity"
