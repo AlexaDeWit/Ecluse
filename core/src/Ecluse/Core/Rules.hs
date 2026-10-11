@@ -95,7 +95,7 @@ data AdvisoryGeneration = AdvisoryGeneration
 withCveLookup :: RuleDeps -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
 withCveLookup deps use = case rdAdvisoryDatabase deps of
     NoAdvisoryDatabase -> use Nothing
-    AdvisoryDatabase borrow -> borrow (`agLookup` use)
+    AdvisoryDatabase borrow -> borrow (\AdvisoryGeneration{agLookup} -> agLookup use)
 
 -- | One package's advisory rows and the generation that served them, or 'Nothing' while none is loaded.
 type AdvisoryRows = Maybe (DbEtag, PackageAdvisories)
