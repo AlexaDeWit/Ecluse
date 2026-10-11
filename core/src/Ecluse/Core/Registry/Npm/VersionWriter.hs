@@ -21,9 +21,7 @@ module Ecluse.Core.Registry.Npm.VersionWriter (
 ) where
 
 import Control.Monad.ST (ST)
-import Data.Aeson (FromJSON (parseJSON), Object, Value (..))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (FromJSON (parseJSON), Value (..))
 import Data.Aeson.Types (parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
@@ -36,7 +34,7 @@ import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer, discard, newWriter, sealValue)
 import Ecluse.Core.Registry.Npm.Project (installHooks)
-import Ecluse.Core.Registry.Npm.Wire (Dist, License, Person, VersionManifest (..), availability, distFields)
+import Ecluse.Core.Registry.Npm.Wire (Dist, License, Person, VersionManifest (..), availability, distFields, distFromFields, licenseFromFields, personFromFields)
 
 -- | One read's packed storage and the role of the next value.
 data VersionWriter st = VersionWriter
@@ -48,19 +46,26 @@ data VersionWriter st = VersionWriter
 -- | A completed value. Invalid facts require the existing whole-release diagnostic decoder.
 data VersionValue
     = ScalarValue Value
+    | DistValue (Maybe Dist)
+    | LicenseValue (Maybe License)
+    | PersonValue Bool
+    | StringCommand
     | ScriptValue (Maybe (Map Text Text))
     | ReleaseValue (Maybe VersionManifest)
     | Unobserved
 
 data Role = Release | ScalarField | DistObject | LicenseObject | PersonObject | Scripts | Command | Ignore
 
-data VersionFrame = VersionFrame Frame ObservedFields (Set Text)
+data VersionFrame
+    = VersionFrame Frame ObservedFields (Set Text)
+    | IgnoredFrame Frame VersionValue
 
 data ObservedFields
     = ReleaseFields Manifest
-    | ObjectFields Role Object
+    | DistFields (Maybe Text) (Maybe (Maybe Text)) (Maybe (Maybe Text)) (Maybe Int)
+    | LicenseFields (Maybe (Maybe Text)) (Maybe (Maybe Text))
+    | PersonFields (Maybe (Maybe Text)) (Maybe (Maybe Text)) (Maybe (Maybe Text))
     | ScriptFields (Maybe (Map Text Text))
-    | IgnoredFields
 
 data Manifest = Manifest
     { manifestName :: Maybe Text
@@ -100,57 +105,84 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     type Items (VersionWriter st) = Int
     sharedString writer entry next =
         sharedString (packedWriter writer) entry $ \() ->
-            observeString writer (entryString entry) next
+            observeScalar writer True (entryString entry) >>= next
     ownString writer name next =
         ownString (packedWriter writer) name $ \() ->
-            observeString writer (String (nameText name)) next
+            observeScalar writer True (String (nameText name)) >>= next
     integer writer number next =
-        integer (packedWriter writer) number (\() -> next (ScalarValue (Number (fromIntegral number))))
-    whole writer value next = whole (packedWriter writer) value (\() -> next (ScalarValue value))
-    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> next (ScalarValue (Array mempty)))
+        integer (packedWriter writer) number (\() -> observeScalar writer False (Number (fromIntegral number)) >>= next)
+    whole writer value next = whole (packedWriter writer) value (\() -> observeScalar writer False value >>= next)
+    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer False (Array mempty) >>= next)
     openObject writer next = openObject (packedWriter writer) $ \frame -> do
         role <- readMutVar (nextRole writer)
         writeMutVar (nextRole writer) Ignore
-        next (VersionFrame frame (fieldsFor role) mempty)
-    beginMember writer key (VersionFrame frame fields seen) next =
-        beginMember (packedWriter writer) key frame $ \repeated -> do
-            writeMutVar (nextRole writer) (memberRole fields (memberText key))
-            next (repeated || Set.member (memberText key) seen)
-    addMember writer key value (VersionFrame frame fields seen) next =
-        addMember (packedWriter writer) key () frame $ \frame' ->
-            next (VersionFrame frame' (addField (memberText key) value fields) (rememberOwn fields key seen))
+        next $! case fieldsFor role of
+            Just fields -> VersionFrame frame fields mempty
+            Nothing -> IgnoredFrame frame $ case role of
+                Ignore -> Unobserved
+                _ -> ScalarValue (Object mempty)
+    beginMember writer key frame next = case frame of
+        IgnoredFrame packed _ -> beginMember (packedWriter writer) key packed next
+        VersionFrame packed fields seen ->
+            beginMember (packedWriter writer) key packed $ \repeated -> do
+                let duplicate =
+                        repeated || case key of
+                            OwnKey _ -> Set.member (memberText key) seen
+                            SharedKey _ -> False
+                writeMutVar (nextRole writer) (if duplicate then Ignore else memberRole fields (memberText key))
+                next duplicate
+    addMember writer key value frame next = case frame of
+        -- The packed writer returns the same frame after each member.
+        IgnoredFrame packed _ -> addMember (packedWriter writer) key () packed (const (next frame))
+        VersionFrame packed fields seen ->
+            addMember (packedWriter writer) key () packed $ \packed' ->
+                next (VersionFrame packed' (addField (memberText key) value fields) (rememberOwn key value seen))
     dropValue writer _ = dropValue (packedWriter writer) ()
-    closeObject writer (VersionFrame frame fields _) next =
-        closeObject (packedWriter writer) frame (\() -> next (finishFields fields))
+    closeObject writer frame next = case frame of
+        IgnoredFrame packed value -> closeObject (packedWriter writer) packed (\() -> next value)
+        VersionFrame packed fields _ -> closeObject (packedWriter writer) packed (\() -> next (finishFields fields))
     openArray writer next = do
         writeMutVar (nextRole writer) Ignore
         openArray (packedWriter writer) next
     addItem writer _ = addItem (packedWriter writer) ()
     closeArray writer count items next = closeArray (packedWriter writer) count items (\() -> next (ScalarValue (Array mempty)))
+    {-# INLINE sharedString #-}
+    {-# INLINE ownString #-}
+    {-# INLINE integer #-}
+    {-# INLINE whole #-}
+    {-# INLINE emptyContainer #-}
+    {-# INLINE openObject #-}
+    {-# INLINE beginMember #-}
+    {-# INLINE addMember #-}
+    {-# INLINE dropValue #-}
+    {-# INLINE closeObject #-}
+    {-# INLINE openArray #-}
+    {-# INLINE addItem #-}
+    {-# INLINE closeArray #-}
 
-observeString :: VersionWriter st -> Value -> (VersionValue -> ST st r) -> ST st r
-observeString writer value next = do
+observeScalar :: VersionWriter st -> Bool -> Value -> ST st VersionValue
+observeScalar writer stringToken value = do
     role <- readMutVar (nextRole writer)
-    next $! case role of
-        Command -> ScriptValue (Just mempty)
+    pure $! case role of
+        Command | stringToken -> StringCommand
         Ignore -> Unobserved
         _ -> ScalarValue value
+{-# INLINE observeScalar #-}
 
-rememberOwn :: ObservedFields -> MemberKey -> Set Text -> Set Text
-rememberOwn fields key seen = case key of
-    OwnKey _ -> case memberRole fields (memberText key) of
-        Ignore -> seen
-        _ -> Set.insert (memberText key) seen
-    SharedKey _ -> seen
+rememberOwn :: MemberKey -> VersionValue -> Set Text -> Set Text
+rememberOwn key value seen = case (key, value) of
+    (OwnKey _, Unobserved) -> seen
+    (OwnKey _, _) -> Set.insert (memberText key) seen
+    (SharedKey _, _) -> seen
 
-fieldsFor :: Role -> ObservedFields
+fieldsFor :: Role -> Maybe ObservedFields
 fieldsFor = \case
-    Release -> ReleaseFields (Manifest Nothing Nothing Nothing Available (Just Nothing) (Just mempty) (Just Nothing) True)
-    Scripts -> ScriptFields (Just mempty)
-    role@DistObject -> ObjectFields role mempty
-    role@LicenseObject -> ObjectFields role mempty
-    role@PersonObject -> ObjectFields role mempty
-    _ -> IgnoredFields
+    Release -> Just (ReleaseFields (Manifest Nothing Nothing Nothing Available (Just Nothing) (Just mempty) (Just Nothing) True))
+    Scripts -> Just (ScriptFields (Just mempty))
+    DistObject -> Just (DistFields Nothing (Just Nothing) (Just Nothing) Nothing)
+    LicenseObject -> Just (LicenseFields (Just Nothing) (Just Nothing))
+    PersonObject -> Just (PersonFields (Just Nothing) (Just Nothing) (Just Nothing))
+    _ -> Nothing
 
 memberRole :: ObservedFields -> Text -> Role
 memberRole fields key = case fields of
@@ -164,32 +196,35 @@ memberRole fields key = case fields of
         "deprecated" -> ScalarField
         "hasInstallScript" -> ScalarField
         _ -> Ignore
-    ObjectFields role _
-        | key `elem` objectMembers role -> ScalarField
-        | otherwise -> Ignore
+    DistFields{} -> if key `elem` distFields then ScalarField else Ignore
+    LicenseFields{} -> if key == "type" || key == "url" then ScalarField else Ignore
+    PersonFields{} -> if key == "name" || key == "email" || key == "url" then ScalarField else Ignore
     ScriptFields _ -> Command
-    IgnoredFields -> Ignore
-
-objectMembers :: Role -> [Text]
-objectMembers = \case
-    DistObject -> distFields
-    LicenseObject -> ["type", "url"]
-    PersonObject -> ["name", "email", "url"]
-    _ -> []
 
 addField :: Text -> VersionValue -> ObservedFields -> ObservedFields
 addField key value = \case
     ReleaseFields manifest -> ReleaseFields (addManifest key value manifest)
-    ObjectFields role fields -> case value of
-        ScalarValue scalar | key `elem` objectMembers role -> ObjectFields role (KeyMap.insert (Key.fromText key) scalar fields)
-        _ -> ObjectFields role fields
+    fields@(DistFields tarball shasum integrity size) -> case (key, value) of
+        ("tarball", ScalarValue scalar) -> DistFields (parseMaybe parseJSON scalar) shasum integrity size
+        ("shasum", ScalarValue scalar) -> DistFields tarball (parseMaybe parseJSON scalar) integrity size
+        ("integrity", ScalarValue scalar) -> DistFields tarball shasum (parseMaybe parseJSON scalar) size
+        ("unpackedSize", ScalarValue scalar) -> DistFields tarball shasum integrity (force (parseMaybe parseJSON scalar))
+        _ -> fields
+    fields@(LicenseFields kind url) -> case (key, value) of
+        ("type", ScalarValue scalar) -> LicenseFields (parseMaybe parseJSON scalar) url
+        ("url", ScalarValue scalar) -> LicenseFields kind (parseMaybe parseJSON scalar)
+        _ -> fields
+    fields@(PersonFields name email url) -> case (key, value) of
+        ("name", ScalarValue scalar) -> PersonFields (parseMaybe parseJSON scalar) email url
+        ("email", ScalarValue scalar) -> PersonFields name (parseMaybe parseJSON scalar) url
+        ("url", ScalarValue scalar) -> PersonFields name email (parseMaybe parseJSON scalar)
+        _ -> fields
     ScriptFields scripts -> ScriptFields $ do
         held <- scripts
         case value of
-            ScriptValue (Just _) -> Just (keepHook key held)
+            StringCommand -> Just (keepHook key held)
             ScalarValue scalar -> parseMaybe (parseJSON @Text) scalar $> keepHook key held
             _ -> Nothing
-    IgnoredFields -> IgnoredFields
 
 keepHook :: Text -> Map Text Text -> Map Text Text
 keepHook key scripts
@@ -198,6 +233,9 @@ keepHook key scripts
 
 addManifest :: Text -> VersionValue -> Manifest -> Manifest
 addManifest key value manifest = case (key, value) of
+    ("dist", DistValue dist) -> manifest{manifestDist = dist}
+    ("license", LicenseValue licence) -> manifest{manifestLicense = Just <$> licence}
+    ("_npmUser", PersonValue valid) -> manifest{manifestPublisher = valid}
     ("scripts", ScriptValue scripts) -> manifest{manifestScripts = scripts}
     (_, ScalarValue scalar) -> case key of
         "name" -> manifest{manifestName = parseMaybe parseJSON scalar}
@@ -223,7 +261,7 @@ finishFields = \case
             <*> manifestInstallScript manifest
             <*> manifestScripts manifest
             <*> manifestLicense manifest
-    ObjectFields _ fields -> ScalarValue (Object fields)
+    DistFields tarball shasum integrity size -> DistValue (distFromFields tarball shasum integrity (Just size))
+    LicenseFields kind url -> LicenseValue (licenseFromFields kind url)
+    PersonFields name email url -> PersonValue (isJust (personFromFields name email url))
     ScriptFields scripts -> ScriptValue scripts
-    -- Wire validation needs the object's kind, without retaining its children.
-    IgnoredFields -> ScalarValue (Object mempty)

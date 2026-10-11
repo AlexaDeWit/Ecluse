@@ -123,12 +123,8 @@ projectArtifact version dist =
         , artSize = distUnpackedSize dist
         }
   where
-    -- A malformed digest is absent, never degenerate: no bogus fingerprint may pass the
-    -- public-integrity admission gate (security.md invariant 5).
     toHash :: HashAlg -> Text -> Maybe Hash
     toHash alg = rightToMaybe . mkHash alg
-    -- One 'Hash' per @integrity@ component, so the admission floor and the worker's tamper
-    -- gate rank and verify each digest exactly.
     sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 

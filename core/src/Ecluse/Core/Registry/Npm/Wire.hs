@@ -6,11 +6,14 @@
 module Ecluse.Core.Registry.Npm.Wire (
     -- * Shared scalars
     Person (..),
+    personFromFields,
     License (..),
+    licenseFromFields,
 
     -- * The @dist@ object
     Dist (..),
     distFields,
+    distFromFields,
 
     -- * Per-version manifest
     VersionManifest (..),
@@ -42,11 +45,13 @@ instance FromJSON Person where
     parseJSON = \case
         String name -> pure (Person name Nothing Nothing)
         Object o ->
-            Person
-                <$> o .:? "name" .!= ""
-                <*> o .:? "email"
-                <*> o .:? "url"
+            personFromFields (o .:? "name") (o .:? "email") (o .:? "url")
         other -> typeMismatchOneOf "Person (object or string)" other
+
+-- | Apply the person defaults to fields validated by the tree or packed read.
+personFromFields :: (Applicative f) => f (Maybe Text) -> f (Maybe Text) -> f (Maybe Text) -> f Person
+personFromFields name email url = Person . fromMaybe "" <$> name <*> email <*> url
+{-# INLINE personFromFields #-}
 
 -- | A declared license, in npm's modern string form or its legacy object form.
 data License
@@ -60,10 +65,13 @@ instance FromJSON License where
     parseJSON = \case
         String spdx -> pure (LicenseSpdx spdx)
         Object o ->
-            LicenseObject
-                <$> o .:? "type" .!= ""
-                <*> o .:? "url"
+            licenseFromFields (o .:? "type") (o .:? "url")
         other -> typeMismatchOneOf "License (object or string)" other
+
+-- | Apply the legacy licence default to validated fields without requiring an object.
+licenseFromFields :: (Applicative f) => f (Maybe Text) -> f (Maybe Text) -> f License
+licenseFromFields kind url = LicenseObject . fromMaybe "" <$> kind <*> url
+{-# INLINE licenseFromFields #-}
 
 -- | Artifact coordinates and digests that serving and mirroring preserve.
 data Dist = Dist
@@ -84,11 +92,12 @@ distFields = ["tarball", "shasum", "integrity", "unpackedSize"]
 
 instance FromJSON Dist where
     parseJSON = withObject "Dist" $ \o ->
-        Dist
-            <$> o .: "tarball"
-            <*> o .:? "shasum"
-            <*> o .:? "integrity"
-            <*> lenientOptional o "unpackedSize"
+        distFromFields (o .: "tarball") (o .:? "shasum") (o .:? "integrity") (lenientOptional o "unpackedSize")
+
+-- | Join the required tarball, validated digests and lenient size in either read representation.
+distFromFields :: (Applicative f) => f Text -> f (Maybe Text) -> f (Maybe Text) -> f (Maybe Int) -> f Dist
+distFromFields tarball shasum integrity size = Dist <$> tarball <*> shasum <*> integrity <*> size
+{-# INLINE distFromFields #-}
 
 -- | A release's policy inputs. Dependency maps and maintainers stay outside the typed facts.
 data VersionManifest = VersionManifest

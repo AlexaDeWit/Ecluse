@@ -274,13 +274,15 @@ integratedFactsSpec = describe "production direct facts against the frozen base"
         baseSources <- traverse (expectRight . readWith baseFullRead) bodies
         directSources <- traverse (expectRight . readWith directFullRead) bodies
         for_ [False, True] $ \firstTree -> for_ [False, True] $ \secondTree -> do
-            let treeIf wanted source = if wanted then second (uncurry (.) npmCached) source else source
-                forms = zipWith treeIf [firstTree, secondTree]
+            let treeIf wanted source = if wanted then traverse (fmap (fst npmCached) . snd npmCached) source else Just source
+                forms = zipWithM treeIf [firstTree, secondTree]
                 updated (info, doc) = (info{infoVersions = Map.map (\details -> details{pkgPublishedAt = Nothing}) (Map.delete "1.0.0" (infoVersions info)), infoDistTags = mempty}, doc)
                 evidence sources = listingEvidence (zip bodies (map Right sources))
+            baseForms <- expectRight (maybeToRight ("expected base document forms" :: Text) (forms baseSources))
+            directForms <- expectRight (maybeToRight ("expected direct document forms" :: Text) (forms directSources))
             for_ [id, map updated] $ \update -> do
-                expected@(_, _, tag) <- expectRight (maybeToRight ("expected base listing" :: Text) (evidence (update (forms baseSources))))
-                actual@(_, rendered, actualTag) <- expectRight (maybeToRight ("expected direct listing" :: Text) (evidence (update (forms directSources))))
+                expected@(_, _, tag) <- expectRight (maybeToRight ("expected base listing" :: Text) (evidence (update baseForms)))
+                actual@(_, rendered, actualTag) <- expectRight (maybeToRight ("expected direct listing" :: Text) (evidence (update directForms)))
                 actual `shouldBe` expected
                 rendered `shouldSatisfy` isRight
                 for_ [[], [(hIfNoneMatch, "*")], [(hIfNoneMatch, "\"different\"")], [(hIfNoneMatch, encodeUtf8 (renderETag tag))], [(hIfNoneMatch, "W/" <> encodeUtf8 (renderETag tag))]] $ \headers ->
@@ -325,9 +327,9 @@ integratedReleases =
         <> [("dist " <> toString field <> " " <> show value, policyRelease [("dist", withKeys [(field, value)] dist)]) | field <- ["tarball", "shasum", "integrity", "unpackedSize"], value <- values <> [Number 1.5, Number 9223372036854775808]]
         <> [("object " <> toString field <> "." <> toString member <> " " <> show value, policyRelease [(field, object [Key.fromText member .= value])]) | (field, members) <- [("license", ["type", "url"]), ("_npmUser", ["name", "email", "url"])], member <- members, value <- values]
         <> [("script command " <> show value, policyRelease [("scripts", object ["build" .= value, "install" .= ("" :: Text)])]) | value <- values]
-        <> [("duplicate " <> toString field <> " " <> show first, policyRelease [(field, first), (field, second)]) | field <- ["license", "_npmUser", "hasInstallScript", "scripts", "name", "version", "dist"], (first, second) <- [(Null, Bool False), (Bool False, Null), (object [], Array mempty), (Array mempty, object [])]]
-        <> [("first script " <> show first, BS.dropEnd 1 (policyRelease []) <> ",\"scripts\":" <> rawObject [("build", first), ("build", second), ("install", String "")] <> "}") | (first, second) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
-        <> [("nested duplicate " <> toString field <> "." <> toString member <> " " <> show first, BS.dropEnd 1 (rawObject [("name", String "thing"), ("version", String "wire-version")]) <> "," <> BL.toStrict (encode field) <> ":" <> rawObject ([(member, first), (member, second)] <> required) <> (if field == "dist" then "}" else ",\"dist\":{\"tarball\":\"a.tgz\"}}")) | (field, member, required) <- [("license", "type", []), ("license", "url", []), ("_npmUser", "email", []), ("dist", "tarball", []), ("dist", "integrity", [("tarball", String "a.tgz")])], (first, second) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
+        <> [("duplicate " <> toString field <> " " <> show firstValue, policyRelease [(field, firstValue), (field, laterValue)]) | field <- ["license", "_npmUser", "hasInstallScript", "scripts", "name", "version", "dist"], (firstValue, laterValue) <- [(Null, Bool False), (Bool False, Null), (object [], Array mempty), (Array mempty, object [])]]
+        <> [("first script " <> show firstValue, BS.dropEnd 1 (policyRelease []) <> ",\"scripts\":" <> rawObject [("build", firstValue), ("build", laterValue), ("install", String "")] <> "}") | (firstValue, laterValue) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
+        <> [("nested duplicate " <> toString field <> "." <> toString member <> " " <> show firstValue, BS.dropEnd 1 (rawObject [("name", String "thing"), ("version", String "wire-version")]) <> "," <> BL.toStrict (encode field) <> ":" <> rawObject ([(member, firstValue), (member, laterValue)] <> required) <> (if field == "dist" then "}" else ",\"dist\":{\"tarball\":\"a.tgz\"}}")) | (field, member, required) <- [("license", "type", []), ("license", "url", []), ("_npmUser", "email", []), ("dist", "tarball", []), ("dist", "integrity", [("tarball", String "a.tgz")])], (firstValue, laterValue) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
         <> [("tarball hole " <> toString url, policyRelease [("dist", object ["tarball" .= url])]) | url <- ["https://source.example/", "https://source.example/a.tgz ", "relative.tgz", "https://source.example/\233.tgz", "https://source.example/%2F.tgz", ""]]
         <> [("Unicode commands and legacy licence", policyRelease [("scripts", object ["build" .= ("\233\128578" :: Text), "postinstall" .= ("" :: Text)]), ("license", object ["type" .= ("MIT OR Apache-2.0" :: Text)]), ("_npmUser", object ["name" .= ("\233\128578" :: Text)]), ("hasInstallScript", Bool False)])]
   where
@@ -336,10 +338,10 @@ integratedReleases =
 
 duplicateBodies :: [ByteString]
 duplicateBodies =
-    ["{\"name\":\"thing\",\"versions\":{\"alias\":" <> first <> ",\"alias\":" <> second <> "},\"versions\":{\"other\":" <> policyRelease [] <> "}}" | (first, second) <- [(policyRelease [], "null"), ("null", policyRelease []), (policyRelease [("scripts", Bool False)], policyRelease [])]]
-        <> ["{\"name\":\"thing\",\"versions\":" <> first <> ",\"versions\":" <> second <> "}" | (first, second) <- [("null", versions), ("[]", versions), (versions, "[]"), (versions, "null")]]
+    ["{\"name\":\"thing\",\"versions\":{\"alias\":" <> firstValue <> ",\"alias\":" <> laterValue <> "},\"versions\":{\"other\":" <> policyRelease [] <> "}}" | (firstValue, laterValue) <- [(policyRelease [], "null"), ("null", policyRelease []), (policyRelease [("scripts", Bool False)], policyRelease [])]]
+        <> ["{\"name\":\"thing\",\"versions\":" <> firstValue <> ",\"versions\":" <> laterValue <> "}" | (firstValue, laterValue) <- [("null", versions), ("[]", versions), (versions, "[]"), (versions, "null")]]
         <> ["{\"name\":\"thing\",\"versions\":" <> versions <> ",\"time\":{\"alias\":false,\"alias\":\"2020-01-01T00:00:00Z\"},\"time\":{},\"dist-tags\":{\"latest\":7,\"latest\":\"alias\"},\"dist-tags\":{\"other\":\"alias\"}}"]
-        <> ["{\"name\":" <> first <> ",\"name\":\"thing\",\"versions\":" <> versions <> "}" | first <- ["null", "false", "\"thing\"", "\"different\""]]
+        <> ["{\"name\":" <> firstValue <> ",\"name\":\"thing\",\"versions\":" <> versions <> "}" | firstValue <- ["null", "false", "\"thing\"", "\"different\""]]
   where
     versions = "{\"alias\":" <> policyRelease [] <> "}"
 

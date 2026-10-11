@@ -30,14 +30,15 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (..), Availability (..), CodeExecSignal (..), Hash, HashAlg (SHA1), PackageDetails (..), PackageInfo (..), PackageName, mkHash, mkSriHashes)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (Provenance (..), mergePackuments)
+import Ecluse.Core.Registry.CachedDocument (npmPacked)
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable, renderPlan)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), Walked (..), withElement)
 import Ecluse.Core.Registry.Json.Writer (decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
-import Ecluse.Core.Registry.Npm.Filter (assemblePackedPackument)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Project (projectVersionEntryResult, projectVersionManifest)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmFieldOf (..), NpmRead (FullRead), npmFields)
@@ -60,6 +61,7 @@ spec :: Spec
 spec = describe "VersionWriter" $ do
     literalSpec
     genericSpec
+    typedFieldsSpec
     growthSpec
     generatedSpec
     assemblySpec
@@ -204,9 +206,9 @@ genericSequence sealing mode count chunks = readOutcome (walkWritingChunks (Meta
         let loop remaining table facts tokens
                 | remaining <= 0 = pure (Finished (reverse facts))
                 | otherwise = withElement tokens $ \element rest ->
-                    readShape writer (Generic 16) mode table element rest $ \value table' after -> do
+                    readShape writer (Generic 16) mode table element rest $ \value table' afterValue -> do
                         if sealing then void (sealVersion writer tarballHole) else discardVersion writer
-                        loop (remaining - 1) table' (versionFacts value : facts) after
+                        loop (remaining - 1) table' (versionFacts value : facts) afterValue
         pure (loop count (testTable releaseUniqueFields) [])
 
 genericBaseSequence :: Bool -> Mode -> Int -> [ByteString] -> Either LimitError (Int, Either Bool [Maybe VersionManifest])
@@ -218,11 +220,11 @@ genericBaseSequence sealing mode count chunks = readOutcome (walkWritingChunks (
         let loop remaining table facts tokens
                 | remaining <= 0 = pure (Finished (reverse facts))
                 | otherwise = withElement tokens $ \element rest ->
-                    readShape writer (Generic 16) mode table element rest $ \() table' after -> do
+                    readShape writer (Generic 16) mode table element rest $ \() table' afterValue -> do
                         sealed <- sealValue writer tarballHole
                         raw <- decodeWhole writer sealed
                         unless sealing (discard writer)
-                        loop (remaining - 1) table' (genericExpected raw : facts) after
+                        loop (remaining - 1) table' (genericExpected raw : facts) afterValue
         pure (loop count (testTable releaseUniqueFields) [])
 
 genericContainers :: [(String, ByteString)]
@@ -285,6 +287,20 @@ generatedSpec = modifyMaxSuccess (const 2000) $ do
         body <- forAll genServablePackumentBytes
         chunks <- forAll (genChunks body)
         directRead 64 True chunks === baseRead 64 True chunks
+
+typedFieldsSpec :: Spec
+typedFieldsSpec = describe "typed object field parity" $
+    for_ [("license", ["type", "url"]), ("_npmUser", ["name", "email", "url"]), ("dist", ["shasum", "integrity", "unpackedSize"])] $ \(container, keys) ->
+        for_ keys $ \key ->
+            it ("validates the first " <> toString container <> "." <> toString key <> " including null defaults") $
+                for_ [("null", "false"), ("false", "null"), ("\"ok\"", "{}"), ("{}", "\"ok\"")] $ \(first', later) -> do
+                    let fields = "\"" <> key <> "\":" <> first' <> ",\"" <> key <> "\":" <> later
+                        release =
+                            if container == "dist"
+                                then requiredRelease "dist" ("{\"tarball\":\"a.tgz\"," <> fields <> "}")
+                                else extended ("\"" <> container <> "\":{" <> fields <> "}")
+                    for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
+                    for_ [Share, Keep] $ \mode -> assertGeneric mode release
 
 assemblySpec :: Spec
 assemblySpec = it "assembles mixed sources from unchanged blobs and frozen policy facts" $ do
@@ -430,10 +446,10 @@ successful result = do
 assemble :: [Observation] -> Maybe ByteString
 assemble observations = do
     let entries = zip [0 ..] observations
-        sources = Map.fromList [(sid, Snapshot (digestOf ("source" <> show sid)) (document observation)) | (sid, observation) <- entries]
+        sources = Map.fromList [(sid, Snapshot (digestOf ("source" <> show sid)) (fst npmPacked (document observation))) | (sid, observation) <- entries]
         infos = [(if sid == 0 then GatedSource else TrustedSource, Snapshot (digestOf ("source" <> show sid)) (info observation)) | (sid, observation) <- entries]
     plan <- mergePackuments infos
-    renderPlan (assemblePackedPackument "https://proxy.example/npm" sources plan (document <$> listToMaybe observations))
+    toStrict <$> rightToMaybe (serialiseMergedDocument (assembleMergedDocument "https://proxy.example/npm" sources plan (fst npmPacked . document <$> listToMaybe observations)))
   where
     document observation = PackedPackument (KeyMap.singleton "name" (String "thing")) (observedTable observation) (KeyMap.fromList [(Key.fromText key, value) | (key, value) <- observedVersions observation])
     info observation = PackageInfo name (Map.fromList [(key, details) | (key, (_, Right details)) <- observedFacts observation]) mempty []
@@ -489,7 +505,7 @@ data FrozenPerson = FrozenPerson
 
 instance FromJSON FrozenPerson where
     parseJSON = \case
-        String name -> pure (FrozenPerson name Nothing Nothing)
+        String publisher -> pure (FrozenPerson publisher Nothing Nothing)
         Object o ->
             FrozenPerson
                 <$> o .:? "name" .!= ""
@@ -563,13 +579,13 @@ instance FromJSON FrozenVersionEntry where
         withObject "npm version object" (\o -> FrozenVersionEntry <$> parseJSON v <* (o .:? "_npmUser" :: Parser (Maybe FrozenPerson))) v
 
 frozenProjectVersionEntryResult :: PackageName -> Version -> Maybe UTCTime -> Value -> Either String PackageDetails
-frozenProjectVersionEntryResult name version publishedAt value =
-    frozenProjectDetails name version publishedAt <$> parseEither parseJSON value
+frozenProjectVersionEntryResult requested version publishedAt value =
+    frozenProjectDetails requested version publishedAt <$> parseEither parseJSON value
 
 frozenProjectDetails :: PackageName -> Version -> Maybe UTCTime -> FrozenVersionEntry -> PackageDetails
-frozenProjectDetails name version publishedAt (FrozenVersionEntry vm) =
+frozenProjectDetails requested version publishedAt (FrozenVersionEntry vm) =
     PackageDetails
-        { pkgName = name
+        { pkgName = requested
         , pkgVersion = version
         , pkgPublishedAt = publishedAt
         , pkgInstallCode = frozenInstallCode vm
