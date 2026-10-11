@@ -267,10 +267,10 @@ launch :: ProxySettings -> PodShape -> Maybe FilePath -> FilePath -> Int -> Mayb
 launch settings shape root dir publicPort privatePort = do
     (port, controlPort, scrapePort) <- distinctPorts
     self <- getExecutablePath
-    cores <- getNumCapabilities
+    capabilities <- getNumCapabilities
     base <- getEnvironment
     manager <- newManager defaultManagerSettings{managerResponseTimeout = responseTimeoutMicro 60_000_000}
-    let environment = proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) publicPort privatePort base
+    let environment = proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort) publicPort privatePort base
         commandIn = \case
             Nothing -> proc self [serveProxyFlag]
             -- The shell joins the cgroup and then becomes the proxy, so the boot already sees its limits.
@@ -344,7 +344,7 @@ distinctPorts = do
 plus the RTS statistics flag and the scenario's.
 -}
 proxyEnvironment :: ProxySettings -> PodShape -> Int -> FilePath -> (Int, Int, Int) -> Int -> Maybe Int -> [(String, String)] -> [(String, String)]
-proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) publicPort privatePort base =
+proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort) publicPort privatePort base =
     filter (inherited . fst) base <> map (bimap toString toString) (fixed <> pinned)
   where
     -- The proxy reads its whole configuration from here, so nothing of the harness's own leaks in.
@@ -384,8 +384,8 @@ proxyEnvironment settings shape cores dir (port, controlPort, scrapePort) public
             , ("ECLUSE_RUNTIME__PUBLIC_CONNECTIONS_PER_HOST",) . show <$> psPublicConnections settings
             , ("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST",) . show <$> psPrivateConnections settings
             , ("BENCH_PROXY_NOW",) . toText . iso8601Show <$> psClock settings
-            , -- Unbounded, the harness's own capability count stands in for the missing CPU quota.
-              ("ECLUSE_RUNTIME__CORES", show cores) <$ guard (shape == Unlimited)
+            , -- Without a quota, runtime.cores sets GHC capabilities to the harness's count.
+              ("ECLUSE_RUNTIME__CORES", show capabilities) <$ guard (shape == Unlimited)
             ]
             <> foldMap advisories (psAdvisories settings)
 

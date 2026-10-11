@@ -47,6 +47,7 @@ logMessages = mapMaybe $ \line -> case decodeStrict line of
 -- | The limits a proxy resolved, in bytes or requests. Each is 'Nothing' when no line states it.
 data BootLimits = BootLimits
     { blCpuAdmission :: Maybe Int
+    -- ^ Serve-admission limit in requests, explicit or derived from GHC capabilities.
     , blMemoryBudgetBytes :: Maybe Int
     -- ^ The metadata memory budget at boot. The proxy's sampler moves it at run time.
     , blCacheBytes :: Maybe Int

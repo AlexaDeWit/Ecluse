@@ -29,7 +29,7 @@ import Data.Text qualified as T
 -- | Either no limit, or a CPU quota and a memory limit applied together.
 data PodShape
     = Unlimited
-    | -- | Whole cores, and the memory limit in bytes.
+    | -- | CPU-time quota in whole CPU equivalents, and the memory limit in bytes, with no CPU affinity restriction.
       Limited Int Int
     deriving stock (Eq, Ord, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
@@ -42,7 +42,7 @@ mib, gib :: Int
 mib = 1024 * 1024
 gib = 1024 * mib
 
--- | Parse @unlimited@, @\<cores\>cpu-\<size\>mib@ or @\<cores\>cpu-\<size\>gib@.
+-- | Parse @unlimited@ or a CPU-time quota and memory limit, such as @2cpu-1gib@ or @2cpu-512mib@.
 parsePodShape :: Text -> Either Text PodShape
 parsePodShape raw = case T.splitOn "-" (T.toLower (T.strip raw)) of
     ["unlimited"] -> Right Unlimited
@@ -67,7 +67,7 @@ renderPodShape = \case
         | bytes `mod` gib == 0 -> show cpus <> "cpu-" <> show (bytes `div` gib) <> "gib"
         | otherwise -> show cpus <> "cpu-" <> show (bytes `div` mib) <> "mib"
 
--- | The @cpu.max@ body granting whole cores over the kernel's default 100 ms period.
+-- | The @cpu.max@ body allowing 100 ms of CPU time per CPU equivalent in each 100 ms period.
 cpuMaxValue :: Int -> Text
 cpuMaxValue cpus = show (cpus * 100_000) <> " 100000"
 

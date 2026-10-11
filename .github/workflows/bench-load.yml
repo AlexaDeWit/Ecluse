@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       pod-shape:
-        description: "Pod shape the measured proxy runs under, or thrash for the GC-thrash probe alone"
+        description: "Proxy CPU-time quota and memory limit (2cpu means two CPUs' worth of time), or thrash for the GC-thrash probe"
         type: choice
         options:
           - all
@@ -79,6 +79,7 @@ jobs:
       # The probe sets its own shape per step, so the shape here only matters for the passes.
       BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
       BENCH_LOAD_THRASH_LIMITS_MIB: ${{ matrix.pod-shape == 'thrash' && (inputs.thrash-limits-mib || '2048,1536,1024,768,512') || '' }}
+      # CPU-time quota in CPU equivalents, not GHC capabilities.
       BENCH_LOAD_THRASH_CPUS: "2"
     steps:
       - name: Checkout
@@ -119,10 +120,9 @@ jobs:
           set -eo pipefail
           # This shell, and so the harness, joins the leaf beside the proxy cgroups.
           echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
-          # The runner has 4 cores. The harness pins oha to core 0, and GHC takes the other
-          # 3 as capabilities. The driver passes -T -N3 to each scenario child through GHCRTS,
-          # because argv RTS flags do not survive the re-exec. Each proxy gets only -T, since
-          # its own boot sizes its capabilities from its cgroup.
+          # oha is pinned to logical CPU 0. -N3 sets three GHC capabilities for the harness
+          # and scenario children via GHCRTS. It does not reserve CPUs or exclude CPU 0.
+          # Each proxy gets only -T and derives its own capabilities at boot.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # Off main only: the runs on main are the baseline, and each pod shape takes the
