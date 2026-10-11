@@ -375,10 +375,10 @@ The existing `Measurement` record supplies allocation and major-GC live samples.
 `compact_byte_estimate` reports the representation estimate separately.
 
 Capture the child process's peak RSS externally, for example with GNU `time`.
-That peak includes the runtime, input, useful output, parser buffers and native lexer allocations.
-RTS allocation and live bytes do not include every native allocation. Report both scopes.
-The native lexer uses batches proportional to the chunk size, and can construct scalar number
-tokens while skipping unknown fields. It never retains a complete unknown value tree.
+That peak includes the runtime, input, output, and foreign library allocations.
+RTS allocation and live bytes do not include every foreign allocation. Report both scopes.
+The Haskell lexer scans immutable chunks and can construct scalar number tokens while skipping
+unknown fields. It never retains a complete unknown value tree.
 
 Results include source SHA-256, consumed bytes, version count, byte ceiling and a status.
 Refusals and empty results return a failing exit status. A larger ceiling used for isolated parser
