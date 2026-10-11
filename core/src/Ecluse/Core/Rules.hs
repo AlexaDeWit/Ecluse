@@ -9,6 +9,7 @@ module Ecluse.Core.Rules (
     -- * The boot-bound rule capabilities
     RuleDeps (..),
     AdvisoryDatabase (..),
+    AdvisoryGeneration (..),
     withCveLookup,
 
     -- * The built-in rule dispatch
@@ -67,42 +68,46 @@ import Ecluse.Core.Version (renderVersion)
 data RuleDeps = RuleDeps
     { rdAdvisoryDatabase :: AdvisoryDatabase
     , rdCurrentAdvisoryEtag :: IO (Maybe DbEtag)
-    {- ^ A non-pinning read of the active 'DbEtag'. It holds no generation open, so it never
-    delays a shadow-swap.
-    -}
+    -- ^ Read the active ETag without pinning or delaying a swap.
     , rdBreakerReporter :: BreakerReporter
     -- ^ Where advisory rules report breaker transitions, as @ecluse.rule.breaker.state@.
     , rdSourceReporter :: SourceReporter
-    {- ^ Where each advisory rule a request reaches reports whether it could consult the source, so
-    an outage is observed as a transition rather than once per request.
-    -}
+    -- ^ Report source availability as outage transitions for each reached advisory rule.
     , rdAdvisoryFreshness :: IO AdvisoryFreshness
-    {- ^ How old the serving artifact's push is, read again for every package read. The wall
-    clock alone ages it, so an unchanged artifact expires in a warm process.
-    -}
+    -- ^ The live slot age for the Dredger's final deletion check. Advisory reads use their borrowed age.
     }
 
 -- | An ecosystem's advisory database, as configuration fixes it at boot.
 data AdvisoryDatabase
     = NoAdvisoryDatabase
-    | -- | Bracketed access to the lookup and ETag acquired together, 'Nothing' until a generation loads.
-      AdvisoryDatabase (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a)
+    | -- | Hold one generation's age reading and lookup access together through the caller's action.
+      AdvisoryDatabase (forall a. (AdvisoryGeneration -> IO a) -> IO a)
+
+-- | The age and lookup capabilities borrowed from one advisory generation.
+data AdvisoryGeneration = AdvisoryGeneration
+    { agFreshness :: IO AdvisoryFreshness
+    -- ^ Assess the borrowed publication timestamp against the existing clock and maximum age.
+    , agLookup :: forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
+    -- ^ Access the borrowed lookup. Query failures belong to the caller's resilience policy.
+    }
 
 -- | Borrow the loaded generation, or 'Nothing' when none is configured or none has loaded yet.
 withCveLookup :: RuleDeps -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
 withCveLookup deps use = case rdAdvisoryDatabase deps of
     NoAdvisoryDatabase -> use Nothing
-    AdvisoryDatabase borrow -> borrow use
+    AdvisoryDatabase borrow -> borrow (`agLookup` use)
 
 -- | One package's advisory rows and the generation that served them, or 'Nothing' while none is loaded.
 type AdvisoryRows = Maybe (DbEtag, PackageAdvisories)
 
-{- | Pin a generation and read one package's rows through it, their bounds parsed once for all its
-versions. A query fault escapes to the caller.
--}
+-- | Pin a generation and parse its package rows once for all versions. Query faults escape.
 readAdvisories :: RuleDeps -> PackageName -> IO AdvisoryRows
 readAdvisories deps name =
-    withCveLookup deps (traverse (\(etag, cve) -> (etag,) . packageAdvisories (pkgEcosystem name) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name))))
+    withCveLookup deps (readGenerationAdvisories name)
+
+readGenerationAdvisories :: PackageName -> Maybe (DbEtag, CveLookup) -> IO AdvisoryRows
+readGenerationAdvisories name =
+    traverse (\(etag, cve) -> (etag,) . packageAdvisories (pkgEcosystem name) <$> cveAdvisoriesFor cve (TS.toText (pkgCanonical name)))
 
 -- | Where a built-in rule's verdict comes from.
 data VerdictSource
@@ -119,9 +124,7 @@ data AdvisoryAlignment = AdvisoryAlignment
     -- ^ The rule's configured alignment for a timeout, a spent retry budget, or an open breaker.
     }
 
-{- | The single dispatch over the closed vocabulary. A rule that reads a fact nothing supplied
-refuses rather than abstaining, so the fold stops at it.
--}
+-- | Dispatch the closed rule vocabulary. An unread required fact refuses instead of abstaining.
 verdictSource :: Rule -> VerdictSource
 verdictSource = \case
     AllowScope scope -> FromEvidence $ \_ ev -> case pkgNamespace (evName ev) of
@@ -209,16 +212,12 @@ data RuleEval
     | -- | A verdict for each version from the evaluator's one advisory read of the package.
       PerPackage PackageRead
 
-{- | An advisory rule: how to make the evaluator's shared read when this rule reaches it first, and
-how the rule decides from that read.
--}
+-- | A rule's bracketed advisory read and its verdict over the shared result.
 data PackageRead = PackageRead
-    { prFreshness :: IO AdvisoryFreshness
-    -- ^ The push-age reading, taken ahead of the breaker.
+    { prRead :: forall a. PackageName -> (AdvisoryFreshness -> IO AdvisoryRows -> IO a) -> IO a
+    -- ^ Hold the assessed generation open while the caller gates its age and reads its rows.
     , prResilience :: Maybe Resilience
     -- ^ The policy around the read, or 'Nothing' where no database is configured and the read does no IO.
-    , prRows :: PackageName -> IO AdvisoryRows
-    -- ^ The package's rows in one pinned generation.
     , prAlignment :: AdvisoryAlignment
     -- ^ How this rule resolves an ineligible push and a faulted read.
     , prVerdict :: AdvisoryRows -> RuleEvidence -> RuleVerdict
@@ -233,9 +232,7 @@ prepResilience rule = case prepEval rule of
     PerVersion _ -> Nothing
     PerPackage packageRead -> prResilience packageRead
 
-{- | Allocate each advisory rule's breaker once. With no advisory database configured, an advisory
-rule's read does no IO and returns the rule's fixed verdict, so it runs without resilience.
--}
+-- | Allocate each advisory rule's breaker once. Unconfigured databases need no resilience.
 prepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
 prepare deps = traverse (prepareRule deps)
 
@@ -253,13 +250,18 @@ advisoryRead deps alignment verdict = do
         AdvisoryDatabase _ -> Just <$> newResilience deps
     pure
         PackageRead
-            { prFreshness = rdAdvisoryFreshness deps
+            { prRead = withAdvisoryRead deps
             , prResilience = resilience
-            , prRows = readAdvisories deps
             , prAlignment = alignment
             , prVerdict = verdict
             , prReporter = rdSourceReporter deps
             }
+
+withAdvisoryRead :: RuleDeps -> PackageName -> (AdvisoryFreshness -> IO AdvisoryRows -> IO a) -> IO a
+withAdvisoryRead deps package use = case rdAdvisoryDatabase deps of
+    AdvisoryDatabase borrow ->
+        borrow (\generation -> agFreshness generation >>= \freshness -> use freshness (agLookup generation (readGenerationAdvisories package)))
+    NoAdvisoryDatabase -> rdAdvisoryFreshness deps >>= \freshness -> use freshness (pure Nothing)
 
 newResilience :: RuleDeps -> IO Resilience
 newResilience deps = do
@@ -281,9 +283,7 @@ bootOrder = sortOn (\r -> bootKey (prepPrecedence r) (prepName r))
 bootKey :: Int -> Text -> (Down Int, Text)
 bootKey prec name = (Down prec, name)
 
-{- | One line per configured rule, in the order 'bootOrder' evaluates the rules prepared from them,
-with the phases each applies at.
--}
+-- | Render each rule and its phases in the order 'bootOrder' evaluates them.
 renderBootOrder :: [PrecededRule] -> [Text]
 renderBootOrder rules = zipWith line [1 :: Int ..] (sortOn (\r -> bootKey (rulePrecedence r) (ruleName (prRule r))) rules)
   where
@@ -359,8 +359,8 @@ data AdvisoryRead
     | PushIneligible Inability
     | ReadGivenUp ReadFault
 
-{- One rule's evaluation of every version from the shared read, made by this rule if it is the first
-reached. The rule reports once per package whether the read let it consult the source. -}
+-- One rule's evaluation of every version from the shared read, made by this rule if it is the first
+-- reached. The rule reports once per package whether the read let it consult the source.
 decideFromRead :: Text -> PackageRead -> PackageCell (Either Text AdvisoryRead) -> RuleEvidence -> IO (Either Text (RuleEvidence -> RuleEvaluation))
 decideFromRead name packageRead shared reaching =
     heldFor shared package (caught (readShared packageRead package)) >>= \case
@@ -371,15 +371,15 @@ decideFromRead name packageRead shared reaching =
   where
     package = evName reaching
 
-{- The push-age gate, then the rows under the reading rule's resilience. The gate runs ahead of
-breaker admission, which an open breaker would otherwise skip past. -}
+-- The push-age gate, then the rows under the reading rule's resilience. The gate runs ahead of
+-- breaker admission, which an open breaker would otherwise skip past.
 readShared :: PackageRead -> PackageName -> IO AdvisoryRead
 readShared packageRead package =
-    prFreshness packageRead >>= \freshness -> case pushInability freshness of
+    prRead packageRead package $ \freshness rows -> case pushInability freshness of
         Just why -> pure (PushIneligible why)
         Nothing -> case prResilience packageRead of
-            Nothing -> RowsRead <$> prRows packageRead package
-            Just res -> either ReadGivenUp RowsRead <$> runResilient res (prRows packageRead package)
+            Nothing -> RowsRead <$> rows
+            Just res -> either ReadGivenUp RowsRead <$> runResilient res rows
 
 -- One rule's evaluation of each version, under its own alignments. A fault resolves all alike.
 resolveRead :: PackageRead -> AdvisoryRead -> RuleEvidence -> RuleEvaluation
@@ -455,9 +455,7 @@ decisive name = \case
     Unavailable transience FailDeny why -> Just (Undecidable transience (RuleUnable name why))
     Unavailable _ FailNoDecision _ -> Nothing
 
-{- | Why a push is not eligible evidence, or 'Nothing' while it is. A serving generation the store
-gave no publication time for reads as unverified, because its age cannot be established.
--}
+-- | Return why expired or undated evidence is unavailable, or 'Nothing' while it is eligible.
 pushInability :: AdvisoryFreshness -> Maybe Inability
 pushInability = \case
     AdvisoryFresh -> Nothing

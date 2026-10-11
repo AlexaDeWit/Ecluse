@@ -27,7 +27,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules (
-    AdvisoryDatabase (AdvisoryDatabase),
+    AdvisoryDatabase,
     PackageRead (..),
     PreparedRule (..),
     RuleDeps (rdAdvisoryDatabase, rdAdvisoryFreshness, rdSourceReporter),
@@ -74,6 +74,8 @@ import Ecluse.Test.Rules (
     revocation,
     sentences,
     servingRuleDeps,
+    staticAdvisoryDatabase,
+    withAdvisoryFreshness,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestClock)
@@ -462,7 +464,7 @@ provenanceSpec = describe "advisory evidence" $
             retried = advisoryRuleDeps "retry" "RETRY" pass
             deps =
                 inertRuleDeps
-                    { rdAdvisoryDatabase = AdvisoryDatabase $ \use -> do
+                    { rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) $ \use -> do
                         attempt <- atomicModifyIORef' attempts (\n -> (n + 1, n))
                         withCveLookup (if attempt == 0 then failed else retried) use
                     }
@@ -520,7 +522,7 @@ countingDeps rows = do
         counted = served{cveAdvisoriesFor = \name -> modifyIORef' (scReads calls) (+ 1) *> cveAdvisoriesFor served name}
         deps =
             inertRuleDeps
-                { rdAdvisoryDatabase = AdvisoryDatabase (\use -> modifyIORef' (scPins calls) (+ 1) *> use (Just (DbEtag "counted", counted)))
+                { rdAdvisoryDatabase = staticAdvisoryDatabase (AdvisoryFresh <$ modifyIORef' (scFreshness calls) (+ 1)) (\use -> modifyIORef' (scPins calls) (+ 1) *> use (Just (DbEtag "counted", counted)))
                 , rdAdvisoryFreshness = AdvisoryFresh <$ modifyIORef' (scFreshness calls) (+ 1)
                 }
     pure (deps, calls)
@@ -593,7 +595,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
 
     it "has every rule reached report once per request, a shared fault with its detail" $ do
         (captured, reporter) <- capturingSourceReporter
-        let deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> throwIO (TestContractEscape "advisory database exploded")), rdSourceReporter = reporter}
+        let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> throwIO (TestContractEscape "advisory database exploded")), rdSourceReporter = reporter}
         rules <- withKnobs fastConfig <$> prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), quarantine])
         void (decideRequest rules requestVersions)
         readIORef captured >>= \reports -> case reverse reports of
@@ -603,7 +605,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
             other -> expectationFailure ("expected one report per rule reached, got " <> show other)
 
     it "leaves a reusing rule's breaker untouched when the shared read fails" $ do
-        let deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> throwIO TestSourceUnavailable)}
+        let deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> throwIO TestSourceUnavailable)}
         rules <- withKnobs fastConfig{ecBreakerThreshold = 5} <$> prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowIfRemediatesCve, quarantine])
         void (decideRequest rules requestVersions)
         traverse (fmap breakerPhase . readTVarIO . resBreaker) (mapMaybe prepResilience rules) `shouldReturn` [Closed 1, Closed 0, Closed 0]
@@ -616,7 +618,7 @@ sharedReadSpec = describe "one read shared by every advisory rule" $ do
         map (isJust . prepResilience) rules `shouldBe` replicate 4 False
         decisions <- decideRequest rules requestVersions
         readIORef freshness `shouldReturn` 1
-        unloaded <- prepare inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use Nothing)} policy
+        unloaded <- prepare inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> use Nothing)} policy
         traverse (evalRules ctx unloaded) requestVersions `shouldReturn` decisions
         map skippedChecks decisions
             `shouldSatisfy` all
@@ -637,7 +639,7 @@ faultedPolicy fault policy = do
             Hangs -> serving{rdAdvisoryDatabase = countedDatabase pins (\use -> threadDelay 1_000_000 *> withCveLookup serving use)}
             Throws -> serving{rdAdvisoryDatabase = countedDatabase pins (\_ -> throwIO TestSourceUnavailable)}
             BreakerOpen -> serving{rdAdvisoryDatabase = countedDatabase pins (withCveLookup serving)}
-            PushExpired -> serving{rdAdvisoryDatabase = countedDatabase pins (withCveLookup serving), rdAdvisoryFreshness = pure expired}
+            PushExpired -> withAdvisoryFreshness (pure expired) serving{rdAdvisoryDatabase = countedDatabase pins (withCveLookup serving)}
         expired = assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (9 * nominalDay)) now))
         knobs = withKnobs fastConfig{ecTimeout = 5_000, ecBackoff = [0, 0], ecBreakerThreshold = 5}
     rules <- knobs <$> prepare deps (policy <> [atDefaultPrecedence quarantine])
@@ -649,7 +651,7 @@ faultedPolicy fault policy = do
     pure (opened, pins)
 
 countedDatabase :: IORef Int -> (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a) -> AdvisoryDatabase
-countedDatabase pins access = AdvisoryDatabase (\use -> modifyIORef' pins (+ 1) *> access use)
+countedDatabase pins access = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> modifyIORef' pins (+ 1) *> access use)
 
 openReaderBreaker :: [PreparedRule] -> IO [PreparedRule]
 openReaderBreaker rules = do
@@ -726,7 +728,7 @@ heldThrowSpec :: Spec
 heldThrowSpec = describe "a throw outside the harness is held for the request" $ do
     it "refuses every version when the push-age reading throws, reading it once" $ do
         (throwing, readings) <- counting (throwIO (TestContractEscape "clock gone"))
-        rule <- mapPackageRead (\packageRead -> packageRead{prFreshness = throwing}) <$> constRule "GateBomb" 300 fastConfig FailNoDecision (Allow remediation)
+        rule <- mapPackageRead (\packageRead -> packageRead{prRead = \_ use -> throwing >>= \freshness -> use freshness (pure Nothing)}) <$> constRule "GateBomb" 300 fastConfig FailNoDecision (Allow remediation)
         decisions <- decideRequest [rule, pureAt 200 (AllowScope (mkScope "myorg"))] requestVersions
         decisions `shouldSatisfy` all (\case Undecidable _ reason -> "GateBomb: the rule threw" `T.isPrefixOf` renderReason reason; _ -> False)
         readIORef readings `shouldReturn` 1
@@ -757,7 +759,7 @@ breakerSpec = describe "the breaker counts requests" $ do
         decisions `shouldAllResolve` (Undecidable (WillResolve Nothing) (RuleUnable "DenyIfCve" SourceBreakerOpen), ["DenyIfCve: the rule source circuit breaker is open"])
         readIORef readCount `shouldReturn` 5
   where
-    faultingDeps readCount = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> modifyIORef' readCount (+ 1) *> throwIO TestSourceUnavailable)}
+    faultingDeps readCount = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> modifyIORef' readCount (+ 1) *> throwIO TestSourceUnavailable)}
     faultingDeny = newIORef (0 :: Int) >>= \readCount -> withKnobs defaultEffectfulConfig{ecBackoff = []} <$> prepare (faultingDeps readCount) [atDefaultPrecedence cveRule]
     breakerOf rules = traverse (readTVarIO . resBreaker) (listToMaybe (mapMaybe prepResilience rules))
 
@@ -766,7 +768,7 @@ generationSpec = forM_ [False, True] $ \recovering -> describe ("one response re
     it "decides every version against the generation its first read pinned, across a swap" $ do
         slot <- newCveSlot
         swapIn slot (DbEtag "first") Nothing (fakeCveDb [("thing", AdvisoryRange "FIRST" (Just 9.8) Nothing Unbounded Nothing)])
-        prepared <- prepare inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
+        prepared <- prepare inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot)} [atDefaultPrecedence cveRule]
         rules <- recoveryRules recovering prepared
         decide <- newEvaluator ctx rules
         let first' = deniedBy "DenyIfCve" "first" Cvss 7.0 "FIRST"
@@ -785,7 +787,7 @@ generationSpec = forM_ [False, True] $ \recovering -> describe ("one response re
         let swapOnce _ =
                 unlessM (atomicModifyIORef' swapped (True,)) $
                     swapIn slot (DbEtag "b") Nothing (fakeCveDb [("thing", AdvisoryRange "B-0001" (Just 7.5) Nothing Unbounded (Just 0.4))])
-            deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
+            deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot), rdSourceReporter = noSourceReporter{reportSource = swapOnce}}
         prepared <- prepare deps (map atDefaultPrecedence [DenyIfCve (DenyIfCveParams 7.0 FailDeny), DenyIfEpss (DenyIfEpssParams 0.5 FailDeny), quarantine])
         rules <- recoveryRules recovering prepared
         decideRequest rules requestVersions

@@ -41,6 +41,10 @@ rule is **effectful** when that read runs under a resilience policy, which is wh
 database is configured. Without one, an advisory rule's verdict is fixed at boot, and the read does
 no IO.
 
+The advisory read pins the database generation before assessing its publication age.
+The age gate and the query use that generation's store timestamp and rows, even if a sync swaps the slot between them.
+An unchanged ETag can advance publication time for later reads without changing an already borrowed snapshot.
+
 ### Evaluation model
 
 Each rule applied to a `RuleEvidence` value yields a `RuleVerdict`, a deterministic answer, never

@@ -10,6 +10,8 @@ module Ecluse.Test.Rules (
     inertRuleDeps,
     servingRuleDeps,
     slotRuleDeps,
+    staticAdvisoryDatabase,
+    withAdvisoryFreshness,
 
     -- * Precedence and reach
     atDefaultPrecedence,
@@ -70,6 +72,7 @@ import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (
     AdvisoryAlignment (AdvisoryAlignment),
     AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase),
+    AdvisoryGeneration (..),
     PackageRead (..),
     PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence),
     Resilience,
@@ -103,9 +106,7 @@ import Ecluse.Core.Rules.Types (
     mkAdvisoryIds,
  )
 
-{- | Rule capabilities with no advisory database configured and no observers. Each advisory rule
-returns its fixed no-database verdict, so a suite that does not test the advisory path wires nothing.
--}
+-- | Rule capabilities without a configured database or observers, returning fixed no-database verdicts.
 inertRuleDeps :: RuleDeps
 inertRuleDeps =
     RuleDeps
@@ -118,15 +119,27 @@ inertRuleDeps =
 
 -- | 'inertRuleDeps' with a database configured and the given generation serving.
 servingRuleDeps :: DbEtag -> CveLookup -> RuleDeps
-servingRuleDeps etag cve = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use (Just (etag, cve)))}
+servingRuleDeps etag cve = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> use (Just (etag, cve)))}
 
--- | 'inertRuleDeps' reading whichever generation the slot serves, as a synced mount does.
+-- | Read a fixture slot whose publications are always treated as fresh.
 slotRuleDeps :: CveSlot -> RuleDeps
-slotRuleDeps slot = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+slotRuleDeps slot = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (withSlotGeneration slot), rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
 
-{- | Pair a rule with its type's 'defaultPrecedence'. The live policy instead assigns each rule its
-configured precedence ("Ecluse.Config.Rule").
--}
+-- | Inject a fixed age with a test lookup that carries no publication metadata.
+staticAdvisoryDatabase :: IO AdvisoryFreshness -> (forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a) -> AdvisoryDatabase
+staticAdvisoryDatabase freshness lookup = AdvisoryDatabase (\use -> use AdvisoryGeneration{agFreshness = freshness, agLookup = lookup})
+
+-- | Replace both age capabilities for a fixture whose publication metadata stays fixed.
+withAdvisoryFreshness :: IO AdvisoryFreshness -> RuleDeps -> RuleDeps
+withAdvisoryFreshness freshness deps =
+    deps
+        { rdAdvisoryFreshness = freshness
+        , rdAdvisoryDatabase = case rdAdvisoryDatabase deps of
+            NoAdvisoryDatabase -> NoAdvisoryDatabase
+            AdvisoryDatabase borrow -> AdvisoryDatabase (\use -> borrow (\generation -> use generation{agFreshness = freshness}))
+        }
+
+-- | Use the rule type's 'defaultPrecedence'. Configuration supplies precedence for live policies.
 atDefaultPrecedence :: Rule -> PrecededRule
 atDefaultPrecedence r = atPrecedence (defaultPrecedence r) r
 
@@ -138,17 +151,13 @@ atPrecedence prec = PrecededRule prec AdmissionAndRevocation
 admissionOnly :: PrecededRule -> PrecededRule
 admissionOnly (PrecededRule prec _ rule) = PrecededRule prec AdmissionOnly rule
 
-{- | One rule's verdict for one version. An advisory rule reads its rows directly, with no gate and no
-resilience, so a lookup fault escapes.
--}
+-- | Decide one version directly. Advisory rules skip age and resilience, and query faults escape.
 evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
 evalRule deps ctx rule ev = case verdictSource rule of
     FromEvidence verdict -> pure (verdict ctx ev)
     FromAdvisories _ verdict -> (`verdict` ev) <$> readAdvisories deps (evName ev)
 
-{- | A prepared rule returning a fixed verdict, so an evaluation reaches a chosen decision
-independent of the version under test.
--}
+-- | Return a fixed verdict for any version.
 constRule :: Text -> RuleVerdict -> PreparedRule
 constRule ruleName verdict =
     PreparedRule
@@ -157,9 +166,7 @@ constRule ruleName verdict =
         , prepEval = PerVersion (\_ _ -> pure verdict)
         }
 
-{- | An advisory rule on a fresh push whose read runs the given effect and finds no rows. Every
-version takes the given verdict, and a faulted read resolves under the given alignment.
--}
+-- | Read no rows on a fresh push, run the supplied effect and resolve faults under the given alignment.
 packageRule :: Text -> Int -> FailureAlignment -> Maybe Resilience -> IO () -> RuleVerdict -> PreparedRule
 packageRule ruleName prec alignment resilience effect verdict =
     PreparedRule
@@ -168,9 +175,8 @@ packageRule ruleName prec alignment resilience effect verdict =
         , prepEval =
             PerPackage
                 PackageRead
-                    { prFreshness = pure AdvisoryFresh
+                    { prRead = \_ use -> use AdvisoryFresh (Nothing <$ effect)
                     , prResilience = resilience
-                    , prRows = \_ -> Nothing <$ effect
                     , prAlignment = AdvisoryAlignment FailDeny alignment
                     , prVerdict = \_ _ -> verdict
                     , prReporter = noSourceReporter
@@ -187,17 +193,13 @@ mapPackageRead adjust rule = case prepEval rule of
 mapResilience :: (Resilience -> Resilience) -> PreparedRule -> PreparedRule
 mapResilience adjust = mapPackageRead (\packageRead -> packageRead{prResilience = adjust <$> prResilience packageRead})
 
-{- | The three fixed-verdict rules the admission and worker suites reuse. 'cannotVetRule' models
-an absent advisory database, so a fail-closed evaluation reaches an undecidable decision.
--}
+-- | Return an undecidable verdict for an absent advisory database.
 admitRule, denyRule, cannotVetRule :: PreparedRule
 admitRule = constRule "test-admit" (Allow remediation)
 denyRule = constRule "test-deny" (Deny Nothing revocation)
 cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny NoDatabaseLoaded)
 
-{- | The reasons a fixed-verdict rule gives where a case reads the verdict and not the reason: an
-allow's, a deny's that names no advisory generation, and a deny's that names one.
--}
+-- | Fixed allow, identity-deny and advisory-deny reasons for fixtures that check the verdict.
 remediation, revocation, exposure :: Reason
 remediation = Remediates (mkAdvisoryIds ("GHSA-test-0001" :| []))
 revocation = IdentityRevoked "thing"
@@ -249,9 +251,7 @@ isCannotVet = \case
     CannotVet{} -> True
     _ -> False
 
-{- | A verdict's reason as the sentence a reader sees. An inability reads without its rule's name,
-which a decision adds.
--}
+-- | Render a verdict's reason without the rule name that a decision adds.
 verdictSentence :: RuleVerdict -> Text
 verdictSentence = \case
     Allow reason -> renderReason reason
@@ -269,9 +269,7 @@ isUnavailable = \case
 withInstallScripts :: RuleEvidence -> RuleEvidence
 withInstallScripts ev = ev{evInstallCode = Known (RunsCodeOnInstall "postinstall hook")}
 
-{- | Decide a single public packument against a rule set in one call. A spec or bench exercises the
-real engine and the real survivor resolution without wiring the staged serve path itself.
--}
+-- | Decide one public packument through the engine and survivor resolution without the staged serve path.
 filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
 filterPlan deps ctx rules info = do
     decide <- prepare deps rules >>= newEvaluator ctx

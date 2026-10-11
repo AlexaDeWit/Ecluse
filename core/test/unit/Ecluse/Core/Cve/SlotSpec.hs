@@ -16,7 +16,7 @@ import UnliftIO.Exception (mask_)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotGeneration)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotGeneration, withSlotGenerationSource)
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
@@ -47,6 +47,22 @@ spec = describe "CveSlot" $ do
         withSlotGeneration slot (traverse (\(_, l) -> namesFix l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         readIORef closeLog `shouldReturn` []
+
+    it "keeps a borrowed publication snapshot while the same ETag is republished" $ do
+        closeLog <- newIORef []
+        slot <- newCveSlot
+        let oldStamp = Just (UTCTime (fromGregorian 2026 9 1) 0)
+            newStamp = Just (UTCTime (fromGregorian 2026 9 2) 0)
+        withSlotGenerationSource slot (pure . isNothing) `shouldReturn` True
+        swapIn slot (DbEtag "gen-a") oldStamp (fakeDb "gen-a" closeLog)
+        installed <- generationInstalledAt slot
+        withSlotGenerationSource slot $ \borrowed -> do
+            observeAdvisoryPublication slot (DbEtag "gen-a") newStamp
+            fmap (\(etag, _, source) -> (etag, asPushedAt source)) borrowed `shouldBe` Just (DbEtag "gen-a", oldStamp)
+            traverse (\(_, lookup, _) -> namesFix lookup "gen-a" "1.0.0") borrowed `shouldReturn` Just True
+            readIORef closeLog `shouldReturn` []
+        withSlotGenerationSource slot (pure . fmap (\(_, _, source) -> asPushedAt source)) `shouldReturn` Just newStamp
+        generationInstalledAt slot `shouldReturn` installed
 
     it "observes publication only for an installed ETag and retains retirement ownership" $ do
         closeLog <- newIORef []

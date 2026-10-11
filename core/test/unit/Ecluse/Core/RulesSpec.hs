@@ -59,7 +59,9 @@ import Ecluse.Test.Rules (
     packageRule,
     sentences,
     servingRuleDeps,
+    staticAdvisoryDatabase,
     verdictSentence,
+    withAdvisoryFreshness,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -79,9 +81,7 @@ listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing"
 at :: Int -> Rule -> PrecededRule
 at = atPrecedence
 
-{- | Decide a policy through the one engine ('prepare' then 'evalRules') under the
-given capabilities.
--}
+-- | Decide a policy through 'prepare' and 'evalRules' under the supplied capabilities.
 decideWith :: RuleDeps -> [PrecededRule] -> RuleEvidence -> IO Decision
 decideWith deps prs ev = prepare deps prs >>= \prepared -> evalRules ctx prepared ev
 
@@ -122,21 +122,17 @@ depsWith rows = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup rows)
 
 -- | Rule capabilities with a database configured and no generation loaded, as before the first sync.
 unloadedDeps :: RuleDeps
-unloadedDeps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use Nothing)}
+unloadedDeps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> use Nothing)}
 
 -- | Rule capabilities with a database configured whose every lookup throws.
 faultingDeps :: Text -> RuleDeps
-faultingDeps detail = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\_ -> throwIO (TestContractEscape detail))}
+faultingDeps detail = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\_ -> throwIO (TestContractEscape detail))}
 
-{- | One advisory naming @thing\@1.0.0@ (the version 'pkg' builds) as its exact
-fixed bound, with no other advisory leaving the package affected.
--}
+-- | An exact fix for @thing\@1.0.0@ with no other advisory affecting that version.
 fixRows :: [(Text, AdvisoryRange)]
 fixRows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (FixedBefore "1.0.0") Nothing)]
 
-{- | One advisory covering @[0, 2.0.0)@, so it affects the version 'pkg' builds, carrying the
-CVSS and EPSS scores under test.
--}
+-- | A range covering @[0, 2.0.0)@ with the CVSS and EPSS scores under test.
 affecting :: Maybe Double -> Maybe Double -> [(Text, AdvisoryRange)]
 affecting severity epss = [("thing", AdvisoryRange "GHSA-affect-0001" severity (Just "0") (FixedBefore "2.0.0") epss)]
 
@@ -155,9 +151,7 @@ genAgeDays = Gen.integral (Range.linear 0 3650)
 genPrecedence :: Gen Int
 genPrecedence = Gen.int (Range.linear 0 1000)
 
-{- | A rule that fires on the package the order-independence property builds: scoped
-@scopeTxt@, old, and running install scripts. None yields no decision, so every rule competes.
--}
+-- | A rule that decides the scoped, old fixture package with install scripts.
 genFiringRule :: Text -> Gen Rule
 genFiringRule scopeTxt =
     Gen.element
@@ -173,20 +167,18 @@ canonical d = d
 
 -- | Capabilities whose serving artifact was pushed the given age before 'now'.
 pushedAgo :: NominalDiffTime -> RuleDeps -> RuleDeps
-pushedAgo age deps =
-    deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate age) now)))}
+pushedAgo age =
+    withAdvisoryFreshness (pure (assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate age) now))))
 
 -- | Capabilities serving a generation the store gave no publication time for.
 undated :: RuleDeps -> RuleDeps
-undated deps = deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now UndatedGeneration)}
+undated = withAdvisoryFreshness (pure (assessAdvisoryAge sixDayLimit now UndatedGeneration))
 
 -- | Capabilities whose serving artifact is three days past the six-day maximum.
 expired :: RuleDeps -> RuleDeps
 expired = pushedAgo (9 * nominalDay)
 
-{- | The same rule with its breaker already open at 'now'. An open breaker fast-fails the rule's
-own IO, so it establishes that the push-age gate runs ahead of breaker admission.
--}
+-- | Open the rule's breaker at 'now' to check that its age gate runs first.
 openBreakerOn :: PreparedRule -> IO PreparedRule
 openBreakerOn rule = case prepResilience rule of
     Nothing -> pure rule
@@ -394,9 +386,7 @@ sourceHealthSpec = describe "advisory source health reporting" $ do
         void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
         reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
 
-{- | Each advisory rule's verdict when no generation answers, with its decision's sentence, verbatim.
-A deployment with no database configured and one awaiting its first sync must read the same.
--}
+-- | Exact verdicts and sentences shared by unconfigured databases and databases awaiting their first sync.
 noDatabaseVerdicts :: [(Text, Rule, RuleVerdict, Text)]
 noDatabaseVerdicts =
     [ ("AllowIfRemediatesCve", AllowIfRemediatesCve, NoDecision NoDatabaseToRemediate, "no advisory database is loaded")
@@ -435,9 +425,7 @@ noDatabaseSpec = describe "an advisory rule with no database configured" $ do
             unconfigured <- decideWith inertRuleDeps shipped ev
             decideWith unloadedDeps shipped ev >>= (`shouldBe` unconfigured)
 
-{- | The reference: an SQL fix probe and a range read for every version, each range checked by parsing
-the version and its bounds again. One read per request must reproduce it verdict for verdict.
--}
+-- | Reference verdict from per-version SQL fix probes and repeated range parsing.
 perVersionVerdict :: DbEtag -> (Text -> Text -> IO Bool) -> CveLookup -> Rule -> RuleEvidence -> IO RuleVerdict
 perVersionVerdict etag probe cve rule ev = case rule of
     AllowIfRemediatesCve ->
@@ -472,7 +460,7 @@ sqlFixProbe conn name version =
 perRequestVerdicts :: RuleDeps -> Rule -> PackageName -> [RuleEvidence] -> IO [RuleVerdict]
 perRequestVerdicts deps rule name versions =
     prepare deps [atDefaultPrecedence rule] >>= \case
-        [PreparedRule{prepEval = PerPackage packageRead}] -> (\rows -> map (prVerdict packageRead rows) versions) <$> prRows packageRead name
+        [PreparedRule{prepEval = PerPackage packageRead}] -> prRead packageRead name (\_ rows -> (\loaded -> map (prVerdict packageRead loaded) versions) <$> rows)
         _ -> fail "expected one prepared package read"
 
 -- | Every advisory rule, at thresholds on, between, and past the fixtures' scores.
@@ -482,9 +470,7 @@ differentialRules =
         : [DenyIfCve (DenyIfCveParams threshold alignment) | threshold <- [0, 5.0, 7.0, 9.9], alignment <- [FailDeny, FailNoDecision]]
             <> [DenyIfEpss (DenyIfEpssParams threshold FailDeny) | threshold <- [0, 0.25, 0.5, 0.95, 1]]
 
-{- | Rows covering every bound shape the reader decodes: segment pairs, both bound columns on one
-row, points, prereleases, build metadata, "v" prefixes, unparseable bounds, and missing scores.
--}
+-- | Ranges, points and version spelling variants, including unparseable bounds and missing scores.
 edgeCaseRows :: [RangeRow]
 edgeCaseRows =
     [ ("range-pkg", "GHSA-r-0001", Just "1.0.0", Just "1.2.0", Nothing, Just 9.8, Just 0.9)
@@ -574,9 +560,7 @@ versionsFor cve name = do
             LastAffected lastAffected -> [lastAffected]
             Unbounded -> []
 
-{- | Every rule decides each version from one read as it does from a read per version, and a mixed
-policy's shared evaluator matches a fresh one per version. Returns the verdicts compared.
--}
+-- | Compare shared reads against per-version reads and evaluators, returning the checked verdicts.
 agreesOn :: (Text -> Text -> IO Bool) -> CveLookup -> [PackageName] -> IO [RuleVerdict]
 agreesOn probe cve names =
     fmap (concat . concat) . forM (names <> [unscopedNpm "no-such-package"]) $ \name -> do
@@ -638,9 +622,7 @@ differentialSpec = describe "one read per request against a read per version, ov
 pypiPkg :: Integer -> RuleEvidence
 pypiPkg ageDays = (pkg Nothing ageDays){evName = unscopedPyPI "Flask_Thing"}
 
-{- | Each verdict a built-in rule reaches and the sentence its reason reads as, for both
-ecosystems. A rule that gives another rule's reason, or a reworded sentence, fails its row.
--}
+-- | Each built-in verdict and its exact reason sentence for both ecosystems.
 ruleSentences :: [(String, RuleDeps, Rule, RuleEvidence, RuleVerdict, Text)]
 ruleSentences =
     [ ("AllowScope on its scope", inertRuleDeps, AllowScope myorg, pkg (Just "myorg") 0, Allow (ScopeAllowListed myorg), "scope @myorg is allow-listed")

@@ -40,7 +40,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Package (PackageName, pkgCanonical, renderPackageName)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), readAdvisories, withCveLookup)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (agLookup), RuleDeps (rdAdvisoryDatabase), readAdvisories, withCveLookup)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     DenyIfEpssParams (DenyIfEpssParams),
@@ -69,9 +69,7 @@ corpusAdvisories eco = do
     feed <- readPinned epss
     pure AdvisoryInputs{aiOsvZip = archive, aiEpssFeed = GZip.compress feed}
 
-{- | Compile the ecosystem's corpus advisories into the directory, returning the artifact's path.
-An artifact with no range would leave every advisory rule abstaining, so it fails.
--}
+-- | Compile the captured advisories, rejecting artifacts without any range.
 compileCorpusAdvisories :: Ecosystem -> FilePath -> IO FilePath
 compileCorpusAdvisories eco dir = do
     compiled <- corpusAdvisories eco >>= compileAdvisoryInputs eco dir
@@ -83,9 +81,7 @@ compileCorpusAdvisories eco dir = do
 compileAdvisoryInputs :: Ecosystem -> FilePath -> AdvisoryInputs -> IO FilePath
 compileAdvisoryInputs eco dir inputs = compileOsvZipDbWithFeedTo eco EpssRequired (status200, aiEpssFeed inputs) (aiOsvZip inputs) dir
 
-{- | Check that each capture's display name is its lookup key, that the served generation names at
-least one capture, and that every capture it names yields rows through 'readAdvisories'.
--}
+-- | Check canonical capture names, covered packages and non-empty rows through 'readAdvisories'.
 checkCapturesServed :: RuleDeps -> [PackageName] -> IO (Either Text ())
 checkCapturesServed deps packages = case filter (\package -> renderPackageName package /= lookupKey package) packages of
     package : _ -> pure (Left ("the capture " <> renderPackageName package <> " differs from its lookup key " <> lookupKey package))
@@ -109,7 +105,13 @@ rowsTheRulesRead :: RuleDeps -> PackageName -> IO [AdvisoryRange]
 rowsTheRulesRead deps package = do
     seen <- newIORef []
     let recording cve = cve{cveAdvisoriesFor = cveAdvisoriesFor cve >=> \rows -> rows <$ writeIORef seen rows}
-        spied = deps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> withCveLookup deps (use . fmap (second recording)))}
+        spied =
+            deps
+                { rdAdvisoryDatabase = case rdAdvisoryDatabase deps of
+                    NoAdvisoryDatabase -> NoAdvisoryDatabase
+                    AdvisoryDatabase borrow -> AdvisoryDatabase $ \use ->
+                        borrow (\generation -> use generation{agLookup = \readLookup -> agLookup generation (readLookup . fmap (second recording))})
+                }
     void (readAdvisories spied package)
     readIORef seen
 
@@ -165,9 +167,7 @@ data SyntheticTarget = SyntheticTarget
 fillerTargets :: Int -> [SyntheticTarget]
 fillerTargets count = [SyntheticTarget ("ecluse-bench-filler-" <> show k) ["1.0.0", "2.0.0"] 1 | k <- [1 .. count]]
 
-{- | Advisories over windows of each target's own releases, each fixed at a real release. Every
-other advisory carries a critical CVSS vector, and EPSS scores step from 0 to 0.95.
--}
+-- | Generate release windows with real fixes, alternating critical CVSS vectors and EPSS scores from 0 to 0.95.
 syntheticAdvisories :: Ecosystem -> [SyntheticTarget] -> IO AdvisoryInputs
 syntheticAdvisories eco targets = do
     archive <- osvZipOf [(recordId n <> ".json", encode (syntheticRecord eco n target window)) | (n, (target, window)) <- indexed]
