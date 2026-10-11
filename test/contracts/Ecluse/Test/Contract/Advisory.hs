@@ -47,18 +47,18 @@ data AdvisoryDriver = AdvisoryDriver
 
 -- | A rejected replacement preserves bytes, identity, provenance, age, and serving evidence.
 advisoryContract :: Text -> CveDbRejected -> SpecWith AdvisoryDriver
-advisoryContract group rejection = describe "advisory generation contract" $
-    it (caseLabel (group <> "/last-good") "preserves the last-good generation after rejecting a replacement") $ \driver -> do
+advisoryContract contractGroup rejection = describe "advisory generation contract" $
+    it (caseLabel (contractGroup <> "/last-good") "preserves the last-good generation after rejecting a replacement") $ \driver -> do
         good <- publishArtifact driver AcceptedArtifact
         syncArtifact driver `shouldReturn` Accepted good
-        before <- observeArtifact driver
-        snapshotBytes before `shouldBe` acceptedBytes driver
-        snapshotIdentity before `shouldBe` Just good
-        snapshotSource before `shouldSatisfy` isJust
-        snapshotInstalledAt before `shouldSatisfy` isJust
-        snapshotRemediation before `shouldBe` Just True
-        snapshotTemporaryExists before `shouldBe` False
+        previousSnapshot <- observeArtifact driver
+        snapshotBytes previousSnapshot `shouldBe` acceptedBytes driver
+        snapshotIdentity previousSnapshot `shouldBe` Just good
+        snapshotSource previousSnapshot `shouldSatisfy` isJust
+        snapshotInstalledAt previousSnapshot `shouldSatisfy` isJust
+        snapshotRemediation previousSnapshot `shouldBe` Just True
+        snapshotTemporaryExists previousSnapshot `shouldBe` False
         bad <- publishArtifact driver RefusedArtifact
         bad `shouldNotBe` good
         syncArtifact driver `shouldReturn` Refused bad rejection
-        observeArtifact driver `shouldReturn` before
+        observeArtifact driver `shouldReturn` previousSnapshot

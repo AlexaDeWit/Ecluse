@@ -26,9 +26,9 @@ data QueueDriver = QueueDriver
 
 -- | Every backend preserves the payload and accepts acknowledgement of its delivery.
 queueContract :: Text -> SpecWith QueueDriver
-queueContract group =
+queueContract contractGroup =
     describe "queue contract" $
-        it (caseLabel (group <> "/payload") "preserves every payload field through delivery") queuePayloadLaw
+        it (caseLabel (contractGroup <> "/payload") "preserves every payload field through delivery") queuePayloadLaw
 
 -- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
 queuePayloadLaw :: QueueDriver -> Expectation
@@ -46,14 +46,14 @@ queuePayloadLaw driver = do
 
 -- | A destructive receive provides neither redelivery nor an increasing delivery count.
 ephemeralQueueContract :: Text -> SpecWith QueueDriver
-ephemeralQueueContract group = describe "ephemeral delivery contract" $ do
-    it (caseLabel (group <> "/destructive-receive") "removes the job on receipt without requiring an acknowledgement") $ \driver -> do
+ephemeralQueueContract contractGroup = describe "ephemeral delivery contract" $ do
+    it (caseLabel (contractGroup <> "/destructive-receive") "removes the job on receipt without requiring an acknowledgement") $ \driver -> do
         expectRightIO (enqueue (queueHandle driver) sampleJob)
         messages <- awaitDelivery driver
         map msgJob messages `shouldBe` [sampleJob]
         map msgReceiveCount messages `shouldBe` [1]
         expectRightIO (receive (queueHandle driver)) `shouldReturn` []
-    it (caseLabel (group <> "/terminal-drop") "drops a terminal delivery without redelivery") $ \driver -> do
+    it (caseLabel (contractGroup <> "/terminal-drop") "drops a terminal delivery without redelivery") $ \driver -> do
         expectRightIO (enqueue (queueHandle driver) sampleJob)
         messages <- awaitDelivery driver
         map msgJob messages `shouldBe` [sampleJob]
@@ -62,8 +62,8 @@ ephemeralQueueContract group = describe "ephemeral delivery contract" $ do
 
 -- | The driver uses a short lease and waits long enough to observe its expiry.
 leasedQueueContract :: Text -> SpecWith QueueDriver
-leasedQueueContract group = describe "leased delivery contract" $
-    it (caseLabel (group <> "/redelivery") "redelivers an unacknowledged payload with an increasing delivery count") $ \driver -> do
+leasedQueueContract contractGroup = describe "leased delivery contract" $
+    it (caseLabel (contractGroup <> "/redelivery") "redelivers an unacknowledged payload with an increasing delivery count") $ \driver -> do
         expectRightIO (enqueue (queueHandle driver) sampleJob)
         firstDelivery <- awaitDelivery driver
         map msgJob firstDelivery `shouldBe` [sampleJob]
