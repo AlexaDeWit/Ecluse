@@ -14,6 +14,8 @@ readonly input_paths=(cabal.project cabal.project.freeze flake.nix flake.lock)
 readonly upstream_url=https://github.com/ondrap/json-stream.git
 readonly upstream_revision=537a43a775e64f50dc63c373193323de98619799
 readonly reference_revision=${BENCH_REFERENCE_SHA:-$upstream_revision}
+readonly project_source_paths=(json-stream/src vendor/json-stream)
+readonly source_strip_components=2
 readonly input_copy_count=2
 readonly baseline_fold_api=${BENCH_BASELINE_FOLD_API:-auto}
 readonly candidate_fold_api=${BENCH_CANDIDATE_FOLD_API:-auto}
@@ -29,6 +31,18 @@ case "$fold_full_laziness" in
   *) fail 'BENCH_FOLD_FULL_LAZINESS must be default or disabled' ;;
 esac
 
+project_source_path() {
+  local revision=$1 path selected=
+  for path in "${project_source_paths[@]}"; do
+    if git -C "$BENCH_REPO" cat-file -e "$revision:$path/Data/JsonStream/Parser.hs" 2>/dev/null; then
+      [[ -z "$selected" ]] || fail "Multiple json-stream source layouts at $revision"
+      selected=$path
+    fi
+  done
+  [[ -n "$selected" ]] || fail "No supported json-stream source layout at $revision"
+  printf '%s\n' "$selected"
+}
+
 for revision in "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"; do
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || fail "Expected a full commit SHA: $revision"
   git -C "$BENCH_REPO" cat-file -e "$revision^{commit}"
@@ -38,8 +52,12 @@ if [[ -n ${BENCH_REFERENCE_SHA:-} ]]; then
   git -C "$BENCH_REPO" cat-file -e "$reference_revision^{commit}"
 fi
 if [[ "$baseline_fold_api" != "$candidate_fold_api" ]]; then
-  git -C "$BENCH_REPO" diff --quiet "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA" -- vendor/json-stream ||
-    fail 'Comparing different fold APIs requires identical baseline and candidate vendor sources'
+  baseline_path=$(project_source_path "$BENCH_BASELINE_SHA")
+  candidate_path=$(project_source_path "$BENCH_CANDIDATE_SHA")
+  baseline_tree=$(git -C "$BENCH_REPO" rev-parse "$BENCH_BASELINE_SHA:$baseline_path/Data")
+  candidate_tree=$(git -C "$BENCH_REPO" rev-parse "$BENCH_CANDIDATE_SHA:$candidate_path/Data")
+  [[ "$baseline_tree" == "$candidate_tree" ]] ||
+    fail 'Comparing different fold APIs requires identical baseline and candidate Haskell sources'
 fi
 mkdir -- "$BENCH_OUTPUT"
 mkdir -p -- "$work_dir" "$artifact_dir/inputs" "$artifact_dir/logs" "$artifact_dir/harness"
@@ -87,6 +105,9 @@ for variant in "${variants[@]}"; do
   git -C "$upstream_repo" archive "$upstream_revision" | tar -xf - -C "$target"
   revision=$upstream_revision
   source_repository=upstream
+  source_path=.
+  source_tree=$(git -C "$upstream_repo" rev-parse "$upstream_revision^{tree}")
+  license_path=LICENSE
   native=false
   owned=false
   facade=false
@@ -97,10 +118,14 @@ for variant in "${variants[@]}"; do
       baseline) revision=$BENCH_BASELINE_SHA ;;
       candidate) revision=$BENCH_CANDIDATE_SHA ;;
     esac
+    source_path=$(project_source_path "$revision")
+    source_tree=$(git -C "$BENCH_REPO" rev-parse "$revision:$source_path")
+    license_path=${source_path%/src}/LICENSE
     # Both paths were created by this invocation from the pinned upstream archive.
     rm -rf -- "$target/Data" "$target/c_lib"
-    git -C "$BENCH_REPO" archive "$revision" vendor/json-stream |
-      tar -xf - --strip-components=2 -C "$target"
+    git -C "$BENCH_REPO" archive "$revision" "$source_path" |
+      tar -xf - --strip-components="$source_strip_components" -C "$target"
+    git -C "$BENCH_REPO" show "$revision:$license_path" > "$target/LICENSE"
     git -C "$BENCH_REPO" show "$revision:ecluse.cabal" > "$artifact_dir/inputs/$variant.ecluse.cabal"
   fi
   [[ ! -f "$target/Data/JsonStream/Lexer/Internal.hs" ]] || native=true
@@ -197,9 +222,11 @@ CABAL
   jq -nc --arg variant "$variant" --arg revision "$revision" --arg fold_api "$fold_api" --argjson native "$native" \
     --arg full_laziness "$fold_full_laziness" --arg repository "$source_repository" \
     --arg benchmark_revision "$upstream_revision" --argjson facade "$facade" \
+    --arg source_path "$source_path" --arg source_tree "$source_tree" --arg license_path "$license_path" \
     '{variant:$variant, revision:$revision, native_lexer:$native, owned_fold:($fold_api == "owned_reader"),
       fold_api:$fold_api, fold_full_laziness:$full_laziness, source_repository:$repository,
-      upstream_benchmark_revision:$benchmark_revision, public_lexer_facade:$facade}' >> "$artifact_dir/variants.jsonl"
+      upstream_benchmark_revision:$benchmark_revision, public_lexer_facade:$facade,
+      source_path:$source_path, source_tree:$source_tree, license_path:$license_path}' >> "$artifact_dir/variants.jsonl"
 done
 jq -s . "$artifact_dir/variants.jsonl" > "$artifact_dir/variants.json"
 check_inputs

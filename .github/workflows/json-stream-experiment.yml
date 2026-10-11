@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   upstream:
-    name: Native lexer interface (${{ matrix.laziness }})
+    name: Maintained JSON parser (${{ matrix.laziness }})
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 45
     strategy:
@@ -20,11 +20,11 @@ jobs:
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       BENCH_REPO: ${{ github.workspace }}
-      BENCH_REFERENCE_SHA: dc1bfb3571d33500a945a23a88eea935bcd80d23
-      BENCH_BASELINE_SHA: 3b074ce62e7a1584fe3b638f2375b79f443e0f72
+      BENCH_REFERENCE_SHA: 7f214208ea93a54584f0687bef6870d68f7ac8a8
+      BENCH_BASELINE_SHA: 53dd7943129211f882f98a89bcb828b1cbba45e4
       BENCH_BASELINE_FOLD_API: pure_cursor
       BENCH_CANDIDATE_FOLD_API: pure_cursor
-      BENCH_CANDIDATE_SHA: ca9b1b531bf1589136112ca05fa8446d8d0a6ded
+      BENCH_CANDIDATE_SHA: 689b7a19f4c3c1840a115cc185582075293c050e
       BENCH_FOLD_FULL_LAZINESS: ${{ matrix.laziness }}
       BENCH_REPEATS: "5"
       BENCH_SECONDS: "0.3"

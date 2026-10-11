@@ -23,9 +23,11 @@ fail() {
 
 hash_sources() {
   local root=$1
+  local -a paths=(Data benchmarks harness LICENSE)
+  [[ ! -d "$root/c_lib" ]] || paths+=(c_lib)
   (
     cd -- "$root"
-    find Data c_lib benchmarks harness -type f ! -path '*/dist-newstyle/*' -print0 |
+    find "${paths[@]}" -type f ! -path '*/dist-newstyle/*' -print0 |
       sort -z | xargs -0 sha256sum
   )
 }
