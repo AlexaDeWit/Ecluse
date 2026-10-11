@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The config-derived runtime sizings of the composition root: serve-admission capacity,
-the two connection-pool sizes and the managers built under them, and the mirror-enqueue
-buffer tunables. The byte-valued bounds live in "Ecluse.Composition.MemoryPlan".
-
-Each resolution is a pure function of the validated configuration plus the process
-file-descriptor limit. An explicit config value always wins, and 'resolveSized' pairs the
-result with the boot-log line naming its provenance.
+{- | Resolve metadata concurrency, connection pools and mirror-enqueue bounds with boot-log provenance.
+"Ecluse.Composition.MemoryPlan" owns byte-valued bounds. Explicit configuration takes precedence.
 -}
 module Ecluse.Composition.Sizing (
     -- * A resolved bound and its boot-log line
@@ -62,9 +57,7 @@ apply it after telemetry instrumentation, so it cannot discard the instrumented 
 connectionPoolSettings :: Int -> ManagerSettings -> ManagerSettings
 connectionPoolSettings connections settings = settings{managerConnCount = connections}
 
-{- | The serve-admission capacity and its boot-log line: explicit @serveMaxInFlight@, else
-@max 8 (10 x capabilities)@ on the post-posture count. The multiplier is where the bench levelled.
--}
+-- | Resolve metadata concurrency independently of its byte budget. An explicit capacity stays exact.
 resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
 resolveServeAdmission explicit capabilities =
     resolveSized
@@ -73,10 +66,9 @@ resolveServeAdmission explicit capabilities =
         (max serveAdmissionFloor (serveAdmissionPerCapability * capabilities))
         ("computed from " <> show capabilities <> " capabilities")
 
--- The floor keeps a tiny pod admitting a useful burst. 'resolveServeAdmission' explains
--- the multiplier.
+-- Upstream waits and shared reads can overlap without using a capability per request.
 serveAdmissionPerCapability :: Int
-serveAdmissionPerCapability = 10
+serveAdmissionPerCapability = 20
 
 serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
