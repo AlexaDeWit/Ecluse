@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Whole-image PyPI advisory compilation, sync, denial, and quarantine overrides through pip.
-module Ecluse.E2E.PyPI.AdvisoriesE2ESpec (specWith) where
+module Ecluse.E2E.PyPI.AdvisoriesE2ESpec (advisoryContract) where
 
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Aeson qualified as Aeson
@@ -12,8 +12,10 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Phase (timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -29,8 +31,8 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)
 
 -- | Drive the product image and its compiled PyPI artifact with isolated pip clients.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder (withDataPlane pypiAdvisoryTopology)) (aroundAllWith (timedFixtureWith recorder withPublishedAdvisories) scenarios)
+advisoryContract :: ConcreteFixture -> DeclaredGroup
+advisoryContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withPublishedAdvisories) scenarios)
 
 withPublishedAdvisories :: (GlobalDataPlane -> IO ()) -> GlobalDataPlane -> IO ()
 withPublishedAdvisories action plane = do

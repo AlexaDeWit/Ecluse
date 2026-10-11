@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Telemetry export from the product image under each telemetry configuration: OTLP metrics and spans reaching a collector, the JSONL log stream with no collector, a visible degradation when the collector is
-unreachable, and the Datadog unified service tags. The configuration is independent of the mount. The traffic is npm's, and the mirror-span and private-leg cases need a mount with a mirror target.
--}
-module Ecluse.E2E.TelemetryE2ESpec (specWith) where
+-- | Product-image telemetry under OTLP, disabled, failed-exporter, and Datadog configurations.
+module Ecluse.E2E.TelemetryE2ESpec (telemetryContract) where
 
 import Data.Text qualified as T
 
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg, telemetryPrivatePkg)
@@ -20,8 +20,8 @@ import Ecluse.Test.Contract.Telemetry
 import Ecluse.Test.Poll (pollUntil)
 
 -- | Drive the product image under each telemetry configuration and read what it exported.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder withGlobalDataPlane) (scenarios recorder)
+telemetryContract :: ConcreteFixture -> DeclaredGroup
+telemetryContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder = do

@@ -5,11 +5,13 @@
 {- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed trees,
 lockfiles, dependency resolution, module exports, and the linked executable's output.
 -}
-module Ecluse.E2E.Npm.MirrorInstallE2ESpec (specWith) where
+module Ecluse.E2E.Npm.MirrorInstallE2ESpec (mirrorContract) where
 
 import Data.Aeson (Value)
 import Data.Set qualified as Set
-import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.Test.Contract.Phase (timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
@@ -25,16 +27,17 @@ import Ecluse.E2E.Fixtures.Npm (
     psVersion,
  )
 import Ecluse.E2E.Harness
-import Ecluse.Test.Contract.Mirror
+import Ecluse.Test.Contract.Mirror hiding (mirrorContract)
+import Ecluse.Test.Contract.Mirror qualified as Mirror
 
 -- | Compare a mirror-only install with its control, using a real npm client and local stores.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder withGlobalDataPlane) scenarios
+mirrorContract :: ConcreteFixture -> DeclaredGroup
+mirrorContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) scenarios
 
 scenarios :: SpecWith GlobalDataPlane
 scenarios =
     beforeAllWith (pure . mirrorDriver) $
-        mirrorContract
+        Mirror.mirrorContract
             "npm/mirror"
             MirrorFixture
                 { mirrorExpectedGraph = expectedGraph
@@ -115,14 +118,12 @@ expectedGraph =
   where
     dependent `resolves` pkg = Resolved dependent (psName pkg) (psVersion pkg)
 
--- The two reads an install needs of each package, as the paths the private store serves them at.
 neededOfMirror :: Set Text
 neededOfMirror = Set.fromList (concatMap readsOf graphPackages)
   where
     readsOf :: PkgSpec -> [Text]
     readsOf pkg = ["/" <> psName pkg, npmArtifactPath (psName pkg) (psVersion pkg)]
 
--- The paths the mirror's route answered a read of with a success.
 servedByMirror :: [StubRead] -> Set Text
 servedByMirror answered =
     Set.fromList [srPath r | r <- answered, srRoute r == Mirror, srMethod r == "GET", srStatus r == 200]

@@ -3,13 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 -- | npm and Verdaccio providers for the maintenance business contracts.
-module Ecluse.E2E.Npm.DredgerE2ESpec (specWith) where
+module Ecluse.E2E.Npm.DredgerE2ESpec (dredgerContract) where
 
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.Test.Contract.Phase (timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
@@ -42,12 +44,12 @@ import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
 -- | Keep each lifecycle group atomic and retain the catalogue identities.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = do
-    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withSeededStore) (Identity.identityScenarios identityFixture storeOps clientOps guardedSweepOps))
-    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withAdvisoryStore) (Advisory.advisoryScenario advisoryFixture storeOps clientOps sweepOps advisoryOps))
-    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withRecoveryStores) (Recovery.recoveryScenarios recoveryFixture storeOps clientOps sweepOps recoveryOps))
-    aroundAll (timedFixture recorder (withDataPlane dredgerTopology)) (aroundAllWith (timedFixtureWith recorder withRolloutStores) (Rollout.rolloutScenarios rolloutFixture storeOps clientOps guardedSweepOps recoveryOps rolloutOps))
+dredgerContract :: ConcreteFixture -> DeclaredGroup
+dredgerContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> do
+    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withSeededStore) (Identity.identityScenarios identityFixture storeOps clientOps guardedSweepOps))
+    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withAdvisoryStore) (Advisory.advisoryScenario advisoryFixture storeOps clientOps sweepOps advisoryOps))
+    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withRecoveryStores) (Recovery.recoveryScenarios recoveryFixture storeOps clientOps sweepOps recoveryOps))
+    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withRolloutStores) (Rollout.rolloutScenarios rolloutFixture storeOps clientOps guardedSweepOps recoveryOps rolloutOps))
 
 withSeededStore :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
 withSeededStore action plane =

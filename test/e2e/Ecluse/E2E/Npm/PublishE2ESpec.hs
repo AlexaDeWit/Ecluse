@@ -5,10 +5,12 @@
 {- | First-party publication through the npm mount with a publication target configured. The refusal
 with no target configured is a base-topology case in "Ecluse.E2E.Npm.InstallE2ESpec".
 -}
-module Ecluse.E2E.Npm.PublishE2ESpec (specWith) where
+module Ecluse.E2E.Npm.PublishE2ESpec (publicationContract) where
 
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Test.Hspec
 
 import Ecluse.E2E.Harness
@@ -16,8 +18,8 @@ import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Publication
 
 -- | Publish with a real npm client and read the publication target back.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder withGlobalDataPlane) (scenarios recorder)
+publicationContract :: ConcreteFixture -> DeclaredGroup
+publicationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder = do

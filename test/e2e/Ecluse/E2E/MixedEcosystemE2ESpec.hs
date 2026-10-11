@@ -5,10 +5,12 @@
 {- | Both mounts behind one proxy, driven by a real @npm@ client and a real @pip@ client in turn. The
 modules under an ecosystem directory each send their proxies one ecosystem's traffic.
 -}
-module Ecluse.E2E.MixedEcosystemE2ESpec (specWith) where
+module Ecluse.E2E.MixedEcosystemE2ESpec (mixedMountContract) where
 
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (allowPkg, psName, psVersion)
@@ -18,8 +20,8 @@ import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
 
 -- | Drive one product image with both real clients and local stores.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder (withDataPlane mixedTopology)) (scenarios recorder)
+mixedMountContract :: ConcreteFixture -> DeclaredGroup
+mixedMountContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =

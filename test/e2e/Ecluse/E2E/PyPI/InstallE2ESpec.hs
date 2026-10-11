@@ -5,11 +5,13 @@
 {- | The pypi mount on the base topology, driven by a real @pip@ client in hash-checking mode. The mount has
 no private store, so the same install fails through a second proxy while public is down.
 -}
-module Ecluse.E2E.PyPI.InstallE2ESpec (specWith) where
+module Ecluse.E2E.PyPI.InstallE2ESpec (installationContract) where
 
 import Data.List (lookup)
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
@@ -20,8 +22,8 @@ import Ecluse.Test.Contract.Serving (ServingResponse (..), artifactDigestCase)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | Drive the product image with a real pip client and local stores.
-specWith :: PhaseRecorder -> Spec
-specWith recorder = aroundAll (timedFixture recorder (withDataPlane pypiTopology)) (scenarios recorder)
+installationContract :: ConcreteFixture -> DeclaredGroup
+installationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =
