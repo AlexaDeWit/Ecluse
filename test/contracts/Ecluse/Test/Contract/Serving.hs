@@ -66,12 +66,12 @@ servingContract provider driver = describe "shared serving contract" $ do
             artifact <- requestArtifact session "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "identity-precedence" "admits an explicit identity and lets denial take precedence" $ do
-        let identity = servingIdentity driver "1.2.3"
-        run [AllowByIdentity identity] [] [young] $ \session -> do
+        let packageIdentity = servingIdentity driver "1.2.3"
+        run [AllowByIdentity packageIdentity] [] [young] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
-        run [AllowByIdentity identity, DenyByIdentity identity] [] [old] $ \session -> do
+        run [AllowByIdentity packageIdentity, DenyByIdentity packageIdentity] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
             artifact <- requestArtifact session "1.2.3"
