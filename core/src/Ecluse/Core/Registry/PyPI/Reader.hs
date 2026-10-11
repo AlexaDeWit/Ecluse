@@ -47,7 +47,7 @@ pypiFullWalk writer depth step keeps fileStep = walkIndex depth FullRead step (\
 
 walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
 {-# INLINE walkIndex #-}
-walkIndex depth mode step finishRead readFile table0 initial = start
+walkIndex depth mode step finishRead readIndexFile table0 initial = start
   where
     start tokens
         | depth <= 0 = withElement tokens tooDeep
@@ -86,7 +86,7 @@ walkIndex depth mode step finishRead readFile table0 initial = start
 
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
-        | otherwise = readFile table acc position element rest (\kept held after -> continue (Walked held kept) after)
+        | otherwise = readIndexFile table acc position element rest (\kept held after -> continue (Walked held kept) after)
 
     candidate selection (Selecting table memo acc) position element rest continue
         | depth <= 2 = tooDeep element rest
