@@ -585,8 +585,10 @@ decompressed byte accounting and overrides, not the heap cost of arbitrary 128 M
 
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 
-Make live calls to public registries (npm today) to confirm our JSON decoding and protocol handling
-match reality. They depend on uncontrolled external services, so an occasional failure is normal
+Make live calls to the public npm and PyPI registries to check JSON decoding and protocol handling.
+The PyPI case reads a project index and one bounded wheel through the shipped adapter, then checks
+the bytes against the advertised integrity. Only transport unavailability makes that case pending.
+The cases depend on uncontrolled external services, so an occasional failure is normal
 and never blocks a merge. The CI `gate` does not depend on them. Treat a failure as a
 prompt to investigate (protocol drift or flakiness?), not a blocker. Run: `cabal test ecluse-smoke`.
 
@@ -1488,7 +1490,10 @@ The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).
 Extend its cases if an ecosystem adds a distinct artifact relay path.
 Live protocol checks use `test/smoke/Ecluse/Core/Registry/<Ecosystem>SmokeSpec.hs`, following
-the [npm example](../test/smoke/Ecluse/Core/Registry/NpmSmokeSpec.hs). PyPI has no corresponding protocol smoke module yet.
+the [npm](../test/smoke/Ecluse/Core/Registry/NpmSmokeSpec.hs) and
+[PyPI](../test/smoke/Ecluse/Core/Registry/PyPISmokeSpec.hs) examples. PyPI reads the live Simple index
+and one wheel, then verifies its advertised integrity. Bounds, identity and protocol failures fail
+the case. Only transport unavailability makes it pending.
 Smoke coverage never replaces a gating case.
 
 ## OSV advisory fixtures
