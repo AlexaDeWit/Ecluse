@@ -1046,6 +1046,7 @@ test-suite ecluse-core-unit
     , katip             ^>=0.8.8
     , ram               ^>=0.22
     , network           ^>=3.2
+    , primitive         ^>=0.9
     , retry             ^>=0.9
     , exceptions        ^>=0.10
     , scientific        ^>=0.3
