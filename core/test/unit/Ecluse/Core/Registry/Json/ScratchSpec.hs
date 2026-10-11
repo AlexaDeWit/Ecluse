@@ -11,6 +11,7 @@ import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
+import Data.Text qualified as T
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -18,7 +19,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Packed (encodeString)
-import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putDecimal, putEncodedText, putVarint, rewindTo, scratchCursor)
+import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newScratch, putByte, putDecimal, putEncodedText, putVarint, rewindTo, scratchCursor)
 
 spec :: Spec
 spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do
@@ -28,6 +29,16 @@ spec = modifyMaxSuccess (const 1000) $ describe "Scratch" $ do
             let aeson = toStrict . encodingToLazyByteString . Encoding.text
                 headed text = written (`putVarint` (3 * BS.length (aeson text))) <> aeson text
             written (\scratch -> traverse_ (putEncodedText scratch (3 *)) texts) === foldMap headed texts
+
+    it "keeps sliced UTF-8 and escaped strings intact across buffer growth and consecutive writes" $ do
+        let texts = ["", "plain", "\xe9\x6c34\x1f600", "\"\\/\n\r\t\b\f", toText ['\0' .. '\x1f'], T.replicate 200 "a", T.replicate 200 "a" <> "\n"]
+            slices = map (T.drop 1 . T.dropEnd 1 . ("\"" <>) . (<> "\\")) texts
+            bytes = written $ \scratch -> do
+                putByte scratch 0xa5
+                traverse_ (putEncodedText scratch (const 0)) slices
+                putByte scratch 0xa5
+            expected = BS.singleton 0xa5 <> foldMap (\text -> "\0" <> toStrict (encodingToLazyByteString (Encoding.text text))) texts <> BS.singleton 0xa5
+        bytes `shouldBe` expected
 
     it "writes each integer as aeson writes it, and counts its digits" $
         hedgehog $ do

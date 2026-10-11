@@ -31,7 +31,7 @@ import Data.Primitive.ByteArray (ByteArray, MutableByteArray, copyMutableByteArr
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 
-import Ecluse.Core.Registry.Json.Packed (encodedLength, quote, varintSize, writeEncoded, writeVarint)
+import Ecluse.Core.Registry.Json.Packed (encodedLength, quote, varintSize, writeEncodedSized, writeVarint)
 import Ecluse.Core.Text (writeDigits)
 
 -- | The buffer and the offset of its next byte.
@@ -86,11 +86,9 @@ putVarint :: Scratch st -> Int -> ST st ()
 putVarint scratch n = putAt scratch (varintSize n) (writeVarint n)
 {-# INLINE putVarint #-}
 
-{- | Write the varint a header makes of a string's encoded length, then the bytes aeson writes for the
-string, quotes included.
--}
+-- | Write the header's varint and aeson's string bytes, quotes included.
 putEncodedText :: Scratch st -> (Int -> Int) -> Text -> ST st ()
-putEncodedText scratch header text = putVarint scratch (header len) >> putAt scratch len (writeEncoded text)
+putEncodedText scratch header text = putVarint scratch (header len) >> putAt scratch len (writeEncodedSized text len)
   where
     len = encodedLength text
 

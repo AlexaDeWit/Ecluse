@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Json.Packed (
     encodeString,
     encodedLength,
     writeEncoded,
+    writeEncodedSized,
     plain,
     quote,
 
@@ -123,8 +124,15 @@ plain (TI.Text array offset len) = go offset
 
 -- | Write 'encodeString' at an offset, and return the offset after it.
 writeEncoded :: Text -> MutableByteArray st -> Int -> ST st Int
-writeEncoded text@(TI.Text array offset len) target at
-    | plain text = do
+writeEncoded text = writeEncodedWith (plain text) text
+
+-- | Like 'writeEncoded': the length must equal 'encodedLength' for this same text without 'Int' overflow, and fit from a non-negative target offset.
+writeEncodedSized :: Text -> Int -> MutableByteArray st -> Int -> ST st Int
+writeEncodedSized text@(TI.Text _ _ len) encoded = writeEncodedWith (encoded == len + 2) text
+
+writeEncodedWith :: Bool -> Text -> MutableByteArray st -> Int -> ST st Int
+writeEncodedWith isPlain (TI.Text array offset len) target at
+    | isPlain = do
         writeByteArray target at quote
         copyByteArray target (at + 1) array offset len
         writeByteArray target (at + len + 1) quote
@@ -134,9 +142,8 @@ writeEncoded text@(TI.Text array offset len) target at
         end <- escapeFrom array offset (offset + len) target (at + 1)
         writeByteArray target end quote
         pure (end + 1)
+{-# INLINE writeEncodedWith #-}
 
-{- aeson's escape for one byte of a string: the byte as it is, a backslash and a letter for a
-backslash, a quote, a newline, a return or a tab, and a lower-case hexadecimal code below a space. -}
 data Escape = Verbatim | Named !Word8 | Coded
 
 escapeOf :: Word8 -> Escape
@@ -259,7 +266,9 @@ docTable strings = DocTable arena offsets
         pure target
     arena = createByteArray (indexPrimArray offsets count) (`placeFrom` 0)
     placeFrom target !index = when (index < count) $ do
-        void (writeEncoded (indexSmallArray strings index) target (indexPrimArray offsets index))
+        let start = indexPrimArray offsets index
+            len = indexPrimArray offsets (index + 1) - start
+        void (writeEncodedSized (indexSmallArray strings index) len target start)
         placeFrom target (index + 1)
 
 -- | The heap bytes the table holds: its record, and its two arrays with their headers.
@@ -315,8 +324,6 @@ withoutHole (Packed blob _ encoded) = Packed blob (-1) encoded
 hasHole :: Packed -> Bool
 hasHole (Packed _ hole _) = hole >= 0
 
--- The array holding the scalar at a position, where its encoding starts and how long it is, and the
--- position after it in the blob.
 scalarSource :: DocTable -> ByteArray -> Int -> (# ByteArray, Int, Int, Int #)
 scalarSource table blob position
     | (indexByteArray blob position :: Word8) == opShared = case readVarint blob (position + 1) of
