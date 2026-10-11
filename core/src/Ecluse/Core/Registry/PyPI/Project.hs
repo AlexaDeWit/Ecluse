@@ -133,11 +133,12 @@ projectSimpleIndex name invalid files =
 projectVersions :: PackageName -> [ProjectedFile] -> (Map Text PackageDetails, [InvalidEntry])
 projectVersions name = foldl' place (Map.empty, [])
   where
-    place (!byVersion, !dropAcc) (ReleaseFile file) =
-        ( Map.alter (Just . projectDetails name file) (renderVersion (frVersion file)) byVersion
-        , dropAcc
-        )
-    place (!byVersion, !dropAcc) (UncoordinatedFile _ failure) = (byVersion, failure : dropAcc)
+    place (!byVersion, !dropAcc) = \case
+        ReleaseFile file ->
+            ( Map.alter (Just . projectDetails name file) (renderVersion (frVersion file)) byVersion
+            , dropAcc
+            )
+        UncoordinatedFile _ failure -> (byVersion, failure : dropAcc)
 
 -- 'mkInvalidEntry' reduces the location to its authority before logging.
 uncoordinatedDrop :: IndexFile -> InvalidEntry
