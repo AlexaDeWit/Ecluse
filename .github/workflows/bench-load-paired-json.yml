@@ -1,8 +1,8 @@
-name: Paired JSON load experiment
+name: Final JSON load comparison
 
 on:
   push:
-    branches: [measure/json-paired-load]
+    branches: [measure/json-final-load]
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pod-shape: [unlimited, 2cpu-1gib, 4cpu-1gib, 4cpu-2gib]
+        pod-shape: [2cpu-1gib, 4cpu-1gib, 4cpu-2gib]
     env:
       BENCH_LOAD_POD: ${{ matrix.pod-shape }}
     steps:
@@ -55,7 +55,7 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      - name: Build all three fixed implementations
+      - name: Build both fixed implementations
         run: nix develop .#ci --command task paired-load-build
 
       - name: Delegate the existing load cgroup
@@ -66,7 +66,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
           echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
 
-      - name: Run all three rotations sequentially
+      - name: Run both balanced orders sequentially
         run: |
           set -euo pipefail
           echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null

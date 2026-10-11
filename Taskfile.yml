@@ -167,7 +167,7 @@ tasks:
     cmds:
       - bash scripts/paired-json-load.sh build
   paired-load-run:
-    desc: Run the three paired JSON load rotations without rebuilding
+    desc: Run the paired JSON load rotations without rebuilding
     cmds:
       - bash scripts/paired-json-load.sh run
   perf-acceptance:

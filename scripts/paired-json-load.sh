@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Build first, then retain every sample from three fixed rotations on one runner.
+# Build first, then retain every sample from two balanced rotations on one runner.
 set -euo pipefail
 
-readonly main_revision=dc1bfb3571d33500a945a23a88eea935bcd80d23
-readonly native_revision=3b074ce62e7a1584fe3b638f2375b79f443e0f72
-readonly c_revision=a45f883a71a74ed10214ef235230c0268ac93914
-readonly implementations=(main native c)
-readonly revisions=("$main_revision" "$native_revision" "$c_revision")
-readonly rotations=('main native c' 'native c main' 'c main native')
+readonly main_revision=3384fa96dd2bf732fdbf051e02edf58df125e0bb
+readonly native_revision=53dd7943129211f882f98a89bcb828b1cbba45e4
+readonly implementations=(main native)
+readonly revisions=("$main_revision" "$native_revision")
+readonly rotations=('main native' 'native main')
 readonly expected_scenarios=npm/merge-cold,npm/heavy-private,pypi/index-cold,pypi/heavy-private
 readonly paired_root="${PAIRED_LOAD_ROOT:-${RUNNER_TEMP:?RUNNER_TEMP or PAIRED_LOAD_ROOT is required}/paired-json-load}"
 readonly sources="$paired_root/sources"
