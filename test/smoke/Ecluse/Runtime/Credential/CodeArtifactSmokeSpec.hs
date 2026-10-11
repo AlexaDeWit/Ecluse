@@ -52,17 +52,17 @@ configuredInputs = do
 
 mintToken :: Text -> Text -> Maybe Text -> IO AuthToken
 mintToken region domain owner =
-    guarded TokenMintFailed $
+    observationAction TokenMintFailed $
         newCodeArtifactProvider noCredentialReporters (CodeArtifactConfig region domain owner Nothing) >>= currentToken
 
 observeIndex :: ObservationConfig -> IO ()
 observeIndex config = do
-    env <- guarded AwsDiscoveryFailed (newAwsEnv (Just (ocRegion config)) Nothing CA.defaultService)
+    env <- observationAction AwsDiscoveryFailed (newAwsEnv (Just (ocRegion config)) Nothing CA.defaultService)
     endpoint <- repositoryEndpoint env config
     target <- expectObservation (observationTarget endpoint (ocPackage config))
     token <- mintToken (ocRegion config) (ocDomain config) (ocOwner config)
     request <- expectObservation (observationRequest target (authSecret token))
-    fetched <- guarded IndexExchangeFailed $ do
+    fetched <- observationAction IndexExchangeFailed $ do
         manager <- newManager tlsManagerSettings
         let progress = progressFloor defaultLimits
         withinServeCap progress id $
@@ -75,11 +75,11 @@ repositoryEndpoint env config = do
     let request =
             CA.newGetRepositoryEndpoint (ocDomain config) (ocRepository config) CA.PackageFormat_Pypi
                 & CA.getRepositoryEndpoint_domainOwner .~ ocOwner config
-    response <- guarded EndpointDiscoveryFailed (runResourceT (AWS.send env request))
+    response <- observationAction EndpointDiscoveryFailed (runResourceT (AWS.send env request))
     expectObservation (maybe (Left EndpointMissing) Right (response ^. CA.getRepositoryEndpointResponse_repositoryEndpoint))
 
-guarded :: ObservationError -> IO a -> IO a
-guarded failure action = tryAny action >>= expectObservation . first (const failure)
+observationAction :: ObservationError -> IO a -> IO a
+observationAction failure action = tryAny action >>= expectObservation . first (const failure)
 
 expectObservation :: Either ObservationError a -> IO a
 expectObservation = expectRightText . first renderObservationError
