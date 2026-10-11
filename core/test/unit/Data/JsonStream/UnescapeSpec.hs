@@ -166,16 +166,32 @@ longPayloads =
 
 malformedExamples :: [ByteString]
 malformedExamples =
-    [ "\\", "\\x", "\\u12", "\\u0X12", "\\ud800", "\\udc00", "\\ud800\\u0041"
+    [ "\\"
+    , "\\x"
+    , "\\u12"
+    , "\\u0X12"
+    , "\\ud800"
+    , "\\udc00"
+    , "\\ud800\\u0041"
     , BS.pack [0xed, 0xa0, 0x80]
     , BS.pack [0xf4, 0x90, 0x80, 0x80]
     ]
 
 unicodeBoundaries :: [(Int, Char)]
 unicodeBoundaries =
-    [ (0, '\x0'), (1, '\x1'), (31, '\x1f'), (32, '\x20'), (127, '\x7f')
-    , (128, '\x80'), (2047, '\x7ff'), (2048, '\x800'), (55295, '\xd7ff')
-    , (57344, '\xe000'), (65535, '\xffff'), (65536, '\x10000'), (1114111, '\x10ffff')
+    [ (0, '\x0')
+    , (1, '\x1')
+    , (31, '\x1f')
+    , (32, '\x20')
+    , (127, '\x7f')
+    , (128, '\x80')
+    , (2047, '\x7ff')
+    , (2048, '\x800')
+    , (55295, '\xd7ff')
+    , (57344, '\xe000')
+    , (65535, '\xffff')
+    , (65536, '\x10000')
+    , (1114111, '\x10ffff')
     ]
 
 allBytes, mutationBytes :: [Word8]

@@ -3,6 +3,7 @@
 --
 -- SPDX-License-Identifier: BSD-3-Clause
 {-# LANGUAGE BangPatterns #-}
+
 -- | The inherited lexer's numeric fallback, including its accepted noncanonical forms.
 module Data.JsonStream.Number (parseNumber, numberDigitLimit) where
 
@@ -27,42 +28,42 @@ digitNine = 57
 parseNumber :: BS.ByteString -> Maybe Scientific
 parseNumber tnumber = do
     let
-      (csign, r1) = parseSign tnumber :: (Int, BS.ByteString)
-      ((num, numdigits), r2) = parseDecimal r1 :: ((Integer, Int), BS.ByteString)
-      ((frac, frdigits), r3) = parseFract r2 :: ((Integer, Int), BS.ByteString)
-      (texp, rest) = parseE r3
+        (csign, r1) = parseSign tnumber :: (Int, BS.ByteString)
+        ((num, numdigits), r2) = parseDecimal r1 :: ((Integer, Int), BS.ByteString)
+        ((frac, frdigits), r3) = parseFract r2 :: ((Integer, Int), BS.ByteString)
+        (texp, rest) = parseE r3
     when (numdigits == 0 || not (BS.null rest)) Nothing
     let dpart = fromIntegral csign * (num * (decimalRadix ^ frdigits) + fromIntegral frac) :: Integer
         e = texp - frdigits
     return $ scientific dpart e
   where
     parseFract txt
-      | BS.null txt = ((0, 0), txt)
-      | BS.head txt == '.' = parseDecimal (BS.tail txt)
-      | otherwise = ((0,0), txt)
+        | BS.null txt = ((0, 0), txt)
+        | BS.head txt == '.' = parseDecimal (BS.tail txt)
+        | otherwise = ((0, 0), txt)
 
     parseE txt
-      | BS.null txt = (0, txt)
-      | firstc == 'e' || firstc == 'E' =
-              let (sign, rest) = parseSign (BS.tail txt)
-                  ((dnum, _), trest) = parseDecimal rest :: ((Int, Int), BS.ByteString)
-              in (dnum * sign, trest)
-      | otherwise = (0, txt)
+        | BS.null txt = (0, txt)
+        | firstc == 'e' || firstc == 'E' =
+            let (sign, rest) = parseSign (BS.tail txt)
+                ((dnum, _), trest) = parseDecimal rest :: ((Int, Int), BS.ByteString)
+             in (dnum * sign, trest)
+        | otherwise = (0, txt)
       where
         firstc = BS.head txt
 
     parseSign txt = case BS.uncons txt of
-      Just ('+', rest) -> (1, rest)
-      Just ('-', rest) -> (-1, rest)
-      _ -> (1, txt)
+        Just ('+', rest) -> (1, rest)
+        Just ('-', rest) -> (-1, rest)
+        _ -> (1, txt)
 
     parseDecimal txt
-      | BS.null txt = ((0, 0), txt)
-      | otherwise = parseNum txt (0,0)
+        | BS.null txt = ((0, 0), txt)
+        | otherwise = parseNum txt (0, 0)
 
     parseNum txt (!start, !digits)
-      | BS.null txt = ((start, digits), txt)
-      | dchr >= digitZero && dchr <= digitNine = parseNum (BS.tail txt) (start * fromIntegral decimalRadix + fromIntegral (dchr - digitZero), digits + 1)
-      | otherwise = ((start, digits), txt)
+        | BS.null txt = ((start, digits), txt)
+        | dchr >= digitZero && dchr <= digitNine = parseNum (BS.tail txt) (start * fromIntegral decimalRadix + fromIntegral (dchr - digitZero), digits + 1)
+        | otherwise = ((start, digits), txt)
       where
         dchr = BSW.head txt

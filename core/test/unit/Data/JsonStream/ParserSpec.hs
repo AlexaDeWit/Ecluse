@@ -71,8 +71,10 @@ objectSpec = describe "typed one-pass object fields" $ do
         expectEveryCut parser "{\"age\":1,\"name\":\"first\",\"age\":2,\"name\":\"second\"}" (Right expected)
 
     it "retains every yield from a selected field parser" $
-        expectEveryCut (J.objectOf ("items" J..: J.arrayOf (J.integer :: J.Parser Int)))
-            "{\"items\":[1,2],\"items\":[3]}" (Right [1, 2, 3])
+        expectEveryCut
+            (J.objectOf ("items" J..: J.arrayOf (J.integer :: J.Parser Int)))
+            "{\"items\":[1,2],\"items\":[3]}"
+            (Right [1, 2, 3])
 
     it "preserves missing, mismatched and defaulted field results" $ do
         let parser = J.objectOf $ (,) <$> "missing" J..:? J.string <*> (("count" J..: (J.integer :: J.Parser Int)) J..| missingCount)

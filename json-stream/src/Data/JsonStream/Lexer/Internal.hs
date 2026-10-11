@@ -3,15 +3,15 @@
 --
 -- SPDX-License-Identifier: BSD-3-Clause
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE StrictData #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StrictData #-}
 -- Keep findIndex's loop counter unboxed under Cabal's default -O1.
 {-# OPTIONS_GHC -fspec-constr #-}
 
--- | Incremental Haskell scanning with the inherited lexer's token and chunk semantics.
--- State owns immutable byte slices, with no foreign result records.
-module Data.JsonStream.Lexer.Internal
-    ( Cursor, Element (..), Scanned (..), PlainString, mkPlainString, plainBytes, start, next, feed, remaining ) where
+{- | Incremental Haskell scanning with the inherited lexer's token and chunk semantics.
+State owns immutable byte slices, with no foreign result records.
+-}
+module Data.JsonStream.Lexer.Internal (Cursor, Element (..), Scanned (..), PlainString, mkPlainString, plainBytes, start, next, feed, remaining) where
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
@@ -24,9 +24,16 @@ import Data.JsonStream.Number (numberDigitLimit, parseNumber)
 
 -- | A lexical token independent of the public parser's leftover-input reporting.
 data Element
-    = ArrayBegin | ArrayEnd | ObjectBegin | ObjectEnd
-    | StringContent !BS.ByteString | StringPlain !PlainString | StringEncoded !BS.ByteString | StringEnd
-    | JValue !Aeson.Value | JInteger !CLong
+    = ArrayBegin
+    | ArrayEnd
+    | ObjectBegin
+    | ObjectEnd
+    | StringContent !BS.ByteString
+    | StringPlain !PlainString
+    | StringEncoded !BS.ByteString
+    | StringEnd
+    | JValue !Aeson.Value
+    | JInteger !CLong
     deriving (Eq, Show)
 
 -- | Bytes that need neither JSON unescaping nor UTF-8 decoding.
@@ -47,8 +54,13 @@ plainBytes (PlainString bytes) = bytes
 -- | The current piece and lexical state carried across pieces.
 data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode ~[BS.ByteString]
 
-data Mode = Base | StringPart !Bool !Bool | NumberPart
-    | LiteralPart !Literal {-# UNPACK #-} !Int | StringFinish | Broken
+data Mode
+    = Base
+    | StringPart !Bool !Bool
+    | NumberPart
+    | LiteralPart !Literal {-# UNPACK #-} !Int
+    | StringFinish
+    | Broken
 
 data Literal = TrueLiteral | FalseLiteral | NullLiteral
 
@@ -162,17 +174,18 @@ stringStop bytes initial continued escaped0
             let !position = offset + distance
                 !byte = BS.index bytes position
              in if byte == quote
-                then StringStop position False False
-                else if byte == backslash
-                    then escaped (position + 1)
-                    else special (position + 1)
+                    then StringStop position False False
+                    else
+                        if byte == backslash
+                            then escaped (position + 1)
+                            else special (position + 1)
     special !offset = case BS.findIndex delimiterByte (BS.drop offset bytes) of
         Nothing -> partial False
         Just distance ->
             let !position = offset + distance
              in if BS.index bytes position == quote
-                then StringStop position False True
-                else escaped (position + 1)
+                    then StringStop position False True
+                    else escaped (position + 1)
     escaped !offset
         | offset >= size = partial True
         | otherwise = special (offset + 1)
@@ -195,19 +208,24 @@ number bytes initial continued numbers = go initial 0 0 False 0 continued 1
         | otherwise =
             let !byte = BS.index bytes offset
              in if not (numberByte byte)
-                then complete (piece offset) offset computed fractionDigits invalid sign
-                else if invalid
-                    then go (offset + 1) computed digits dotted fractionDigits True sign
-                    else if offset == initial && byte == minus
-                        then go (offset + 1) computed digits dotted fractionDigits False (negate 1)
-                        else if digitByte byte
-                            then let !digits' = digits + 1
-                                     !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
-                                     !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
-                                  in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
-                            else if byte == dot && not dotted
-                                then go (offset + 1) computed digits True fractionDigits False sign
-                                else go (offset + 1) computed digits dotted fractionDigits True sign
+                    then complete (piece offset) offset computed fractionDigits invalid sign
+                    else
+                        if invalid
+                            then go (offset + 1) computed digits dotted fractionDigits True sign
+                            else
+                                if offset == initial && byte == minus
+                                    then go (offset + 1) computed digits dotted fractionDigits False (negate 1)
+                                    else
+                                        if digitByte byte
+                                            then
+                                                let !digits' = digits + 1
+                                                    !computed' = computed * decimalRadix + fromIntegral (byte - digitZero)
+                                                    !fractionDigits' = if dotted then fractionDigits + 1 else fractionDigits
+                                                 in go (offset + 1) computed' digits' dotted fractionDigits' (digits' > fastDigits) sign
+                                            else
+                                                if byte == dot && not dotted
+                                                    then go (offset + 1) computed digits True fractionDigits False sign
+                                                    else go (offset + 1) computed digits dotted fractionDigits True sign
     partial part
         | not continued = More (Cursor bytes size NumberPart [part])
         | foldl' (\total piece -> total + BS.length piece) 0 numbers > numberDigitLimit = Failed
