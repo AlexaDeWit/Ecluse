@@ -427,6 +427,11 @@ mounts:
   # With advisories.url set, this mount reads pypi-osv-schema4.db under that prefix.
   # Publish it with ecluse pilot compile --ecosystem pypi --out DIR --upload.
   pypi:
+    # pypi blocks these rule types at boot, even through shared rules:
+    # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
+    # AllowScope: A PyPI project name has no scope, so this rule can never match one.
+    # Move either type from shared rules into mounts.npm.rules, or disable its configured
+    # entry with enabled: false under mounts.pypi.rules (ECLUSE_MOUNTS__PYPI__RULES).
     publicUpstream:
       registry:
         url: https://pypi.org

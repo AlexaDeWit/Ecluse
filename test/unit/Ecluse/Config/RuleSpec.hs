@@ -5,10 +5,13 @@
 
 module Ecluse.Config.RuleSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Aeson (Value (Object), eitherDecodeStrict)
 import Data.Aeson.Types (parseEither, (.!=), (.:?))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
 import Ecluse.Config (defaultPolicy)
@@ -21,6 +24,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
     RuleReach (..),
+    RuleType,
     defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
@@ -30,6 +34,7 @@ import Ecluse.Core.Rules.Types (
     defaultDenyInstallTimeExecutionPrecedence,
     ruleName,
  )
+import Ecluse.Core.Wire (renderWire)
 import Ecluse.Test.Rules (admissionOnly, atPrecedence)
 
 spec :: Spec
@@ -322,6 +327,9 @@ rulePolicySpec = describe "rulePolicySpec" $ do
                 `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
 
     describe "rule-type name contract" $ do
+        it "uses the canonical typed vocabulary for diagnostic names" $
+            knownRuleTypes `shouldBe` map renderWire (universe :: [RuleType])
+
         it "covers exactly the diagnostic knownRuleTypes list (neither has drifted)" $
             map fst knownRuleAdds `shouldMatchList` knownRuleTypes
 

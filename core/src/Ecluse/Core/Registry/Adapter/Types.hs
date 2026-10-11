@@ -25,6 +25,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     ProjectName,
  )
 import Ecluse.Core.Registry.Request (CredentialMapping)
+import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Server.Context (MountRouter)
 import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
@@ -34,6 +35,8 @@ consuming pipeline from. 'Ecluse.Core.Registry.Adapter.adapterFor' resolves it.
 data RegistryAdapter = RegistryAdapter
     { adapterEcosystem :: Ecosystem
     -- ^ The registry key must agree with it, so no record can register under a foreign ecosystem.
+    , adapterRuleBlocks :: Map RuleType Text
+    -- ^ Rule types this ecosystem refuses at boot, each with its reason.
     , adapterServe :: AdapterServe
     -- ^ The web-facing serve surface: the route grammar and response contracts.
     , adapterMetadata :: AdapterMetadata

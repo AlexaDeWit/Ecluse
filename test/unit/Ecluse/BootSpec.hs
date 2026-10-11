@@ -21,14 +21,15 @@ import UnliftIO (throwIO, timeout, try)
 import Ecluse (run)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
 import Ecluse.Composition.BootError (
-    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
+    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, RuleBlockedOnMount, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
 import Ecluse.Composition.Support (captureBoot, collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, publicGateEnv, reportLines, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
 import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
 import Ecluse.Dredger (dredgerServerConfig)
@@ -72,6 +73,28 @@ awsRunEnv =
 
 spec :: Spec
 spec = do
+    describe "blocked rules at both entry points" $ do
+        let bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
+        for_ [("DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), ("AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one.")] $ \(name, parameters, ty, reason) ->
+            it ("refuses " <> name <> " with the same block line") $ do
+                let rules = "{\"custom\":{\"type\":\"" <> name <> "\"" <> parameters <> "}}"
+                    env = overrideEnv "ECLUSE_RULES" rules bothMounts
+                    expected = renderBootError (RuleBlockedOnMount PyPI ty reason)
+                (bootOutcome, bootReport) <- bootRefusal ["proxy"] env
+                (checkOutcome, checkReport) <- checkConfigRefusal env
+                bootOutcome `shouldBe` Left (ExitFailure 2)
+                checkOutcome `shouldBe` refusedCheck
+                bootReport `shouldBe` [expected]
+                checkReport `shouldBe` [expected, "configuration: refused"]
+        it "boots and checks both mounts after the same-key PyPI suppression" $ do
+            let env =
+                    overrideEnv
+                        "ECLUSE_MOUNTS__PYPI__RULES"
+                        "{\"custom\":{\"enabled\":false}}"
+                        (overrideEnv "ECLUSE_RULES" "{\"custom\":{\"type\":\"DenyInstallTimeExecution\"}}" bothMounts)
+            checkConfig env `shouldReturn` Left ExitSuccess
+            serves ["proxy"] env
+
     describe "shared listener settings" $ do
         forM_ [("default", [], 30), ("override", [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "7")], 7)] $ \(label, timeoutEnv, expected) ->
             it ("uses the " <> label <> " timeout and configured port for every listener") $ do
@@ -401,6 +424,8 @@ caseKeys =
                , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
                , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN"
                , "ECLUSE_MOUNTS__RUBYGEMS__ENABLED"
+               , "ECLUSE_MOUNTS__PYPI__ENABLED"
+               , "ECLUSE_MOUNTS__PYPI__RULES"
                , "ECLUSE_MOUNTS__NPM__RULES"
                , "ECLUSE_ADVISORIES__URL"
                , "ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL"

@@ -25,9 +25,9 @@ import Ecluse.Config (
     renderPolicyError,
     storeTagName,
  )
-import Ecluse.Config.Resolve (mountKeyRef)
+import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (externalConnectionText),
     PermissionName (permissionNameText),
@@ -35,9 +35,11 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
+import Ecluse.Core.Rules.Types (RuleType)
 import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Wire (renderWire)
 
 {- | A reason the composition root refuses to start. The root aggregates them, so a
 single run reports every problem an operator must fix.
@@ -153,6 +155,8 @@ data BootError
       those rules could never decide. Carries the mount and the rule names, in policy order.
       -}
       AdvisoryDenyWithoutStore Ecosystem (NonEmpty Text)
+    | -- | An active mount carries a rule its adapter blocks, with the declared reason.
+      RuleBlockedOnMount Ecosystem RuleType Text
     | {- | An advisory store is configured and no mount is, so @ecluse pilot@ has no ecosystem
       to compile an artifact for and would publish nothing.
       -}
@@ -219,6 +223,22 @@ renderBootErrors = T.unlines . map renderBootError
 renderBootError :: BootError -> Text
 renderBootError = \case
     PolicyBootError err -> renderPolicyError err
+    RuleBlockedOnMount eco ty reason ->
+        "mount \""
+            <> ecosystemName eco
+            <> "\" carries the rule "
+            <> renderWire ty
+            <> ", which the "
+            <> ecosystemName eco
+            <> " ecosystem blocks: "
+            <> reason
+            <> " A rule in shared rules reaches every mount. Move this type from shared rules into "
+            <> mountDocRef Npm "rules"
+            <> ", or disable its configured entry with enabled: false under "
+            <> mountDocRef eco "rules"
+            <> " ("
+            <> mountKeyRef eco "rules"
+            <> ")."
     MissingAdapter eco ->
         "mount " <> ecosystemName eco <> " has no adapter wired in this build"
     UnresolvedCredential eco ->

@@ -10,7 +10,11 @@ import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import Test.Hspec
 
+import Data.Map.Strict qualified as Map
 import Ecluse.Config (loadConfig, renderConfigError)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
+import Ecluse.Core.Registry.Adapter (adapterFor, adapterRuleBlocks)
+import Ecluse.Core.Wire (renderWire)
 
 {- | Every operator-facing @ECLUSE_*@ spelling outside a mount's tagged endpoints, paired with a
 value the loader must accept. Each needs its document key in @config\/default.yaml@, and must load.
@@ -193,6 +197,20 @@ spec = describe "the configuration reference covers the accepted variables" $ do
                 , maybe True (not . documentsKey yaml) (documentKey var)
                 ]
         missing `shouldBe` []
+
+    it "documents every adapter block and its reason in both operator references" $ do
+        manual <- readOperatorManual
+        yaml <- decodeUtf8 <$> readFileBS "config/default.yaml"
+        let blocks =
+                [ (ecosystemName eco, renderWire ty, reason)
+                | eco <- [Npm, PyPI]
+                , Just adapter <- [adapterFor eco]
+                , (ty, reason) <- Map.toList (adapterRuleBlocks adapter)
+                ]
+        for_ blocks $ \(ecosystem, ty, reason) ->
+            for_ [manual, yaml] $ \reference ->
+                for_ [ecosystem, ty, reason] $ \fact ->
+                    reference `shouldSatisfy` T.isInfixOf fact
 
     it "the operator manual mentions every process-level spelling" $ do
         manual <- readOperatorManual

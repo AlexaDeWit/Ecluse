@@ -9,6 +9,8 @@ Configuration selects built-in rules and cannot supply evaluation closures.
 module Ecluse.Core.Rules.Types (
     -- * The built-in rule vocabulary
     Rule (..),
+    RuleType (..),
+    ruleType,
     DenyIfCveParams (..),
     DenyIfEpssParams (..),
     ruleName,
@@ -60,6 +62,8 @@ module Ecluse.Core.Rules.Types (
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (
@@ -70,6 +74,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version)
+import Ecluse.Core.Wire (WireVocab (..), renderWire)
 
 {- | The closed built-in rule vocabulary accepted from configuration.
 'Ecluse.Core.Rules.prepare' binds capabilities without accepting arbitrary evaluation closures.
@@ -133,19 +138,48 @@ data DenyIfEpssParams = DenyIfEpssParams
     }
     deriving stock (Eq, Show)
 
-{- | A stable, human-facing name for a rule: its identity, derived from the data. It is
-the boot-order tiebreak and the credited identity in logs and denial messages.
--}
+-- | Parameter-free rule identity for configuration and ecosystem blocks.
+data RuleType
+    = AllowScopeType
+    | AllowIfOlderThanType
+    | AllowByIdentityType
+    | AllowIfRemediatesCveType
+    | DenyIfCveType
+    | DenyIfEpssType
+    | DenyInstallTimeExecutionType
+    | DenyByIdentityType
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Universe RuleType where universe = universeGeneric
+
+instance WireVocab RuleType where
+    wireKind = "rule type"
+    wireTable =
+        (AllowScopeType, "AllowScope")
+            :| [ (AllowIfOlderThanType, "AllowIfOlderThan")
+               , (AllowByIdentityType, "AllowByIdentity")
+               , (AllowIfRemediatesCveType, "AllowIfRemediatesCve")
+               , (DenyIfCveType, "DenyIfCve")
+               , (DenyIfEpssType, "DenyIfEpss")
+               , (DenyInstallTimeExecutionType, "DenyInstallTimeExecution")
+               , (DenyByIdentityType, "DenyByIdentity")
+               ]
+
+-- | Discard a rule's parameters while retaining its canonical type.
+ruleType :: Rule -> RuleType
+ruleType = \case
+    AllowScope{} -> AllowScopeType
+    AllowIfOlderThan{} -> AllowIfOlderThanType
+    DenyInstallTimeExecution -> DenyInstallTimeExecutionType
+    DenyByIdentity{} -> DenyByIdentityType
+    AllowByIdentity{} -> AllowByIdentityType
+    AllowIfRemediatesCve -> AllowIfRemediatesCveType
+    DenyIfCve{} -> DenyIfCveType
+    DenyIfEpss{} -> DenyIfEpssType
+
+-- | Canonical rule name used for boot-order ties, logs, and denial messages.
 ruleName :: Rule -> Text
-ruleName = \case
-    AllowScope{} -> "AllowScope"
-    AllowIfOlderThan{} -> "AllowIfOlderThan"
-    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
-    DenyByIdentity{} -> "DenyByIdentity"
-    AllowByIdentity{} -> "AllowByIdentity"
-    AllowIfRemediatesCve -> "AllowIfRemediatesCve"
-    DenyIfCve{} -> "DenyIfCve"
-    DenyIfEpss{} -> "DenyIfEpss"
+ruleName = renderWire . ruleType
 
 {- | Whether a rule reads the advisory database. A rule set with none never needs one, and a set
 with one is worth waiting a bounded while for the first sync before deciding anything.

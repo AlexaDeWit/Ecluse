@@ -24,10 +24,13 @@ view an adapter produces (see
 reading. The Dredger can build it from a store listing alone, which establishes identity with no
 metadata read. A rule never sees a registry wire format. Rule names track the agnostic concept,
 not one ecosystem's mechanism: the install-time code-execution signal, not npm's
-`hasInstallScript`. Where the signal a rule reads is absent for an ecosystem, the rule yields no
-decision, the no-op under deny-by-default, never a configuration error. Where nothing read that
-signal at all, the rule yields `CannotVet` instead, so evaluation stops rather than letting a
-lower-precedence rule decide past an unresolved one.
+`hasInstallScript`. A determined absence can yield no decision under deny-by-default.
+Where nothing read that signal at all, the rule yields `CannotVet`, so evaluation stops rather than
+letting a lower-precedence rule decide past an unresolved one.
+An adapter declares a typed block when a rule's meaning does not fit its ecosystem or the ecosystem
+can never determine the required fact. Boot refuses every blocked entry in an active mount's
+resolved policy, with the adapter's reason and the configuration remedy.
+This configuration check does not change the engine's treatment of evidence.
 
 A `Rule` is closed `Eq`/`Show` data with no evaluation. `verdictSource` is the single dispatch
 over it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a

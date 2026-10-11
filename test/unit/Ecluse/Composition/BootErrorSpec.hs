@@ -29,10 +29,12 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
     UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
  )
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = do
+    ruleBlockRenderSpec
     renderBootErrorSpec
     renderBootErrorsSpec
     renderAdvisorySpec
@@ -47,6 +49,25 @@ spec = do
     it "names both upstream keys and their repository in the private/public refusal" $
         renderBootError (PrivateUpstreamOnPublicUpstream Npm "https://registry.example.test/npm/public/")
             `shouldBe` "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM and ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM resolve to the same registry (https://registry.example.test/npm/public/): the private leg forwards caller credentials and admits versions without the public rules. Configure distinct repositories."
+
+ruleBlockRenderSpec :: Spec
+ruleBlockRenderSpec = describe "blocked-rule remedies" $ do
+    let entries =
+            [ (DenyInstallTimeExecutionType, "DenyInstallTimeExecution", "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.")
+            , (AllowScopeType, "AllowScope", "A PyPI project name has no scope, so this rule can never match one.")
+            ]
+        expected name reason =
+            "mount \"pypi\" carries the rule "
+                <> name
+                <> ", which the pypi ecosystem blocks: "
+                <> reason
+                <> " A rule in shared rules reaches every mount. Move this type from shared rules into mounts.npm.rules, or disable its configured entry with enabled: false under mounts.pypi.rules (ECLUSE_MOUNTS__PYPI__RULES)."
+    for_ entries $ \(ty, name, reason) ->
+        it ("renders the complete remedy for " <> toString name) $
+            renderBootError (RuleBlockedOnMount PyPI ty reason) `shouldBe` expected name reason
+    it "retains both block lines beside an independent refusal" $
+        renderBootErrors ([RuleBlockedOnMount PyPI ty reason | (ty, _, reason) <- entries] <> [MissingAdapter RubyGems])
+            `shouldBe` T.unlines ([expected name reason | (_, name, reason) <- entries] <> ["mount rubygems has no adapter wired in this build"])
 
 renderBootErrorsSpec :: Spec
 renderBootErrorsSpec =
