@@ -27,6 +27,7 @@ fi
 
 # Instrumented build + run of just this suite.
 if [ "$suite" = ecluse-integration ]; then
+  bash scripts/test-integration.sh validate-coverage "$@"
   cabal build "$suite" --enable-coverage --builddir="$builddir"
   export ECLTEST_INTEGRATION_BINARY
   ECLTEST_INTEGRATION_BINARY="$(cabal list-bin "$suite" --enable-coverage --builddir="$builddir")"

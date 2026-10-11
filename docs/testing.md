@@ -772,17 +772,32 @@ The tier stays outside local `task gate` and `task check`. Run these commands in
 task test-contract-list TIER=e2e
 task test-contract-plan TIER=e2e
 task test-e2e
-task test-e2e-audit
 ```
 
 Listing and planning need the compiled runner but no services.
-`task test-e2e` prepares, loads, and runs the image. A later `test-e2e-run` reuses that preparation.
-`test-e2e-prepare` writes `scratchpad/e2e/docker-image.tar`, `plan.json`, and `identity.json`.
+`task test-e2e` prepares, loads, and runs the image in a fresh `scratchpad/e2e/run.*` directory.
+It prints the artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later reruns or auditing.
+Staged commands require an explicit directory:
+
+```bash
+mkdir -p scratchpad/e2e
+export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
+task test-e2e-prepare
+task test-e2e-load
+task test-e2e-run
+task test-e2e-audit
+```
+
+Preparation writes `docker-image.tar`, `plan.json`, and `identity.json` once.
+Another preparation cannot overwrite that directory, including after a failed preparation.
+An artifact lock prevents overlapping preparation, loading, execution, or auditing in the same directory.
 `test-e2e-load` validates the prepared identity before loading the archive.
-`test-e2e-audit` checks collected reports against the complete plan and identity.
-For a later targeted rerun, choose `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
-Each rerun replaces its shard report. A group rerun without `SHARD` replaces `reports/all.json`.
-Keep full-run reports separately before a subset rerun. A full audit rejects mixed full/subset reports as duplicate execution.
+`test-e2e-audit` checks current reports against the complete plan and identity.
+For a targeted rerun, use `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
+Each attempt invalidates its previous published report before checking prerequisites.
+Only a successful runner and cleanup publish the current report.
+Failed reports and logs remain under `reports/attempts/` and cannot satisfy the audit.
+A group rerun without `SHARD` replaces `reports/all.json`. Mixing full and partition reports fails the audit.
 Use a group ID from `test-contract-list` when reproducing a failure.
 The [contract coverage map](test-contracts.md) records migrated assertions and native extensions.
 
@@ -1729,6 +1744,11 @@ others exercise: only integration covers the SQS `MirrorQueue` and the worker's 
 the integration tier, so it needs a Docker daemon. Without one it fails and points at the fast path.
 For a quick, Docker-free loop, `task coverage-unit` (default `SUITE=ecluse-unit`, or another suite)
 measures one tier and prints loudly that it is a partial view.
+
+Integration coverage rejects runner selection, discovery, report overrides, and extra suite targets in `COVERAGE_FLAGS`.
+Accepted options are `-fdev-http-egress` (or `--flags=dev-http-egress`), `--enable-coverage`, `--builddir=dist-coverage`, and `--test-show-details=direct`.
+After execution, the same instrumented binary audits the report against the full compiled catalogue.
+Discovery and auditing use separate temporary `.tix` files, preserving the suite's coverage ticks.
 
 **What CI uploads.** The `coverage` job is a four-leg matrix, one runner per instrumented suite.
 Each leg builds and runs its own suite through `scripts/coverage.sh` and uploads the JSON that

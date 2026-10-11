@@ -193,25 +193,32 @@ Use `task perf-allocation` for the allocation gate and the documented benchmark/
 
 E2E and integration discovery need no Docker or credentials.
 The scripts compile their runner if needed. `TIER` accepts only `e2e` and `integration`.
-Run and audit the complete E2E suite together:
+Run the complete E2E suite with fresh artifacts:
 
 ```bash
 task test-contract-list TIER=e2e
 task test-contract-plan TIER=e2e
 task test-e2e
+```
+
+The task prints its new artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path before running `task test-e2e-audit`.
+For staged preparation, choose a fresh directory explicitly:
+
+```bash
+mkdir -p scratchpad/e2e
+export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
+task test-e2e-prepare
+task test-e2e-load
+task test-e2e-run
 task test-e2e-audit
 ```
 
-For a targeted rerun, choose one selection after image preparation and loading:
-
-```bash
-task test-e2e-run SHARD=pypi
-task test-e2e-run -- --group pypi/install
-```
-
-These selections reuse the prepared image and plan. They are alternatives, not inputs to a full-suite audit.
-A run replaces `reports/all.json`, or `reports/<shard>.json` when a shard is selected.
-Preserve completed full-run reports before a subset rerun. Mixing full and subset reports fails the duplicate-case audit.
+Preparation cannot overwrite an existing attempt. Commands that share an artifact directory hold the same lock.
+For a targeted rerun, choose `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
+These selections reuse the prepared image and plan. A subset report cannot satisfy the full-suite audit.
+Before prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
+Only successful execution and cleanup publish `reports/all.json` or `reports/<shard>.json`.
+Failed-attempt evidence remains available for diagnosis but does not count towards completion.
 The full audit requires every primary group and case exactly once, with matching execution identities.
 
 Integration supports stable group, partition, ecosystem, backend, and capability selection:
@@ -228,6 +235,7 @@ task test-integration SHARD=http
 Unit catalogue audits run through `task test`. They have no `TIER=unit` list or plan command.
 Smoke and residency retain their existing suite commands. Measurement registration does not add a measurement execution CLI.
 Run integration through its Task wrapper so selected Docker groups receive ownership and daemon exclusion controls.
+Integration coverage always runs and audits the complete catalogue. `COVERAGE_FLAGS` cannot select cases, bypass execution, or change the report path.
 
 ## Canonical E2E module index
 

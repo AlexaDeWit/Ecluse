@@ -124,13 +124,11 @@ tasks:
     cmds:
       - bash scripts/e2e.sh audit
   test-e2e:
-    desc: Prepare, load and run the real product image
+    desc: Prepare, load and run the real product image with owned artifacts
+    env:
+      ECLTEST_SHARD: '{{.SHARD | default "all"}}'
     cmds:
-      - task: test-e2e-prepare
-      - task: test-e2e-load
-      - task: test-e2e-run
-        vars:
-          SHARD: '{{.SHARD | default "all"}}'
+      - bash scripts/e2e.sh full {{.CLI_ARGS}}
   test-clean:
     desc: Wait for active planes, then reap this worktree's stale test resources
     cmds:

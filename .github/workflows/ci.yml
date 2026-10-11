@@ -298,6 +298,7 @@ jobs:
       partitions: ${{ steps.plan.outputs.partitions }}
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
       ECLTEST_SOURCE: ${{ github.sha }}
       ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -354,6 +355,7 @@ jobs:
       contents: read
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
       ECLTEST_SOURCE: ${{ github.sha }}
       ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -425,6 +427,7 @@ jobs:
       contents: read
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
       ECLTEST_SOURCE: ${{ github.sha }}
       ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:

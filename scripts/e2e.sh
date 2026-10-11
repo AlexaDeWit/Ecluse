@@ -2,12 +2,20 @@
 # Prepare immutable inputs, load an image, run a selection, or audit shard reports.
 set -euo pipefail
 
-root="${ECLTEST_ARTIFACT_DIR:-scratchpad/e2e}"
+root="${ECLTEST_ARTIFACT_DIR:-}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   echo "e2e: $*" >&2
   exit 1
+}
+
+lock_artifacts() {
+  [ -n "$root" ] || fail "set ECLTEST_ARTIFACT_DIR for staged commands, or use task test-e2e"
+  mkdir -p "$root"
+  export ECLTEST_ARTIFACT_DIR="$root"
+  exec 8>"$root/.lock"
+  flock 8
 }
 
 architecture() {
@@ -48,7 +56,9 @@ identity() {
 
 prepare() {
   local binary archive config image
-  mkdir -p "$root"
+  [ ! -e "$root/plan.json" ] && [ ! -e "$root/identity.json" ] && [ ! -e "$root/docker-image.tar" ] \
+    || fail "prepared inputs already exist, choose a new ECLTEST_ARTIFACT_DIR"
+  mkdir "$root/.preparation" || fail "preparation already attempted, choose a new ECLTEST_ARTIFACT_DIR"
   binary="$(runner)"
   "$binary" --catalogue-plan > "$root/plan.json"
   archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
@@ -81,10 +91,50 @@ run_selection() {
   binary="$(runner)"
   mkdir -p "$root/reports"
   if [ "$shard" = all ]; then
-    exec "$binary" --report "$root/reports/all.json" "$@"
+    exec "$binary" --report "${ECLTEST_REPORT_PATH:?}" "$@"
   else
-    exec "$binary" --shard "$shard" --report "$root/reports/$shard.json" "$@"
+    exec "$binary" --shard "$shard" --report "${ECLTEST_REPORT_PATH:?}" "$@"
   fi
+}
+
+run_attempt() {
+  local shard="${ECLTEST_SHARD:-all}" attempt status flag previous
+  local -a superseded
+  [[ "$shard" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid shard name"
+  mkdir -p "$root/reports/attempts"
+  attempt="$(mktemp -d "$root/reports/attempts/$shard.XXXXXXXXXX")"
+  if [ "$shard" = all ]; then
+    shopt -s nullglob
+    superseded=("$root"/reports/*.json)
+  else
+    superseded=("$root/reports/$shard.json" "$root/reports/all.json")
+  fi
+  for previous in "${superseded[@]}"; do
+    if [ -e "$previous" ]; then
+      mv "$previous" "$attempt/previous-$(basename "$previous")"
+    fi
+  done
+  printf 'running\n' > "$attempt/status"
+  export ECLTEST_REPORT_PATH="$attempt/report.json"
+  set +e
+  (
+    set -e
+    for flag in "$@"; do
+      case "$flag" in --report|--report=*) fail "the wrapper owns the report path" ;; esac
+    done
+    identity
+    bash "$here/test-containers.sh" run bash "$here/e2e.sh" owned-run "$@"
+  ) 2>&1 | tee "$attempt/run.log" "$root/reports/$shard.log"
+  status=$?
+  set -e
+  printf '%s\n' "$status" > "$attempt/status"
+  [ "$status" -eq 0 ] || return "$status"
+  if [ ! -s "$ECLTEST_REPORT_PATH" ]; then
+    printf 'missing-report\n' > "$attempt/status"
+    fail "runner completed without a current execution report"
+  fi
+  cp "$ECLTEST_REPORT_PATH" "$root/reports/$shard.json.tmp"
+  mv "$root/reports/$shard.json.tmp" "$root/reports/$shard.json"
 }
 
 audit() {
@@ -95,7 +145,11 @@ audit() {
   reports=("$root"/reports/*.json)
   [ "${#reports[@]}" -gt 0 ] || { echo 'e2e: no shard reports' >&2; return 1; }
   binary="$(runner)"
-  "$binary" --audit "$root/plan.json" "${reports[@]}"
+  if [ "${#reports[@]}" -eq 1 ] && [ "${reports[0]}" = "$root/reports/all.json" ]; then
+    "$binary" --audit-full "$root/plan.json" "${reports[0]}"
+  else
+    "$binary" --audit "$root/plan.json" "${reports[@]}"
+  fi
 }
 
 diagnostics() {
@@ -107,24 +161,29 @@ diagnostics() {
 }
 
 case "${1:-}" in
-  prepare) prepare ;;
-  load) load_image ;;
-  run)
+  prepare) lock_artifacts; prepare ;;
+  load) lock_artifacts; load_image ;;
+  run) shift; lock_artifacts; run_attempt "$@" ;;
+  full)
     shift
-    mkdir -p "$root/reports"
-    (
-      identity
-      bash "$here/test-containers.sh" run bash "$here/e2e.sh" owned-run "$@"
-    ) 2>&1 | tee "$root/reports/${ECLTEST_SHARD:-all}.log"
+    if [ -z "$root" ]; then
+      mkdir -p scratchpad/e2e
+      root="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
+    fi
+    printf 'E2E artifacts: %s\n' "$root"
+    lock_artifacts
+    prepare
+    load_image
+    run_attempt "$@"
     ;;
   owned-run)
     shift
     [ "${ECLTEST_CONTAINER_LOCK:-}" = held ] || fail "missing container lifetime"
     run_selection "$@"
     ;;
-  audit) audit ;;
-  diagnostics) diagnostics ;;
+  audit) lock_artifacts; audit ;;
+  diagnostics) lock_artifacts; diagnostics ;;
   list) binary="$(runner)"; "$binary" --catalogue-list ;;
   plan) binary="$(runner)"; "$binary" --catalogue-plan ;;
-  *) echo "usage: $0 {prepare|load|run [SELECTION...]|audit|list|plan}" >&2; exit 2 ;;
+  *) echo "usage: $0 {prepare|load|run [SELECTION...]|full|audit|list|plan}" >&2; exit 2 ;;
 esac
