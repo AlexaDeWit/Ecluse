@@ -51,7 +51,8 @@ guarantee for every build, because GHC 9.10 does not promise deterministic objec
 orders its object code differently from build to build when it compiles modules in parallel, so the
 flake compiles the image's `ecluse` binary and each Haskell library it builds from source one module
 at a time. A release's own build is a third build, and no job compares it with the other two. The
-job reports its result and does not gate a merge.
+job gates a merge on both architectures. A mismatch or a skipped comparison after a failed build
+fails the gate. The gate accepts a skip only when the change classifier excludes the release build.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces immutable
 tags, so every push is a fresh, never-reused tag. The release publishes `ecluse:X.Y.Z` and nothing

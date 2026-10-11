@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Decide the CI gate from its dependencies' results, for .github/workflows/ci.yml.
-#
-# A skip counts as a pass only when the change classifier skipped the job: the
-# documentation-only filter for the Haskell jobs, and the release-build filter for the
-# release dry-run. Every other skip, failure, or cancellation fails the gate, so a job
-# that silently never ran can never read as green.
+# Only a classifier filter can excuse a skipped job.
 set -euo pipefail
 
 verdict=0
@@ -37,9 +33,7 @@ require build "${BUILD:-missing}" docs
 require allocation "${ALLOCATION:-missing}" docs
 require coverage "${COVERAGE:-missing}" docs
 
-# codecov-notify posts the Codecov statuses once every coverage leg has uploaded, so it
-# runs only behind a green coverage job. Any other coverage result already decided the
-# gate above, and a skip there is the correct outcome rather than a second failure.
+# Coverage failure already fails the gate and prevents codecov-notify from running.
 if [ "${COVERAGE:-missing}" = "success" ]; then
   require codecov-notify "${CODECOV_NOTIFY:-missing}"
 else
@@ -58,5 +52,8 @@ if [ "${RELEASE_DRY_RUN:-missing}" = "success" ]; then
 else
   echo "ok      release-dry-run-assemble, release-dry-run-boot: not run, release-dry-run did not succeed"
 fi
+
+# A failed rebuild skips the comparison, which must fail outside the release filter.
+require release-compare "${RELEASE_COMPARE:-missing}" release
 
 exit "$verdict"

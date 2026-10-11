@@ -591,10 +591,8 @@ jobs:
       artifact-prefix: rebuild-
       sbom: false
 
-  # Report-only: absent from the gate's `needs`. A difference fails this job and the
-  # run, and `CI gate` stays green.
   release-compare:
-    name: Image comparison (${{ matrix.arch }}, report-only)
+    name: Image comparison (${{ matrix.arch }})
     needs: [release-dry-run, release-rebuild]
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 15
@@ -680,7 +678,7 @@ jobs:
   gate:
     name: CI gate
     # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
-    # smoke, grype, and release-compare do not gate. Required contexts are in .agents/orchestration-strategy.md.
+    # smoke and grype do not gate. Required contexts are in .agents/orchestration-strategy.md.
     needs:
       - changes
       - build
@@ -695,6 +693,7 @@ jobs:
       - release-dry-run
       - release-dry-run-assemble
       - release-dry-run-boot
+      - release-compare
     if: always()
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
@@ -723,4 +722,5 @@ jobs:
           RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}
           RELEASE_DRY_RUN_ASSEMBLE: ${{ needs.release-dry-run-assemble.result }}
           RELEASE_DRY_RUN_BOOT: ${{ needs.release-dry-run-boot.result }}
+          RELEASE_COMPARE: ${{ needs.release-compare.result }}
         run: bash scripts/ci-gate-verdict.sh

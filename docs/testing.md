@@ -1406,10 +1406,9 @@ both images' SBOMs with grype. That scan is report-only and never gates.
 that share no cache and no Nix store with the first build, and it uploads no SBOM.
 `release-compare` then compares the two archives of each architecture by SHA-256
 (`scripts/image-archive.sh compare`), and on a difference it prints the archive members and the
-files that differ. Neither job is a `gate` dependency. A difference shows as a red
-`Image comparison` job and a red run with a green `CI gate`. A failed rebuild shows as a red
-`Release rebuild / Build image` job, both comparisons skipped, and the same red run with a green
-`CI gate`.
+files that differ. `release-compare` gates both architectures. A difference fails `CI gate`, as
+does a skipped comparison after a failed or cancelled build. The gate accepts a comparison skip
+only when the change classifier sets `release-build=false`.
 
 Every job restores caches and only a main run ever saves one, so a pull request reads the default
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub

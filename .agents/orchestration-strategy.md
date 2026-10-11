@@ -381,6 +381,7 @@ gating jobs are the `needs` of the terminal `gate` job in
 | `release-dry-run` | Release dry-run / Build image (`<arch>`), one leg per architecture | `task docker-build`, then `task sbom`, for the host's architecture |
 | `release-dry-run-assemble` | Release dry-run (multi-arch index) | none, it needs the image archives of both architectures |
 | `release-dry-run-boot` | Release dry-run (start `<arch>`), one leg per architecture | none, it starts each built image with `--version` |
+| `release-compare` | Image comparison (`<arch>`), one leg per architecture | `bash scripts/image-archive.sh compare <first-archive> <second-archive>` |
 | `gate` | CI gate | none, green when every job above passed or the change classifier skipped it |
 
 Verify a PR's gate with `gh pr checks`, which prints the display names above. Do not trust
