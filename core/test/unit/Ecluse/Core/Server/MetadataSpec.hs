@@ -461,6 +461,7 @@ details who rawVer =
             , artFilename = "pkg-" <> rawVer <> ".tgz"
             , artUrl = "https://example.test/pkg-" <> rawVer <> ".tgz"
             , artHashes = []
+            , artCoreMetadata = Nothing
             , artSize = Nothing
             }
 

@@ -25,7 +25,7 @@ import Ecluse.Core.Security (LimitError)
 
 -- | Members whose values differ in every file, so the table keeps them as read.
 fileUniqueFields :: [Text]
-fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
+fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance", "core-metadata"]
 
 -- | Walk an index into trees, retaining the first occurrence and the selected-file skip policy.
 pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Cursor -> Step s
@@ -108,8 +108,10 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
 
 fileMembers :: Int -> (Members -> Members) -> Members
-fileMembers depth prepare = prepare (namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars]))
+fileMembers depth prepare = prepare (namedMembers (digestMembers <> scalarMembers))
   where
+    digestMembers = [(key, ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) | key <- ["hashes", "core-metadata"]]
+    scalarMembers = [(key, Scalar (depth - 3)) | key <- fileScalars]
     hashFields = prepare (knownMembers hashNames (Scalar (depth - 4)))
 
 data Selection = Selection

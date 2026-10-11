@@ -30,7 +30,7 @@ import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, ResponseDoc, 
 import Ecluse.Core.Server.Route (
     Capture (capDescription, capName),
     MethodMatch (MethodDelete, MethodPost, MethodPut, MethodRead),
-    PatternSeg (SegCap, SegLit),
+    PatternSeg (SegCap, SegCapSuffix, SegLit),
     Route (Route, routeContract, routeDescription, routeMethod, routeName, routeRequest, routeSegs, routeSummary),
     RouteName (RouteName, unRouteName),
  )
@@ -59,6 +59,8 @@ data RouteSpec = RouteSpec
 data PathSeg
     = Lit Text
     | Param ParamSpec
+    | -- | A named parameter followed by a literal suffix within the same segment.
+      ParamSuffix ParamSpec Text
     deriving stock (Eq, Show)
 
 -- | A named path parameter and its human-facing description.
@@ -106,6 +108,7 @@ pathSegOf :: PatternSeg v -> PathSeg
 pathSegOf = \case
     SegLit text -> Lit text
     SegCap capture -> Param (ParamSpec (capName capture) (capDescription capture))
+    SegCapSuffix capture suffix -> ParamSuffix (ParamSpec (capName capture) (capDescription capture)) suffix
 
 -- The @HEAD@ projection's operation name, derived so it cannot collide with its @GET@.
 headName :: RouteName -> RouteName

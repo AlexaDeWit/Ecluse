@@ -8,6 +8,7 @@ advertised, so pip's hash-checking mode refuses any byte that is not the one the
 module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipInstallIn,
+    pipResolveIn,
     pipInstalled,
     pipInstallsWheel,
 
@@ -68,6 +69,28 @@ pipInstallIn proj =
         , ppDir proj </> targetDir
         , "--requirement"
         , ppDir proj </> requirementsFile
+        ]
+
+-- | Resolve without hash mode, which makes pip fetch the declared metadata companion.
+pipResolveIn :: PipProject -> Text -> Text -> IO ClientResult
+pipResolveIn proj project version =
+    runClient
+        (ppDir proj)
+        (ppEnv proj)
+        "python3"
+        [ "-m"
+        , "pip"
+        , "--isolated"
+        , "install"
+        , "--dry-run"
+        , "--ignore-installed"
+        , "--no-cache-dir"
+        , "--disable-pip-version-check"
+        , "--no-input"
+        , "--only-binary=:all:"
+        , "--index-url"
+        , toString (ppIndex proj)
+        , toString (project <> "==" <> version)
         ]
 
 -- | Install the fixture wheel with its advertised digest and assert its installed metadata exists.

@@ -33,8 +33,13 @@ constraint, size, upload time, yank status and provenance URL. The proxy also pr
 project name, API version, serial, tracking declarations, alternate locations and project status.
 It derives the served version list from the admitted releases.
 
-The proxy omits unknown fields and metadata sidecar declarations while reading the index.
-Installers read distribution metadata from the wheel or source archive instead.
+The proxy retains canonical `core-metadata` declarations, including their exact digest names and values.
+It omits unknown fields and the legacy `dist-info-metadata` and `data-dist-info-metadata` aliases.
+A true declaration or a nonempty digest map enables `GET` and `HEAD` for the distribution's `.metadata` companion.
+Absent, false and empty-map declarations enable no companion fetch.
+Both wheel and source-distribution companions require the parent's origin-specific host and integrity checks.
+The companion path checks edge authentication and private access, but does not evaluate package rules or enqueue a mirror.
+The resolver verifies any advertised companion digest. Écluse streams the upstream bytes without hashing or unpacking them.
 Distribution bytes stay unchanged. The proxy hashes the complete upstream index for response
 validators, including fields omitted from the served response.
 

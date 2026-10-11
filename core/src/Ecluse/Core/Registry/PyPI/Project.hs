@@ -167,6 +167,7 @@ projectArtifact file =
         , artFilename = ifFilename file
         , artUrl = ifUrl file
         , artHashes = strictElements (mapMaybe indexHash (Map.toAscList (ifHashes file)))
+        , artCoreMetadata = ifCoreMetadata file
         , artSize = ifSize file
         }
 

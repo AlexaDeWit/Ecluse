@@ -18,12 +18,13 @@ import Data.Map.Strict qualified as Map
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 import Data.Time (UTCTime)
 
+import Ecluse.Core.Package (CoreMetadata (..))
 import Ecluse.Core.Package.Entry (EntryKey (SingletonEntry))
 import Ecluse.Core.Registry.Json.Intern (entryText, nameText)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer)
-import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), YankState (FileOffered), yankState)
+import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), YankState (FileOffered), parseCoreMetadata, yankState)
 import Ecluse.Core.Registry.WireSupport (parsePublishTime)
 
 -- | A writer with the object depth needed to distinguish file fields from digest members.
@@ -48,7 +49,7 @@ data FileValue
 
 -- Failed digests reserve their keys so a duplicate cannot repair the first value.
 data FileFields
-    = FileFields Frame FileFacts {-# UNPACK #-} !Word8
+    = FileFields Frame FileFacts {-# UNPACK #-} !Word16
     | HashFields Frame (Map Text Text) Bool
 
 data FileFacts = FileFacts
@@ -60,11 +61,12 @@ data FileFacts = FileFacts
     , ffUploadTime :: Maybe UTCTime
     , ffYanked :: YankState
     , ffProvenance :: Maybe Text
+    , ffCoreMetadata :: Maybe CoreMetadata
     , ffValid :: Bool
     }
 
 emptyFacts :: FileFacts
-emptyFacts = FileFacts Nothing Nothing (Just mempty) Nothing Nothing Nothing FileOffered Nothing True
+emptyFacts = FileFacts Nothing Nothing (Just mempty) Nothing Nothing Nothing FileOffered Nothing Nothing True
 
 instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
     type Built (FileWriter st) = FileValue
@@ -127,7 +129,7 @@ seenMember key fields = case (key, fields) of
     (_, HashFields _ hashes _) -> Map.member (memberText key) hashes
     _ -> False
 
-fileFieldBit :: Text -> Word8
+fileFieldBit :: Text -> Word16
 fileFieldBit = \case
     "filename" -> 0x01
     "url" -> 0x02
@@ -137,6 +139,7 @@ fileFieldBit = \case
     "upload-time" -> 0x20
     "yanked" -> 0x40
     "provenance" -> 0x80
+    "core-metadata" -> 0x100
     _ -> 0
 
 scalarText :: FileValue -> Maybe Text
@@ -152,6 +155,9 @@ reduceMember key value facts = case (key, value) of
     ("hashes", HashValue hashes) -> facts{ffHashes = hashes}
     ("hashes", ScalarValue Null) -> facts{ffHashes = Just mempty}
     ("hashes", _) -> facts{ffHashes = Nothing}
+    ("core-metadata", HashValue (Just hashes)) -> facts{ffCoreMetadata = Just (MetadataDigests hashes)}
+    ("core-metadata", ScalarValue scalar) -> maybe facts{ffValid = False} (\declaration -> facts{ffCoreMetadata = Just declaration}) (parseMaybe parseCoreMetadata scalar)
+    ("core-metadata", _) -> facts{ffValid = False}
     ("requires-python", _) -> updateOptionalFact (\text -> facts{ffRequiresPython = text})
     ("provenance", _) -> updateOptionalFact (\text -> facts{ffProvenance = text})
     ("size", IntegerValue number) -> facts{ffSize = Just number}
@@ -187,5 +193,6 @@ finishFacts facts = do
             , ifSize = ffSize facts
             , ifUploadTime = ffUploadTime facts
             , ifYanked = ffYanked facts
+            , ifCoreMetadata = ffCoreMetadata facts
             , ifProvenance = ffProvenance facts
             }

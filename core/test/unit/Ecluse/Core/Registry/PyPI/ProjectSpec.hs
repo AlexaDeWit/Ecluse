@@ -683,6 +683,7 @@ referenceArtifact file =
         , artFilename = ifFilename file
         , artUrl = ifUrl file
         , artHashes = strictElements (mapMaybe referenceHash (Map.toAscList (ifHashes file)))
+        , artCoreMetadata = ifCoreMetadata file
         , artSize = ifSize file
         }
 

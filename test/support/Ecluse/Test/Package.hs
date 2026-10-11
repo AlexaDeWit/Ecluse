@@ -230,6 +230,7 @@ sampleArtifact =
         , artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://example.test/thing-1.0.0.tgz"
         , artHashes = []
+        , artCoreMetadata = Nothing
         , artSize = Nothing
         }
 

@@ -21,6 +21,7 @@ module Ecluse.Core.Registry.PyPI.Route.Internal (
 
     -- * The served file URL (rendered from the route that claims it)
     distributionPath,
+    sidecarPath,
 
     -- * The capture values and leaf parsers
     PyPICap (..),
@@ -71,6 +72,7 @@ import Ecluse.Core.Server.Contract (
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
@@ -78,7 +80,7 @@ import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything, AcceptsOnly),
     MethodMatch (MethodPost, MethodRead),
-    PatternSeg (SegCap, SegLit),
+    PatternSeg (SegCap, SegCapSuffix, SegLit),
     Route (Route),
     RouteName (RouteName),
     refusing,
@@ -100,10 +102,25 @@ pypiNotFound = RouteAction unsupportedContract (AnswerRefusal (declaredRefusal "
 -- | PyPI's routes, in matching order.
 pypiRoutes :: [Route PyPICap]
 pypiRoutes =
-    [ artifactRoute
+    [ sidecarRoute
+    , artifactRoute
     , simpleIndexRoute
     , uploadRoute
     ]
+
+-- The companion route strips one suffix before applying the distribution coordinate parser.
+sidecarRoute :: Route PyPICap
+sidecarRoute =
+    Route
+        (RouteName "coreMetadata")
+        MethodRead
+        AcceptsAnything
+        [SegLit "simple", SegCap capProject, SegCapSuffix capFile ".metadata"]
+        buildSidecar
+        "Stream a distribution's Core Metadata companion"
+        "Relays an advertised companion after checking the parent file's origin and integrity. The resolver verifies the advertised companion digest."
+        Nothing
+        pypiArtifactContract
 
 -- @GET \/simple\/{project}\/{file}@: a distribution file, streamed.
 artifactRoute :: Route PyPICap
@@ -287,6 +304,17 @@ buildArtifact method = \case
         (version, filename) <- artifactCoordinate name file
         pure (tarballAction pypiArtifactReplies method name version filename)
     _ -> Nothing
+
+buildSidecar :: Method -> [PyPICap] -> Maybe (ResponseAction PassthroughResponse)
+buildSidecar method = \case
+    [PyPIProject name, PyPIFile file] -> do
+        (version, filename) <- artifactCoordinate name file
+        pure (sidecarAction pypiArtifactReplies method name version filename)
+    _ -> Nothing
+
+-- | Render a companion URL using the route's checked captures.
+sidecarPath :: PackageName -> Text -> Maybe Text
+sidecarPath name file = T.intercalate "/" <$> renderRoute sidecarRoute [PyPIProject name, PyPIFile file]
 
 -- | Positional captures distinguish parsed projects from checked distribution filenames.
 data PyPICap

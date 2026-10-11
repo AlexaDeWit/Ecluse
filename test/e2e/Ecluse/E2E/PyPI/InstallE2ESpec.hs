@@ -29,10 +29,24 @@ scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =
     aroundAllWith (timedFixtureWith recorder withE2E) $
         describe "pypi surface -- a real pip install" $ do
-            it (caseLabel "pypi/install/wheel" "installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar") $ \e2e -> do
+            it (caseLabel "pypi/install/wheel" "installs the compatible non-yanked wheel with its advertised hash") $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
                 length advertised `shouldBe` 5
                 pipInstallsWheel e2e advertised
+
+            it (caseLabel "pypi/install/metadata-companion" "resolves through the advertised metadata companion before the hash-checked install") $ \e2e -> do
+                advertised <- advertisedFiles e2e pypiProject
+                case lookup pypiWheelFile advertised of
+                    Nothing -> expectationFailure "the served index advertised no digest for the wheel"
+                    Just digest -> do
+                        let plane = e2ePlane e2e
+                            companion readEvent = srRoute readEvent == PyPIPublic && srPath readEvent == "/simple/" <> pypiProject <> "/" <> pypiWheelFile <> ".metadata" && answeredByPublic readEvent
+                        seen <- length <$> stubReadsNow plane
+                        withPipProject e2e pypiProject pypiVersion digest $ \proj ->
+                            void $ pipResolveIn proj pypiProject pypiVersion >>= shouldSucceedThroughProxy e2e
+                        reads <- awaitStubReads plane seen (any companion)
+                        reads `shouldSatisfy` any companion
+                        pipInstallsWheel e2e advertised
 
             it (caseLabel "pypi/install/yanked-pin" "relays the yank reason when pip installs an exact pin") $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject

@@ -113,6 +113,10 @@ algorithm strength, and the digest is computable for every algorithm it admits. 
 tamper gate verifies that digest, so an admitted public artifact is always verifiable and
 reaches the mirror.
 
+For PyPI metadata companions, the parent distribution must clear its origin's integrity floor.
+Companion digest declarations remain separate and impose no new proxy hash floor.
+A sidecar cannot borrow an admitted sibling's integrity or a refused duplicate's location.
+
 ## A static publish credential is fail-closed
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)

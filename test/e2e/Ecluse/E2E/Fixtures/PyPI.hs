@@ -112,6 +112,7 @@ buildWheelFor project version metadata work wheelPath = do
     createDirectoryIfMissing True metadataDir
     writeFileText (moduleDir </> "__init__.py") ("VERSION = \"" <> version <> "\"\n")
     writeFileText (metadataDir </> "METADATA") metadata
+    writeFileText (wheelPath <> ".metadata") metadata
     writeFileText (metadataDir </> "WHEEL") wheelMetadataFile
     writeFileText (metadataDir </> "RECORD") (recordFileFor project version)
     runProcess_ . setWorkingDir work $
@@ -181,7 +182,7 @@ wheelEntryFor project version uploaded digest =
         , "hashes" .= object ["sha256" .= digest]
         , "requires-python" .= (">=3.8" :: Text)
         , "upload-time" .= uploaded
-        , "core-metadata" .= True
+        , "core-metadata" .= object ["sha256" .= hexSha256Of (encodeUtf8 (metadataFileFor project version))]
         ]
   where
     filename = pypiWheelFor project version

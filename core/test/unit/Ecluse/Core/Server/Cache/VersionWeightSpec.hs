@@ -10,6 +10,7 @@ module Ecluse.Core.Server.Cache.VersionWeightSpec (spec) where
 import Data.Aeson (Value (Number), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Scientific (scientific)
 import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
@@ -114,6 +115,8 @@ retainedFields =
     , ("timestamp Integer payload", \p -> p{pkgPublishedAt = Just (UTCTime (ModifiedJulianDay (10 ^ (5000 :: Int))) 0)})
     , ("entry coordinates", changeArtifact (\a -> a{artEntryKey = ObjectEntry longText}))
     , ("filenames", changeArtifact (\a -> a{artFilename = longText}))
+    , ("sidecar algorithm names and digest values", changeArtifact (\a -> a{artCoreMetadata = Just (MetadataDigests (Map.fromList [(longText, longText), ("unknown", longText)]))}))
+    , ("sidecar Boolean declaration", changeArtifact (\a -> a{artCoreMetadata = Just (MetadataAvailable True)}))
     , ("artifact URLs", changeArtifact (\a -> a{artUrl = longText}))
     , ("hash nodes and digest backing allocations", changeArtifact (\a -> a{artHashes = [unsafeHash SHA256 (T.take 64 (validSha256 <> longText))]}))
     ]

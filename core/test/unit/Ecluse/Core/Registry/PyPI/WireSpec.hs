@@ -11,6 +11,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
 import Test.Hspec
 
 import Ecluse.Core.Package (
+    CoreMetadata (..),
     InvalidEntry (invalidKey, invalidKind),
     InvalidEntryKind (InvalidIndexFile, InvalidVersionListing),
  )
@@ -82,9 +83,9 @@ fileSpec = describe "IndexFile" $ do
         file <- shouldDecodeFile (fileEntry ["upload-time" .= ("last tuesday" :: Text)])
         ifUploadTime file `shouldBe` Nothing
 
-    it "ignores a key it does not model, the PEP 658 sidecar included" $ do
+    it "preserves a companion digest independently of distribution digests" $ do
         file <- shouldDecodeFile (fileEntry ["core-metadata" .= object ["sha256" .= ("8c384ba3" :: Text)]])
-        ifFilename file `shouldBe` "requests-2.34.2-py3-none-any.whl"
+        ifCoreMetadata file `shouldBe` Just (MetadataDigests (Map.singleton "sha256" "8c384ba3"))
 
     it "refuses a file that names no location, which could be neither gated nor served" $
         (eitherDecodeStrict (encodeStrict namedButLocationless) :: Either String IndexFile)

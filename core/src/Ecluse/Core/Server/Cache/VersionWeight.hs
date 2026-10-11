@@ -8,6 +8,7 @@ A retained raw version object is charged on the shared wire-to-resident model, w
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text.Short qualified as TS
 import Data.Text.Unsafe (lengthWord8)
 import Data.Time (UTCTime (..), diffTimeToPicoseconds, toModifiedJulianDay)
@@ -84,6 +85,11 @@ artifactWeight artifact =
         + textWeight (artFilename artifact)
         + textWeight (artUrl artifact)
         + itemsWeight (textWeight . hashValue) (artHashes artifact)
+        + maybe 0 metadataWeight (artCoreMetadata artifact)
+
+metadataWeight :: CoreMetadata -> Integer
+metadataWeight (MetadataAvailable _) = 64
+metadataWeight (MetadataDigests digests) = 64 + itemsWeight (\(name, value) -> textWeight name + textWeight value) (Map.toList digests)
 
 -- | Charge an entry coordinate, including any retained text backing allocation.
 weighEntryKey :: EntryKey -> Integer

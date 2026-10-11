@@ -18,7 +18,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Data.Text qualified as T
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
-import Ecluse.Core.Registry.PyPI.Route (distributionPath)
+import Ecluse.Core.Registry.PyPI.Route (distributionPath, sidecarPath)
 import Ecluse.Core.Registry.PyPI.Route.Internal (
     PyPICap (PyPIFile, PyPIProject),
     artifactCoordinate,
@@ -80,9 +80,17 @@ matchingSpec = describe "which route claims a request" $ do
     it "claims nothing for the JSON API, which this mount does not serve" $
         claimed methodGet [] ["pypi", "requests", "json"] `shouldBe` Nothing
 
-    it "claims nothing for a PEP 658 metadata sidecar" $
-        claimed methodGet [] ["simple", "requests", "requests-2.34.2-py3-none-any.whl.metadata"]
-            `shouldBe` Nothing
+    for_ [methodGet, methodHead] $ \method ->
+        for_ ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"] $ \file ->
+            it ("routes a companion for " <> toString file <> " under " <> decodeUtf8 method) $
+                claimed method [] ["simple", "requests", file <> ".metadata"] `shouldBe` Just (RouteName "coreMetadata")
+
+    for_ ["urllib3-2.0.tar.gz.metadata", "requests-2.0.tar.gz.metadata.metadata"] $ \file ->
+        it ("refuses a malformed companion coordinate " <> toString file) $
+            claimed methodGet [] ["simple", "requests", file] `shouldBe` Nothing
+
+    it "renders the companion under its distinct route" $
+        sidecarPath requestsName "requests-2.34.2.tar.gz" `shouldBe` Just "simple/requests/requests-2.34.2.tar.gz.metadata"
 
     it "claims nothing for the root index, which lists every project on the upstream" $
         claimed methodGet [] ["simple"] `shouldBe` Nothing

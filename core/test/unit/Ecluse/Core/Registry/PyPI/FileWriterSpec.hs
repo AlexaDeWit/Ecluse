@@ -55,6 +55,10 @@ spec = describe "fileWriter" $ do
             it ("keeps the first optional text value for " <> decodeUtf8 field <> "=" <> decodeUtf8 firstValue) $
                 agrees ["\"" <> field <> "\":" <> firstValue, "\"" <> field <> "\":" <> repeated]
 
+    for_ ["null", "true", "false", "{}", "{\"unknown\":\"raw\"}", "{\"unknown\":null}"] $ \firstValue ->
+        it ("keeps the first companion declaration " <> decodeUtf8 firstValue) $
+            agrees ["\"core-metadata\":" <> firstValue, "\"core-metadata\":true"]
+
     it "keeps scalar facts and served values across single-byte chunks" $ do
         let body = "{\"name\":\"thing\",\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"hashes\":{\"custom\":\"\\u00e9\"},\"requires-python\":\">=3\",\"provenance\":\"https://files.example/\\u00e9\",\"size\":12345,\"upload-time\":\"2026-01-01T00:00:00Z\",\"yanked\":\"\"}]}"
             name = unscopedPyPI "thing"
@@ -105,7 +109,7 @@ spec = describe "fileWriter" $ do
                 `shouldBe` Left (MetadataBoundExceeded fault)
 
 fields :: [ByteString]
-fields = ["hashes", "requires-python", "size", "upload-time", "yanked", "provenance"]
+fields = ["core-metadata", "hashes", "requires-python", "size", "upload-time", "yanked", "provenance"]
 
 values :: [ByteString]
 values = ["null", "true", "false", "12", "12.5", "-1", "1e20", "\"\"", "\"text\"", "\"2026-01-01T00:00:00Z\"", "[]", "{}", "{\"sha256\":\"00\",\"custom\":\"11\"}", "{\"custom\":null}"]

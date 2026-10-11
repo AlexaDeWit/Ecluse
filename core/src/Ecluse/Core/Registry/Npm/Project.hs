@@ -120,6 +120,7 @@ projectArtifact version dist =
         , artFilename = tarballFilename (distTarball dist) version
         , artUrl = distTarball dist
         , artHashes = strictElements (sriHashes <> maybeToList sha1Hash)
+        , artCoreMetadata = Nothing
         , artSize = distUnpackedSize dist
         }
   where

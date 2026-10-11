@@ -79,10 +79,6 @@ spec = do
             -- does not depend on insertion order.
             map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
-    -- The manifest's specs are the documentation projection ('specsOf') of the same route
-    -- records the classifier routes on, so paths and methods agree by construction. These
-    -- cases assert that the projection reaches the rendered document, for every adapter this
-    -- build registers rather than for npm alone.
     describe "documented routes correspond to the live classifier" $ do
         for_ registeredEcosystems agreesWithClassifier
 
@@ -119,6 +115,10 @@ spec = do
                 `shouldBe` Just ["application/json"]
         it "operations are tagged by ecosystem (npm)" $
             (InsOrdSet.member "npm" . _operationTags <$> getOp "/npm/{package}") `shouldBe` Just True
+        it "documents distinct PyPI companion and distribution operations" $ do
+            getOp "/pypi/simple/{project}/{file}.metadata" `shouldSatisfy` isJust
+            getOp "/pypi/simple/{project}/{file}" `shouldSatisfy` isJust
+
         it "the pypi Simple index documents its 406 and its own served media type" $ do
             (statusCodes <$> getOp "/pypi/simple/{project}") `shouldBe` Just [200, 304, 401, 403, 404, 406, 500, 502, 503]
             (mediaTypesAt 200 <$> getOp "/pypi/simple/{project}")

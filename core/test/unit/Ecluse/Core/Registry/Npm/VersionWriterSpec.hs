@@ -675,6 +675,7 @@ frozenProjectArtifact version dist =
         , artFilename = frozenTarballFilename (frozenDistTarball dist) version
         , artUrl = frozenDistTarball dist
         , artHashes = strictElements (sriHashes <> maybeToList sha1Hash)
+        , artCoreMetadata = Nothing
         , artSize = frozenDistUnpackedSize dist
         }
   where

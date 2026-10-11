@@ -20,11 +20,12 @@ import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything),
     MethodMatch (MethodPost, MethodRead),
-    PatternSeg (SegCap, SegLit),
+    PatternSeg (SegCap, SegCapSuffix, SegLit),
     Route (Route),
     RouteName (RouteName),
     answering,
     isHead,
+    renderRoute,
     safeSegment,
  )
 import Ecluse.Test.Server.Route (claimedOn, everyMethod)
@@ -54,6 +55,14 @@ spec = do
         it "keeps an unsafe component out of the table it guards" $ do
             claimed methodGet ["thing", "-", "file.txt"] `shouldBe` Just (RouteName "file")
             claimed methodGet ["thing", "-", ".."] `shouldBe` Nothing
+
+    describe "a suffixed capture" $ do
+        it "strips the suffix before validating the component" $ do
+            claimedOn [companionRoute] methodGet ["report.txt.metadata"] `shouldBe` Just (RouteName "companion")
+            claimedOn [companionRoute] methodGet ["report.txt"] `shouldBe` Nothing
+            claimedOn [companionRoute] methodGet ["...metadata"] `shouldBe` Nothing
+        it "renders the same suffix after the capture" $
+            renderRoute companionRoute [ToyFile "report.txt"] `shouldBe` Just ["report.txt.metadata"]
 
     describe "isHead" $
         it "holds for HEAD alone" $
@@ -127,3 +136,6 @@ toySegment :: ToyCap -> [Text]
 toySegment = \case
     ToyName name -> [name]
     ToyFile file -> [file]
+
+companionRoute :: Route ToyCap
+companionRoute = Route (RouteName "companion") MethodRead AcceptsAnything [SegCapSuffix capFile ".metadata"] (answering (responseValue [] ())) "Companion" "Companion bytes." Nothing (emptyContract status404 "Absent.")

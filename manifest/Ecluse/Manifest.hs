@@ -133,7 +133,7 @@ import Ecluse.Core.Server.Contract (
 import Ecluse.Core.Server.Route (RouteName, unRouteName)
 import Ecluse.Core.Server.RouteDescription (
     ParamSpec (psDescription, psName),
-    PathSeg (Lit, Param),
+    PathSeg (Lit, Param, ParamSuffix),
     RouteSpec (rsDescription, rsMethod, rsName, rsOutcomes, rsPattern, rsRequest, rsSummary),
  )
 
@@ -252,10 +252,15 @@ routePathKey prefix spec =
     renderSeg = \case
         Lit s -> s
         Param p -> "{" <> psName p <> "}"
+        ParamSuffix p suffix -> "{" <> psName p <> "}" <> suffix
 
 -- | The path parameters a route's template carries, in template order.
 specParams :: RouteSpec -> [ParamSpec]
-specParams spec = [p | Param p <- rsPattern spec]
+specParams spec = mapMaybe parameter (rsPattern spec)
+  where
+    parameter (Param p) = Just p
+    parameter (ParamSuffix p _) = Just p
+    parameter (Lit _) = Nothing
 
 {- | Place an operation on the 'PathItem' field its HTTP method names. Total over 'StdMethod'.
 The unreachable @CONNECT@ branch is the sanctioned @error@ escape hatch (docs/style.md 10).
@@ -275,11 +280,7 @@ methodItem method op = case method of
     -- CONNECT has no OpenAPI operation slot, and no served route uses it.
     CONNECT -> error "Ecluse.Manifest: OpenAPI has no CONNECT operation"
 
-{- | Interpret a route's __documentation__ into an OpenAPI operation.
-
-The ecosystem qualifies the route's name to form OpenAPI's @operationId@, which must be unique
-across the whole document, and only here is every mount in view.
--}
+-- | Qualify the route's operation name with its ecosystem and project its response contract.
 operationFrom :: Ecosystem -> RouteSpec -> Operation
 operationFrom eco spec =
     (mempty :: Operation)
@@ -379,12 +380,7 @@ instance ToSchema SynthesizedPackument where
 synthesizedPackumentSchemaName :: Text
 synthesizedPackumentSchemaName = "SynthesizedPackument"
 
-{- | The __partial__ schema of the served packument: the documented __trust boundary__.
-
-It models only the fields Écluse reads and transforms, and stays open everywhere else. A valid
-instance is __not__ a proof that every @dist-tags@ target is a surviving @versions@ key, because
-that cross-field coherence is not schema-expressible.
--}
+-- | Model transformed packument fields. Cross-field tag coherence cannot be expressed by this schema.
 synthesizedPackumentSchema :: Schema
 synthesizedPackumentSchema =
     (mempty :: Schema)
@@ -508,8 +504,8 @@ simpleIndexSchema =
                 \merged across upstreams and gated (private releases trusted, public releases admitted only by \
                 \policy), files that do not clear the integrity floor or that name an authority this mount does \
                 \not honour are dropped, and each surviving file's `url` is rewritten to resolve back through \
-                \this proxy. The PEP 658 `core-metadata` and `data-dist-info-metadata` keys are omitted, \
-                \because Écluse serves no `.metadata` companion."
+                \this proxy. Canonical `core-metadata` declarations retain their upstream Boolean or digest map. \
+                \Legacy metadata aliases are omitted. Declared companions use the distribution URL with `.metadata` appended to its path."
         , _schemaRequired = ["name", "files"]
         , _schemaProperties =
             InsOrd.fromList

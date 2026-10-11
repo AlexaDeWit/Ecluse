@@ -200,6 +200,17 @@ sequenceDiagram
     Note over E,Queue: demand-driven, enqueue only when a tarball is accepted
 ```
 
+## Distribution metadata companions
+
+PyPI companions retain the exact source entry's canonical declaration and use that parent's admitted location.
+The companion URL appends `.metadata` to the path before any query or fragment.
+Both private and public selection apply their own parent integrity floor and origin-sensitive authority check.
+The metadata path does not evaluate rules, read advisories or enqueue a mirror.
+Private index reads authorise each caller again, and only the private authority receives that caller's credential.
+A private refusal stops fallback, and first-party names never fall back to public metadata.
+Selection releases metadata admission before the bounded relay streams the companion.
+The upstream asserts that the companion matches the archive's Core Metadata. The resolver verifies advertised digests.
+
 ## Packument merge across upstreams
 
 A packument is the set of available versions, spread across upstreams. The private upstream holds
