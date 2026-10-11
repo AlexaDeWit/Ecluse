@@ -409,10 +409,18 @@ mounts:
     # integrity:
     #   minTrusted: sha256
     #   divergencePolicy: warn # deprecated compatibility only, remove this key
-    # Per-mount rule refinement, merged over the shared policy with the same schema
-    # as the top-level rules. An entry that restates only `appliesTo` widens or narrows
-    # a shared rule for this mount alone.
-    # rules: {}
+    # ECLUSE_MOUNTS__NPM__RULES refines the shared policy, then these shipped rules.
+    # This default refuses npm install scripts at admission and keeps stored copies.
+    rules:
+      deny-scripts:
+        type: DenyInstallTimeExecution
+        appliesTo: [admission]
+      # Disable it here with deny-scripts: { enabled: false }, not under shared rules.
+      # Or add an AllowByIdentity pin here with explicit precedence above 300.
+      # Restate appliesTo: [admission, revocation] here to include Dredger deletion.
+      # trust-our-scope:
+      #   type: AllowScope
+      #   scope: acme            # the scope without its leading @
   # A pypi mount serves reads: the PEP 691 Simple index and the distribution files
   # under it. It publishes nothing, so a publicationTarget or a mirrorTarget on it
   # refuses the boot naming the ecosystem and the key.
@@ -450,12 +458,6 @@ rules:
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
-  # Opt-in scope allow-list, absent from this shipped policy. It admits every version
-  # under an npm scope you already trust, past the quarantine, without reaching the
-  # advisory database. It sits above min-age and below every deny.
-  # trust-our-scope:
-  #   type: AllowScope
-  #   scope: acme            # the scope without its leading @
   # Opt-in CVE deny gate, absent from this shipped policy. It denies a version a
   # synced advisory records as affected at or above `minCvss` (a CVSS base score,
   # 0-10). Unscored npm malware advisories count as above every threshold, so
@@ -492,12 +494,8 @@ rules:
   # pin-fix:
   #   type: AllowByIdentity
   #   identity: left-pad@1.3.0  # a bare name pins every version of that package
-  # Opt-in install-script deny, absent from this shipped policy. It denies a version
-  # whose manifest runs code at install time. It sits above every allow, so no pin
-  # admits a version it denies. Many legitimate packages ship install scripts, so
-  # enabling it breaks builds until you know which of yours do.
-  # deny-scripts:
-  #   type: DenyInstallTimeExecution
+  # The npm install-script deny ships under mounts.npm.rules, at admission only.
+  # Disable or refine deny-scripts there. An AllowByIdentity pin needs precedence > 300.
   # Opt-in revoke, absent from this shipped policy. It denies one package, or one
   # package@version, whatever else would admit it. `identity` matches on the same exact
   # terms as AllowByIdentity. It carries the highest precedence of any shipped type, so

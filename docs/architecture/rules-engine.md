@@ -162,10 +162,13 @@ escape hatch. Both still sit above the quarantine, the remediation lane, and a s
 allow-list, and configured together they tie, which the boot order resolves by name. An operator may
 raise a specific allow above a specific deny, or the reverse, with an explicit precedence.
 
-The [default policy](configuration.md#the-default-policy) records which rules ship enabled: the
-pure `AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane. The
-fast lane abstains when no advisory database is configured, so only the quarantine governs.
-Every other rule is off by default and opts in by name.
+The [default policy](configuration.md#the-default-policy) has two shared rules: the pure
+`AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane. The fast lane
+abstains without an advisory database, leaving the quarantine as the shared allow.
+The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) at admission only, so it
+refuses new public admission without deleting stored copies. Disable it with `enabled: false`
+under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
+precedence is above 300. Every remaining rule is off by default and opts in by name.
 
 ## CVE subsystem
 

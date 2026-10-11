@@ -291,20 +291,25 @@ both. An entry with a new name must carry a full `type`, and it **adds** a rule.
 `"enabled": false` to **suppress** a default rule. With no rule config, the default policy applies
 unchanged.
 
-This top-level policy applies to every mount. A multi-ecosystem deployment may give an individual
-mount its own [refinement](web-layer.md#multi-ecosystem-mounts) that merges over it.
+This top-level policy applies to every mount. Each active mount resolves that shared policy,
+then its shipped `mounts.<ecosystem>.rules`, then the operator's mount rules.
+The mount decoder accepts the rules object, and resolution parses each layer separately.
+This keeps suppression and type checks available for shipped mount rules.
+The document and environment still merge into one operator layer, strongest-last.
 
 ```yaml
 rules:
   min-age:
     ageSeconds: 1209600
-  deny-scripts:
-    type: DenyInstallTimeExecution
-    precedence: 200
+mounts:
+  npm:
+    rules:
+      deny-scripts:
+        appliesTo: [admission, revocation]
 ```
 
-Here `min-age` names a default rule, so it overrides that rule's value. `deny-scripts` is a new name
-carrying a `type`, so it adds a rule. Each rule may set an integer `precedence`, where higher wins.
+Here `min-age` patches a shared default. The npm patch widens the shipped mount deny to revocation.
+Each rule may set an integer `precedence`, where higher wins.
 Omit it for the type's default.
 
 Each rule may also set `appliesTo`, the list of phases it applies at. It merges as `precedence`
@@ -328,14 +333,17 @@ document owns only the document-merge schema above.
 
 #### The default policy
 
-The shipped default enables two rules. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
+The shared shipped default enables two rules. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
 version only after a quarantine window. Registries usually find and yank a malicious publish within
 days, so the delay keeps it out of your builds. This quarantine is Écluse's core security boundary.
 `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a release fixing
 a known CVE at once rather than waiting out the quarantine (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 
-Every other built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
+The npm mount adds `deny-scripts` (`DenyInstallTimeExecution`) at admission only. It does not
+activate a mount. The operator can disable it under `mounts.npm.rules`, widen its phases, or add
+an `AllowByIdentity` pin with explicit precedence above 300. PyPI has no shipped mount rules.
+Every remaining built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
 `DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their
 [onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies) first.

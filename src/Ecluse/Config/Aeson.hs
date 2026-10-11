@@ -4,11 +4,8 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-{- | The document decoders: one 'GroupDecoder' per configuration group, assembled from
-"Ecluse.Config.Parser"'s key vocabulary, plus the @FromJSON@ instances that run them.
-
-The instances are orphans because the types live in "Ecluse.Config.Types", which carries no Aeson
-dependency. A group's decoder declares every key the group admits, so an unknown key refuses.
+{- | Configuration group decoders and their @FromJSON@ instances.
+The instances are orphans because "Ecluse.Config.Types" carries no Aeson dependency.
 -}
 module Ecluse.Config.Aeson () where
 
@@ -51,7 +48,7 @@ mountDecoder eco =
         <*> optionalKey "publicationTarget" parsePublicationTarget
         <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
-        <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
+        <* unreadKey "rules"
 
 -- Each endpoint admits exactly the tags and keys its cell of the store admission matrix names,
 -- so a shape outside the cell has nothing to parse into and refuses with the key path.

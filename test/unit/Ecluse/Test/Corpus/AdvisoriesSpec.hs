@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pin the corpus captures the compiled corpus advisories cover, the rows the rules read for them, and the shipped policy.
+-- | Pin the corpus captures the compiled corpus advisories cover, the rows the rules read for them, and the shared shipped policy.
 module Ecluse.Test.Corpus.AdvisoriesSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -49,5 +49,5 @@ spec = do
                 `shouldReturn` Left "the capture typing_extensions differs from its lookup key typing-extensions"
 
     describe "shippedPolicy" $
-        it "is the policy config/default.yaml ships" $
+        it "is the shared policy config/default.yaml ships" $
             shippedPolicy `shouldMatchList` Map.elems (policyRules defaultPolicy)

@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Advisory inputs for the benchmark corpus: the OSV records and EPSS rows captured under
-@bench/corpus/advisories/@, and a generated worst case with many ranges per package. Both take
-the served shape, an OSV export archive and a gzipped EPSS feed, for Pilot's compiler to read.
-The performance harnesses deny on them at the same suggested thresholds.
+{- | Captured and generated OSV archives and EPSS feeds for the benchmark corpus.
+Pilot compiles both into the advisory shapes the performance harnesses read.
 -}
 module Ecluse.Test.Corpus.Advisories (
     AdvisoryInputs (..),
@@ -113,11 +111,11 @@ rowsTheRulesRead deps package = do
     void (readAdvisories spied package)
     readIORef seen
 
--- | The shipped policy: the minimum-age quarantine and the remediation fast lane.
+-- | The shared shipped policy: the minimum-age quarantine and the remediation fast lane.
 shippedPolicy :: [PrecededRule]
 shippedPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
 
--- | The shipped policy with both advisory denies, at the suggested thresholds.
+-- | The shared shipped policy with both advisory denies, at the suggested thresholds.
 allAdvisoryRules :: [PrecededRule]
 allAdvisoryRules = shippedPolicy <> map atDefaultPrecedence [DenyIfCve suggestedDenyIfCve, DenyIfEpss suggestedDenyIfEpss]
 

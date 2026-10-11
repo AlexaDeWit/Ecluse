@@ -7,11 +7,13 @@ mount has no private store, so the same install fails through a second proxy whi
 -}
 module Ecluse.E2E.PyPI.InstallE2ESpec (spec) where
 
+import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiVersion, pypiWheelFile)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness
+import Ecluse.Test.Package (hexSha256Of)
 
 -- | Drive the product image with a real pip client and local stores.
 spec :: Spec
@@ -23,8 +25,17 @@ scenarios =
         describe "pypi surface -- a real pip install" $ do
             it "installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
-                length advertised `shouldBe` 3
+                length advertised `shouldBe` 4
                 pipInstallsWheel e2e advertised
+
+            it "serves the source distribution beside the wheel under the shipped policy" $ \e2e -> do
+                advertised <- advertisedFiles e2e pypiProject
+                case lookup pypiSdistFile advertised of
+                    Nothing -> expectationFailure "the served index advertised no digest for the source distribution"
+                    Just digest -> do
+                        (status, body) <- proxyGet e2e ("/pypi/simple/" <> pypiProject <> "/" <> pypiSdistFile)
+                        status `shouldBe` 200
+                        hexSha256Of (LBS.toStrict body) `shouldBe` digest
 
             it "fails the same install through a second proxy while both public upstreams are down" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject

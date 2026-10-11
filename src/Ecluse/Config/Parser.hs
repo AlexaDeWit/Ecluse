@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The key vocabulary every configuration group decodes through ("Ecluse.Config.Aeson").
-
-One declaration list is both the accepted-key list and the read list, so a key no field reads
-cannot pass unnoticed and must be declared with 'unreadKey'. Each refusal carries the
-group-qualified label and the Aeson path, so a nested type error names the setting an operator
-wrote.
+{- | Configuration key decoders with group-qualified refusal paths.
+Each declared key is read or explicitly accepted through 'unreadKey'.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
@@ -19,7 +15,6 @@ module Ecluse.Config.Parser (
     optionalKeyOr,
     plainKey,
     optionalPlainKey,
-    optionalPlainKeyOr,
     optionalNonNullKey,
     nestedKey,
     unreadKey,
@@ -122,10 +117,6 @@ plainKey k = GroupDecoder [k] present
 -- | 'plainKey' for an optional key.
 optionalPlainKey :: (FromJSON a) => Key.Key -> GroupDecoder (Maybe a)
 optionalPlainKey k = optionalKey k (const pure)
-
--- | 'plainKey' for an optional key, with the value an absent one reads as.
-optionalPlainKeyOr :: (FromJSON a) => Key.Key -> a -> GroupDecoder a
-optionalPlainKeyOr k fallback = optionalKeyOr k fallback (const pure)
 
 {- | 'optionalPlainKey' for a key that refuses a written @null@, where an empty value must not
 read as the key's default.

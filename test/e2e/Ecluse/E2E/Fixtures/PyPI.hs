@@ -2,15 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PyPI fixtures for the nginx upstream in end-to-end tests.
-The release is backdated past quarantine and carries a wheel alone: an sdist beside it
-reads as install-time code execution, which the harness deny rule refuses.
--}
+-- | A backdated PyPI release with a wheel and a source distribution for the nginx upstream.
 module Ecluse.E2E.Fixtures.PyPI (
     pypiUpstreamUrl,
     pypiProject,
     pypiVersion,
     pypiWheelFile,
+    pypiSdistFile,
     pypiDistInfo,
     buildPyPIFixtures,
 ) where
@@ -43,19 +41,26 @@ pypiVersion = "1.0.0"
 pypiWheelFile :: Text
 pypiWheelFile = escapedProject <> "-" <> pypiVersion <> "-py3-none-any.whl"
 
+-- | The source distribution's advertised filename.
+pypiSdistFile :: Text
+pypiSdistFile = pypiProject <> "-" <> pypiVersion <> ".tar.gz"
+
 -- | The metadata directory a wheel install leaves in the client's target.
 pypiDistInfo :: Text
 pypiDistInfo = escapedProject <> "-" <> pypiVersion <> ".dist-info"
 
--- | Write one wheel and an index with higher-build candidates that pip must exclude.
+-- | Write both artifact kinds and an index with higher-build wheels that pip must exclude.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
     let projectDir = root </> "simple" </> toString pypiProject
         wheelPath = projectDir </> toString pypiWheelFile
+        sdistPath = projectDir </> toString pypiSdistFile
     createDirectoryIfMissing True projectDir
     buildWheel (root </> ".work-wheel") wheelPath
+    buildSdist (root </> ".work-sdist") sdistPath
     bytes <- BS.readFile wheelPath
-    writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes)))
+    sourceBytes <- BS.readFile sdistPath
+    writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes) (hexSha256Of sourceBytes)))
 
 -- The filename the nginx stub aliases a project's index request onto.
 indexFile :: FilePath
@@ -79,6 +84,15 @@ buildWheel work wheelPath = do
     writeFileText (metadataDir </> "RECORD") recordFile
     runProcess_ . setWorkingDir work $
         proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escapedProject, toString pypiDistInfo]
+
+buildSdist :: FilePath -> FilePath -> IO ()
+buildSdist work sdistPath = do
+    let distribution = pypiProject <> "-" <> pypiVersion
+        sourceDir = work </> toString distribution
+    createDirectoryIfMissing True sourceDir
+    writeFileText (sourceDir </> "PKG-INFO") metadataFile
+    writeFileText (sourceDir </> "setup.py") "from setuptools import setup\nsetup(name='e2e-sample', version='1.0.0')\n"
+    runProcess_ (proc "tar" ["-czf", sdistPath, "-C", work, toString distribution])
 
 metadataFile :: Text
 metadataFile =
@@ -109,13 +123,13 @@ recordFile =
         , pypiDistInfo <> "/RECORD,,"
         ]
 
-simpleIndex :: Text -> Value
-simpleIndex digest =
+simpleIndex :: Text -> Text -> Value
+simpleIndex digest sourceDigest =
     object
         [ "name" .= pypiProject
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
         , "versions" .= [pypiVersion]
-        , "files" .= [wheelEntry digest, excludedWheel "2" "requires-python" (String ">=99") digest, excludedWheel "3" "yanked" (Bool True) digest]
+        , "files" .= [sdistEntry sourceDigest, wheelEntry digest, excludedWheel "2" "requires-python" (String ">=99") digest, excludedWheel "3" "yanked" (Bool True) digest]
         ]
 
 wheelEntry :: Text -> Value
@@ -127,6 +141,15 @@ wheelEntry digest =
         , "requires-python" .= (">=3.8" :: Text)
         , "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
         , "core-metadata" .= True
+        ]
+
+sdistEntry :: Text -> Value
+sdistEntry digest =
+    object
+        [ "filename" .= pypiSdistFile
+        , "url" .= (pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> pypiSdistFile)
+        , "hashes" .= object ["sha256" .= digest]
+        , "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
         ]
 
 -- These files are absent, so an installer that loses compatibility or yank fields cannot succeed.

@@ -9,6 +9,7 @@ module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Text qualified as T
 
 import Test.Hspec
 
@@ -35,7 +36,9 @@ scenarios :: SpecWith GlobalDataPlane
 scenarios = do
     describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withE2E $ do
         describe "public surface -- install and policy" $ do
-            it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
+            it "uses the shipped default to block install scripts and never mirrors the package" $ \e2e -> do
+                logs <- proxyContainerLogs e2e
+                logs `shouldSatisfy` T.isInfixOf "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
                 void $ npmInstall e2e (psName denyPkg) >>= shouldFail
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
                 mirrored `shouldBe` False

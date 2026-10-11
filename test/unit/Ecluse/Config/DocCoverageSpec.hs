@@ -67,6 +67,7 @@ documentedEnvVars =
     , ("ECLUSE_DREDGER__DELETION_CAP", "500")
     , ("ECLUSE_DREDGER__FULL_WALK", "true")
     , ("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":100}}")
+    , ("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"enabled\":false}}")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED", "sha256")
