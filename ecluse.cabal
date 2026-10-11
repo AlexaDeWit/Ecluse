@@ -817,6 +817,8 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Binding
     Ecluse.Test.Contract.Catalogue
     Ecluse.Test.Contract.Credential
+    Ecluse.Test.Contract.Integration.Catalogue
+    Ecluse.Test.Contract.Integration.Obligations
     Ecluse.Test.Contract.Install
     Ecluse.Test.Contract.Install.Advisory
     Ecluse.Test.Contract.Install.Outage
@@ -835,6 +837,13 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Runner
     Ecluse.Test.Contract.Serving
     Ecluse.Test.Contract.Types
+    Ecluse.Test.Contract.UnitCatalogue
+    Ecluse.Test.Contract.Sweep
+    Ecluse.Test.Contract.Sweep.Types
+    Ecluse.Test.Contract.Sweep.Identity
+    Ecluse.Test.Contract.Sweep.Recovery
+    Ecluse.Test.Contract.Sweep.Rollout
+    Ecluse.Test.Contract.Sweep.Advisory
 
   if flag(dev-http-egress)
     exposed-modules: Ecluse.Test.Contract.Metadata.Fetch
@@ -863,6 +872,7 @@ library ecluse-runtime-test-support
   hs-source-dirs:  runtime/test-support
   exposed-modules:
     Ecluse.Runtime.Test.Advisory
+    Ecluse.Runtime.Test.Contract.UnitCatalogue
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
@@ -901,6 +911,9 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.RegistrySmokeSpec
     Ecluse.Test.Contract.ServingSpec
     Ecluse.Test.Contract.InstallSpec
+    Ecluse.Test.Contract.Integration.CatalogueSpec
+    Ecluse.Test.Contract.UnitCatalogueSpec
+    Ecluse.Test.Contract.Sweep.AdvisorySpec
     Ecluse.Test.Contract.PublicationSpec
     Ecluse.Test.Contract.QueueSpec
     Ecluse.Test.Registry.Npm.StoredVersionsSpec
@@ -1335,6 +1348,7 @@ test-suite ecluse-runtime-unit
   main-is:            Spec.hs
   hs-source-dirs:     runtime/test/unit
   other-modules:
+    Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec
@@ -1402,10 +1416,8 @@ test-suite ecluse-runtime-unit
 -- testcontainers). Hermetic and gating. The AWS cases require a Docker daemon.
 test-suite ecluse-integration
   import:             shared
-  -- hspec-discover generates a Main without an export list. The tracing integration
-  -- test drives the OpenTelemetry batch span processor through the live SDK. It aborts
-  -- under the non-threaded RTS, so the suite needs -threaded.
-  ghc-options:        -Wno-missing-export-lists -threaded
+  -- The OpenTelemetry integration requires the threaded RTS for its batch span processor.
+  ghc-options:        -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
@@ -1434,7 +1446,6 @@ test-suite ecluse-integration
     Ecluse.Runtime.Telemetry.TracingIntegrationSpec
     Ecluse.Server.Pipeline.TestSupport
 
-  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            >=2.2 && <2.4
     , amazonka         ^>=2.0
