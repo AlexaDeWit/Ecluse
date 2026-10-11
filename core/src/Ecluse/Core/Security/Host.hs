@@ -40,37 +40,27 @@ import Ecluse.Core.Security.Authority (HostPort (..), hostPortAddress)
 import Ecluse.Core.Security.IpLiteral (IpAddr (IpV4, IpV6), parseIpLiteral)
 import Ecluse.Core.Text (toLowerUnlessAsciiUnchanged)
 
-{- | The @host:port@ pairs the host guards authorise, canonicalised by 'allowedHostPorts', its
-only constructor. An entry authorises exactly its own pair, port 443 when none was written.
--}
+-- | The @host:port@ pairs the host guards authorise, canonicalised by 'allowedHostPorts', its only constructor. An entry authorises exactly its own pair, port 443 when none was written.
 newtype AllowedHostPorts = AllowedHostPorts (Set HostPort)
     deriving stock (Eq, Show)
 
-{- | Normalise configured upstream authorities to the key form the guards match on. Equivalent
-spellings of one IP literal collapse, so an operator's @0:0:0:0:0:0:0:1@ matches an incoming @::1@.
--}
+-- | Normalise configured upstream authorities to the key form the guards match on. Equivalent spellings of one IP literal collapse, so an operator's @0:0:0:0:0:0:0:1@ matches an incoming @::1@.
 allowedHostPorts :: Set HostPort -> AllowedHostPorts
 allowedHostPorts = AllowedHostPorts . Set.map canonicalEntry
   where
     canonicalEntry (HostPort host port) = HostPort (canonicalHostKey host) port
 
-{- | The allowlist half of the SSRF gate. Matching the pair is load-bearing: an allowlisted
-host on an attacker-chosen port (@registry.npmjs.org:9443@) is an unauthorised target.
--}
+-- | The allowlist half of the SSRF gate. Matching the pair is load-bearing: an allowlisted host on an attacker-chosen port (@registry.npmjs.org:9443@) is an unauthorised target.
 isAllowedUpstreamHost :: AllowedHostPorts -> HostPort -> Bool
 isAllowedUpstreamHost (AllowedHostPorts allowed) (HostPort host port) =
     not (T.null host) && HostPort (canonicalHostKey host) port `Set.member` allowed
 
-{- | Whether @host@ is an internal-address literal the proxy must not fetch. A DNS name is
-not blocked here: the allowlist and the validating-TLS manager close that class.
--}
+-- | Whether @host@ is an internal-address literal the proxy must not fetch. A DNS name is not blocked here: the allowlist and the validating-TLS manager close that class.
 isBlockedTarget :: [IPRange] -> Text -> Bool
 isBlockedTarget additionalRanges host =
     maybe False (isBlockedIP additionalRanges . ipAddrToIP) (parseIpLiteral host)
 
-{- | Whether an 'IP' falls in a blocked internal range. An IPv6 address embedding an IPv4 one
-decodes first (see 'decodeEmbeddedV4'), so an embedding literal cannot slip the IPv4 ranges.
--}
+-- | Whether an 'IP' falls in a blocked internal range. An IPv6 address embedding an IPv4 one decodes first (see 'decodeEmbeddedV4'), so an embedding literal cannot slip the IPv4 ranges.
 isBlockedIP :: [IPRange] -> IP -> Bool
 isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
   where
@@ -100,9 +90,7 @@ blockedRanges =
     , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
     ]
 
-{- | Parse one operator-configured CIDR entry (@"203.0.113.0\/24"@) into an 'IPRange'. It goes
-through @iproute@'s total 'Read', not its partial 'IsString', so a malformed entry fails closed.
--}
+-- | Parse one operator-configured CIDR entry (@"203.0.113.0\/24"@) into an 'IPRange'. It goes through @iproute@'s total 'Read', not its partial 'IsString', so a malformed entry fails closed.
 parseBlockedRange :: Text -> Maybe IPRange
 parseBlockedRange = readMaybe . toString
 
@@ -135,9 +123,7 @@ decodeEmbeddedV4 = \case
         _ -> IPv6 v6
     ip -> ip
 
-{- | The trust of the origin a @dist.tarball@ comes from. It governs the literal internal-range
-block alone, since a private registry may live on an internal address.
--}
+-- | The trust of the origin a @dist.tarball@ comes from. It governs the literal internal-range block alone, since a private registry may live on an internal address.
 data Origin
     = -- | The operator-configured private upstream: exempt from the literal internal-range block.
       TrustedOrigin
@@ -145,18 +131,14 @@ data Origin
       UntrustedOrigin
     deriving stock (Eq, Show)
 
-{- | Whether a @dist.tarball@ authority may be fetched. An upstream's @dist.tarball@ is
-server-chosen data, so the target must equal the packument authority, @ecosystemHosts@ aside.
--}
+-- | Whether a @dist.tarball@ authority may be fetched. An upstream's @dist.tarball@ is server-chosen data, so the target must equal the packument authority, @ecosystemHosts@ aside.
 tarballHostAllowed ::
     -- | The ecosystem's canonical artifact authorities, same-host-equivalent.
     AllowedHostPorts ->
     Origin ->
     -- | The @host:port@ allowlist (the same one every outbound fetch is gated by).
     AllowedHostPorts ->
-    {- | The operator-configured ranges extending the fixed internal-range block
-    (untrusted origin).
-    -}
+    -- | The operator-configured ranges extending the fixed internal-range block (untrusted origin).
     [IPRange] ->
     -- | The authority that served the packument, when one could be extracted.
     Maybe HostPort ->
@@ -178,9 +160,7 @@ internalRangeOk origin additionalBlockedRanges target = case origin of
     TrustedOrigin -> True
     UntrustedOrigin -> not (isBlockedTarget additionalBlockedRanges (hpHost target))
 
-{- | Whether an artifact's authority is honoured for a document the given authority served: the
-same dial target, or one the ecosystem serves artifact bytes from by design.
--}
+-- | Whether an artifact's authority is honoured for a document the given authority served: the same dial target, or one the ecosystem serves artifact bytes from by design.
 artifactAuthorityHonoured :: AllowedHostPorts -> Maybe HostPort -> Maybe HostPort -> Bool
 artifactAuthorityHonoured ecosystemHosts packumentOrigin artifactTarget =
     case (packumentOrigin, artifactTarget) of
@@ -188,9 +168,7 @@ artifactAuthorityHonoured ecosystemHosts packumentOrigin artifactTarget =
             sameAuthority target packument || isAllowedUpstreamHost ecosystemHosts target
         _ -> False
 
-{- | The authority set of an ecosystem's declared artifact hosts, which the gate and each
-adapter's projection both derive 'artifactAuthorityHonoured''s first argument through.
--}
+-- | The authority set of an ecosystem's declared artifact hosts, which the gate and each adapter's projection both derive 'artifactAuthorityHonoured''s first argument through.
 ecosystemArtifactAuthorities :: [Text] -> AllowedHostPorts
 ecosystemArtifactAuthorities = allowedHostPorts . Set.fromList . mapMaybe hostPortAddress
 
@@ -200,18 +178,12 @@ sameAuthority :: HostPort -> HostPort -> Bool
 sameAuthority (HostPort host port) (HostPort host' port') =
     canonicalHostKey host == canonicalHostKey host' && port == port'
 
-{- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate. The gate runs on
-the hot artifact path, so only the dynamic public @dist.tarball@ authority is parsed per request.
--}
+-- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate. The gate runs on the hot artifact path, so only the dynamic public @dist.tarball@ authority is parsed per request.
 data TarballHostGate = TarballHostGate
     { thgAllowlist :: AllowedHostPorts
-    {- ^ The mount's configured upstreams plus the ecosystem's artifact hosts, the same set
-    every outbound fetch is gated against. A URL that writes no port contributes its host at 443.
-    -}
+    -- ^ The mount's configured upstreams plus the ecosystem's artifact hosts, the same set every outbound fetch is gated against. A URL that writes no port contributes its host at 443.
     , thgEcosystemHosts :: AllowedHostPorts
-    {- ^ The adapter's artifact authorities (npm has none, PyPI's is @files.pythonhosted.org@):
-    the one same-host equivalence, still internal-range-gated like any target.
-    -}
+    -- ^ The adapter's artifact authorities (npm has none, PyPI's is @files.pythonhosted.org@): the one same-host equivalence, still internal-range-gated like any target.
     , thgPrivateHostPort :: Maybe HostPort
     -- ^ The private upstream's authority. 'Nothing' authorises nothing (fail closed).
     , thgPublicHostPort :: Maybe HostPort
@@ -219,9 +191,7 @@ data TarballHostGate = TarballHostGate
     }
     deriving stock (Eq, Show)
 
-{- | Build the gate from the ecosystem's artifact hosts and a mount's private, public, and
-mirror-target URLs. A URL no authority extracts from authorises nothing (fail closed).
--}
+-- | Build the gate from the ecosystem's artifact hosts and a mount's private, public, and mirror-target URLs. A URL no authority extracts from authorises nothing (fail closed).
 tarballHostGate :: [Text] -> Maybe Text -> Text -> Maybe Text -> TarballHostGate
 tarballHostGate ecosystemHostUrls privateUrl publicUrl mirrorUrl =
     TarballHostGate

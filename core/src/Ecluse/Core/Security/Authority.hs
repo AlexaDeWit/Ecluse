@@ -32,9 +32,7 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Text (afterFirst, httpPrefix, isPrefixOfLowered, readDecimalText, toLowerUnlessAsciiUnchanged)
 
-{- | The authority an outbound fetch dials: a bare host with its effective port. The gate
-authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
--}
+-- | The authority an outbound fetch dials: a bare host with its effective port. The gate authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
 data HostPort = HostPort
     { hpHost :: Text
     -- ^ The bare host: no brackets, no port, lower-cased by both extractors.
@@ -43,9 +41,7 @@ data HostPort = HostPort
     }
     deriving stock (Eq, Ord, Show)
 
-{- | The bare host of a URI or @host[:port]@ authority, lower-cased and unbracketed. A value with no
-recognisable host yields the empty string, which the guards treat as not-allowed.
--}
+-- | The bare host of a URI or @host[:port]@ authority, lower-cased and unbracketed. A value with no recognisable host yields the empty string, which the guards treat as not-allowed.
 hostAddress :: Text -> Text
 hostAddress raw = toLowerUnlessAsciiUnchanged (maybe "" fst (splitHostPort (authorityOf raw)))
 
@@ -53,9 +49,7 @@ hostAddress raw = toLowerUnlessAsciiUnchanged (maybe "" fst (splitHostPort (auth
 hostPortAddress :: Text -> Maybe HostPort
 hostPortAddress = hostPortAddressWithDefault 443
 
-{- | 'hostPortAddress' with the caller's own port for a URL that writes none, for a scheme whose
-portless default is not the gate's 443. The authority split and the port grammar do not change.
--}
+-- | 'hostPortAddress' with the caller's own port for a URL that writes none, for a scheme whose portless default is not the gate's 443. The authority split and the port grammar do not change.
 hostPortAddressWithDefault :: Word16 -> Text -> Maybe HostPort
 hostPortAddressWithDefault portless raw = do
     let authority = authorityOf raw
@@ -151,9 +145,7 @@ afterLast needle hay =
     let (pre, post) = T.breakOnEnd needle hay
      in if T.null pre then hay else post
 
-{- | Split a @host[:port]@ authority into its bare host and the raw @":port"@ remainder, empty when
-no port is present. The split is bracket-aware, and an unclosed opening bracket yields 'Nothing'.
--}
+-- | Split a @host[:port]@ authority into its bare host and the raw @":port"@ remainder, empty when no port is present. The split is bracket-aware, and an unclosed opening bracket yields 'Nothing'.
 splitHostPort :: Text -> Maybe (Text, Text)
 splitHostPort authority
     | T.null authority = Nothing

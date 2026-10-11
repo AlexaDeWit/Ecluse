@@ -101,9 +101,7 @@ additionalRangesSpec = describe "isBlockedTarget (operator-configured additional
     it "does not block a DNS name even when it lexically resembles a blocked range" $
         isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
 
-{- | Every classification 'isBlockedTarget' owes under the fixed range set, expected value
-written out rather than derived from any implementation.
--}
+-- | Every classification 'isBlockedTarget' owes under the fixed range set, expected value written out rather than derived from any implementation.
 classificationCorpusSpec :: Spec
 classificationCorpusSpec =
     describe "isBlockedTarget classification corpus (explicit expected table)" $
@@ -234,9 +232,7 @@ classificationCorpusSpec =
         , ("::ffff:1.2.3.4.5", False) -- mapped form with a bad embedded IPv4
         ]
 
-{- | The outbound-fetch guarantee is the conjunction: Ecluse fetches a target only if the host
-allowlist admits it and it is not an internal address.
--}
+-- | The outbound-fetch guarantee is the conjunction: Ecluse fetches a target only if the host allowlist admits it and it is not an internal address.
 ssrfGateSpec :: Spec
 ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
     let noOptIn = []
@@ -397,17 +393,13 @@ propertiesSpec = modifyMaxSuccess (const 1000) $ describe "properties" $ do
             H.cover 2 "public host matched by an additional range" (not (looksInternal host) && matchedByExtra)
             isBlockedTarget additionalRanges host === (looksInternal host || matchedByExtra)
 
-{- | An operator-configured single-host range naming exactly @host@, a @\/32@ for an IPv4 literal
-and a @\/128@ for IPv6, or 'Nothing' for a DNS name, which no CIDR range can express.
--}
+-- | An operator-configured single-host range naming exactly @host@, a @\/32@ for an IPv4 literal and a @\/128@ for IPv6, or 'Nothing' for a DNS name, which no CIDR range can express.
 singleHostRange :: Text -> Maybe IPRange
 singleHostRange h
     | T.any (== ':') h = parseBlockedRange (h <> "/128")
     | otherwise = parseBlockedRange (h <> "/32")
 
-{- | Whether a generated host string is one this module's ranges treat as internal. It restates
-the ranges independently of the implementation, so the property is not a tautology.
--}
+-- | Whether a generated host string is one this module's ranges treat as internal. It restates the ranges independently of the implementation, so the property is not a tautology.
 looksInternal :: Text -> Bool
 looksInternal h =
     h == "::1"
@@ -423,9 +415,7 @@ looksInternal h =
   where
     octetIn t lo hi = maybe False (\n -> n >= lo && n <= hi) (readMaybe (toString t) :: Maybe Int)
 
-{- | A host generator mixing internal-range IPv4 and IPv6 literals with public addresses and the
-odd DNS name, so the SSRF property drives both the blocked and the permitted arms.
--}
+-- | A host generator mixing internal-range IPv4 and IPv6 literals with public addresses and the odd DNS name, so the SSRF property drives both the blocked and the permitted arms.
 genMaybeInternalHost :: H.Gen Text
 genMaybeInternalHost =
     Gen.choice
