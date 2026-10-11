@@ -78,17 +78,17 @@ validId value = not (T.null value) && T.all allowed value
     allowed char = isAsciiLower char || isDigit char || char `elem` ("/-_." :: String)
 
 groupProblems :: Map Text Profile -> Map Text Obligation -> Group -> [Text]
-groupProblems profiles obligations group =
-    ["empty group: " <> groupId group | null (groupCases group)]
-        <> ["group has no partition: " <> groupId group | T.null (groupPartition group)]
-        <> case Map.lookup (groupProfileId group) profiles of
-            Nothing -> ["unknown group profile: " <> groupProfileId group]
+groupProblems profiles obligations scenarioGroup =
+    ["empty group: " <> groupId scenarioGroup | null (groupCases scenarioGroup)]
+        <> ["group has no partition: " <> groupId scenarioGroup | T.null (groupPartition scenarioGroup)]
+        <> case Map.lookup (groupProfileId scenarioGroup) profiles of
+            Nothing -> ["unknown group profile: " <> groupProfileId scenarioGroup]
             Just profile ->
-                [ "group lacks capability: " <> groupId group <> ": " <> capability
-                | capability <- groupCapabilities group
+                [ "group lacks capability: " <> groupId scenarioGroup <> ": " <> capability
+                | capability <- groupCapabilities scenarioGroup
                 , capability `notElem` profileCapabilities profile
                 ]
-                    <> concatMap checkCase (groupCases group)
+                    <> concatMap checkCase (groupCases scenarioGroup)
   where
     checkCase item =
         ["case has no requirement: " <> caseId item | null (caseRequirements item)]
@@ -98,10 +98,10 @@ groupProblems profiles obligations group =
         Just obligation ->
             [ "case does not satisfy its declared obligation: " <> caseId item <> ": " <> requirement
             | obligationSupport obligation /= Supported
-                || obligationProfile obligation /= groupProfileId group
-                || obligationContract obligation /= groupContractId group
+                || obligationProfile obligation /= groupProfileId scenarioGroup
+                || obligationContract obligation /= groupContractId scenarioGroup
                 || caseId item `notElem` obligationCases obligation
-                || any (`notElem` groupCapabilities group) (obligationCapabilities obligation)
+                || any (`notElem` groupCapabilities scenarioGroup) (obligationCapabilities obligation)
             ]
 
 obligationProblems :: Map Text Profile -> [Group] -> Obligation -> [Text]
@@ -125,10 +125,10 @@ obligationProblems profiles groups obligation = case obligationSupport obligatio
   where
     registered =
         [ caseId item
-        | group <- groups
-        , groupProfileId group == obligationProfile obligation
-        , groupContractId group == obligationContract obligation
-        , item <- groupCases group
+        | scenarioGroup <- groups
+        , groupProfileId scenarioGroup == obligationProfile obligation
+        , groupContractId scenarioGroup == obligationContract obligation
+        , item <- groupCases scenarioGroup
         , obligationId obligation `elem` caseRequirements item
         ]
 
@@ -141,11 +141,11 @@ selectGroups selection catalogue = do
         selected = List.sortOn groupId $ filter (matches profiles) groups
     if null selected then Left ["selection matches no groups: " <> show selection] else Right selected
   where
-    matches profiles group =
-        maybe True (== groupId group) (selectionGroup selection)
-            && maybe True (== groupPartition group) (selectionPartition selection)
-            && maybe True (== groupTier group) (selectionTier selection)
-            && maybe False (profileMatches selection) (Map.lookup (groupProfileId group) profiles)
+    matches profiles scenarioGroup =
+        maybe True (== groupId scenarioGroup) (selectionGroup selection)
+            && maybe True (== groupPartition scenarioGroup) (selectionPartition selection)
+            && maybe True (== groupTier scenarioGroup) (selectionTier selection)
+            && maybe False (profileMatches selection) (Map.lookup (groupProfileId scenarioGroup) profiles)
 
 profileMatches :: Selection -> Profile -> Bool
 profileMatches selection profile =

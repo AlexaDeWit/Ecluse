@@ -17,12 +17,13 @@ spec = describe "labelledCaseIds" $ do
         let body =
                 beforeAll_ (modifyIORef' effects (+ 1)) $
                     afterAll_ (modifyIORef' effects (+ 1)) $
-                        it (caseLabel "read/identity" "identity") $
-                            modifyIORef' effects (+ 1)
+                        it
+                            (caseLabel "read/identity" "identity")
+                            (modifyIORef' effects (+ 1) :: Expectation)
         labelledCaseIds body `shouldReturn` ["read/identity"]
         readIORef effects `shouldReturn` 0
     it "retains duplicate labels so the caller cannot lose duplicate evidence" $ do
-        let body = replicateM_ 2 $ it (caseLabel "read/identity" "identity") $ pure ()
+        let body = replicateM_ 2 $ it (caseLabel "read/identity" "identity") (pure () :: Expectation)
         labelledCaseIds body `shouldReturn` ["read/identity", "read/identity"]
     it "keeps native unlabelled cases outside the migrated inventory" $
-        labelledCaseIds (it "native parser oracle" $ pure ()) `shouldReturn` []
+        labelledCaseIds (it "native parser oracle" (pure () :: Expectation)) `shouldReturn` []

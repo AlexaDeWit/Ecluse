@@ -26,9 +26,9 @@ spec = do
             validateCatalogue catalogue{catalogueObligations = [obligation{obligationSupport = Planned "delivery-issue"}]} `shouldSatisfy` isLeft
     describe "selectGroups" $ do
         it "selects whole lifecycle groups by stable ID" $
-            selectGroups emptySelection{selectionGroup = Just "example/read"} catalogue `shouldBe` Right [group]
+            selectGroups emptySelection{selectionGroup = Just "example/read"} catalogue `shouldBe` Right [scenarioGroup]
         it "intersects ecosystem, backend, capability and partition filters" $
-            selectGroups emptySelection{selectionEcosystem = Just "example", selectionBackend = Just "http", selectionCapability = Just "read", selectionPartition = Just "primary"} catalogue `shouldBe` Right [group]
+            selectGroups emptySelection{selectionEcosystem = Just "example", selectionBackend = Just "http", selectionCapability = Just "read", selectionPartition = Just "primary"} catalogue `shouldBe` Right [scenarioGroup]
         it "rejects unknown IDs without evaluating any provider" $
             selectGroups emptySelection{selectionGroup = Just "absent"} catalogue `shouldSatisfy` isLeft
         it "rejects empty filter intersections" $
@@ -48,12 +48,12 @@ omissions =
     , ("rejects a removed required profile", catalogue{catalogueProfiles = []})
     , ("rejects a removed capability", catalogue{catalogueProfiles = [profile{profileCapabilities = []}]})
     , ("rejects an empty required case list", catalogue{catalogueObligations = [obligation{obligationCases = []}]})
-    , ("rejects an omitted case", catalogue{catalogueGroups = [group{groupCases = []}]})
-    , ("rejects a duplicate group", catalogue{catalogueGroups = [group, group]})
-    , ("rejects a duplicate case", catalogue{catalogueGroups = [group{groupCases = [item, item]}]})
-    , ("rejects a ghost case", catalogue{catalogueGroups = [group{groupCases = [item{caseId = "ghost"}]}]})
+    , ("rejects an omitted case", catalogue{catalogueGroups = [scenarioGroup{groupCases = []}]})
+    , ("rejects a duplicate group", catalogue{catalogueGroups = [scenarioGroup, scenarioGroup]})
+    , ("rejects a duplicate case", catalogue{catalogueGroups = [scenarioGroup{groupCases = [item, item]}]})
+    , ("rejects a ghost case", catalogue{catalogueGroups = [scenarioGroup{groupCases = [item{caseId = "ghost"}]}]})
     , ("rejects an empty added profile", catalogue{catalogueProfiles = [profile, profile{profileId = "empty"}]})
-    , ("rejects a group omitting required capabilities", catalogue{catalogueGroups = [group{groupCapabilities = []}]})
+    , ("rejects a group omitting required capabilities", catalogue{catalogueGroups = [scenarioGroup{groupCapabilities = []}]})
     , ("rejects a removed requirement", catalogue{catalogueObligations = []})
     , ("rejects a required new production ecosystem without a profile", catalogue{catalogueProductionEcosystems = ["example", "new"]})
     , ("rejects a profile for an unregistered production ecosystem", catalogue{catalogueProductionEcosystems = []})

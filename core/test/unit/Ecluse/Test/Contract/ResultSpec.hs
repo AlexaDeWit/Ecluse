@@ -15,22 +15,22 @@ import Ecluse.Test.Contract.Types
 spec :: Spec
 spec = describe "auditReports" $ do
     it "accepts complete primary evidence" $
-        auditReports identity plan [report] `shouldBe` []
+        auditReports executionIdentity plan [report] `shouldBe` []
     forM_ invalidReports $ \(label, reports) ->
-        it label $ auditReports identity plan reports `shouldSatisfy` (not . null)
+        it label $ auditReports executionIdentity plan reports `shouldSatisfy` (not . null)
     forM_ identityChanges $ \changed ->
         it ("rejects identity mismatch " <> show changed) $
-            auditReports identity plan [report{reportIdentity = changed}] `shouldSatisfy` (not . null)
+            auditReports executionIdentity plan [report{reportIdentity = changed}] `shouldSatisfy` (not . null)
     forM_ [Failed, Pending, SetupFailed, Cancelled, TimedOut] $ \status ->
         it ("rejects " <> show status <> " cases") $
-            auditReports identity plan [report{reportCases = [CaseResult "example/read/identity" "example/read" status 0 []]}] `shouldSatisfy` (not . null)
+            auditReports executionIdentity plan [report{reportCases = [CaseResult "example/read/identity" "example/read" status 0 []]}] `shouldSatisfy` (not . null)
     it "requires group evidence even when every case passed" $
-        auditReports identity plan [report{reportGroups = []}] `shouldSatisfy` (not . null)
+        auditReports executionIdentity plan [report{reportGroups = []}] `shouldSatisfy` (not . null)
     it "keeps the required case set when groups move to another partition" $ do
-        let moved = plan{planPartitions = ["moved"], planCatalogue = catalogue{catalogueGroups = [group{groupPartition = "moved"}]}}
-        auditReports identity moved [report{reportShard = "moved"}] `shouldBe` []
+        let moved = plan{planPartitions = ["moved"], planCatalogue = catalogue{catalogueGroups = [scenarioGroup{groupPartition = "moved"}]}}
+        auditReports executionIdentity moved [report{reportShard = "moved", reportSelectedGroups = [scenarioGroup{groupPartition = "moved"}]}] `shouldBe` []
     it "does not accept a modified partition manifest" $
-        auditReports identity plan{planPartitions = []} [report] `shouldSatisfy` (not . null)
+        auditReports executionIdentity plan{planPartitions = []} [report] `shouldSatisfy` (not . null)
   where
     plan = Plan 1 ["primary"] catalogue
 
@@ -49,9 +49,9 @@ invalidReports =
 
 identityChanges :: [Identity]
 identityChanges =
-    [ identity{identitySource = "other"}
-    , identity{identityImage = "other"}
-    , identity{identityArchitecture = "other"}
-    , identity{identityPlanDigest = "other"}
-    , identity{identityRunId = "other"}
+    [ executionIdentity{identitySource = "other"}
+    , executionIdentity{identityImage = "other"}
+    , executionIdentity{identityArchitecture = "other"}
+    , executionIdentity{identityPlanDigest = "other"}
+    , executionIdentity{identityRunId = "other"}
     ]

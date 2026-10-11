@@ -48,8 +48,8 @@ contractMain catalogue actions prerequisites = do
         Audit path reportPaths -> auditFiles plan path reportPaths
         Execute options -> do
             groups <- either (die . T.unlines) pure $ selectGroups (runSelection options) catalogue
-            identity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
-            report <- executeGroups identity options groups actions prerequisites
+            executionIdentity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
+            report <- executeGroups executionIdentity options groups actions prerequisites
             let faults = auditSelection groups (reportGroups report) (reportCases report)
             unless (null faults) $ do
                 forM_ (reportGroups report) $ \result ->
@@ -59,11 +59,11 @@ contractMain catalogue actions prerequisites = do
 
 -- | Each completed group is persisted before the next acquisition begins.
 executeGroups :: Identity -> RunOptions -> [Group] -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO Report
-executeGroups identity options groups actions prerequisites = Exception.mask $ \restore -> do
-    reportRef <- newIORef $ Report 1 identity shard (runRepeat options) [] [] (runSeed options) groups
+executeGroups executionIdentity options groups actions prerequisites = Exception.mask $ \restore -> do
+    reportRef <- newIORef $ Report 1 executionIdentity shard (runRepeat options) [] [] (runSeed options) groups
     persist options =<< readIORef reportRef
-    forM_ groups $ \group -> do
-        (groupResult, caseResults, interrupted) <- restore $ executeGroup options actions prerequisites group
+    forM_ groups $ \scenarioGroup -> do
+        (groupResult, caseResults, interrupted) <- restore $ executeGroup options actions prerequisites scenarioGroup
         modifyIORef' reportRef $ \report ->
             report
                 { reportGroups = reportGroups report <> [groupResult]
@@ -76,29 +76,29 @@ executeGroups identity options groups actions prerequisites = Exception.mask $ \
     shard = fromMaybe "all" $ selectionPartition $ runSelection options
 
 executeGroup :: RunOptions -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> Group -> IO (GroupResult, [CaseResult], Maybe SomeException)
-executeGroup options actions prerequisites group = Exception.mask $ \restore -> do
+executeGroup options actions prerequisites scenarioGroup = Exception.mask $ \restore -> do
     start <- getCurrentTime
     results <- newIORef []
     recorder <- newPhaseRecorder
     execution <- Exception.try @SomeException $ restore $ bounded options $ do
-        unavailable <- prerequisites group
+        unavailable <- prerequisites scenarioGroup
         case unavailable of
             Just reason -> pure $ Left reason
-            Nothing -> case Map.lookup (groupId group) actions of
+            Nothing -> case Map.lookup (groupId scenarioGroup) actions of
                 Nothing -> pure $ Left "group has no registered specification"
-                Just spec -> Right <$> runSpec options group results (spec recorder)
+                Just spec -> Right <$> runSpec options scenarioGroup results (spec recorder)
     end <- getCurrentTime
     observed <- reverse <$> readIORef results
     timings <- readPhaseTimings recorder
     executable <- toText <$> getProgName
     let (status, diagnostics, interrupted) = executionStatus execution
         missing =
-            [ CaseResult (caseId item) (groupId group) (missingStatus status) 0 diagnostics
-            | item <- groupCases group
+            [ CaseResult (caseId item) (groupId scenarioGroup) (missingStatus status) 0 diagnostics
+            | item <- groupCases scenarioGroup
             , caseId item `notElem` map crCaseId observed
             ]
-        rerun = executable <> " --group " <> groupId group <> " --seed " <> show (runSeed options)
-        groupResult = GroupResult (groupId group) status (realToFrac $ diffUTCTime end start) (diagnostics <> ["Rerun: " <> rerun]) timings
+        rerun = executable <> " --group " <> groupId scenarioGroup <> " --seed " <> show (runSeed options)
+        groupResult = GroupResult (groupId scenarioGroup) status (realToFrac $ diffUTCTime end start) (diagnostics <> ["Rerun: " <> rerun]) timings
     pure (groupResult, observed <> missing, interrupted)
 
 bounded :: RunOptions -> IO a -> IO (Maybe a)
@@ -120,7 +120,7 @@ missingStatus Passed = Failed
 missingStatus status = status
 
 runSpec :: RunOptions -> Group -> IORef [CaseResult] -> Spec -> IO Bool
-runSpec options group results spec = do
+runSpec options scenarioGroup results spec = do
     let configuration =
             Hspec.defaultConfig
                 { Hspec.configFailOnEmpty = True
@@ -133,7 +133,7 @@ runSpec options group results spec = do
                     display <- Formatters.formatterToFormat Formatters.specdoc formatConfig
                     pure $ \event -> do
                         display event
-                        captureResult group results event
+                        captureResult scenarioGroup results event
                 }
     (configured, forest) <- Hspec.evalSpec configuration spec
     result <- Hspec.runSpecForest forest configured
@@ -141,7 +141,7 @@ runSpec options group results spec = do
     pure $ Hspec.specResultSuccess result && all ((== Passed) . crStatus) observed
 
 captureResult :: Group -> IORef [CaseResult] -> Format.Event -> IO ()
-captureResult group results = \case
+captureResult scenarioGroup results = \case
     Format.ItemDone (_, label) item -> do
         let identifier = fromMaybe ("unregistered:" <> toText label) $ labelCaseId label
             Format.Seconds duration = Format.itemDuration item
@@ -150,7 +150,7 @@ captureResult group results = \case
                 Format.Pending _ reason -> (Pending, maybe [] (pure . toText) reason)
                 Format.Failure _ reason -> (Failed, [show reason])
         let information = [toText $ Format.itemInfo item | not $ null $ Format.itemInfo item]
-        modifyIORef' results (CaseResult identifier (groupId group) status duration (information <> diagnostics) :)
+        modifyIORef' results (CaseResult identifier (groupId scenarioGroup) status duration (information <> diagnostics) :)
     _ -> pure ()
 
 persist :: RunOptions -> Report -> IO ()

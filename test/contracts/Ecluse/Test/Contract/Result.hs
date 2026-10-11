@@ -152,7 +152,7 @@ auditSelection groups actualGroups actualCases =
            , (crCaseId result, crGroupId result) `notElem` ownership
            ]
   where
-    ownership = [(caseId item, groupId group) | group <- groups, item <- groupCases group]
+    ownership = [(caseId item, groupId scenarioGroup) | scenarioGroup <- groups, item <- groupCases scenarioGroup]
     expectedCases = map fst ownership
 
 -- | Missing shard files, repeats, pending cases, and mismatched identities fail the primary audit.
@@ -182,12 +182,12 @@ auditReports expected plan reports =
                 (reportCases report)
 
 identityFields :: Identity -> [(Text, Text)]
-identityFields identity =
-    [ ("source", identitySource identity)
-    , ("image", identityImage identity)
-    , ("architecture", identityArchitecture identity)
-    , ("planDigest", identityPlanDigest identity)
-    , ("runId", identityRunId identity)
+identityFields executionIdentity =
+    [ ("source", identitySource executionIdentity)
+    , ("image", identityImage executionIdentity)
+    , ("architecture", identityArchitecture executionIdentity)
+    , ("planDigest", identityPlanDigest executionIdentity)
+    , ("runId", identityRunId executionIdentity)
     ]
 
 exact :: Text -> [Text] -> [Text] -> [Text]
