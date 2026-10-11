@@ -95,16 +95,18 @@ mergeDocuments shape info bytes = case shape of
 keepVersions :: PackageInfo -> Set Text -> Value -> Value
 keepVersions info = case pkgEcosystem (infoName info) of
     PyPI -> keepPyPIVersions info
-    _ -> keepNpmVersions
+    Npm -> keepNpmVersions
+    RubyGems -> const id
 
-{- Add rendered text of about the given size. npm takes only its name, author and two time stamps
-from the base, so its text goes in each release's deprecation notice, and PyPI's in its status. -}
+-- npm keeps release deprecation text, while PyPI keeps project status text.
 weighDown :: PackageInfo -> Int -> Value -> Value
 weighDown info size = \case
     Object fields -> Object $ case pkgEcosystem (infoName info) of
-        Npm | Just (Object releases) <- KeyMap.lookup "versions" fields -> KeyMap.insert "versions" (Object (deprecated releases)) fields
+        Npm -> case KeyMap.lookup "versions" fields of
+            Just (Object releases) -> KeyMap.insert "versions" (Object (deprecated releases)) fields
+            _ -> fields
         PyPI -> KeyMap.insert "project-status" (object ["status" .= ("active" :: Text), "reason" .= padded "heavy base" size]) fields
-        _ -> fields
+        RubyGems -> fields
     other -> other
   where
     deprecated releases = KeyMap.mapWithKey (\key -> deprecate (padded (Key.toText key) (size `div` max 1 (KeyMap.size releases)))) releases
