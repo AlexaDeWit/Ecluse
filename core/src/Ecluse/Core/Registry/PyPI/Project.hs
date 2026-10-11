@@ -29,7 +29,6 @@ module Ecluse.Core.Registry.PyPI.Project (
 
 import Data.Aeson (toJSON)
 import Data.Char (isAlphaNum, isAscii)
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -221,23 +220,45 @@ readRemembering remember memo file = maybe (Nothing, memo) known (filenameParts 
              in (coordinate kind parsed, memo{memoVersions = remember version parsed (memoVersions memo)})
     coordinate kind = fmap (`FileCoordinate` kind)
 
--- A filename's version text and distribution kind, before PEP 440 canonicalisation.
 filenameParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 filenameParts project file = wheelParts project file <|> sdistParts project file
 
--- @{project}-{version}(-{build})?-{python}-{abi}-{platform}.whl@. The project and version
--- parts escape @-@ as @_@, so the parts split exactly and the project part compares whole.
+-- Five or six components qualify, even when build or tag components are empty.
 wheelParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 wheelParts project file = do
     stem <- T.stripSuffix ".whl" file
-    parts <- nonEmpty (T.splitOn "-" stem)
-    guard (length parts == 5 || length parts == 6)
-    guard (canonicalise PyPI (NE.head parts) == fpCanonical project)
-    version <- toList parts !!? 1
+    let (name, afterName) = T.break (== '-') stem
+        (version, tags) = T.break (== '-') (T.drop 1 afterName)
+    guard (wheelTailFits tags)
+    guard (canonicalise PyPI name == fpCanonical project)
     pure (version, Wheel)
 
--- @{project}-{version}{archive suffix}@. A legacy project name can carry the separator a
--- version can, so the split takes the longest project part that canonicalises to this one.
+data WheelDelimiterCount
+    = ZeroDelimiters
+    | OneDelimiter
+    | TwoDelimiters
+    | ThreeDelimiters
+    | FourDelimiters
+    | ExcessDelimiters
+
+wheelTailFits :: Text -> Bool
+wheelTailFits tags = case T.foldl' advanceCount ZeroDelimiters tags of
+    ThreeDelimiters -> True
+    FourDelimiters -> True
+    _ -> False
+  where
+    advanceCount delimiterCount character
+        | character /= '-' = delimiterCount
+        | otherwise = case delimiterCount of
+            ZeroDelimiters -> OneDelimiter
+            OneDelimiter -> TwoDelimiters
+            TwoDelimiters -> ThreeDelimiters
+            ThreeDelimiters -> FourDelimiters
+            FourDelimiters -> ExcessDelimiters
+            ExcessDelimiters -> ExcessDelimiters
+{-# INLINE wheelTailFits #-}
+
+-- Legacy project names and versions can share separators. Keep the longest matching project prefix.
 sdistParts :: FileProject -> Text -> Maybe (Text, DistributionKind)
 sdistParts project file = do
     stem <- asum (map (`T.stripSuffix` file) sdistSuffixes)
@@ -295,13 +316,11 @@ usableComponent component =
         && maybe False (nameEdge . fst) (T.uncons component)
         && maybe False (nameEdge . snd) (T.unsnoc component)
 
--- A separator is legal inside a name, never at either end.
 nameChar :: Char -> Bool
 nameChar ch = nameEdge ch || isNameSeparator ch
 
 nameEdge :: Char -> Bool
 nameEdge ch = isAscii ch && isAlphaNum ch
 
--- PyPI's own cap on a project name, the one its own validator applies.
 pypiNameLimit :: Int
 pypiNameLimit = 100
