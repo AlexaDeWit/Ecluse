@@ -96,7 +96,8 @@ import Network.HTTP.Types.Header (RequestHeaders, hDate, hETag, hHost, hIfNoneMa
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
-import Network.Wai.Test (SResponse (..), request, runSession)
+import Network.Wai.Test (SResponse (..), runSession)
+import Network.Wai.Test qualified as WaiTest (request)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -239,7 +240,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             base <- depsFor publicPort
             logEnv <- newTestLogEnv
             let fetch deps =
-                    runSession (request defaultRequest) $ \req respond ->
+                    runSession (WaiTest.request defaultRequest) $ \req respond ->
                         runHandler
                             logEnv
                             mempty
@@ -940,8 +941,7 @@ mkRuntime metricsPort = do
     admission <- newServeAdmission 1_000_000
     mkRuntimeWith admission metricsPort
 
-{- A runtime whose memory meter holds one one-byte step and has no waiting room, so a second
-request is refused at once while the first holds the step. -}
+-- The zero waiting room makes a held step refuse the next request at once.
 fullDoorRuntime :: MetricsPort -> IO (ServeRuntime, MemoryMeter)
 fullDoorRuntime metricsPort = do
     rt <- mkRuntime metricsPort

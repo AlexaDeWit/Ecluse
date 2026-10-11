@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Exercise artifact routes against local private and public upstreams.
 module Ecluse.Core.Server.Pipeline.TarballIntegrationSpec (spec) where
 
 import Control.Exception (try)
@@ -24,6 +25,7 @@ import Network.Wai (defaultRequest, requestHeaders, responseLBS)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 
+-- | Pin artifact responses, origin selection, and mirror jobs.
 spec :: Spec
 spec = do
     tarballSpec
@@ -115,7 +117,7 @@ privateAuthorisationSpec = describe "private artifact authorisation" $ do
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
                     response <- getTarball "1.0.0" Nothing app
-                    status response `shouldBe` if firstParty then 404 else 200
+                    status response `shouldBe` if firstParty then statusCode upstreamStatus else 200
                     if firstParty
                         then seenAuth publicUp `shouldReturn` []
                         else simpleBody response `shouldBe` publicTarballBytes
@@ -203,8 +205,6 @@ tarballSpec = describe "artifact (tarball) path" $ do
                            ]
 
     it "serve-only mount: streams the admitted public artifact and enqueues nothing (NoMirrorWrite)" $ do
-        -- A mount that never mirrors: the gate and the stream are identical, and the absent
-        -- capability is the discriminant, so no job, producer span, or enqueue metric follows.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
@@ -288,8 +288,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             drainJobs env `shouldReturn` []
 
     it "relays a public artifact 404 verbatim and enqueues nothing (the relay verdict gates the back-fill)" $ do
-        -- The packument admits the version, but the artifact slot answers 404. The serve path
-        -- relays the miss verbatim and enqueues no job the worker could only drop.
+        -- An admitted version can lose its artifact before the download.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status404 [] "gone")
         queue <- newTestMemoryQueue
@@ -299,8 +298,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             drainJobs env `shouldReturn` []
 
     it "relays an oddly-shaped public 2xx verbatim (body untouched) and enqueues nothing" $ do
-        -- An HTML page where the gate admitted a tarball. The bytes still relay verbatim, because
-        -- the verdict is a tripwire and never a validator, and no mirror job is enqueued.
+        -- The relay verdict gates mirroring without validating the served bytes.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstreamAnswering "1.0.0" (responseLBS status200 [("Content-Type", "text/html")] "<html>not a tarball</html>")
         queue <- newTestMemoryQueue
@@ -374,8 +372,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             simpleBody resp `shouldBe` publicTarballBytes
 
     it "drops a cross-host public dist.tarball at projection, so the artifact is a 404 and no fetch" $ do
-        -- One authority definition serves the listing and the download. A location the projection
-        -- refuses leaves no version to request, so the artifact route never reaches the gate.
+        -- Projection uses the same authority policy as the artifact route.
         privateUp <- privateArtifactMiss
         publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
