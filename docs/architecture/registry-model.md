@@ -497,6 +497,11 @@ copy of each key and string its releases or files repeat. The walk finds that co
 read, in a table keyed by SipHash-1-3 under a key drawn for that read. When the read ends, it seals
 the table's strings into the document's `DocTable` and drops the table. An npm full read keeps each
 served release packed against that `DocTable`, as the bytes a listing copies when it renders.
+Its ecosystem-specific builder observes typed policy facts beside the generic packed writer.
+Successful releases use those facts without decoding a release object. Invalid facts use the
+existing diagnostic decoder, including the source's original author. Explicit tree reads keep
+the whole-release decoder. Script validation covers every command, while typed facts retain
+only the presence of the three install hooks. The packed release preserves every retained command.
 Parser continuations advance before the next chunk, so successful reads do not retain a complete
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and

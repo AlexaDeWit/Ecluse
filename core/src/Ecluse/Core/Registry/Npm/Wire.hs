@@ -2,25 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm wire JSON types and their decoders: the decode-only protocol boundary.
-
-Every decoder is lenient in the ways the public registry requires. Unknown keys are
-ignored, @license@ and a person arrive as a string or an object, @deprecated@ as a string
-or a boolean, and an undecodable advisory @unpackedSize@ reads as absent rather than
-failing the version. The shapes come from live captures of @registry.npmjs.org@, kept as
-fixtures under @core\/test\/unit\/fixtures\/npm\/@.
--}
+-- | npm wire types shared by tree decoding and typed extraction during packing.
 module Ecluse.Core.Registry.Npm.Wire (
     -- * Shared scalars
     Person (..),
+    personFromFields,
     License (..),
+    licenseFromFields,
 
     -- * The @dist@ object
     Dist (..),
     distFields,
+    distFromFields,
 
     -- * Per-version manifest
     VersionManifest (..),
+    availability,
 ) where
 
 import Data.Aeson (
@@ -35,9 +32,7 @@ import Data.Aeson (
 import Ecluse.Core.Json.Lenient (lenientOptional, typeMismatchOneOf)
 import Ecluse.Core.Package (Availability (Available, Deprecated))
 
-{- | A person on a package: an author, maintainer, contributor, or a version's publisher.
-A packed @"Name \<email\> (url)"@ string, npm's other form, stays verbatim in 'personName'.
--}
+-- | A publisher or contributor. Packed person strings stay verbatim in 'personName'.
 data Person = Person
     { personName :: Text
     -- ^ The name, or the whole packed string as sent.
@@ -50,11 +45,13 @@ instance FromJSON Person where
     parseJSON = \case
         String name -> pure (Person name Nothing Nothing)
         Object o ->
-            Person
-                <$> o .:? "name" .!= ""
-                <*> o .:? "email"
-                <*> o .:? "url"
+            personFromFields (o .:? "name") (o .:? "email") (o .:? "url")
         other -> typeMismatchOneOf "Person (object or string)" other
+
+-- | Apply the person defaults to fields validated by the tree or packed read.
+personFromFields :: (Applicative f) => f (Maybe Text) -> f (Maybe Text) -> f (Maybe Text) -> f Person
+personFromFields name email url = Person . fromMaybe "" <$> name <*> email <*> url
+{-# INLINE personFromFields #-}
 
 -- | A declared license, in npm's modern string form or its legacy object form.
 data License
@@ -68,14 +65,15 @@ instance FromJSON License where
     parseJSON = \case
         String spdx -> pure (LicenseSpdx spdx)
         Object o ->
-            LicenseObject
-                <$> o .:? "type" .!= ""
-                <*> o .:? "url"
+            licenseFromFields (o .:? "type") (o .:? "url")
         other -> typeMismatchOneOf "License (object or string)" other
 
-{- | The artifact descriptor every version manifest carries. A client fails the install
-when the bytes mismatch, so a mirror or a URL rewrite preserves the digests byte for byte.
--}
+-- | Apply the legacy licence default to validated fields without requiring an object.
+licenseFromFields :: (Applicative f) => f (Maybe Text) -> f (Maybe Text) -> f License
+licenseFromFields kind url = LicenseObject . fromMaybe "" <$> kind <*> url
+{-# INLINE licenseFromFields #-}
+
+-- | Artifact coordinates and digests that serving and mirroring preserve.
 data Dist = Dist
     { distTarball :: Text
     -- ^ Absolute URL of the @.tgz@ artifact. Always present.
@@ -84,9 +82,7 @@ data Dist = Dist
     , distIntegrity :: Maybe Text
     -- ^ The Subresource-Integrity string (@"sha512-..."@), preferred over the shasum.
     , distUnpackedSize :: Maybe Int
-    {- ^ Unpacked size in bytes. Advisory, so a fractional, huge, or wrong-typed value
-    reads as 'Nothing' instead of denying the whole packument.
-    -}
+    -- ^ Advisory bytes. Fractional, huge or wrong-typed values read as 'Nothing'.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -96,15 +92,14 @@ distFields = ["tarball", "shasum", "integrity", "unpackedSize"]
 
 instance FromJSON Dist where
     parseJSON = withObject "Dist" $ \o ->
-        Dist
-            <$> o .: "tarball"
-            <*> o .:? "shasum"
-            <*> o .:? "integrity"
-            <*> lenientOptional o "unpackedSize"
+        distFromFields (o .: "tarball") (o .:? "shasum") (o .:? "integrity") (lenientOptional o "unpackedSize")
 
-{- | One version's manifest, decoding all three wire forms alike. The dependency maps and
-the maintainer list stay unparsed: nothing reads them, and the cost falls on every version.
--}
+-- | Join the required tarball, validated digests and lenient size in either read representation.
+distFromFields :: (Applicative f) => f Text -> f (Maybe Text) -> f (Maybe Text) -> f (Maybe Int) -> f Dist
+distFromFields tarball shasum integrity size = Dist <$> tarball <*> shasum <*> integrity <*> size
+{-# INLINE distFromFields #-}
+
+-- | A release's policy inputs. Dependency maps and maintainers stay outside the typed facts.
 data VersionManifest = VersionManifest
     { vmName :: Text
     -- ^ The package name as sent, possibly scoped (@"\@scope\/name"@).
@@ -132,6 +127,7 @@ instance FromJSON VersionManifest where
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
 
+-- | Only a nonempty string or @true@ declares deprecation. Other values remain available.
 availability :: Maybe Value -> Availability
 availability = \case
     Just (String "") -> Available

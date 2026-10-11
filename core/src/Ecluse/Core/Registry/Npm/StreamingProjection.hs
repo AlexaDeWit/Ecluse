@@ -41,13 +41,14 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails (..), PackageInfo (..), PackageName, mkInvalidEntry)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
-import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, replacedMember, sealValue)
+import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
-import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
+import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, projectVersionManifest)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
-import Ecluse.Core.Registry.Npm.Wire (distFields)
+import Ecluse.Core.Registry.Npm.VersionWriter (VersionValue, VersionWriter, discardVersion, packedWriter, sealVersion, versionFacts)
+import Ecluse.Core.Registry.Npm.Wire (Dist (distTarball), VersionManifest (vmDist), distFields)
 import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
@@ -89,7 +90,7 @@ emptyProjection =
 keepsRelease :: NpmProjection -> Text -> Bool
 keepsRelease acc key = projectedActiveContainer acc == Just VersionsContainer && Map.notMember key (projectedVersions acc)
 
--- Receive a release the projection keeps, with its typed facts, and enforce the version ceiling.
+-- The version ceiling counts source entries even when their facts do not project.
 collectRelease :: Limits -> NpmProjection -> NpmFieldOf release -> Text -> TypedRelease -> Either LimitError NpmProjection
 collectRelease limits acc field key typed = (\counted -> counted{projectedVersions = Map.insert key typed (projectedVersions counted)}) <$> collectField limits acc field
 
@@ -139,20 +140,18 @@ collectField limits acc = \case
 firstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
 firstInsert = Map.insertWith (\_ old -> old)
 
--- A release's typed facts from the members they read, or why it does not project.
 projectRelease :: PackageName -> Text -> Value -> Either Text PackageDetails
 projectRelease name key projected = case projectVersionEntryResult name (mkVersion Npm key) Nothing projected of
     Left err -> Left (toText err)
     Right details -> Right $! details
 
--- A dropped release, recorded with the whole release as read.
+-- Diagnostics retain the source payload, including its original author.
 invalidRelease :: Text -> Value -> Text -> TypedRelease
 invalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest key whole reason
 
 -- The parts a finished read serves beside its releases: the reported name and the bookkeeping times.
 data NpmParts = NpmParts Value (Map Text Value)
 
--- Bind the reported name and join policy timestamps with their same-source releases.
 finishParts :: Limits -> PackageName -> NpmProjection -> Either MetadataError (PackageInfo, NpmParts)
 finishParts limits requested acc = do
     when (projectedInvalidContainer acc) (Left MetadataUndecodable)
@@ -228,23 +227,27 @@ emptyPackedRead = PackedRead emptyProjection []
 keepsPackedRelease :: PackedRead -> Text -> Bool
 keepsPackedRelease (PackedRead acc _) = keepsRelease acc
 
-{- | Seal each kept release the writer finished, and project its typed facts from the members they
-read. A release the read does not keep is discarded.
--}
-packedStep :: Writer st -> Limits -> PackageName -> PackedRead -> NpmFieldOf () -> (Either LimitError PackedRead -> ST st r) -> ST st r
+-- | Project direct facts for kept releases. Invalid facts use the diagnostic decoder.
+packedStep :: VersionWriter st -> Limits -> PackageName -> PackedRead -> NpmFieldOf VersionValue -> (Either LimitError PackedRead -> ST st r) -> ST st r
 packedStep writer limits name (PackedRead acc served) field next = case field of
-    VersionField key (Just ())
+    VersionField key (Just value)
         | keepsRelease acc key -> do
-            sealed <- sealValue writer tarballHole
-            picked <- decodePicked writer typedMembers sealed
-            typed <- case projectRelease name key picked of
-                Right details -> pure (Right details)
-                Left reason -> (\whole original -> invalidRelease key (asRead original whole) reason) <$> decodeWhole writer sealed <*> replacedMember writer
-            let !release = if rebases picked then sealed else withoutHole sealed
+            sealed <- sealVersion writer tarballHole
+            (typed, rebased) <- case versionFacts value of
+                Just facts ->
+                    pure (Right $! projectVersionManifest name (mkVersion Npm key) Nothing facts, rebases (Just (distTarball (vmDist facts))))
+                Nothing -> do
+                    let diagnostic = packedWriter writer
+                    picked <- decodePicked diagnostic typedMembers sealed
+                    typed <- case projectRelease name key picked of
+                        Right details -> pure (Right details)
+                        Left reason -> (\whole original -> invalidRelease key (asRead original whole) reason) <$> decodeWhole diagnostic sealed <*> replacedMember diagnostic
+                    pure (typed, rebases (tarballUrl picked))
+            let !release = if rebased then sealed else withoutHole sealed
             next $! do
                 kept <- collectRelease limits acc field key typed
                 pure (PackedRead kept ((key, release) : served))
-        | otherwise -> discard writer >> unchanged
+        | otherwise -> discardVersion writer >> unchanged
     _ -> unchanged
   where
     unchanged = next $! (`PackedRead` served) <$> collectField limits acc field
@@ -253,11 +256,10 @@ packedStep writer limits name (PackedRead acc served) field next = case field of
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
 
--- Whether the rebase rule rewrites the release's tarball URL, so a render may rebase its hole.
-rebases :: Value -> Bool
-rebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
+rebases :: Maybe Text -> Bool
+rebases url = isJust (url >>= rebaseArtifactUrl Just)
 
--- The members a release's typed facts read: the version list's fields, and of @dist@ what 'Dist' reads.
+-- Keep the diagnostic field selection to preserve decoder refusal priority.
 typedMembers :: Pick
 typedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
 
