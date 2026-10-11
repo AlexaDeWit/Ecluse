@@ -12,15 +12,14 @@ module Ecluse.Core.Version.Pep440 (
 
 import Data.Char (isDigit)
 import Data.List (dropWhileEnd)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 
 import Ecluse.Core.Text (isAsciiAlphaNum)
 import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, withinVersionLength)
 
-{- | A parsed PEP 440 version as its canonical ordering key. The release carries no trailing
-zeros (@1.0 == 1.0.0@), and the rank fields encode PEP 440's None-handling for the derived 'Ord'.
--}
+-- | Canonical key without trailing release zeros (@1.0 == 1.0.0@), with ranks for PEP 440's None-handling.
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
     , p440Release :: [Integer]
@@ -36,9 +35,7 @@ data Pep440Key = Pep440Key
 
 instance NFData Pep440Key
 
-{- | Canonicalise a version of at most 1024 characters, refusing missing releases and trailing text.
-Accepted keys are fully evaluated and retain no parser state.
--}
+-- | Canonicalise at most 1024 characters, refusing missing releases or trailing text. Accepted keys are fully evaluated and retain no parser state.
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
     guard (withinVersionLength raw)
@@ -89,7 +86,7 @@ assembleKey ::
 assembleKey epoch release (mPre, mPost, mDev) localToks =
     Pep440Key
         { p440Epoch = epoch
-        , p440Release = stripTrailingZeros release
+        , p440Release = canonicalRelease release
         , p440Pre = pre
         , p440Post = post
         , p440Dev = dev
@@ -107,7 +104,12 @@ assembleKey epoch release (mPre, mPost, mDev) localToks =
     dev = case mDev of
         Nothing -> (1, 0)
         Just n -> (0, n)
-    stripTrailingZeros = dropWhileEnd (== 0)
+
+-- A nonzero last segment means the parsed list already satisfies the key's invariant.
+canonicalRelease :: [Integer] -> [Integer]
+canonicalRelease release = case viaNonEmpty NE.last release of
+    Just 0 -> dropWhileEnd (== 0) release
+    _ -> release
 
 parsePep440Suffix ::
     Text -> Maybe (Maybe (Int, Integer), Maybe Integer, Maybe Integer)

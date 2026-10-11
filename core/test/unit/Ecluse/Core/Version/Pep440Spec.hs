@@ -6,8 +6,9 @@
 module Ecluse.Core.Version.Pep440Spec (spec) where
 
 import Data.Char (isDigit)
-import Data.List (dropWhileEnd, unsnoc)
+import Data.List (dropWhileEnd)
 import Data.Text qualified as T
+import Data.Text.Read qualified as TR
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Test.Hspec
@@ -21,9 +22,21 @@ import Ecluse.Test.Version (genPyPI)
 
 -- | Preserve complete keys, refusals, rendering and ordering against the base parser.
 spec :: Spec
-spec = describe "PEP 440 against the frozen parser at 1a53a01" $ do
+spec = describe "PEP 440 against the frozen parser at ec1b8d8" $ do
     it "keeps complete keys, refusals, rendering and stability for deterministic generated inputs" $
         take 10 [raw | raw <- pep440Cases, pep440Snapshot raw /= frozenSnapshot raw] `shouldBe` []
+    it "keeps release normalisation for nonzero ends, zero suffixes and all-zero lists" $
+        take 10 [raw | raw <- releaseNormalisationCases, pep440Snapshot raw /= frozenSnapshot raw] `shouldBe` []
+    it "keeps ordering for deterministic release pairs" $
+        take
+            10
+            [ (a, b)
+            | a <- releaseOrderingCases
+            , b <- releaseOrderingCases
+            , compareVersions (mkVersion PyPI a) (mkVersion PyPI b)
+                /= (compare <$> frozenParsePep440 a <*> frozenParsePep440 b)
+            ]
+            `shouldBe` []
     modifyMaxSuccess (const 2000) $
         it "keeps ordering for generated valid and malformed pairs" $
             hedgehog $ do
@@ -78,6 +91,28 @@ pep440SuffixCases =
     ]
         <> ["", "ALPHA1", "-1", ".rc_1.post-2.dev_3", ".post1.dev2", ".dev1.post2", "..dev1", "-", "_"]
 
+releaseNormalisationCases :: [Text]
+releaseNormalisationCases =
+    [ prefix <> T.intercalate "." segments <> suffix
+    | count <- [1 .. 6]
+    , segments <- replicateM count ["0", "01", "2"]
+    , prefix <- ["", "1!"]
+    , suffix <- ["", ".", "rc1.post2.dev3+Ubuntu.07", ".dev0", ".."]
+    ]
+        <> [ T.intercalate "." (replicate count segment <> [ending]) <> suffix
+           | count <- [510, 511, 512]
+           , segment <- ["0", "1"]
+           , ending <- ["0", "1"]
+           , suffix <- ["", ".", ".dev1"]
+           ]
+
+releaseOrderingCases :: [Text]
+releaseOrderingCases =
+    [ release <> suffix
+    | release <- ["0", "0.0", "0.0.1", "1", "1.0", "1.0.0", "1.0.1", "1.1", "1.1.0", "1.1.0.2", "2", "2.0.0"]
+    , suffix <- ["", ".dev1", "rc1", ".post1", "+local.0"]
+    ]
+
 pep440EdgeCases :: [Text]
 pep440EdgeCases =
     [ lead <> T.replicate (total - T.length lead - T.length tailPart) "9" <> tailPart
@@ -92,7 +127,7 @@ pep440EdgeCases =
   where
     characters = ['\0', '\x1B', '\x301', '\xE9', '\xDF', '\x130', '\x212A', '\x663', '\xB2', '\xFF11', '\x10400', '\x1D7CE']
 
--- Frozen from core/src/Ecluse/Core/Version/Pep440.hs at 1a53a01b0480ae61f486a6ec1eda0a27cb646181.
+-- Frozen from core/src/Ecluse/Core/Version/Pep440.hs at ec1b8d8952332ba00dc0048b7eb416093efe0d2f.
 -- Only comments and the three entry point names differ from that parser.
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
@@ -132,18 +167,15 @@ parseEpoch mainPart = do
     pure (epoch, afterEpoch)
 
 parseRelease :: Text -> Maybe ([Integer], Text)
-parseRelease afterEpoch = do
-    let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
-
-        relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
-    guard (not (any T.null relSegs))
-    release <- traverse parseNumSeg relSegs
-    guard (not (null release))
-    pure (release, suffix)
-  where
-    dropTrailingEmpty segs = case unsnoc segs of
-        Just (initSegs, lastSeg) | T.null lastSeg -> initSegs
-        _ -> segs
+parseRelease raw = do
+    (n, rest) <- rightToMaybe (TR.decimal raw)
+    case T.uncons rest of
+        Just ('.', afterDot) -> case T.uncons afterDot of
+            Just (c, _) | isDigit c || c == '.' -> do
+                (ns, suffix) <- parseRelease afterDot
+                pure (n : ns, suffix)
+            _ -> pure ([n], afterDot)
+        _ -> pure ([n], rest)
 
 parseLocal :: Text -> Maybe [VToken]
 parseLocal lr
