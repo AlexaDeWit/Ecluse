@@ -59,16 +59,16 @@ mirrorDriver plane =
 
 installFromPublic :: E2E -> IO (PublicPhase (Set Resolved) Value)
 installFromPublic proxy = do
-    before <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioVersions proxy (psName pkg)
+    versionsBefore <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioVersions proxy (psName pkg)
     reachable <- npmPublicReachable proxy
     observed <- observeInstall proxy
-    after <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioAwaitVersions proxy (psName pkg) [psVersion pkg]
+    versionsAfter <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioAwaitVersions proxy (psName pkg) [psVersion pkg]
     pure
         PublicPhase
             { publicObserved = observed
             , publicReachable = reachable
-            , publicVersionsBefore = before
-            , publicVersionsAfter = after
+            , publicVersionsBefore = versionsBefore
+            , publicVersionsAfter = versionsAfter
             }
 
 installFromMirror :: E2E -> IO (OfflinePhase (Set Resolved) Value)

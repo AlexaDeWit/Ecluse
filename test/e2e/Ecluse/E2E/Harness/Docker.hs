@@ -67,7 +67,7 @@ import System.Directory (createDirectoryIfMissing, renamePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess)
-import UnliftIO (bracket_, finally, handleAny, onException)
+import UnliftIO (bracket_, finally, handleAny, onException, throwIO)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)

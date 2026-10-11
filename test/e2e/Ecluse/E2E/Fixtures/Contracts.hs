@@ -15,7 +15,15 @@ module Ecluse.E2E.Fixtures.Contracts (
     mixedRegistryFixture,
 ) where
 
-import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness (
+    GlobalDataPlane,
+    dredgerTopology,
+    mixedTopology,
+    pypiAdvisoryTopology,
+    pypiTopology,
+    withDataPlane,
+    withGlobalDataPlane,
+ )
 import Ecluse.Test.Contract.Types
 
 -- | Each acquisition owns the complete data plane for one lifecycle.
