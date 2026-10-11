@@ -1,6 +1,6 @@
 100644 0d4a766271c2581692f1b5213c1cd0b05fa31640 0	vendor/json-stream/Data/JsonStream/CLexer.hs
 100644 89ea7d3357541b78b66b07d3a7baaf5fd0e3338a 0	vendor/json-stream/Data/JsonStream/Lexer.hs
-100644 a96abe59877686028bcbe6ba8582f02b5bcf30c5 0	vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
+100644 6c9ab372d06a7cc7baae2614874f56ce5ed0d069 0	vendor/json-stream/Data/JsonStream/Lexer/Internal.hs
 100644 248e6a7247c077792e1511af8a752e2d7e05b5b5 0	vendor/json-stream/Data/JsonStream/Number.hs
 100644 d971d15a5f32c0e8be9429f097bd9f50aa158be4 0	vendor/json-stream/Data/JsonStream/Parser.hs
 100644 b11becac71e712df519ba9311b7acd77b8bd4bd8 0	vendor/json-stream/Data/JsonStream/TokenParser.hs
