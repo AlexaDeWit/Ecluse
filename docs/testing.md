@@ -166,8 +166,21 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 ### Listing peaks
 
-The [qualified packed integration](#qualified-packed-integration) sets PyPI's full-read charge to 3.2 and its read limit to 2.75.
+PyPI's full-read charge is 3.5 and its read limit is 3.25 after retaining canonical sidecars.
 npm keeps its full-read charge of 1.1. Output charges are 2.0 for npm and 1.9 for PyPI.
+
+[Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296)
+measured all 84 listing shapes and 48 retained probes at actual checkout `372e02a14222e65128bd6cae284e335ca4e41b46`.
+That checkout merges source `9d78a8a1f79aac63fe3e401ea9d0ab22cd19ee0e` into base `9b20b528d03a7958cc6471a542db2a516db76732`.
+
+Boto3's single listing reaches 6,157,344 read bytes above baseline from 2,206,044 source bytes, a ratio of 2.791124746.
+It sets both qualifying read maxima: realistic listings and all shapes, each restricted to at least one 1 MiB source step.
+The 25% margin rounded up to a tenth gives 3.5. The all-shape figure rounds up to 2.8, so the read charge is 3.5.
+The single-read 8% margin rounded up to a quarter gives the 3.25 read regression limit.
+
+All retained envelopes and the 1,024-byte forcing allowance pass in that run and remain unchanged.
+The [earlier packed qualification](#qualified-packed-integration) retains its original 3.2 charge and 2.75 limit as historical evidence.
+
 Retaining canonical PyPI sidecars raises the measured output working set. At `90cd71db7b4c0ab31336c1e086b1f77f8447a485`,
 NumPy's disjoint merge reaches 1.476585 per basis byte, the largest qualifying realistic shape among all 84 listing rows.
 The documented 25% margin rounded up to a tenth gives 1.9. The 8% margin rounded up to a quarter gives a 1.75 regression limit.
@@ -243,7 +256,7 @@ The checks compare bytes with each ecosystem's charges:
 - The basis of an identical merge is one document and that of a disjoint merge is both. That of an
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
-- From one step up, the tier applies read regression limits of 1.0 for npm and 2.75 for PyPI.
+- From one step up, the tier applies read regression limits of 1.0 for npm and 3.25 for PyPI.
   The output limits are 1.75 for both npm and PyPI. Every limit remains below its charge.
   Measurements must use the same main base as the candidate.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
