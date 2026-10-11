@@ -34,8 +34,8 @@ spec = describe "fileWriter" $ do
         for_ [0 .. 2] $ \position ->
             it ("keeps a failed digest at position " <> show position <> " invalid after later strings: " <> decodeUtf8 invalid) $
                 let digests = ["\"md5\":\"11\"", "\"sha256\":\"00\""]
-                    (before, after) = splitAt position digests
-                 in agrees ["\"hashes\":{" <> BS.intercalate "," (before <> ["\"custom\":" <> invalid] <> after <> ["\"custom\":\"repaired\""]) <> "}"]
+                    (leadingDigests, trailingDigests) = splitAt position digests
+                 in agrees ["\"hashes\":{" <> BS.intercalate "," (leadingDigests <> ["\"custom\":" <> invalid] <> trailingDigests <> ["\"custom\":\"repaired\""]) <> "}"]
 
     it "resets digest validity between files and keeps invalid-entry order" $
         compareRead "{\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"hashes\":{\"custom\":null,\"sha256\":\"00\"}},{\"filename\":\"thing-2.0.tar.gz\",\"url\":\"https://files.example/b.tar.gz\",\"hashes\":{\"sha256\":\"\"}},{\"filename\":\"thing-3.0.tar.gz\",\"url\":\"https://files.example/c.tar.gz\",\"hashes\":{\"md5\":\"11\",\"custom\":false}}],\"name\":\"thing\"}"
