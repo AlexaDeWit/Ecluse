@@ -1,0 +1,25 @@
+version: '3'
+tasks:
+  lint:
+    dir: ../..
+    cmds:
+      - hlint core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
+  lint-observed:
+    dir: ../..
+    cmds:
+      - hlint --cpp-define=SHARING_STATS scratchpad/1633-sharing-coverage/Main.hs
+  format:
+    dir: ../..
+    cmds:
+      - fourmolu --mode inplace core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
+      - fourmolu --mode check core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
+  static:
+    dir: ../..
+    cmds:
+      - bash -n scripts/measure-1633-sharing-coverage.sh
+      - shellcheck --severity=warning scripts/measure-1633-sharing-coverage.sh
+      - actionlint .github/workflows/bench.yml
+  host-run:
+    dir: ../..
+    cmds:
+      - bash scripts/measure-1633-sharing-coverage.sh

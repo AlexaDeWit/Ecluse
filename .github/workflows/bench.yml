@@ -1,90 +1,45 @@
-name: Benchmarks
-
-# Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
+name: Sharing coverage preparation
 on:
-  pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-
-# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
-# the latest commit's numbers matter. Never cancel a manual dispatch.
-concurrency:
-  group: bench-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
+    inputs:
+      lead_reviewed:
+        description: Lead reviewed this exact measurement head
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: read
-
+concurrency:
+  group: sharing-coverage-1633-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  bench:
-    name: Work-per-request benchmarks (inform-only)
+  coverage:
+    if: github.ref == 'refs/heads/measure/1633-sharing-coverage' && inputs.lead_reviewed
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     env:
-      # Pin the cabal store to a deterministic, cacheable location, as the other
-      # Haskell jobs do.
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      SHARING_LEAD_REVIEWED: ${{ inputs.lead_reviewed }}
     steps:
-      - name: Checkout
+      - name: Checkout reviewed measurement head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+          fetch-depth: 0
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore the warm cabal store (this job compiles the benchmark).
-          cabal-cache: "true"
-
-      # An exact cabal-store hit already covers cabal.project's pinned index-state.
+          cabal-cache: 'true'
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
-
-      # pipefail preserves the harness exit code through tee's output capture.
-      - name: Run benchmarks
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
-
-      # The renderer accepts partial CSV output and reports a missing CSV without failing.
-      - name: Render results to the run summary
-        if: always()
-        run: nix develop .#ci --command task bench-report
-
-      # Off main only: the runs on main are the baseline. A missing baseline renders as
-      # "no baseline". Both steps continue on error and stop after five minutes, so neither
-      # can fail or stall the job.
-      - name: Fetch the latest results on main
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/perf-baseline.sh bench.yml "bench-results-$RUNNER_ARCH-" "$RUNNER_TEMP/perf-baseline"
-
-      - name: Compare time with main
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task against-main KIND=bench BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=bench-results.csv | tee against-main.md
-
-      # Preserve partial output when the harness fails.
-      - name: Upload this run's results
+      - name: Collect bounded sharing counts
+        run: nix develop .#ci --command task --taskfile scratchpad/1633-sharing-coverage/static.yml host-run
+      - name: Preserve statuses and failed partials
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-results-${{ runner.arch }}-${{ github.sha }}
-          path: |
-            bench-results.csv
-            bench-output.txt
-            against-main.md
+          name: sharing-coverage-1633-${{ github.sha }}
+          path: scratchpad/1633-sharing-coverage/host-results
           if-no-files-found: warn

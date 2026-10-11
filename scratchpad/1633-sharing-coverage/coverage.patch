@@ -1,0 +1,184 @@
+diff --git a/core/src/Ecluse/Core/Registry/Json/Intern.hs b/core/src/Ecluse/Core/Registry/Json/Intern.hs
+index 11bed14a..cb6906d9 100644
+--- a/core/src/Ecluse/Core/Registry/Json/Intern.hs
++++ b/core/src/Ecluse/Core/Registry/Json/Intern.hs
+@@ -6,5 +6 @@
+-{- | The first copy of each key and string that one document's retained values hold, found by the
+-bytes the lexer read before any text is built. Keep one table per read and drop it when the read
+-ends, so no table outlives the document it serves. The table hashes with SipHash-1-3 under a key
+-drawn for its read, so upstream text cannot choose which names collide.
+--}
++-- | Per-read shared entries keyed by SipHash-1-3, with no input slice retained in a stored key.
+@@ -35,0 +32 @@ module Ecluse.Core.Registry.Json.Intern (
++    tableCount,
+@@ -90,3 +87 @@ newTableKey = do
+-{- | One table entry: the shared text, its shared string value, whether a member's value is kept as
+-read, and its index. Only a table makes one, so every index lies within its table.
+--}
++-- | A shared text and string, its keep policy, and a stable index within the owning table.
+@@ -117,3 +112 @@ data InternTable = InternTable !SipKey !(HashMap.HashMap Probe Entry) !Int
+-{- | A table for one document that keeps the values of the named members as read. Name the members
+-whose values differ in every release or file, so they never enter the table.
+--}
++-- | One document's keyed table, seeded with names whose values keep their own copies.
+@@ -127,3 +120 @@ newInternTable key = foldl' seed (InternTable key mempty 0)
+-{- | The table's entry for a name. A name the table lacks gets an entry of its own text, which the
+-returned table holds from then on.
+--}
++-- | Find the first entry for a name, or insert one with the next stable index.
+@@ -164,0 +156,4 @@ probeOf key bytes = Probe (fromIntegral (sipHash 1 3 key bytes)) (Slice bytes)
++-- | The count before a lookup distinguishes a hit from the new entry's index.
++tableCount :: InternTable -> Int
++tableCount (InternTable _ _ count) = count
++
+@@ -199,3 +194 @@ sliceMatches bytes (TI.Text array offset len) = BS.length bytes == len && go 0
+-{- | SipHash with the given compression and finalisation rounds, from one to four each, over the
+-message's little-endian words. The table uses SipHash-1-3.
+--}
++-- | SipHash with one to four compression and finalisation rounds over little-endian words.
+diff --git a/core/src/Ecluse/Core/Registry/Json/Shape.hs b/core/src/Ecluse/Core/Registry/Json/Shape.hs
+index e66bee6c..68fac84f 100644
+--- a/core/src/Ecluse/Core/Registry/Json/Shape.hs
++++ b/core/src/Ecluse/Core/Registry/Json/Shape.hs
+@@ -6,5 +6 @@
+-{- | Retained-value shapes for the token walk, and the reader that builds each value once. A shape
+-reads what the matching "Ecluse.Core.Registry.JsonStream" combinator reads, and interns keys and
+-strings by the bytes the lexer read unless its mode keeps them as read. A 'Build' says what the
+-reader builds: aeson's tree, or the packed form a full read writes.
+--}
++-- | Retained-value shapes and the current-pass builder over native lexer cursors.
+@@ -114,0 +111,4 @@ class (Walk r) => Build b r where
++    -- | A temporary observation of the current choice, before its builder runs.
++    observeName :: b -> Bool -> Mode -> Bool -> Name -> InternTable -> Maybe Entry -> r -> r
++    observeName _ _ _ _ _ _ _ next = next
++
+@@ -278 +278 @@ string build mode table next name after = case mode of
+-    Keep -> ownString build name (\value -> next value table after)
++    Keep -> observeName build False Keep False name table Nothing $ ownString build name (\value -> next value table after)
+@@ -280 +280 @@ string build mode table next name after = case mode of
+-        Interned entry held -> sharedString build entry (\value -> next value held after)
++        Interned entry held -> observeName build False Share False name table (Just entry) $ sharedString build entry (\value -> next value held after)
+@@ -301 +301 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+-        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
++        Keep -> observeName build True Keep False name table Nothing $ keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
+@@ -303 +303 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+-            Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
++            Interned entry held -> observeName build True Share (isJust prepared) name table (Just entry) $ keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
+@@ -330 +330 @@ data Direct
+-    = DirectShared !Entry !InternTable
++    = DirectShared !Name !InternTable !Entry !InternTable
+@@ -339,2 +339,2 @@ withDirect build scalar table next indirect = case scalar of
+-    DirectShared entry held -> sharedString build entry (`next` held)
+-    DirectOwn name -> ownString build name (`next` table)
++    DirectShared name before entry held -> observeName build False Share False name before (Just entry) $ sharedString build entry (`next` held)
++    DirectOwn name -> observeName build False Keep False name table Nothing $ ownString build name (`next` table)
+@@ -379 +379 @@ scalarToken mode table = \case
+-            Interned entry held -> DirectShared entry held
++            Interned entry held -> DirectShared name table entry held
+diff --git a/core/src/Ecluse/Core/Registry/Json/Writer.hs b/core/src/Ecluse/Core/Registry/Json/Writer.hs
+index ba95ec4e..89ed7957 100644
+--- a/core/src/Ecluse/Core/Registry/Json/Writer.hs
++++ b/core/src/Ecluse/Core/Registry/Json/Writer.hs
+@@ -10,0 +11,2 @@ module Ecluse.Core.Registry.Json.Writer (
++    writerStatistics,
++    printWriterStatistics,
+@@ -20,2 +22,2 @@ module Ecluse.Core.Registry.Json.Writer (
+-import Control.Monad.ST (ST)
+-import Data.Aeson (Value (..), toEncoding)
++import Control.Monad.ST (ST, stToIO)
++import Data.Aeson (Value (..), encode, object, toEncoding, (.=))
+@@ -34,0 +37,3 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
++import Data.Set qualified as Set
++import Data.Text qualified as T
++import GHC.Exts (RealWorld)
+@@ -36 +41 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
+-import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
++import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName, nameText, tableCount)
+@@ -39 +44 @@ import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newSc
+-import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
++import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), Mode (..))
+@@ -55,0 +61 @@ data Writer st = Writer
++    , writerObservations :: MutVar st (Map [Text] Int, Map (Text, Text) (Set Text))
+@@ -58 +64 @@ data Writer st = Writer
+--- | Create a read's writer, optionally adding a top-level member. Shared originals are replaced and retained for diagnostics. Owned originals win.
++-- | Create scratch storage for one read. Owned originals win over added members.
+@@ -73,0 +80,13 @@ newWriter added =
++        <*> newMutVar (mempty, mempty)
++
++-- | Aggregate attempts at packed-value boundaries, including duplicate values later dropped.
++writerStatistics :: Writer st -> ST st Value
++writerStatistics writer = do
++    (counts, _) <- readMutVar (writerObservations writer)
++    pure (object ["columns" .= (["role", "policy", "input", "lookup", "name", "utf8Bytes", "jsonBytes", "characters", "occurrence"] :: [Text]), "rows" .= [object ["dimensions" .= dimensions, "count" .= count] | (dimensions, count) <- Map.toAscList counts]])
++
++-- | Emit statistics after the read returns, including a refused or failed partial read.
++printWriterStatistics :: Writer RealWorld -> IO ()
++printWriterStatistics writer = do
++    statistics <- stToIO (writerStatistics writer)
++    putTextLn ("SHARING " <> decodeUtf8 (LBS.toStrict (encode statistics)))
+@@ -107,0 +127,14 @@ instance Build (Writer st) (ST st (Steps (ST st) s)) where
++    observeName writer key mode prepared name table entry next = do
++        (counts, seen) <- readMutVar (writerObservations writer)
++        let role = if key then "member-key" else "string-value"
++            policy = case mode of
++                Share -> "share"
++                Keep -> "keep"
++            text = maybe (nameText name) entryText entry
++            group = (role, policy)
++            known = Map.findWithDefault mempty group seen
++            input = foldName (const "plain") (const "decoded") name
++            lookupResult = maybe "none" (\found -> if entryIndex found < tableCount table then "hit" else "miss") entry
++            row = [role, policy, input, lookupResult, if prepared then "prepared" else "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), if Set.member text known then "repeated" else "unique"]
++        writeMutVar (writerObservations writer) (Map.insertWith (+) row 1 counts, Map.insert group (Set.insert text known) seen)
++        next
+diff --git a/core/src/Ecluse/Core/Registry/Npm/Metadata.hs b/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
+index 63c40504..7626c455 100644
+--- a/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
++++ b/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
+@@ -8,5 +8 @@
+-{- | npm's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" drives.
+-Both reads fetch the full packument because publish-age rules need its @time@ map.
+-Selective reads materialise only the requested version and timestamp. A version read pairs the
+-typed projection with the selected version object, which the mirror write republishes.
+--}
++-- | npm full and selected metadata reads driven by the production fetch boundary.
+@@ -46,0 +43 @@ import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJ
++import Ecluse.Core.Registry.Json.Writer (printWriterStatistics)
+@@ -55 +52 @@ import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, empty
+-import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
++import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter, packedWriter)
+@@ -90 +87,3 @@ readNpmFull limits name base bound table0 readChunk = do
+-    readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
++    result <- readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
++    printWriterStatistics (packedWriter writer)
++    pure result
+diff --git a/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs b/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
+index b40c4958..6c4933ae 100644
+--- a/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
++++ b/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
+@@ -6,4 +6 @@
+-{- | npm policy facts collected beside the existing packed writer.
+-The walk still owns shapes, depth checks and first-member handling.
+-Only the three install hooks retain script names, and no command survives in typed facts.
+--}
++-- | npm policy facts collected beside packing, with commands retained only in packed data.
+@@ -106,0 +104 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
++    observeName writer = observeName (packedWriter writer)
+diff --git a/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs b/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
+index d378b1a3..32806158 100644
+--- a/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
++++ b/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
+@@ -72,0 +73 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
++    observeName (FileWriter writer _) = observeName writer
+diff --git a/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs b/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
+index c128a6f1..d32014a0 100644
+--- a/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
++++ b/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
+@@ -28 +28 @@ import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJ
+-import Ecluse.Core.Registry.Json.Writer (Writer, newWriter)
++import Ecluse.Core.Registry.Json.Writer (Writer, newWriter, printWriterStatistics)
+@@ -73 +73,3 @@ readPyPIFull limits name bound table readChunk = do
+-    readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
++    result <- readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
++    printWriterStatistics writer
++    pure result
