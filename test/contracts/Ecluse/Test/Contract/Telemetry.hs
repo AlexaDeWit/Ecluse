@@ -111,7 +111,7 @@ servesAfterExportFailure firstPackage secondPackage traffic logs = do
 
 -- | Configured resource identity and populated log correlation reach both outputs.
 exportsIdentity :: Text -> TelemetryIdentity -> TrafficDriver -> LogDriver -> CollectorDriver -> Expectation
-exportsIdentity package identity traffic logs collector = do
+exportsIdentity package expectedIdentity traffic logs collector = do
     void (telemetryInstall traffic package >>= shouldSucceed)
     collected <- telemetryCollected collector carriesIdentity 80
     collected `shouldSatisfy` carriesIdentity
@@ -122,19 +122,19 @@ exportsIdentity package identity traffic logs collector = do
         all
             (`T.isInfixOf` output)
             [ "service.name"
-            , telemetryService identity
+            , telemetryService expectedIdentity
             , "deployment.environment"
-            , telemetryEnvironment identity
+            , telemetryEnvironment expectedIdentity
             , "service.version"
-            , telemetryVersion identity
+            , telemetryVersion expectedIdentity
             ]
     correlated output =
         hasPopulatedTraceId output
             && all
                 (`T.isInfixOf` output)
-                [ "\"service\":\"" <> telemetryService identity <> "\""
-                , "\"env\":\"" <> telemetryEnvironment identity <> "\""
-                , "\"version\":\"" <> telemetryVersion identity <> "\""
+                [ "\"service\":\"" <> telemetryService expectedIdentity <> "\""
+                , "\"env\":\"" <> telemetryEnvironment expectedIdentity <> "\""
+                , "\"version\":\"" <> telemetryVersion expectedIdentity <> "\""
                 ]
 
 -- | A trace identifier must contain a leading digit rather than an absent or empty value.
