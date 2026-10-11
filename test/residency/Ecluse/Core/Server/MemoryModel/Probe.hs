@@ -32,6 +32,8 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     probeSource,
 ) where
 
+import Prelude hiding (universe)
+
 import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS

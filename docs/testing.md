@@ -237,7 +237,7 @@ The checks compare bytes with each ecosystem's charges:
   The output limits remain 1.75 for npm and 1.5 for PyPI. Every limit remains below its charge.
   The factor-update candidate requires qualification against the same actual main base as its measurements.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
-  `entryBelowSource` names the ecosystems this check covers. PyPI's packed files and typed view
+  Each residency record's `residencyEntryBelowSource` selects this check. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
 - A single-source listing's entry frees live bytes when it drops its served document, and the
   document's weight, expanded as a cache expands it, covers them.

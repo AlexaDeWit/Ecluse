@@ -5,6 +5,8 @@
 -- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
+import Prelude hiding (universe)
+
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
