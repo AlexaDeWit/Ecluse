@@ -96,10 +96,11 @@ operatingPointTable knobs capabilities processors shape limits =
     , "| knob | value |"
     , "| --- | --- |"
     , row "pod shape" (shapeNote shape capabilities)
-    , row "runner processors" (show processors <> " (oha is pinned to core 0 when isolated)")
+    , row "runner logical processors" (show processors <> " (oha is pinned to logical CPU 0 when isolated)")
+    , row "harness GHC capabilities (-N)" (show capabilities)
     , row "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections)")
     , row "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
-    , row "CPU admission" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
+    , row "serve admission (requests)" (maybe "n/a" show (blCpuAdmission limits) <> origin (lkServeMaxInFlight knobs))
     , row "memory admission budget at boot" (maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
     , row "private pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPrivateConnectionsPerHost knobs))
     , row "public pool" (maybe "computed by the proxy from its fd limit" (\n -> show n <> " (explicit)") (lkPublicConnectionsPerHost knobs))
@@ -138,8 +139,8 @@ ruleTable = \case
 
 shapeNote :: Text -> Int -> Text
 shapeNote shape capabilities
-    | shape == "unlimited" = "unlimited: no cgroup limit, runtime.cores " <> show capabilities
-    | otherwise = shape <> ": the proxy's own cgroup, memory.max and cpu.max set, swap off"
+    | shape == "unlimited" = "unlimited: no harness-imposed cgroup limit, runtime.cores " <> show capabilities <> " (GHC capabilities)"
+    | otherwise = shape <> ": the proxy's own cgroup, CPU-time quota via cpu.max, memory.max set, swap off"
 
 glanceRow :: (Text -> FloorCheck) -> ScenarioReport -> Text
 glanceRow floorOf r =
@@ -260,7 +261,7 @@ rtsRows r =
     , row "GCs (total / major) / GC share of CPU / GC wall" (maybe "n/a" gcCell (srRtsWindow r))
     , row "mean live data after the window's major collections" (maybe "n/a" (mib . round) (meanLiveAtMajors =<< srRtsWindow r))
     , row "RTS max live / max memory in use" (maybe "n/a" (\s -> mib (rsMaxLiveBytes s) <> " / " <> mib (rsMaxMemInUseBytes s)) (srRtsEnd r))
-    , row "heap ceiling (-M) / capabilities / allocation area" (maybe "n/a" postureCell (posture r))
+    , row "heap ceiling (-M) / proxy GHC capabilities / allocation area per capability" (maybe "n/a" postureCell (posture r))
     , row "compaction threshold crossed (inferred from the maxima)" (maybe "n/a" compactionCell (srRtsEnd r))
     , row "retained after the run" (maybe "n/a" mib (srRetainedBytes r))
     ]
@@ -278,7 +279,7 @@ proxyRows p =
     , row "CPU throttled during the window" (maybe "n/a" (\us -> fmt1 (fromIntegral us / 1_000) <> " ms") (pfWindowThrottledUsec p))
     , row "proxy ending" (endingCell (pfEnding p) <> if pfExitedEarly p then ", before the harness stopped it" else "")
     , row "boot attempts" (show (length (pfBootRetries p) + 1))
-    , row "CPU admission / memory admission budget at boot" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
+    , row "serve admission (requests) / memory admission budget at boot" (maybe "n/a" show (blCpuAdmission limits) <> " / " <> maybe "n/a" bytesCell (blMemoryBudgetBytes limits))
     , row "admission in-flight gauge: max / mean / last (samples, missed)" (gaugeCell (pfInFlight p))
     , row "proxy threads (pids.current): max / mean / last (samples, missed)" (gaugeCell (pfTasks p))
     , row "metadata cache hit / miss / collapsed in the window" (maybe "n/a (a scrape failed)" cacheCell (pfCacheWindow p))

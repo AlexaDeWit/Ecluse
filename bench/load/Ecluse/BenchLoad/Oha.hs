@@ -59,7 +59,7 @@ instance FromJSON OhaReport where
         errorCounts <- o .:? "errorDistribution" .!= mempty
         pure (OhaReport elapsed statusCounts errorCounts [])
 
--- | Run @oha@, pinned to core 0 when @BENCH_LOAD_ISOLATE_OHA=1@ so it does not share the proxy's cores.
+-- | Run @oha@, pinned to logical CPU 0 when @BENCH_LOAD_ISOLATE_OHA=1@. The proxy's affinity is unchanged.
 runOha :: OhaRun -> IO OhaReport
 runOha run = withSystemTempDirectory "ecluse-bench-oha" $ \dir -> do
     let urlsFile = dir </> "urls.txt"

@@ -710,6 +710,28 @@ Read a red result according to its measurement:
 
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
 
+### CPU quotas, processors, and GHC capabilities
+
+Read the CPU-time quota separately from GHC parallelism. A GHC capability runs one Haskell
+thread at a time. Its count does not reserve a processor or set CPU affinity.
+
+| Setting or report label | Meaning |
+|---|---|
+| `2cpu` or `4cpu` in a load pod shape, and `BENCH_LOAD_THRASH_CPUS` | CPU-time quota in CPU equivalents. `2cpu` writes `200000 100000` to `cpu.max`, allowing 200 ms of CPU time per 100 ms period. It assigns no specific CPUs. |
+| Runner logical processors | Logical CPUs visible to the RTS, read with `getNumProcessors`, separate from the capability count |
+| Load harness `-N3` | Three GHC capabilities for the harness and each scenario child. The measured proxy resolves its own count at boot. |
+| Unlimited load shape `runtime.cores` | Sets the proxy's GHC capability count to the harness's count. The harness imposes no CPU-time quota. |
+| Performance acceptance `-N` | The shipped RTS default selects capabilities from visible processors. The report reads the running count. The harness does not boot a proxy or apply its cgroup-derived runtime plan. |
+| Work-per-request benchmarks | One GHC capability by default. Their Cabal stanza enables `-T`, with no `-N` override in the CI invocation. |
+| Serve admission (requests) | Concurrent-request limit, explicit or derived from the proxy's resolved GHC capabilities. It is neither a CPU quota nor a capability count. |
+| GC share of CPU, and CPU throttled during the window | Time measurements from RTS counters and `cpu.stat`, respectively |
+
+`BENCH_LOAD_ISOLATE_OHA=1` pins only `oha` to logical CPU 0 with `taskset`. The harness and
+proxy retain their inherited CPU affinity, so they can also run on CPU 0.
+The [GHC RTS guide](https://downloads.haskell.org/ghc/9.10.3/docs/users_guide/using-concurrent.html#rts-options-for-smp-parallelism)
+defines capabilities and affinity. The [cgroup v2 reference](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu-interface-files)
+defines CPU bandwidth quotas.
+
 ### Comparison against main
 
 Use this section of a run summary to see what a branch changed without a download and a hand
@@ -776,10 +798,10 @@ pipe buffers (at most 64 KiB per pipe) but not for the log's page cache. On CI t
 just built or restored the executable, so its text pages are already cached when the proxy starts
 and are not charged to it. The harness does not enforce that.
 
-`BENCH_LOAD_POD` names the pod shape: `unlimited`, or cores and a memory limit such as
+`BENCH_LOAD_POD` names the pod shape: `unlimited`, or a CPU-time quota and a memory limit such as
 `2cpu-1gib` or `4cpu-2gib`. Under a limited shape the proxy starts inside its own cgroup, a child
 of the directory `BENCH_LOAD_CGROUP` names, with `memory.max` at the limit, `memory.swap.max` at
-zero, and `cpu.max` at the cores. The load generator and the stubs stay outside that cgroup. The
+zero, and `cpu.max` at the quota. The load generator and the stubs stay outside that cgroup. The
 proxy links the shipped RTS options and gets only `-T`, for its statistics, through `GHCRTS` at
 launch. Its boot reads the cgroup and derives its capabilities, its heap ceiling, and its memory
 plan as it would in a pod. The unlimited shape sets `runtime.cores` to the harness's capability
@@ -790,7 +812,8 @@ retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`
 `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
-Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
+Hosted runners have four logical processors. A four-CPU quota still shares those processors
+with `oha` and the stubs.
 
 Each scenario reports:
 
@@ -812,8 +835,8 @@ Each scenario reports:
   the quota withheld during the window
 - how the proxy ended: a clean shutdown, a heap overflow (from its own report or the RTS exit
   status), a kernel OOM kill, or another exit
-- the CPU admission and the memory admission budget at boot, read from the proxy's boot log, with
-  the runtime lines quoted
+- the serve-admission limit in requests and the memory admission budget at boot, read from the
+  proxy's boot log, with the runtime lines quoted
 - `ecluse.serve.admission.in_flight` and the proxy's thread count (`pids.current`) sampled each
   second, and every admission series at the end of the window
 - the metadata cache's hit, miss, and collapsed request counts in the window for the full,
@@ -893,8 +916,9 @@ that 503 with the admission refusals. When the proxy records such a failure in
 
 `BENCH_LOAD_SCENARIOS` runs a comma-separated subset, such as `npm/merge-cold,npm/herd`.
 `BENCH_LOAD_THRASH_LIMITS_MIB` runs the GC-thrash probe instead of the passes: one scenario
-(`BENCH_LOAD_THRASH_SCENARIO`, `npm/heavy-private` unless set) at `BENCH_LOAD_THRASH_CPUS` cores
-(two unless set) under each listed memory limit, highest first. The probe records OOM kills and
+(`BENCH_LOAD_THRASH_SCENARIO`, `npm/heavy-private` unless set) at a CPU-time quota of
+`BENCH_LOAD_THRASH_CPUS` CPU equivalents (two unless set) under each listed memory limit, highest
+first. The probe records OOM kills and
 heap overflows as its reading, so they do not fail it. It fails only when no limit produced a report.
 
 ### Success floors
