@@ -268,7 +268,8 @@ Use the [contract coverage map](../test-contracts.md) to find existing laws and 
 A queue profile declares whether receipt removes the message or leases it for redelivery.
 Apply lease, delivery-count, and dead-letter laws only to durable providers.
 A maintenance profile preserves `StoreFacts`, consent, batch ceilings, deletion completion, refill behaviour, and optional cursor support.
-Keep credential mint request mapping and live-only mint coverage native.
+Keep credential mint request mapping and response parsing in the backend's deterministic tests.
+No automatic test verifies a real AWS token mint.
 Planned package storage does not inherit support from S3 advisory storage.
 Future filesystem and S3 package providers require their own completion visibility contracts when those features ship.
 

@@ -123,7 +123,9 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 All other original assertions remain in their native specs. This includes memory FIFO and overflow accounting, SQS visibility extension and active lease renewal, terminal redrive and dead-letter capture budget, unreachable endpoint classification, secret representation, refresh/expiry/cancellation policy, provider mint mapping, maintenance raw JSON preservation, pagination tokens, request credentials, per-version refusals, uncertain/unreached outcomes, upstream classification, cursor persistence and bounds, advisory HEAD/GET race, republication identity, EPSS policy, last-good age, cancellation, and the compile/publish/serve integration.
 
-Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof. Actual CodeArtifact mint remains live smoke.
+Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
+No automatic test verifies a real AWS token mint or the Datadog SaaS.
+Credential tests use local HTTP stubs. Telemetry tests use the local Collector and process logs.
 
 ### Negative controls and lifecycle
 
@@ -186,21 +188,68 @@ Run commands inside `env -u IN_NIX_SHELL nix develop`.
 Use `task test` for core/runtime/application contract checks, `task test-residency` for unchanged heap probes, and `task test-smoke` for live drift checks.
 Use `task perf-allocation` for the allocation gate and the documented benchmark/load targets for measured runs.
 
-E2E discovery and planning need no Docker or credentials:
+E2E and integration discovery need no Docker or credentials.
+The scripts compile their runner if needed. `TIER` accepts only `e2e` and `integration`.
+Run and audit the complete E2E suite together:
 
 ```bash
-task test-contract-list
-task test-contract-plan
+task test-contract-list TIER=e2e
+task test-contract-plan TIER=e2e
 task test-e2e
-task test-e2e-run SHARD=pypi
-task test-e2e-run -- --group pypi/install
 task test-e2e-audit
 ```
 
-A shard or group rerun reuses the exact prepared image and plan.
-An execution report retains its selected manifest and identities. The full audit still requires every primary group and case exactly once.
-A deliberately repeated subset cannot conceal an omitted primary case.
-Run integration through `task test-integration` so its ownership and daemon exclusion controls apply.
+For a targeted rerun, choose one selection after image preparation and loading:
+
+```bash
+task test-e2e-run SHARD=pypi
+task test-e2e-run -- --group pypi/install
+```
+
+These selections reuse the prepared image and plan. They are alternatives, not inputs to a full-suite audit.
+A run replaces `reports/all.json`, or `reports/<shard>.json` when a shard is selected.
+Preserve completed full-run reports before a subset rerun. Mixing full and subset reports fails the duplicate-case audit.
+The full audit requires every primary group and case exactly once, with matching execution identities.
+
+Integration supports stable group, partition, ecosystem, backend, and capability selection:
+
+```bash
+task test-contract-list TIER=integration
+task test-contract-plan TIER=integration
+task test-integration GROUP=integration/queue-sqs
+task test-integration SHARD=http
+```
+
+`GROUP`, `SHARD`, `ECOSYSTEM`, `BACKEND`, and `CAPABILITY` filters intersect.
+`MATCH` is no longer supported. A required empty selection fails before services start.
+Unit catalogue audits run through `task test`. They have no `TIER=unit` list or plan command.
+Smoke and residency retain their existing suite commands. Measurement registration does not add a measurement execution CLI.
+Run integration through its Task wrapper so selected Docker groups receive ownership and daemon exclusion controls.
+
+## Canonical E2E module index
+
+These modules live under `test/contracts/Ecluse/Test/Contract/` and take observations from the native E2E providers.
+The existing ecosystem spec modules still own fixture construction and lifecycle registration.
+
+| Canonical module | Registered cases | Native evidence retained |
+|---|---|---|
+| `Install` | `npm/install/default-denial`, `npm/install/lifecycle-script-control`, `pypi/install/wheel`, `mixed/alternating-clients` | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
+| `Install.Advisory` | All four `pypi/advisories/*` cases | Native file lists, digests, exact denial text and remediation controls. |
+| `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
+| `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect` | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
+| `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
+| `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
+| `Telemetry` | All six `telemetry/*` cases | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
+| `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
+| `Sweep.Advisory` | `npm/dredger/advisory-revocation` | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
+| `Sweep.Recovery` | Five recovery cases below | Residual deletion, refill, absent source bytes and copies arriving after cleanup. |
+| `Sweep.Rollout` | Three rollout cases below | Durable queue, independently started roles, stale policy, retained bytes and sentinel drain. |
+
+`Sweep.Types` owns the fixture and operation records. `Sweep` owns shared inventory, listing and refusal assertions.
+The Dredger provider keeps four lifecycle brackets in order: identity, advisory, recovery and rollout.
+All four remain inside the single schedulable `npm/dredger` group.
+The detailed tables below preserve all 49 original E2E case identities and descriptions.
+Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
 
 ## E2E assertion identities
 
@@ -241,24 +290,24 @@ The native module remains the registration home even when its scenario body move
 
 ### `test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs`
 
-| Case ID | Original assertion |
-|---|---|
-| `npm/dredger/inventory` | walks the seeded store through listPackagesIn, including scoped base-name buckets |
-| `npm/dredger/admission-only` | keeps every version an identity deny limited to admission names, and states the phase at boot |
-| `npm/dredger/denied-versions` | deletes every denied version and preserves all other versions, including first-party versions |
-| `npm/dredger/dry-run` | previews distinct real inventories without writes and preserves first-party versions |
-| `npm/dredger/consent-refusal` | refuses missing consent, names the key, and leaves every version intact |
-| `npm/dredger/first-party` | protects every first-party version even when an identity deny names one |
-| `npm/dredger/two-stores` | deletes shared and cache-only versions while preserving each store's other contents |
-| `npm/dredger/advisory-revocation` | revokes the version a new advisory generation condemns and keeps its fix installable |
-| `npm/dredger/denied-install` | serves the sibling and refuses the denied version once both stores lose it |
-| `npm/dredger/delete-recovery` | keeps the cache copy its backend refused and removes it on a later run |
-| `npm/dredger/refill` | mirrors the version again when the policy lifts and the public source still holds bytes |
-| `npm/dredger/missing-source` | leaves both stores empty when the policy lifts and no source bytes remain |
-| `npm/dredger/late-copy` | removes the copies each store received after the cycle that reported them gone |
-| `npm/dredger/old-worker` | removes the copies an old worker mirrored after a stricter proxy started |
-| `npm/dredger/old-dredger-refill` | restores a version an old Dredger removed while the newer roles permitted it |
-| `npm/dredger/old-dredger-loss` | leaves the version lost when an old Dredger removed the only remaining bytes |
+| Case ID | Original assertion | Canonical home and retained evidence |
+|---|---|---|
+| `npm/dredger/inventory` | walks the seeded store through listPackagesIn, including scoped base-name buckets | `Sweep.Identity`: Exact seeded snapshot, listing matches names, empty and matching prefix inventories, absent prefix empty. |
+| `npm/dredger/admission-only` | keeps every version an identity deny limited to admission names, and states the phase at boot | `Sweep.Identity`: Successful role exit, admission-only phase at boot, exact examined/deleted/kept/guard tally, both complete snapshots unchanged. |
+| `npm/dredger/denied-versions` | deletes every denied version and preserves all other versions, including first-party versions | `Sweep.Identity`: Successful exit and exact fixture version, deletion reason, no-generation audit and cycle tally. Denied inventory empty, retained snapshot/listing exact, cache unchanged. |
+| `npm/dredger/dry-run` | previews distinct real inventories without writes and preserves first-party versions | `Sweep.Identity`: Distinct cache versions, first-party publication and listing readiness. Non-success preview exit, both store diagnostics, cache-only preview and deletion count. Partial-evidence and non-authority messages. No first-party deletion and both snapshots unchanged. |
+| `npm/dredger/consent-refusal` | refuses missing consent, names the key, and leaves every version intact | `Sweep.Identity`: Non-success exit, exact native consent key diagnostic, no sweep events, both snapshots unchanged. |
+| `npm/dredger/first-party` | protects every first-party version even when an identity deny names one | `Sweep.Identity`: Successful exit, exact zero-work/guard-skipped tally across both stores, exact protected versions and unchanged mirror snapshot. |
+| `npm/dredger/two-stores` | deletes shared and cache-only versions while preserving each store's other contents | `Sweep.Identity`: Cache-only publication and original bounded presence probes: present in cache, absent in mirror. Successful exit. Each snapshot loses only the condemned name. Both name inventories empty. |
+| `npm/dredger/advisory-revocation` | revokes the version a new advisory generation condemns and keeps its fix installable | `Sweep.Advisory`: Every fixture release and unaffected package installed, with exact mirrored versions/listing and initial snapshot. Successful generation publication, second swap witness and successful sweep. Exact deletion and cycle tally, with unpinned generation. Snapshot removes only the vulnerable version. Vulnerable install fails and artifact returns 403. Bounded no-refill window, fixed version retained and fixed install succeeds. Stored and served artifact bytes remain nonempty with HTTP 200. |
+| `npm/dredger/denied-install` | serves the sibling and refuses the denied version once both stores lose it | `Sweep.Recovery`: Exact initial cache versions and vulnerable bytes. Successful sweep, sibling-only inventories, removed cache artifact 404, metadata and sibling artifact 200. Denied artifact 403 and fresh install failure. Sibling fresh install succeeds with exact installed version. Both sibling-only inventories remain unchanged. |
+| `npm/dredger/delete-recovery` | keeps the cache copy its backend refused and removes it on a later run | `Sweep.Recovery`: Exact cache target, version and refused-503 audit. Mirror empty while cache retains version and bytes. Later successful sweep removes the cache copy. Subsequent direct and client reads remain denied. Both inventories empty. |
+| `npm/dredger/refill` | mirrors the version again when the policy lifts and the public source still holds bytes | `Sweep.Recovery`: Successful removal and both inventories empty. Relaxed fresh install succeeds with exact version. Bounded mirror inventory and nonempty stored artifact. |
+| `npm/dredger/missing-source` | leaves both stores empty when the policy lifts and no source bytes remain | `Sweep.Recovery`: Successful removal and both inventories empty. Public-artifact fault, relaxed artifact 404 and fresh install failure. Original bounded write window, both stores remain empty. |
+| `npm/dredger/late-copy` | removes the copies each store received after the cycle that reported them gone | `Sweep.Recovery`: Successful initial cleanup and empty stores. Direct publication into both stores, exact inventory and listing readiness. Later successful rediscovery sweep leaves both stores empty. |
+| `npm/dredger/old-worker` | removes the copies an old worker mirrored after a stricter proxy started | `Sweep.Rollout`: Shared durable queue, successful old admissions and first-party publication. Target absent before worker starts, strict public reads denied. Old worker publishes target and unrelated release, target reaches both stores. Private-origin fresh install succeeds with exact version and nonempty served bytes. Successful sweep removes target from both stores and preserves unrelated and first-party versions. Next reads fail. Permissive drain publishes sentinel, never denied release. Successful rescan retains the first-party version. |
+| `npm/dredger/old-dredger-refill` | restores a version an old Dredger removed while the newer roles permitted it | `Sweep.Rollout`: Initial cache bytes and mirror HTTP 200. Old policy removes both copies. Converged permissive sweep alone restores nothing. Fresh install succeeds with exact version and mirrored inventory. Restored artifact returns HTTP 200 with identical bytes. Served artifact returns HTTP 200. Exact byte equality strengthens the original SHA-512 equality. |
+| `npm/dredger/old-dredger-loss` | leaves the version lost when an old Dredger removed the only remaining bytes | `Sweep.Rollout`: With public bytes absent, retained artifact initially returns 200. Old policy removes both copies. Converged sweep restores nothing. Artifact returns 404 rather than policy refusal. Fresh install fails. Bounded window leaves both stores empty. |
 
 ### `test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs`
 
@@ -347,7 +396,8 @@ Coverage remains one full integration invocation with the same Cabal instrumenta
 ## Unit registration validation
 
 Core and runtime retain `hspec-discover` and their existing dependency boundaries.
-`UnitCatalogue` independently requires 100 canonical examples across nine actual spec roots.
+The core `Ecluse.Test.Contract.UnitCatalogue` and runtime `Ecluse.Runtime.Test.Contract.UnitCatalogue` hold separate obligations.
+Together, they require 100 canonical examples across nine actual spec roots.
 `UnitCatalogueSpec` reads labelled declaration trees without executing hooks or examples.
 Native unlabelled examples continue in their original suites.
 The audits reject missing, duplicate, and unknown IDs and missing capabilities.

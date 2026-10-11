@@ -48,9 +48,8 @@ before `Spec`: `IntegrationSpec`, `E2ESpec`, `SmokeSpec`, `ResidencySpec`. The i
 
 ## Integration tests: `ecluse-integration` (gating)
 
-Exercise cloud-backed code (the `MirrorQueue` and `CredentialProvider` handles) against a real
-emulator, driven by `testcontainers`. The AWS backend runs against a **ministack** container, a
-lightweight LocalStack alternative, with `amazonka` pointed at `http://<container>:4566` and
+Exercise the mirror queue and advisory transport against a real emulator, driven by `testcontainers`.
+The AWS backend runs against a **ministack** container, a lightweight LocalStack alternative, with `amazonka` pointed at `http://<container>:4566` and
 throwaway credentials. The telemetry specs run a real OTLP **Collector** container the same way. Both
 are hermetic: no real cloud account, no real credentials.
 
@@ -69,6 +68,7 @@ task test-integration SHARD=http
 Discovery validates independent obligations without constructing specs, reading credentials, or acquiring services.
 Unknown groups, empty selections, missing prerequisites, pending cases, and missing execution results fail.
 The `http`, `aws`, and `telemetry` partitions are local scheduling data, not a new CI matrix.
+`MATCH` is no longer supported. Discovery accepts `TIER=e2e` or `TIER=integration`, not unit or measurement tiers.
 Reports and the selected manifest go under `scratchpad/integration/<run-id>/`.
 In-process integration records an inapplicable product image identity.
 The instrumented coverage run uses the same runner and always executes every group.
@@ -769,11 +769,10 @@ No timing improvement is claimed until comparable runs measure it.
 The tier stays outside local `task gate` and `task check`. Run these commands inside the Nix flake:
 
 ```bash
-task test-contract-list
-task test-contract-plan
+task test-contract-list TIER=e2e
+task test-contract-plan TIER=e2e
 task test-e2e
-task test-e2e-run SHARD=pypi
-task test-e2e-run -- --group pypi/install
+task test-e2e-audit
 ```
 
 Listing and planning need the compiled runner but no services.
@@ -781,6 +780,9 @@ Listing and planning need the compiled runner but no services.
 `test-e2e-prepare` writes `scratchpad/e2e/docker-image.tar`, `plan.json`, and `identity.json`.
 `test-e2e-load` validates the prepared identity before loading the archive.
 `test-e2e-audit` checks collected reports against the complete plan and identity.
+For a later targeted rerun, choose `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
+Each rerun replaces its shard report. A group rerun without `SHARD` replaces `reports/all.json`.
+Keep full-run reports separately before a subset rerun. A full audit rejects mixed full/subset reports as duplicate execution.
 Use a group ID from `test-contract-list` when reproducing a failure.
 The [contract coverage map](test-contracts.md) records migrated assertions and native extensions.
 
