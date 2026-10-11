@@ -7,7 +7,7 @@ module Ecluse.Test.Contract.Integration.CatalogueSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Test.Contract.Catalogue (selectGroups, validateCatalogue)
+import Ecluse.Test.Contract.Catalogue (validateCatalogue)
 import Ecluse.Test.Contract.Integration.Catalogue (integrationCatalogue)
 import Ecluse.Test.Contract.Types
 
@@ -30,12 +30,11 @@ spec = do
                 validateCatalogue integrationCatalogue{catalogueProfiles = map removeCapability (catalogueProfiles integrationCatalogue)} `shouldSatisfy` isLeft
     it "rejects a newly registered ecosystem without coverage" $
         validateCatalogue integrationCatalogue{catalogueProductionEcosystems = "new-ecosystem" : catalogueProductionEcosystems integrationCatalogue} `shouldSatisfy` isLeft
-    it "selects each whole group by its fixed identifier" $
-        for_ (catalogueGroups integrationCatalogue) $ \scenarioGroup ->
-            selectGroups emptySelection{selectionGroup = Just (groupId scenarioGroup)} integrationCatalogue `shouldBe` Right [scenarioGroup]
-    it "rejects unknown and empty intersections before setup" $ do
-        selectGroups emptySelection{selectionGroup = Just "absent"} integrationCatalogue `shouldSatisfy` isLeft
-        selectGroups emptySelection{selectionGroup = Just "integration/pypi", selectionBackend = Just "ministack"} integrationCatalogue `shouldSatisfy` isLeft
+    it "declares all integration groups in the fixed integration component" $ do
+        length (catalogueGroups integrationCatalogue) `shouldBe` 17
+        map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
+    it "retains every unique integration case" $
+        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 252
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate

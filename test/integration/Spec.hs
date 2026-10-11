@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Integration selection uses the shared catalogue runner without an OCI product image.
+-- | Concrete integration contracts run without an OCI product image.
 module Main (main) where
-
-import Data.Map.Strict qualified as Map
 
 import Ecluse.AwsEndToEndIntegrationSpec qualified as AwsComposition
 import Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec qualified as PyPI
@@ -24,32 +22,31 @@ import Ecluse.Runtime.ServerIntegrationSpec qualified as ServerShutdown
 import Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec qualified as TelemetryMetrics
 import Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec qualified as TelemetryScrape
 import Ecluse.Runtime.Telemetry.TracingIntegrationSpec qualified as TelemetryTraces
-import Ecluse.Test.Contract.Integration.Catalogue (integrationCatalogue)
-import Ecluse.Test.Contract.Runner (contractMain)
+import Ecluse.Test.Contract.Integration.Catalogue qualified as Coverage
+import Ecluse.Test.Contract.Runner (DeclaredGroup (DeclaredGroup), contractMain)
 
 -- | Missing Docker fails during fixture acquisition and cannot become pending coverage.
 main :: IO ()
 main =
     contractMain
-        integrationCatalogue
-        ( Map.fromList
-            [ ("integration/aws-composition", const AwsComposition.spec)
-            , ("integration/pypi", const PyPI.spec)
-            , ("integration/egress", const Egress.spec)
-            , ("integration/origin", const Origin.spec)
-            , ("integration/npm-metadata", const NpmMetadata.spec)
-            , ("integration/publication", const Publication.spec)
-            , ("integration/pipeline-faults", const PipelineFaults.spec)
-            , ("integration/npm-artifact", const NpmArtifact.spec)
-            , ("integration/worker", const Worker.spec)
-            , ("integration/pilot", const Pilot.spec)
-            , ("integration/advisory-sync", const AdvisorySync.spec)
-            , ("integration/advisory-export", const AdvisoryExport.spec)
-            , ("integration/queue-sqs", const SqsQueue.spec)
-            , ("integration/server-shutdown", const ServerShutdown.spec)
-            , ("integration/telemetry-metrics", const TelemetryMetrics.spec)
-            , ("integration/telemetry-scrape", const TelemetryScrape.spec)
-            , ("integration/telemetry-traces", const TelemetryTraces.spec)
-            ]
-        )
+        Coverage.integrationCatalogue
+        "integration"
+        [ DeclaredGroup Coverage.awsComposition (const AwsComposition.spec)
+        , DeclaredGroup Coverage.pypiHttp (const PyPI.spec)
+        , DeclaredGroup Coverage.egressHttp (const Egress.spec)
+        , DeclaredGroup Coverage.originHttp (const Origin.spec)
+        , DeclaredGroup Coverage.npmMetadataHttp (const NpmMetadata.spec)
+        , DeclaredGroup Coverage.publicationHttp (const Publication.spec)
+        , DeclaredGroup Coverage.pipelineFaultsHttp (const PipelineFaults.spec)
+        , DeclaredGroup Coverage.npmArtifactHttp (const NpmArtifact.spec)
+        , DeclaredGroup Coverage.workerSqs (const Worker.spec)
+        , DeclaredGroup Coverage.pilotS3 (const Pilot.spec)
+        , DeclaredGroup Coverage.advisorySyncS3 (const AdvisorySync.spec)
+        , DeclaredGroup Coverage.advisoryExportS3 (const AdvisoryExport.spec)
+        , DeclaredGroup Coverage.queueSqs (const SqsQueue.spec)
+        , DeclaredGroup Coverage.serverShutdownHttp (const ServerShutdown.spec)
+        , DeclaredGroup Coverage.collectorMetrics (const TelemetryMetrics.spec)
+        , DeclaredGroup Coverage.telemetryScrapeHttp (const TelemetryScrape.spec)
+        , DeclaredGroup Coverage.collectorTraces (const TelemetryTraces.spec)
+        ]
         (const (pure Nothing))

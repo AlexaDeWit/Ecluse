@@ -9,6 +9,7 @@ import Data.Unique (hashUnique, newUnique)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
+import TestContainers (Container)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -43,22 +44,14 @@ import Ecluse.Test.Contract.Queue (QueueDriver (..), leasedQueueContract, queueC
 import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
 import Ecluse.Test.Support (expectRightIO)
 
-{- | These cases drive the SQS 'MirrorQueue' backend against a @ministack@ container from
-"Ecluse.Integration.Ministack". They are gating and need a Docker daemon, never real AWS.
--}
+-- | Run shared delivery contracts and SQS lease and fault assertions against ministack.
 spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "mirror queue (ministack)" $ do
-            beforeWith
-                ( \container -> do
-                    unique <- hashUnique <$> newUnique
-                    queue <- freshQueue container ("mirror-contract-" <> show unique) defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                    pure QueueDriver{queueHandle = queue, awaitDelivery = receiveUntil queue}
-                )
-                $ do
-                    queueContract "queue/sqs"
-                    leasedQueueContract "queue/sqs"
+            beforeWith sqsQueueDriver $ do
+                queueContract "queue/sqs"
+                leasedQueueContract "queue/sqs"
 
             it (caseLabel "integration/queue-sqs/native-001" "extendVisibility holds an un-acked job past its original window") $ \container -> do
                 -- Extend the in-flight message well past its 1s visibility timeout. No
@@ -121,8 +114,13 @@ spec =
                     Left fault -> tfCause fault `shouldBe` TransportUnreachable
                     Right messages -> expectationFailure ("expected a typed transport fault, got " <> show messages)
 
--- An SQS backend pointed at a loopback port with nothing listening, for the
--- typed-fault classification case. Port 1 is in the privileged range and never bound.
+sqsQueueDriver :: Container -> IO QueueDriver
+sqsQueueDriver container = do
+    unique <- hashUnique <$> newUnique
+    queue <- freshQueue container ("mirror-contract-" <> show unique) defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+    pure QueueDriver{queueHandle = queue, awaitDelivery = receiveUntil queue}
+
+-- Port 1 supplies the unreachable endpoint for fault classification.
 deadEndpointQueue :: IO MirrorQueue
 deadEndpointQueue = do
     logEnv <- quietLogEnv
@@ -135,9 +133,6 @@ deadEndpointQueue = do
             , sqsWaitSeconds = 1
             }
 
-{- | A job that runs three times its receipt's two-second window, then asserts nothing came
-back to a second consumer in the meantime.
--}
 heldJob :: MirrorQueue -> KatipContextT IO ()
 heldJob queue = liftIO $ do
     threadDelay 6_000_000
@@ -146,7 +141,6 @@ heldJob queue = liftIO $ do
     stillHidden2 <- expectRightIO (receive queue)
     map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
--- | A sample mirror job carried end-to-end through SQS.
 sampleJob :: MirrorJob
 sampleJob =
     MirrorJob
