@@ -133,6 +133,14 @@ tasks:
     desc: Run the work-per-request benchmarks
     cmds:
       - '{{.NIX_BENCH}} cabal bench ecluse-bench --benchmark-options="{{.BENCH_OPTS}}"'
+  shape-validation:
+    desc: Run the fixed three-revision full-read comparison in CI
+    cmds:
+      - bash scripts/json-shape-validation.sh
+  shape-validation-build:
+    desc: Compile the measurement harness without running timers
+    cmds:
+      - cabal build ecluse-bench --enable-benchmarks
   bench-report:
     desc: Render the work-per-request bench CSV as a Markdown report
     cmds:

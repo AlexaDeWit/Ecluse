@@ -1,0 +1,46 @@
+name: Large full-read shape validation
+
+on:
+  push:
+    branches: [measure/json-shape-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: json-shape-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout the measurement harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up the pinned toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+      - name: Update the package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+      - name: Build, verify semantics, and measure fixed rotations
+        env:
+          ECLUSE_SHAPE_WORK: ${{ runner.temp }}/ecluse-json-shape-validation
+        run: nix develop .#ci --command task shape-validation
+      - name: Upload all evidence, including partial results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: json-shape-validation-${{ github.sha }}
+          path: ${{ runner.temp }}/ecluse-json-shape-validation/artifacts
+          if-no-files-found: warn

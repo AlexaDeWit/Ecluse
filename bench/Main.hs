@@ -10,6 +10,7 @@ module Main (main) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Bench.Corpus (benchEvalContext, syntheticInput)
+import Ecluse.Bench.ShapeValidation qualified as ShapeValidation
 import Ecluse.Core.AdvisoryRulesBench qualified as AdvisoryRulesBench
 import Ecluse.Core.CacheBench qualified as CacheBench
 import Ecluse.Core.ColdReadBench qualified as ColdReadBench
@@ -37,7 +38,10 @@ import Test.Tasty.Bench (bgroup, defaultMain)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 main :: IO ()
-main = do
+main = lookupEnv "ECLUSE_SHAPE_MODE" >>= maybe ordinaryBenchmarks ShapeValidation.run
+
+ordinaryBenchmarks :: IO ()
+ordinaryBenchmarks = do
     ecosystems <- ecosystemBenches
     cacheBenchmarks <- CacheBench.benchmarks
     packed <- traverse PackedBench.benchmarks ecosystems

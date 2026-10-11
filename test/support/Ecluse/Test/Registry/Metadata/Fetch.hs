@@ -8,6 +8,7 @@ module Ecluse.Test.Registry.Metadata.Fetch (
     heldBody,
     sourceBody,
     captureChunks,
+    captureChunksOf,
 
     -- * Reads
     heldManifest,
@@ -44,9 +45,16 @@ answered = bimap FetchBoundExceeded (SuccessBody 200)
 cuts them before a measured read, so the read's figure holds no slicing.
 -}
 captureChunks :: ByteString -> [ByteString]
-captureChunks bytes
+captureChunks = captureChunksOf captureChunkBytes
+
+-- | Cut held input before measurement, with a positive chunk size.
+captureChunksOf :: Int -> ByteString -> [ByteString]
+captureChunksOf size bytes
     | BS.null bytes = []
-    | otherwise = case BS.splitAt 32768 bytes of (!piece, rest) -> piece : captureChunks rest
+    | otherwise = case BS.splitAt (max 1 size) bytes of (!piece, rest) -> piece : captureChunksOf size rest
+
+captureChunkBytes :: Int
+captureChunkBytes = 32768
 
 {- | The production full read of held chunks, as a fetch from an origin at the base URL runs it. The
 body limit is at least the chunks' size, and the charge has no payer, as outside the memory gate.
