@@ -13,7 +13,7 @@ module Ecluse.Core.Registry.PyPI.Reader (
 
 import Data.Aeson (Value (Null, String))
 import Data.Aeson.Key qualified as Key
-import Data.JsonStream.Lexer.Internal (Cursor, Element (..))
+import Data.JsonStream.Lexer (Cursor, Element (..))
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)

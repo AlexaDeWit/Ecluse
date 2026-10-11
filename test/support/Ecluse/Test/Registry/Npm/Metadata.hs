@@ -8,7 +8,7 @@ module Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmFull, np
 import Control.Monad.ST (ST)
 import Data.Aeson (Value)
 import Data.ByteString qualified as BS
-import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.Lexer (Cursor)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)

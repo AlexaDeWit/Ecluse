@@ -32,7 +32,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Parser qualified as J
-import Data.JsonStream.TokenReader (maxChunkBytes)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
@@ -172,3 +171,6 @@ foldRetained = fmap finish . J.foldI collect Missing
 -- | Read a scalar without materialising an object or array when the field has the wrong shape.
 retainedScalar :: J.Parser Value
 retainedScalar = (String <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
+
+maxChunkBytes :: Int
+maxChunkBytes = 32768

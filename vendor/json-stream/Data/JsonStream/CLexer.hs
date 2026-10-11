@@ -2,7 +2,7 @@
 module Data.JsonStream.CLexer (tokenParser, unescapeText) where
 
 import qualified Data.ByteString as BS
-import qualified Data.JsonStream.Lexer.Internal as Lexer
+import qualified Data.JsonStream.Lexer as Lexer
 import Data.JsonStream.TokenParser (TokenResult (..))
 import qualified Data.JsonStream.TokenParser as List
 import Data.JsonStream.Unescape (unescapeText)
@@ -23,7 +23,8 @@ withContext element after = case element of
     Lexer.ObjectBegin -> List.ObjectBegin
     Lexer.ObjectEnd -> List.ObjectEnd rest
     Lexer.StringContent bytes -> List.StringContent bytes
-    Lexer.StringRaw bytes ascii -> List.StringRaw bytes ascii rest
+    Lexer.StringPlain plain -> List.StringRaw (Lexer.plainBytes plain) True rest
+    Lexer.StringEncoded bytes -> List.StringRaw bytes False rest
     Lexer.StringEnd -> List.StringEnd rest
     Lexer.JValue scalar -> List.JValue scalar
     Lexer.JInteger integer -> List.JInteger integer

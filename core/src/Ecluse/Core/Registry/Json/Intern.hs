@@ -10,7 +10,8 @@ drawn for its read, so upstream text cannot choose which names collide.
 -}
 module Ecluse.Core.Registry.Json.Intern (
     -- * Names as read
-    Name (Plain),
+    Name,
+    plainName,
     decodedName,
     foldName,
     nameText,
@@ -43,13 +44,17 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable (..))
-import Data.JsonStream.Unescape (unsafeDecodeASCII)
+import Data.JsonStream.Lexer (PlainString, plainBytes, plainText)
 import Data.Primitive.SmallArray (SmallArray, newSmallArray, runSmallArray, writeSmallArray)
 import Data.Text.Array qualified as TA
 import Data.Text.Internal qualified as TI
 
 -- | A member name or string as the lexer read it: plain ASCII bytes, or text decoded from escapes or UTF-8.
-data Name = Plain !ByteString | Decoded !Text ~ByteString
+data Name = Plain !PlainString | Decoded !Text ~ByteString
+
+-- | A name whose bytes carry the lexer's plain-string validation.
+plainName :: PlainString -> Name
+plainName = Plain
 
 -- | A name decoded from escapes or UTF-8. Its bytes are encoded once, when first asked for.
 decodedName :: Text -> Name
@@ -58,20 +63,20 @@ decodedName text = Decoded text (encodeUtf8 text)
 -- | Take a name as its plain ASCII bytes or as its decoded text.
 foldName :: (ByteString -> a) -> (Text -> a) -> Name -> a
 foldName onPlain onDecoded = \case
-    Plain bytes -> onPlain bytes
+    Plain bytes -> onPlain (plainBytes bytes)
     Decoded text _ -> onDecoded text
 {-# INLINE foldName #-}
 
 -- | The name's text on an array of its own. Plain bytes are copied, so no text keeps its input chunk.
 nameText :: Name -> Text
 nameText = \case
-    Plain bytes -> unsafeDecodeASCII bytes
+    Plain bytes -> plainText bytes
     Decoded text _ -> text
 
 -- | The name's UTF-8 bytes. Plain bytes are the input's own, so hold them only for the current lookup.
 nameBytes :: Name -> ByteString
 nameBytes = \case
-    Plain bytes -> bytes
+    Plain bytes -> plainBytes bytes
     Decoded _ bytes -> bytes
 
 -- | A fresh key for one read's table, so no key outlives the table it seeds.

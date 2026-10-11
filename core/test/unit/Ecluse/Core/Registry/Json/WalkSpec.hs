@@ -6,7 +6,7 @@
 module Ecluse.Core.Registry.Json.WalkSpec (spec) where
 
 import Data.ByteString qualified as BS
-import Data.JsonStream.Lexer.Internal (Cursor, Element (ArrayBegin, ObjectBegin))
+import Data.JsonStream.Lexer (Cursor, Element (ArrayBegin, ObjectBegin))
 import Data.JsonStream.Parser qualified as J
 import Hedgehog (forAll, (===))
 import Test.Hspec

@@ -7,7 +7,7 @@ Explicit imports keep integration fixtures from registering unrelated examples.
 -}
 module Main (main) where
 
-import Data.JsonStream.TokenReaderResidencySpec qualified as TokenReaderResidencySpec
+import Data.JsonStream.LexerResidencySpec qualified as LexerResidencySpec
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
@@ -30,7 +30,7 @@ main =
         ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
         ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path
         _ -> hspec $ do
-            TokenReaderResidencySpec.spec
+            LexerResidencySpec.spec
             JsonStreamResidencySpec.spec
             MetadataResidencySpec.spec
             NpmReaderResidencySpec.spec

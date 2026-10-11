@@ -34,7 +34,7 @@ import Control.Monad.ST (ST, stToIO)
 import Data.Aeson (Value (Object))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (..), PackageName, renderPackageName)

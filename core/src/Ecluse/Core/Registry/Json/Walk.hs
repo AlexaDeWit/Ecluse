@@ -36,12 +36,11 @@ module Ecluse.Core.Registry.Json.Walk (
 import Control.Monad.ST (ST)
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
-import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.Lexer.Internal (Cursor, Element (..))
-import Data.JsonStream.Lexer.Internal qualified as Lexer
+import Data.JsonStream.Lexer (Cursor, Element (..), decodeString)
+import Data.JsonStream.Lexer qualified as Lexer
 import GHC.Exts (oneShot)
 
-import Ecluse.Core.Registry.Json.Intern (InternTable, Name (Plain), decodedName)
+import Ecluse.Core.Registry.Json.Intern (InternTable, Name, decodedName, plainName)
 import Ecluse.Core.Registry.JsonStream (Step, Steps (..), StreamResult, readSteps)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
@@ -126,7 +125,8 @@ skipFrom :: (Walk r) => Element -> Cursor -> (Cursor -> r) -> r
 skipFrom element rest next = case element of
     JValue _ -> next rest
     JInteger _ -> next rest
-    StringRaw{} -> next rest
+    StringPlain{} -> next rest
+    StringEncoded{} -> next rest
     StringContent _ -> skipStringThen rest next
     ArrayBegin -> skipRest 1 rest next
     ObjectBegin -> skipRest 1 rest next
@@ -169,7 +169,8 @@ tooDeep element rest = skipFrom element rest (const (failWith nestingLimit))
 -- | Whether the element starts a string.
 isString :: Element -> Bool
 isString = \case
-    StringRaw{} -> True
+    StringPlain{} -> True
+    StringEncoded{} -> True
     StringContent _ -> True
     JValue (Aeson.String _) -> True
     _ -> False
@@ -177,8 +178,8 @@ isString = \case
 -- | Decode the string starting at the element, failing where json-stream's @string@ fails.
 readString :: (Walk r) => Element -> Cursor -> (Name -> Cursor -> r) -> r
 readString element rest next = case element of
-    StringRaw bytes True -> next (Plain bytes) rest
-    StringRaw bytes False -> case unescapeText bytes of
+    StringPlain bytes -> next (plainName bytes) rest
+    StringEncoded bytes -> case decodeString bytes of
         Right text -> next (decodedName text) rest
         Left err -> failWith (show err)
     StringContent part -> longString [part] rest next
@@ -189,7 +190,7 @@ readString element rest next = case element of
 longString :: (Walk r) => [ByteString] -> Cursor -> (Name -> Cursor -> r) -> r
 longString parts tokens next = withElement tokens $ \element rest -> case element of
     StringContent part -> longString (part : parts) rest next
-    StringEnd -> case unescapeText (BS.concat (reverse parts)) of
+    StringEnd -> case decodeString (BS.concat (reverse parts)) of
         Right text -> next (decodedName text) rest
         Left _ -> failWith "Error decoding UTF8"
     _ -> failWith "unexpected token in a string"
@@ -210,8 +211,8 @@ eachMember visit done = loop
 memberName :: (Walk r) => Element -> Cursor -> (Name -> Cursor -> r) -> (Cursor -> r) -> r
 memberName element rest named dropped = case element of
     JValue (Aeson.String key) -> named (decodedName key) rest
-    StringRaw bytes True -> named (Plain bytes) rest
-    StringRaw bytes False -> case unescapeText bytes of
+    StringPlain bytes -> named (plainName bytes) rest
+    StringEncoded bytes -> case decodeString bytes of
         Right key -> named (decodedName key) rest
         Left err -> failWith (show err)
     StringContent part -> longKey [part] (BS.length part) rest named dropped
@@ -221,7 +222,7 @@ memberName element rest named dropped = case element of
 -- json-stream's getLongKey: the limit applies from the third piece, and a dropped key skips its value.
 longKey :: (Walk r) => [ByteString] -> Int -> Cursor -> (Name -> Cursor -> r) -> (Cursor -> r) -> r
 longKey parts !size tokens next dropped = withElement tokens $ \element rest -> case element of
-    StringEnd -> case unescapeText (BS.concat (reverse parts)) of
+    StringEnd -> case decodeString (BS.concat (reverse parts)) of
         Right key -> next (decodedName key) rest
         Left _ -> failWith "Error decoding UTF8"
     StringContent part

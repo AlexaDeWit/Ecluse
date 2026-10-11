@@ -19,7 +19,7 @@ import Data.Aeson (Value, encode)
 import Data.Array.Byte (ByteArray)
 import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
-import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, tableTexts)

@@ -488,6 +488,9 @@ retained object once from its members.
 The Haskell lexer scans immutable input slices, with no C lexer or foreign result buffer.
 Each scan returns a token and a new immutable cursor. Tree reads stay pure, while packed writers
 retain their state threads. Returned tokens retain their input slices through later reads.
+The private library exposes the parser and one lexer interface. Cursor constructors and raw decoding
+stay private. Plain string tokens carry validation that their bytes need no JSON escaping or UTF-8
+decoding. Registry readers enforce body and chunk limits outside that interface.
 The key accumulator stops at about 64 KiB and the number accumulator at about
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it

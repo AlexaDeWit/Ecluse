@@ -100,16 +100,15 @@ common shipped-rts
 library ecluse-json-stream
   hs-source-dirs:   vendor/json-stream
   exposed-modules:
-    Data.JsonStream.CLexType
-    Data.JsonStream.CLexer
-    Data.JsonStream.Lexer.Internal
+    Data.JsonStream.Lexer
     Data.JsonStream.Parser
-    Data.JsonStream.TokenParser
-    Data.JsonStream.TokenReader
-    Data.JsonStream.Unescape
 
   other-modules:
+    Data.JsonStream.CLexer
+    Data.JsonStream.Lexer.Internal
     Data.JsonStream.Number
+    Data.JsonStream.TokenParser
+    Data.JsonStream.Unescape
   default-language: Haskell2010
   ghc-options:      -Wall -fwarn-incomplete-uni-patterns
   build-depends:
@@ -840,8 +839,8 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
-    Data.JsonStream.CLexerSpec
-    Data.JsonStream.TokenReaderSpec
+    Data.JsonStream.LexerSpec
+    Data.JsonStream.ParserSpec
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.ClockSpec
@@ -1394,7 +1393,7 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
-    Data.JsonStream.TokenReaderResidencySpec
+    Data.JsonStream.LexerResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Registry.MetadataResidencySpec

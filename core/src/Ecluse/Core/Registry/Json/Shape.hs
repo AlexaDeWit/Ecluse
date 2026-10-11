@@ -27,12 +27,11 @@ import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict qualified as HashMap
-import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.Lexer.Internal (Cursor, Element (..))
-import Data.JsonStream.Lexer.Internal qualified as Lexer
+import Data.JsonStream.Lexer (Cursor, Element (..), decodeString)
+import Data.JsonStream.Lexer qualified as Lexer
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), PreparedName, decodedName, entryKeeps, entryString, entryText, internName, internPreparedName, nameBytes, nameText, prepareName)
+import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name, PreparedName, decodedName, entryKeeps, entryString, entryText, internName, internPreparedName, nameBytes, nameText, plainName, prepareName)
 import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement, withScanned)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
@@ -291,7 +290,7 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
   where
     loop table !fields tokens = case Lexer.next tokens of
         Lexer.Token ObjectEnd rest -> closeObject build fields (\built -> next built table rest)
-        Lexer.Token (StringRaw bytes True) rest -> member table fields (Plain bytes) rest
+        Lexer.Token (StringPlain bytes) rest -> member table fields (plainName bytes) rest
         scanned -> withScanned scanned $ \element rest -> case element of
             ObjectEnd -> closeObject build fields (\built -> next built table rest)
             _ -> memberName element rest (member table fields) (loop table fields)
@@ -355,11 +354,13 @@ direct shape mode table element = case shape of
     ArrayWith budget _ fallback | budget > 0 -> direct fallback mode table element
     StringOr budget other
         | budget > 0 -> case element of
-            StringRaw{} -> scalarToken mode table element
+            StringPlain{} -> scalarToken mode table element
+            StringEncoded{} -> scalarToken mode table element
             JValue (String _) -> scalarToken mode table element
             _ -> direct other mode table element
     ObjectOr fallback _ -> case element of
-        StringRaw{} -> DirectWhole fallback
+        StringPlain{} -> DirectWhole fallback
+        StringEncoded{} -> DirectWhole fallback
         JValue _ -> DirectWhole fallback
         JInteger _ -> DirectWhole fallback
         _ -> Indirect
@@ -368,8 +369,8 @@ direct shape mode table element = case shape of
 
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
-    StringRaw bytes True -> direct' (Plain bytes)
-    StringRaw bytes False -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
+    StringPlain bytes -> direct' (plainName bytes)
+    StringEncoded bytes -> either (const Indirect) (direct' . decodedName) (decodeString bytes)
     JValue (String text) -> direct' (decodedName text)
     JValue scalar -> DirectWhole scalar
     JInteger number -> DirectInteger (fromIntegral number)

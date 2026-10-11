@@ -113,6 +113,18 @@ readSpec = describe "readJsonStream" $ do
         parseJsonChunks (MetadataBodyLimit 2) (retainedValue 3) (\_ value -> Right (Just value)) Nothing ["{}", "x"]
             `shouldBe` Left (BodyTooLarge (MetadataBodyLimit 2))
 
+    it "limits every resumed piece while counting the original body chunks" $ do
+        source <- newIORef [BS.replicate oversizedChunkBytes bodyByte, BS.empty]
+        let takeChunk = atomicModifyIORef' source $ \case
+                [] -> ([], BS.empty)
+                chunk : rest -> (rest, chunk)
+            collect sizes = NeedData $ \piece ->
+                Identity $
+                    let nextSizes = sizes <> [BS.length piece]
+                     in if sum nextSizes == oversizedChunkBytes then Finished nextSizes else collect nextSizes
+        result <- readSteps (pure . runIdentity) (MetadataBodyLimit oversizedChunkBytes) (collect []) takeChunk
+        result `shouldBe` Right (StreamResult (Right [expectedPieceBytes, expectedPieceBytes, trailingPieceBytes]) oversizedChunkBytes)
+
     it "reports a truncated required object as a parse error" $ do
         result <- expectRight (decode (retainedValue 3) ["{\"keep\":"])
         streamValue result `shouldSatisfy` isLeft
@@ -128,3 +140,11 @@ arrayItems = \case
 -- Keep the test fold independent of an accumulated list of parser events.
 decode :: J.Parser a -> [ByteString] -> Either LimitError (StreamResult (Maybe a))
 decode parser = parseJsonChunks (MetadataBodyLimit (1024 * 1024)) parser (\_ value -> Right (Just value)) Nothing
+
+expectedPieceBytes, trailingPieceBytes, oversizedChunkBytes :: Int
+expectedPieceBytes = 32768
+trailingPieceBytes = 7
+oversizedChunkBytes = 2 * expectedPieceBytes + trailingPieceBytes
+
+bodyByte :: Word8
+bodyByte = 32

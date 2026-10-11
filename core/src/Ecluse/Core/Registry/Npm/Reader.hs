@@ -14,7 +14,7 @@ module Ecluse.Core.Registry.Npm.Reader (
 ) where
 
 import Data.Aeson (Value (Null))
-import Data.JsonStream.Lexer.Internal (Cursor, Element (..))
+import Data.JsonStream.Lexer (Cursor, Element (..))
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), entryText, internName, nameBytes, nameText)
 import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, prepareMembers, readShape)

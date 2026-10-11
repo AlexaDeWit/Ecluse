@@ -8,8 +8,7 @@ module Ecluse.Core.Registry.Json.WalkProbe (heldDuring, heldWritingDuring, allow
 import Control.Concurrent (yield)
 import Control.Monad.ST (RealWorld, ST, stToIO)
 import Data.ByteString qualified as BS
-import Data.JsonStream.Lexer.Internal (Cursor)
-import Data.JsonStream.TokenReader (maxChunkBytes)
+import Data.JsonStream.Lexer (Cursor)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (gc), getRTSStats, getRTSStatsEnabled)
 import System.Mem (performMajorGC)
 import UnliftIO.Exception (evaluate)
@@ -52,7 +51,7 @@ allowance = 256 * 1024
 pieces :: ByteString -> [ByteString]
 pieces body
     | BS.null body = []
-    | otherwise = BS.take maxChunkBytes body : pieces (BS.drop maxChunkBytes body)
+    | otherwise = BS.take fixtureChunkBytes body : pieces (BS.drop fixtureChunkBytes body)
 
 liveBytes :: IO Word64
 liveBytes = do
@@ -60,3 +59,6 @@ liveBytes = do
     yield
     performMajorGC
     gcdetails_live_bytes . gc <$> getRTSStats
+
+fixtureChunkBytes :: Int
+fixtureChunkBytes = 32768

@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.Json.InternSpec (spec) where
 
 import Data.ByteArray.Hash (SipHash (SipHash), sipHashWith)
 import Data.ByteString qualified as BS
+import Data.JsonStream.Lexer (mkPlainString)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -23,21 +24,21 @@ spec :: Spec
 spec = do
     describe "internName" $ do
         it "holds a name read plain and read with escapes as one copy" $ do
-            let Interned earlier held = internName (Plain "dep") (newInternTable key [])
+            let Interned earlier held = internName (plain "dep") (newInternTable key [])
                 Interned later _ = internName (decodedName "dep") held
             sameObject (entryText earlier) (entryText later) `shouldReturn` True
 
         it "keeps the values of the named members as read, and shares the names themselves" $ do
-            let Interned kept _ = internName (Plain "url") (newInternTable key ["url"])
-                Interned shared _ = internName (Plain "dep") (newInternTable key ["url"])
+            let Interned kept _ = internName (plain "url") (newInternTable key ["url"])
+                Interned shared _ = internName (plain "dep") (newInternTable key ["url"])
             (entryKeeps kept, entryKeeps shared) `shouldBe` (True, False)
 
         it "stores an owned copy of a name cut from a larger input" $ do
-            let Interned entry _ = internName (Plain (BS.take 5 (BS.drop 1 "xvaluex"))) (newInternTable key [])
+            let Interned entry _ = internName (plain (BS.take 5 (BS.drop 1 "xvaluex"))) (newInternTable key [])
             textStorageBytes (entryText entry) `shouldBe` 5
 
         it "seeds a repeated member name once, so each index names one entry" $ do
-            let Interned entry held = internName (Plain "dep") (newInternTable key ["url", "url", "tarball"])
+            let Interned entry held = internName (plain "dep") (newInternTable key ["url", "url", "tarball"])
             (entryIndex entry, toList (tableTexts held)) `shouldBe` (2, ["url", "tarball", "dep"])
 
         describe "properties" $ do
@@ -65,7 +66,7 @@ spec = do
         it "inserts only on use, after names already read, and shares the existing entry" $ do
             let initial = newInternTable key ["url"]
             prepared <- evaluate (prepareName initial "dep")
-            let Interned dynamic held = internName (Plain "dynamic") initial
+            let Interned dynamic held = internName (plain "dynamic") initial
                 Interned preparedEntry shared = internPreparedName prepared held
                 Interned again final = internName (decodedName "dep") shared
             toList (tableTexts final) `shouldBe` ["url", "dynamic", "dep"]
@@ -77,7 +78,7 @@ spec = do
             let prepared = prepareName (newInternTable key []) "url"
                 target = newInternTable otherKey ["before", "url"]
                 Interned preparedEntry held = internPreparedName prepared target
-                Interned again final = internName (Plain "url") held
+                Interned again final = internName (plain "url") held
             entryKeeps preparedEntry `shouldBe` True
             entryIndex preparedEntry `shouldBe` entryIndex again
             toList (tableTexts final) `shouldBe` ["before", "url"]
@@ -140,7 +141,7 @@ pool :: [ByteString]
 pool = ["dep", "url", "^2", "\xc3\xa9", "", "key1", "key2", "tarball", "a", "aa", "aaa"]
 
 plain :: ByteString -> Name
-plain bytes = if BS.all (< 0x80) bytes then Plain bytes else decodedName (decodeUtf8 bytes)
+plain bytes = maybe (decodedName (decodeUtf8 bytes)) plainName (mkPlainString bytes)
 
 sameObject :: Text -> Text -> IO Bool
 sameObject left right = (==) <$> (makeStableName =<< evaluate left) <*> (makeStableName =<< evaluate right)

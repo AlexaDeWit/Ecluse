@@ -15,7 +15,7 @@ module Ecluse.Core.Registry.PyPI.Metadata (
     projectPyPIStream,
 ) where
 
-import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)

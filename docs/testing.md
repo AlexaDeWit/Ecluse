@@ -1206,9 +1206,14 @@ because 304 avoids assembled-store resolution.
 
 ## The vendored JSON lexer
 
-The npm and PyPI metadata reads walk the tokens of the lexer in `vendor/json-stream/`. Two kinds of
-check hold that walk and that lexer to upstream json-stream's behaviour.
+The npm and PyPI metadata reads walk the tokens of the lexer in `vendor/json-stream/`. The Haskell lexer preserves
+upstream json-stream's token behaviour. These checks cover its public interface and the registry walk.
 
+- **Recorded C traces** in `Data.JsonStream.LexerSpec` compare 2,914 frozen cases through the public
+  lexer interface. They include chunk waits, payloads, number results, failures, and leftover input.
+  The recorded reference does not call the replacement lexer. Public parser tests also preserve
+  large input pieces and chunk-sensitive lenient numbers. Lexer and residency tests check plain
+  string validation, immutable snapshots, offset slices, and backing-allocation lifetime.
 - **Differential properties** in `ecluse-core-unit` compare the walk with json-stream's own parser
   combinators on generated bodies: every emitted field, the byte count, the refusal, and whether a
   failure is the nesting limit. The bodies carry escapes, lone surrogates, invalid and overlong
@@ -1217,15 +1222,17 @@ check hold that walk and that lexer to upstream json-stream's behaviour.
   which its reference decodes. So a second property compares that read with the reference's read
   of the same index once the undecodable members in those places are repaired. They run with the
   suite, or alone with
-  `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`.
+  `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`. Both readers use the
+  Haskell lexer, so these properties check the walk rather than independently checking tokenisation.
 - **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the vendored C lexer beside
   upstream's at the vendored tree's base commit under libFuzzer, AddressSanitizer and
   UndefinedBehaviorSanitizer. It fails on any difference in return code, lexer state or result
   records, with the input cut into pieces at random. Run it with `task fuzz-json-lexer`, ten minutes
   by default, or pass libFuzzer options after `--`. clang and libFuzzer come from the flake's pinned
-  nixpkgs, and the corpus grows under `dist-fuzz/json-lexer/`. It does not run in CI.
+  nixpkgs, and the corpus grows under `dist-fuzz/json-lexer/`. It does not run in CI or exercise the
+  production Haskell lexer. The retained C sources are reference code and are not linked into Écluse.
 
-Both lexers overflow a signed `long` in `handle_number` on an integer of 19 digits or more, before
+Both reference C lexers overflow a signed `long` in `handle_number` on an integer of 19 digits or more, before
 they discard the value and parse the digits again. Nixpkgs' hardening makes the overflow wrap, so the
 harness builds with `-fno-wrapv` to let UndefinedBehaviorSanitizer see it, and
 `test/fuzz/json-lexer/ubsan.supp` names those two functions so fuzzing continues past it. The seed

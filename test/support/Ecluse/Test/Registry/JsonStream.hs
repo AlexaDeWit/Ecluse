@@ -10,7 +10,7 @@ import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
-import Data.JsonStream.Lexer.Internal (Cursor)
+import Data.JsonStream.Lexer (Cursor)
 import Data.JsonStream.Parser qualified as J
 import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)

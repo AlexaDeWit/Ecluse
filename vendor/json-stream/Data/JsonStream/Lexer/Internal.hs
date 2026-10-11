@@ -6,7 +6,7 @@
 -- | Incremental Haskell scanning with the vendored lexer's token and chunk semantics.
 -- State owns immutable byte slices, with no foreign result records.
 module Data.JsonStream.Lexer.Internal
-    ( Cursor, Element (..), Scanned (..), start, next, feed, canFeed, stopped, remaining ) where
+    ( Cursor, Element (..), Scanned (..), PlainString, mkPlainString, plainBytes, start, next, feed, remaining ) where
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
@@ -19,9 +19,24 @@ import Data.JsonStream.Number (numberDigitLimit, parseNumber)
 -- | A lexical token independent of the public parser's leftover-input reporting.
 data Element
     = ArrayBegin | ArrayEnd | ObjectBegin | ObjectEnd
-    | StringContent !BS.ByteString | StringRaw !BS.ByteString !Bool | StringEnd
+    | StringContent !BS.ByteString | StringPlain !PlainString | StringEncoded !BS.ByteString | StringEnd
     | JValue !Aeson.Value | JInteger !CLong
     deriving (Eq, Show)
+
+-- | Bytes that need neither JSON unescaping nor UTF-8 decoding.
+newtype PlainString = PlainString BS.ByteString
+    deriving (Eq, Show)
+
+-- | Validate caller-supplied bytes before using the plain-string path.
+mkPlainString :: BS.ByteString -> Maybe PlainString
+mkPlainString bytes
+    | BS.any specialByte bytes = Nothing
+    | otherwise = Just (PlainString bytes)
+
+-- | The original immutable slice. Keeping it retains its backing allocation.
+plainBytes :: PlainString -> BS.ByteString
+plainBytes (PlainString bytes) = bytes
+{-# INLINE plainBytes #-}
 
 -- | The current piece and lexical state carried across pieces.
 data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode [BS.ByteString]
@@ -121,7 +136,7 @@ string bytes initial continued escaped0 numbers = case stringStop bytes initial 
     StringStop offset escapePending special
         | offset >= BS.length bytes -> Token (StringContent (piece offset)) (Cursor bytes offset (StringPart True escapePending) numbers)
         | continued -> Token (StringContent (piece offset)) (Cursor bytes (offset + 1) StringFinish numbers)
-        | otherwise -> Token (StringRaw (piece offset) (not special)) (Cursor bytes (offset + 1) Base numbers)
+        | otherwise -> Token (if special then StringEncoded (piece offset) else StringPlain (PlainString (piece offset))) (Cursor bytes (offset + 1) Base numbers)
   where
     piece offset = BS.take (offset - initial) (BS.drop initial bytes)
 
@@ -198,7 +213,7 @@ number bytes initial continued numbers = go initial 0 0 False 0 continued 1
         | fractionDigits == 0 = emit (JInteger (sign * computed))
         | otherwise = emit (JValue (Aeson.Number (scientific (fromIntegral (sign * computed)) (negate fractionDigits))))
       where
-        emit element = Token element (Cursor bytes offset Base numbers)
+        emit element = Token element (Cursor bytes offset Base [])
 
 emptyByte :: Word8 -> Bool
 emptyByte byte = byte == colon || byte == comma || byte == space || (byte >= whitespaceLow && byte <= whitespaceHigh)

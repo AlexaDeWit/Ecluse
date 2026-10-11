@@ -4,6 +4,10 @@ This folder holds json-stream's library modules. Écluse builds its internal
 `ecluse-json-stream` library with a Haskell lexer. The C sources remain as a reference for the
 lexer fuzz harness. They are not linked into this library.
 
+The private library exposes `Data.JsonStream.Parser` and `Data.JsonStream.Lexer`.
+Lexer cursors are immutable and opaque. Plain string tokens carry validated bytes, while decoding
+and compatibility modules stay private. The registry driver owns body and input-piece limits.
+
 - Upstream: <https://github.com/ondrap/json-stream>, published on Hackage as
   [json-stream](https://hackage.haskell.org/package/json-stream). Its author is Ondrej Palkovsky.
 - The tree was taken from upstream commit `537a43a775e64f50dc63c373193323de98619799`. Git history
