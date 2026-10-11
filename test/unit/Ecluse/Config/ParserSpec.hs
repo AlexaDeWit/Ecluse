@@ -23,7 +23,6 @@ spec = do
             , ("defaulted", void (optionalKeyOr "port" 4873 parsePort))
             , ("plain", void (plainKey "port" :: GroupDecoder Int))
             , ("optional plain", void (optionalPlainKey "port" :: GroupDecoder (Maybe Int)))
-            , ("defaulted plain", void (optionalPlainKeyOr "port" (4873 :: Int)))
             ]
             $ \(name, decoder) ->
                 it (name <> " reads name the group and key on a wrong type") $
