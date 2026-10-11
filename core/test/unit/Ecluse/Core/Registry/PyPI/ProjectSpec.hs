@@ -201,8 +201,8 @@ wheelComponentSpec = describe "filename components against base 3384fa96" $ do
 
     it "matches both memo readers against the frozen parser" $
         for_ wheelBoundaryProjects $ \name ->
-            for_ memoReads $ \(_, reader) ->
-                snd (readThrough reader (filenameMemo name) wheelBoundaryFiles)
+            for_ memoReads $ \(_, readName) ->
+                snd (readThrough readName (filenameMemo name) wheelBoundaryFiles)
                     `shouldBe` map (baseFileCoordinate name) wheelBoundaryFiles
 
     describe "properties" $
