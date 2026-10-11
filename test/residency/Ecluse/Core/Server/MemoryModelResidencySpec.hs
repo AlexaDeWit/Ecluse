@@ -44,7 +44,7 @@ spec = do
             when (isJust (adapterFor ecosystem)) $
                 it ("covers registered adapter " <> show ecosystem) $ do
                     record <- requireResidency ecosystem
-                    residencyPackages record `shouldSatisfy` (not . null)
+                    length (residencyPackages record) `shouldSatisfy` (> 0)
                     map (pkgEcosystem . cpPackage) (residencyPackages record) `shouldSatisfy` all (== ecosystem)
                     let limits = residencyPeakLimits record
                     readPeakLimit limits `shouldSatisfy` (> 0)
