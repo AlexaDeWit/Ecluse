@@ -75,17 +75,12 @@ tasks:
     cmds:
       - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
   test-integration:
-    desc: Run the integration suite (requires a Docker daemon)
+    desc: Run integration, optionally selecting an Hspec path with MATCH
     env:
-      # Pin this worktree's reaping scope. The harness stamps every container with it
-      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+      ECLTEST_SHARD: integration
+      ECLTEST_INTEGRATION_MATCH: '{{.MATCH | default ""}}'
     cmds:
-      # Sweep this worktree before running and on exit, without touching sibling containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - cabal test ecluse-integration --test-show-details=direct
+      - bash scripts/test-integration.sh
   test-residency:
     desc: Run the bounded-memory streaming gate (own process, RTS -T)
     cmds:
@@ -94,33 +89,46 @@ tasks:
     desc: Run the smoke suite (live registries, non-gating)
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
-  test-e2e:
-    desc: End-to-end suite against a locally built OCI image (needs the E2E image, an active Docker daemon, and the E2E dependencies built)
-    env:
-      # Pin this worktree's reaping scope. The harness stamps every container with it
-      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+  test-contract-list:
+    desc: List the pure E2E catalogue without services
     cmds:
-      # Sweep this worktree before running and on exit, without touching sibling containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - |
-        echo "==> building the OCI image (.#dockerImage)"
-        img_archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
-        
-        echo "==> loading the image into docker"
-        tag="$(bash scripts/docker-load.sh "$img_archive")"
-        echo "==> image: $tag"
-        
-        echo "==> running ecluse-e2e"
-        ECLTEST_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
+      - bash scripts/e2e.sh list
+  test-contract-plan:
+    desc: Print the deterministic E2E partition plan
+    cmds:
+      - bash scripts/e2e.sh plan
+  test-e2e-prepare:
+    desc: Build one image archive and the E2E plan
+    cmds:
+      - bash scripts/e2e.sh prepare
+  test-e2e-load:
+    desc: Verify and load the prepared E2E image archive
+    cmds:
+      - bash scripts/e2e.sh load
+  test-e2e-run:
+    desc: Run the prepared image and selected E2E shard
+    env:
+      ECLTEST_SHARD: '{{.SHARD | default "all"}}'
+    cmds:
+      - bash scripts/e2e.sh run {{.CLI_ARGS}}
+  test-e2e-audit:
+    desc: Check that shard reports cover the complete prepared plan
+    cmds:
+      - bash scripts/e2e.sh audit
+  test-e2e:
+    desc: Prepare, load and run the real product image
+    cmds:
+      - task: test-e2e-prepare
+      - task: test-e2e-load
+      - task: test-e2e-run
+        vars:
+          SHARD: '{{.SHARD | default "all"}}'
   test-clean:
-    desc: Reap THIS worktree's leftover test containers/networks (scoped, safe while other agents or worktrees run)
+    desc: Wait for active planes, then reap this worktree's stale test resources
     cmds:
       - bash scripts/test-containers.sh reap
   test-clean-all:
-    desc: Reap ALL Écluse test containers/networks/images across every worktree (only when no other suite is running)
+    desc: Wait for active planes, then reap all labelled test resources
     cmds:
       - bash scripts/test-containers.sh reap --all
   test-all:
@@ -207,25 +215,20 @@ tasks:
         support_exclude=()
         while IFS= read -r module; do
           support_exclude+=(-x "$module")
-        done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
+        done < <(find test/support test/contracts runtime/test-support -name '*.hs' | sed -e 's#^\(test/support\|test/contracts\|runtime/test-support\)/##' -e 's#/#.#g' -e 's#\.hs$##')
         
         hpc-codecov "${mix_args[@]}" -s . -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
-        echo "coverage: wrote coverage/combined.json (combined core-unit ∪ app-unit ∪ integration — matches Codecov's merged total)"
+        echo "coverage: wrote coverage/combined.json (combined core-unit + runtime-unit + app-unit + integration, matches Codecov's merged total)"
   coverage-unit:
     desc: Fast, Docker-free unit-only coverage
     cmds:
       - bash scripts/coverage.sh {{.SUITE}} {{.COVERAGE_FLAGS}}
   coverage-integration:
-    desc: Integration-tier coverage (drives ministack, scoped and reaped like test-integration)
+    desc: Full integration coverage under the shared daemon lock
     env:
-      # Stamp containers with this worktree scope so cleanup can identify them.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+      ECLTEST_SHARD: integration
     cmds:
-      # Sweep before running and on exit to remove this worktree's abandoned containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
+      - bash scripts/test-containers.sh run bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
   gen-version-fixtures:
     desc: Regenerate version-ordering fixtures
     cmds:
@@ -377,6 +380,8 @@ tasks:
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/ci-runner-policy.test.sh
       - bash scripts/coverage-tix.test.sh
+      - bash scripts/e2e.test.sh
+      - bash scripts/test-containers.test.sh
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
       - bash scripts/image-archive.test.sh

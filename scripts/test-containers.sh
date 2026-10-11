@@ -1,120 +1,110 @@
 #!/usr/bin/env bash
-#
-# Reap the Docker containers, networks, and (only in --all mode) images that
-# Écluse's integration and end-to-end suites create. A killed or interrupted run
-# then leaves no pile of orphans behind to slowly fill the machine. See
-# AGENTS.md -> "Build and tooling" and docs/testing.md -> "Tests and Docker".
-#
-# The suites stamp every test container with two labels (see the shared writer,
-# Ecluse.Test.Containers, and test/e2e/Ecluse/E2E/Harness/Docker.hs):
-#
-#   com.ecluse.test        = e2e | integration   # "this is an Écluse test object"
-#   com.ecluse.test.scope  = <per-worktree id>    # who owns it
-#
-# The scope is what makes concurrency safe. `reap` (the default) removes only
-# THIS worktree's objects, so it can never touch a sibling worktree's or a
-# parallel agent's live containers. `reap --all` ignores the scope and removes
-# every Écluse test object on the daemon: the "prune everything, nothing else is
-# running" button.
-#
-# Usage:
-#   scripts/test-containers.sh scope        # print this worktree's scope id
-#   scripts/test-containers.sh list         # list Écluse test containers by scope
-#   scripts/test-containers.sh reap         # remove THIS worktree's test objects
-#   scripts/test-containers.sh reap --all   # remove ALL Écluse test objects
+# Serialise planes on one daemon and reap only the current invocation's objects.
 set -euo pipefail
 
-readonly LABEL_KEY="com.ecluse.test"
-readonly SCOPE_KEY="com.ecluse.test.scope"
+readonly LABEL_KEY=com.ecluse.test
+readonly SCOPE_KEY=com.ecluse.test.scope
+readonly RUN_KEY=com.ecluse.test.run
+readonly SHARD_KEY=com.ecluse.test.shard
 
-# The reaping scope for the current worktree. Honours ECLTEST_SCOPE when the caller
-# has pinned it: a container-running `task` target, the `test-*` suites or the `coverage`
-# and `check` path. Otherwise it derives a stable id from the worktree root path, so each
-# checkout owns a distinct scope.
 scope_id() {
-  if [ -n "${ECLTEST_SCOPE:-}" ]; then
-    printf '%s\n' "$ECLTEST_SCOPE"
-    return
-  fi
   local root
   root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   printf 'ecl-%s\n' "$(printf '%s' "$root" | sha1sum | cut -c1-12)"
 }
 
-# True when a Docker daemon is reachable. Without one, everything downstream
-# degrades to a no-op (exit 0). A `defer` reap then never masks a suite result,
-# and `task test-clean` on a daemonless box is harmless.
-docker_ready() {
-  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+run_id() {
+  local token
+  token="$(mktemp -d /tmp/ecluse-run.XXXXXXXXXXXX)"
+  basename "$token"
+  rmdir "$token"
 }
 
-# `rm -f` every container id on stdin (no-op on empty input).
-rm_containers() {
-  xargs -r docker rm -f >/dev/null 2>&1 || true
-}
-
-# Remove every network id on stdin, one at a time so one in-use network does not
-# strand the rest.
-rm_networks() {
-  xargs -r -n1 docker network rm >/dev/null 2>&1 || true
-}
-
-# Force-remove every image id on stdin.
-rm_images() {
-  xargs -r docker rmi -f >/dev/null 2>&1 || true
+# A single lock covers all contexts: two Docker contexts can point at the same daemon.
+lock_daemon() {
+  local lock_dir="/tmp/ecluse-test-daemon-${UID}"
+  mkdir -p "$lock_dir"
+  exec 9>"$lock_dir/lock"
+  flock 9
 }
 
 reap() {
-  local mode="${1:-}"
-  if ! docker_ready; then
-    echo "test-containers: no reachable Docker daemon; nothing to reap" >&2
-    return 0
-  fi
-
-  local -a filters
-  if [ "$mode" = "--all" ]; then
-    filters=(--filter "label=$LABEL_KEY")
-    echo "test-containers: reaping ALL Écluse test containers/networks/images (every worktree)" >&2
-  elif [ -z "$mode" ]; then
-    local scope
-    scope="$(scope_id)"
-    filters=(--filter "label=$LABEL_KEY" --filter "label=$SCOPE_KEY=$scope")
-    echo "test-containers: reaping test objects for scope '$scope'" >&2
-  else
-    echo "test-containers: unknown reap mode '$mode' (expected nothing or --all)" >&2
-    return 2
-  fi
-
-  docker ps -aq "${filters[@]}" | rm_containers
-  docker network ls -q "${filters[@]}" | rm_networks
-  # Images carry only the coarse label: a Dockerfile LABEL is static, so it has no
-  # per-worktree scope. Prune them only in --all mode, where nothing else is meant
-  # to run, and so nothing else can rely on the shared build image.
-  if [ "$mode" = "--all" ]; then
-    docker images -q --filter "label=$LABEL_KEY" | rm_images
-  fi
-}
-
-list() {
-  if ! docker_ready; then
-    echo "test-containers: no reachable Docker daemon" >&2
-    return 0
-  fi
-  docker ps -a --filter "label=$LABEL_KEY" \
-    --format 'table {{.ID}}\t{{.Label "com.ecluse.test"}}\t{{.Label "com.ecluse.test.scope"}}\t{{.Names}}\t{{.Status}}'
-}
-
-main() {
-  local cmd="${1:-}"
-  case "$cmd" in
-    scope) scope_id ;;
-    list) list ;;
-    reap) reap "${2:-}" ;;
-    *)
-      echo "usage: $0 {scope|list|reap [--all]}" >&2
-      exit 2
+  local mode="${1:-}" ids status=0
+  local -a filters=(--filter "label=$LABEL_KEY")
+  case "$mode" in
+    invocation)
+      filters+=(--filter "label=$SCOPE_KEY=${ECLTEST_SCOPE:?}" --filter "label=$RUN_KEY=${ECLTEST_RUN_ID:?}" --filter "label=$SHARD_KEY=${ECLTEST_SHARD:?}")
       ;;
+    stale) filters+=(--filter "label=$SCOPE_KEY=$(scope_id)") ;;
+    --all) ;;
+    *) echo "test-containers: unknown reap mode '$mode'" >&2; return 2 ;;
   esac
+  ids="$(docker ps -aq "${filters[@]}")" || status=1
+  if [ -n "$ids" ]; then
+    printf '%s\n' "$ids" | xargs -r docker rm -f || status=1
+  fi
+  ids="$(docker network ls -q "${filters[@]}")" || status=1
+  if [ -n "$ids" ]; then
+    printf '%s\n' "$ids" | xargs -r -n1 docker network rm || status=1
+  fi
+  if [ "$mode" = --all ]; then
+    ids="$(docker images -q --filter "label=$LABEL_KEY")" || status=1
+    if [ -n "$ids" ]; then
+      printf '%s\n' "$ids" | xargs -r docker rmi -f || status=1
+    fi
+  fi
+  return "$status"
 }
 
-main "$@"
+finish() {
+  local status=$?
+  trap - EXIT INT TERM
+  if ! reap invocation; then
+    echo 'test-containers: cleanup failed' >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
+  exit "$status"
+}
+
+stop_child() {
+  local status="$1"
+  trap '' INT TERM
+  kill -TERM -- "-$child_pid" 2>/dev/null || true
+  wait "$child_pid" || true
+  exit "$status"
+}
+
+run() {
+  [ "$#" -gt 0 ] || return 2
+  lock_daemon
+  export ECLTEST_SCOPE
+  ECLTEST_SCOPE="$(scope_id)"
+  export ECLTEST_RUN_ID="${ECLTEST_RUN_ID:-$(run_id)}"
+  export ECLTEST_SHARD="${ECLTEST_SHARD:-all}"
+  export ECLTEST_CONTAINER_LOCK=held
+  docker info >/dev/null
+  trap finish EXIT
+  set -m
+  "$@" &
+  child_pid=$!
+  set +m
+  trap 'stop_child 130' INT
+  trap 'stop_child 143' TERM
+  wait "$child_pid"
+}
+
+case "${1:-}" in
+  scope) scope_id ;;
+  run-id) run_id ;;
+  run) shift; run "$@" ;;
+  reap)
+    lock_daemon
+    docker info >/dev/null
+    reap "${2:-stale}"
+    ;;
+  list)
+    docker ps -a --filter "label=$LABEL_KEY" \
+      --format 'table {{.ID}}\t{{.Label "com.ecluse.test.scope"}}\t{{.Label "com.ecluse.test.run"}}\t{{.Label "com.ecluse.test.shard"}}\t{{.Names}}\t{{.Status}}'
+    ;;
+  *) echo "usage: $0 {scope|run COMMAND...|list|reap [--all]}" >&2; exit 2 ;;
+esac

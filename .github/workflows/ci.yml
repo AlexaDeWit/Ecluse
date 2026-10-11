@@ -286,26 +286,26 @@ jobs:
       - name: Smoke tests
         run: nix develop .#ci --command task test-smoke
 
-  e2e:
-    name: End-to-end tests (whole-system, real clients)
+  e2e-prepare:
+    name: Prepare E2E image and plan
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     permissions:
       contents: read
-    # Real npm and pip clients exercise the OCI image against an nginx stub and Verdaccio.
-    # This hermetic tier gates. Drop it from the gate only as a last resort.
+    outputs:
+      partitions: ${{ steps.plan.outputs.partitions }}
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # `.#dockerImage` links the Nix-built Haskell closure the docs job roots, and the
-      # suite runs in `.#ci`. The Nix-store cache carries both.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
@@ -316,8 +316,74 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # One throttled pull in the suite's setup hook cascades every case to pending. The
-      # refs copy the pins in test/support/Ecluse/Test/Container/Image.hs verbatim.
+      - name: Prepare image and catalogue
+        run: nix develop .#ci --command task test-e2e-prepare
+
+      - name: Read planned partitions
+        id: plan
+        run: bash scripts/e2e-matrix.sh scratchpad/e2e/plan.json
+
+      - name: Upload immutable plan and identity
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-plan
+          path: |
+            scratchpad/e2e/plan.json
+            scratchpad/e2e/identity.json
+          if-no-files-found: error
+
+      - name: Upload image archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-image
+          path: scratchpad/e2e/docker-image.tar
+          compression-level: 0
+          if-no-files-found: error
+
+  e2e-shards:
+    name: End-to-end tests (${{ matrix.shard }})
+    needs: [changes, e2e-prepare]
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.e2e-prepare.outputs.partitions) }}
+    permissions:
+      contents: read
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Download plan and identity
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-plan
+          path: scratchpad/e2e
+
+      - name: Download exact image archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-image
+          path: scratchpad/e2e
+
       - name: Pre-pull pinned e2e images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
@@ -326,8 +392,75 @@ jobs:
           verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
           nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
-      - name: End-to-end suite (builds + loads the image, drives the real clients)
-        run: nix develop .#ci --command task test-e2e
+      - name: Verify and load exact image
+        run: nix develop .#ci --command task test-e2e-load
+
+      - name: Run planned shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: nix develop .#ci --command task test-e2e-run "SHARD=$SHARD"
+
+      - name: Record shard outcome
+        if: always()
+        env:
+          ECLTEST_SHARD: ${{ matrix.shard }}
+          ECLTEST_JOB_STATUS: ${{ job.status }}
+        run: bash scripts/e2e.sh diagnostics
+
+      - name: Upload execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-${{ matrix.shard }}
+          path: scratchpad/e2e/reports/
+          if-no-files-found: error
+
+  e2e:
+    name: E2E execution completeness
+    needs: [changes, e2e-prepare, e2e-shards]
+    if: ${{ always() && needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Download plan and identity
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-plan
+          path: scratchpad/e2e
+
+      - name: Download shard reports
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: e2e-report-*
+          merge-multiple: true
+          path: scratchpad/e2e/reports
+
+      - name: Audit all required groups and cases
+        if: always()
+        run: nix develop .#ci --command task test-e2e-audit
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
@@ -683,6 +816,8 @@ jobs:
       - codecov-notify
       - static-checks
       - docs
+      - e2e-prepare
+      - e2e-shards
       - e2e
       - weeder
       - stan
@@ -712,6 +847,8 @@ jobs:
           COVERAGE: ${{ needs.coverage.result }}
           CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}
           DOCS: ${{ needs.docs.result }}
+          E2E_PREPARE: ${{ needs.e2e-prepare.result }}
+          E2E_SHARDS: ${{ needs.e2e-shards.result }}
           E2E: ${{ needs.e2e.result }}
           WEEDER: ${{ needs.weeder.result }}
           STAN: ${{ needs.stan.result }}
