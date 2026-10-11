@@ -63,7 +63,7 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishFault,
  )
-import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorInput, npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorUploadData, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..), PublishPlan)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -103,7 +103,7 @@ recordingPublish logRef outcome =
     MirrorPublish
         { mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
         , mpPrepareArtifact = \name version doc artifact -> do
-            input <- mkNpmMirrorInput name version doc artifact
+            input <- mkNpmMirrorUploadData name version doc artifact
             pure $ PreparedMirror $ \plan document -> do
                 atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPublications = npmPublishDocument plan input document : plPublications l, plPlans = plan : plPlans l}, ()))
                 pure outcome

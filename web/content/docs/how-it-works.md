@@ -106,7 +106,7 @@ worker reads that object at admission time, never from the queued job.
   is dropped rather than republished.
 - Écluse strips `dist.signatures`, `dist.attestations`, and every underscore-prefixed field,
   because they describe the public registry's own keys, bundles, and bookkeeping.
-- Missing or inconsistent source input stops mirroring before the artifact download. The worker
+- Missing or inconsistent mirror upload data stops mirroring before the artifact download. The worker
   checks the admitted package, version, and complete npm tarball inventory against the publication
   input. It retires a refused job without publishing and logs the reason apart from a policy denial.
 

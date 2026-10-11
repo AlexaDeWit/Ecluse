@@ -127,6 +127,6 @@ data PublishFault
       PublishFetch FetchFault
     | -- | The registry answered and rejected the write (a non-2xx, non-@409@ status). Retryable.
       PublishRejected PublishError
-    | -- | Native preparation refused missing or inconsistent source input. Not retryable.
+    | -- | Mirror upload preparation refused missing or inconsistent mirror upload data. Not retryable.
       PublishSourceUnavailable Text
     deriving stock (Eq, Show)

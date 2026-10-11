@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Local npm load scenarios for metadata, private copies of public versions, artifacts, caches,
-advisory databases, admission under memory pressure, and the mirror worker. Private reads stay
-live. Public requests can share one in-flight fetch even at zero cache TTL.
+{- | npm load scenarios covering serving, admission, and the mirror worker.
+Private reads stay live, while public requests can share a fetch at zero cache TTL.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
@@ -54,7 +53,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry (BodyOutcome (UnreadStatus))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
@@ -362,7 +361,7 @@ mirrorJob url =
 succeedingPublishClient :: IORef Int -> MirrorPublish
 succeedingPublishClient counter =
     MirrorPublish
-        { mpPublishArtifact = \_ _ _ _ -> do
+        { mpPrepareArtifact = \_ _ _ _ -> Right $ PreparedMirror $ \_ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
         , mpProbeMetadata = const (pure (Right (UnreadStatus 404)))

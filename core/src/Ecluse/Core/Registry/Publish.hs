@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bind a native mirror codec to the shared bounded transport.
-Native preparation runs before artifact download, and every request disables redirects.
+{- | Bind a mirror upload codec to the shared bounded transport.
+Mirror upload preparation runs before artifact download, and every request disables redirects.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * What one write declares
@@ -51,17 +51,17 @@ newtype PublishPlan = PublishPlan
     }
     deriving stock (Eq, Show)
 
--- | A native input checked against the admitted snapshot, bound to its target and credential mint.
+-- | A prepared write with checked mirror upload data, bound to its target and credential mint.
 newtype PreparedMirror = PreparedMirror
     { publishPrepared :: PublishPlan -> ByteString -> IO (Either PublishFault ())
     }
 
--- | The codec keeps its checked native input private to its constructor and writer.
-data PublishCodec = forall input. PublishCodec
+-- | The codec keeps its checked mirror upload data private to its constructor and writer.
+data PublishCodec = forall uploadData. PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
     , pcVersionListParser :: Limits -> J.Parser VersionListItem
-    , pcPrepareInput :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault input
-    , pcPublishRequest :: Text -> Maybe Secret -> PublishPlan -> input -> ByteString -> Either PublishFault Request
+    , pcPrepareUploadData :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault uploadData
+    , pcPublishRequest :: Text -> Maybe Secret -> PublishPlan -> uploadData -> ByteString -> Either PublishFault Request
     , pcPublishOutcome :: Int -> Either PublishFault ()
     }
 
@@ -84,17 +84,17 @@ data MirrorPublish = MirrorPublish
     { mpProbeMetadata :: PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
     -- ^ Every failure is a 'FetchFault' value, so the probe's fall-through match is total.
     , mpPrepareArtifact :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault PreparedMirror
-    -- ^ Refuse inconsistent source input before fetching artifact bytes or minting a write credential.
+    -- ^ Refuse inconsistent mirror upload data before fetching artifact bytes or minting a write credential.
     }
 
 -- | Marry a protocol codec to the shared transport against one mirror-target endpoint.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> PublishCodec -> MirrorPublish
-newMirrorPublish transport target PublishCodec{pcProbeRequest, pcVersionListParser, pcPrepareInput, pcPublishRequest, pcPublishOutcome} =
+newMirrorPublish transport target PublishCodec{pcProbeRequest, pcVersionListParser, pcPrepareUploadData, pcPublishRequest, pcPublishOutcome} =
     MirrorPublish
         { mpProbeMetadata = probeMetadata transport targetUrl pcProbeRequest pcVersionListParser
         , mpPrepareArtifact = \name version doc artifact -> do
-            input <- pcPrepareInput name version doc artifact
-            pure (PreparedMirror (publishArtifact transport targetUrl pcPublishRequest pcPublishOutcome input))
+            uploadData <- pcPrepareUploadData name version doc artifact
+            pure (PreparedMirror (publishArtifact transport targetUrl pcPublishRequest pcPublishOutcome uploadData))
         }
   where
     targetUrl = registryUrlText target
@@ -114,13 +114,13 @@ fetchVersionList manager limits parser request =
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
-publishArtifact :: MirrorTransport -> Text -> (Text -> Maybe Secret -> PublishPlan -> input -> ByteString -> Either PublishFault Request) -> (Int -> Either PublishFault ()) -> input -> PublishPlan -> ByteString -> IO (Either PublishFault ())
-publishArtifact transport targetUrl request outcome input plan bytes = do
+publishArtifact :: MirrorTransport -> Text -> (Text -> Maybe Secret -> PublishPlan -> uploadData -> ByteString -> Either PublishFault Request) -> (Int -> Either PublishFault ()) -> uploadData -> PublishPlan -> ByteString -> IO (Either PublishFault ())
+publishArtifact transport targetUrl request outcome uploadData plan bytes = do
     token <- ptMintToken transport
     either
         (pure . Left)
         (writeArtifact transport outcome . sealRequest)
-        (request targetUrl token plan input bytes)
+        (request targetUrl token plan uploadData bytes)
 
 writeArtifact :: MirrorTransport -> (Int -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())
 writeArtifact transport outcome request =

@@ -289,7 +289,7 @@ spec = do
                     plans <- plPlans <$> readIORef logRef
                     plans `shouldBe` []
 
-        it "reports invalid native source as source-unavailable before publication" $
+        it "reports invalid source metadata as source-unavailable before publication" $
             withUpstream $ \url ->
                 withStub status404 "" $ \mirror -> do
                     publish <- codecPublishAt (stubBaseUrl mirror)
@@ -302,7 +302,7 @@ spec = do
                         written <- filter (== "PUT") . map capMethod <$> allCaptured mirror
                         written `shouldBe` []
 
-        it "refuses malformed native source before downloading the artifact" $
+        it "refuses malformed source metadata before downloading the artifact" $
             withStub status200 (toLazy tarballBytes) $ \upstream ->
                 withStub status404 "" $ \mirror -> do
                     publish <- codecPublishAt (stubBaseUrl mirror)

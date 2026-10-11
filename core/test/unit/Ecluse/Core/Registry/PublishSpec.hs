@@ -125,8 +125,8 @@ spec = do
 
         it "the publish request attaches the bearer with redirects disabled" $
             case npmPublishCodec of
-                PublishCodec{pcPrepareInput, pcPublishRequest} -> do
-                    input <- expectRight (pcPrepareInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
+                PublishCodec{pcPrepareUploadData, pcPublishRequest} -> do
+                    input <- expectRight (pcPrepareUploadData isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
                     request <- expectRight (pcPublishRequest "https://mirror.test" (Just (mkSecret "tok")) planV1 input "bytes")
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
@@ -160,7 +160,7 @@ unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcVersionListParser = const (pure VersionListObject)
-        , pcPrepareInput = \_ _ _ _ -> Right ()
+        , pcPrepareUploadData = \_ _ _ _ -> Right ()
         , pcPublishRequest = \targetUrl _token _plan () _bytes ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = const (Right ())

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared npm source documents, native mirror inputs, names, and client fixtures.
+{- | Shared npm source documents, mirror upload data, names, and client fixtures.
 The name-verdict table keeps the protocol entry points on one grammar.
 -}
 module Ecluse.Test.Registry.Npm (

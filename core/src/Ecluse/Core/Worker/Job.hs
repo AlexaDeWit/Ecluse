@@ -198,7 +198,7 @@ probeParseReason job detail =
         <> detail
         <> "); refusing to publish a release tag chosen without it"
 
--- Native preparation binds publication to the same snapshot the gate admitted.
+-- Mirror upload preparation binds publication to the same snapshot the gate admitted.
 data Readmitted = Readmitted
     { raArtifact :: MirrorArtifact
     , raUpstreamLatest :: Maybe Version

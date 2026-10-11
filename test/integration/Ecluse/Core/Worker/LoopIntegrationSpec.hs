@@ -66,7 +66,7 @@ spec =
             it "retires an incomplete npm inventory without fetching or publishing a selected subset" $ \container ->
                 withStub status200 "artifact bytes" $ \upstream ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
-                        queue <- freshQueue container "worker-incomplete-native-input" defaultQueueOptions
+                        queue <- freshQueue container "worker-incomplete-upload-data" defaultQueueOptions
                         acknowledged <- newIORef False
                         let observedQueue =
                                 queue

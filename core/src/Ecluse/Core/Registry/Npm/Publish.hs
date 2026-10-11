@@ -2,12 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Native npm mirror input, publication, and the first-party identity guard.
-The checked input keeps publication fields paired with the admitted tarball.
+{- | npm mirror upload data, publication, and the first-party identity guard.
+The checked mirror upload data keeps publication fields paired with the admitted tarball.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
-    NpmMirrorInput,
-    mkNpmMirrorInput,
+    NpmMirrorUploadData,
+    mkNpmMirrorUploadData,
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
@@ -49,18 +49,18 @@ import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | A complete npm tarball inventory with its paired native publication fields.
-data NpmMirrorInput = NpmMirrorInput
-    { nmiName :: PackageName
-    , nmiVersion :: Version
-    , nmiArtifact :: MirrorArtifact
-    , nmiFields :: KeyMap Value
+-- | A complete npm tarball inventory with its paired source publication fields.
+data NpmMirrorUploadData = NpmMirrorUploadData
+    { nmudName :: PackageName
+    , nmudVersion :: Version
+    , nmudArtifact :: MirrorArtifact
+    , nmudFields :: KeyMap Value
     }
     deriving stock (Eq, Show)
 
--- | Refuse a mismatched identity, incomplete npm inventory, or missing native source before fetching bytes.
-mkNpmMirrorInput :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault NpmMirrorInput
-mkNpmMirrorInput name version doc admitted = do
+-- | Refuse a mismatched identity, incomplete npm inventory, or missing source metadata before fetching bytes.
+mkNpmMirrorUploadData :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault NpmMirrorUploadData
+mkNpmMirrorUploadData name version doc admitted = do
     unless (pkgEcosystem name == Npm && pkgName details == name && pkgVersion details == version) $
         Left (PublishSourceUnavailable "the admitted snapshot belongs to another package or version")
     case pkgArtifacts details of
@@ -72,7 +72,7 @@ mkNpmMirrorInput name version doc admitted = do
         _ -> Left (PublishSourceUnavailable "the admitted descriptor does not cover the complete npm inventory")
     raw <- maybeToRight (PublishSourceUnavailable "the resolver carried no source version object") (vdRaw doc)
     fields <- authoredFields raw
-    pure (NpmMirrorInput name version admitted fields)
+    pure (NpmMirrorUploadData name version admitted fields)
   where
     details = vdDetails doc
 
@@ -82,15 +82,15 @@ npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
         , pcVersionListParser = Project.versionListParser
-        , pcPrepareInput = mkNpmMirrorInput
+        , pcPrepareUploadData = mkNpmMirrorUploadData
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
         }
 
-npmPublishRequestFor :: Text -> Maybe Secret -> PublishPlan -> NpmMirrorInput -> ByteString -> Either PublishFault Request
-npmPublishRequestFor targetUrl token plan input bytes =
+npmPublishRequestFor :: Text -> Maybe Secret -> PublishPlan -> NpmMirrorUploadData -> ByteString -> Either PublishFault Request
+npmPublishRequestFor targetUrl token plan uploadData bytes =
     first (PublishFetch . FetchUrlUnformable) $
-        publishRequest targetUrl (bareCredential <$> token) (nmiName input) (npmPublishDocument plan input bytes)
+        publishRequest targetUrl (bareCredential <$> token) (nmudName uploadData) (npmPublishDocument plan uploadData bytes)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do
@@ -116,9 +116,9 @@ publishRequest baseUrl credential name document = do
     url <- packageUrl baseUrl name
     jsonPutRequest credential url document
 
--- | Preserve native source fields while replacing identity, attachment controls, and verified distribution facts.
-npmPublishDocument :: PublishPlan -> NpmMirrorInput -> ByteString -> ByteString
-npmPublishDocument plan input tarball =
+-- | Preserve source metadata fields while replacing identity, attachment controls, and verified distribution facts.
+npmPublishDocument :: PublishPlan -> NpmMirrorUploadData -> ByteString -> ByteString
+npmPublishDocument plan uploadData tarball =
     toStrict . Aeson.encode $
         object
             [ "_id" .= rendered
@@ -128,13 +128,13 @@ npmPublishDocument plan input tarball =
             , "_attachments" .= object [Key.fromText filename .= attachmentObject tarball]
             ]
   where
-    artifact = nmiArtifact input
+    artifact = nmudArtifact uploadData
     filename = unFilename (maFilename artifact)
-    authored = nmiFields input
+    authored = nmudFields uploadData
     dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (objectAt "dist" authored)
     manifest = versionManifestObject rendered versionText dist authored
-    versionText = renderVersion (nmiVersion input)
-    rendered = renderPackageName (nmiName input)
+    versionText = renderVersion (nmudVersion uploadData)
+    rendered = renderPackageName (nmudName uploadData)
 
 -- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
 authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)

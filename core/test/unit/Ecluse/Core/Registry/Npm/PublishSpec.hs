@@ -30,7 +30,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
-import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorInput, npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorUploadData, npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpPrepareArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
@@ -65,7 +65,7 @@ spec = do
     publishSpec
     integritySpec
     fieldRewriteSpec
-    checkedInputSpec
+    checkedUploadDataSpec
 
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
@@ -225,7 +225,7 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
     publishedManifest = do
         document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion) planV1 verifiedArtifact) :: IO Object
         expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
-    checked raw = mkNpmMirrorInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw verifiedArtifact) verifiedArtifact
+    checked raw = mkNpmMirrorUploadData isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw verifiedArtifact) verifiedArtifact
     verifiedArtifact = sizedArtifact{maHashes = unsafeHash SHA1 validSha1 :| [unsafeHash SRI verifiedSri]}
     distOf :: Object -> Object
     distOf manifest = case KeyMap.lookup "dist" manifest of
@@ -289,7 +289,7 @@ publishDoc = expectRight (documentOf isOddVersionDoc planV1 sizedArtifact)
 
 documentOf :: CachedDoc -> PublishPlan -> MirrorArtifact -> Either PublishFault ByteString
 documentOf raw plan artifact =
-    (\input -> npmPublishDocument plan input dummyTarballBytes) <$> mkNpmMirrorInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw artifact) artifact
+    (\input -> npmPublishDocument plan input dummyTarballBytes) <$> mkNpmMirrorUploadData isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw artifact) artifact
 
 publishFixture :: MirrorPublish -> CachedDoc -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishFixture publish raw plan artifact bytes =
@@ -297,16 +297,16 @@ publishFixture publish raw plan artifact bytes =
         Left fault -> pure (Left fault)
         Right prepared -> publishPrepared prepared plan bytes
 
-checkedInputSpec :: Spec
-checkedInputSpec = describe "checked native mirror input" $ do
+checkedUploadDataSpec :: Spec
+checkedUploadDataSpec = describe "checked mirror upload data" $ do
     let doc = mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc sizedArtifact
         details = vdDetails doc
         changed update = doc{vdDetails = update details}
-        check snapshot = mkNpmMirrorInput isOdd v1_0_0 snapshot sizedArtifact
+        check snapshot = mkNpmMirrorUploadData isOdd v1_0_0 snapshot sizedArtifact
     it "refuses another ecosystem even when its snapshot identity agrees" $ do
         let name = unscopedPyPI "is-odd"
             version = pypiVersion "1.0.0"
-        mkNpmMirrorInput name version (mirrorVersionDoc name version isOddVersionDoc sizedArtifact) sizedArtifact `shouldSatisfy` isSourceRefusal
+        mkNpmMirrorUploadData name version (mirrorVersionDoc name version isOddVersionDoc sizedArtifact) sizedArtifact `shouldSatisfy` isSourceRefusal
     it "refuses missing source metadata" $
         check doc{vdRaw = Nothing} `shouldSatisfy` isSourceRefusal
     it "refuses a snapshot belonging to another package" $
@@ -317,7 +317,7 @@ checkedInputSpec = describe "checked native mirror input" $ do
         check (changed (\d -> d{pkgArtifacts = pkgArtifacts d <> pkgArtifacts d})) `shouldSatisfy` isSourceRefusal
     for_ [sizedArtifact{maFilename = unsafeFilename "other.tgz"}, sizedArtifact{maSize = Nothing}, sizedArtifact{maHashes = unsafeHash SRI (sriSha512Of "other") :| []}] $ \artifact ->
         it ("refuses an inconsistent admitted descriptor: " <> show artifact) $
-            mkNpmMirrorInput isOdd v1_0_0 doc artifact `shouldSatisfy` isSourceRefusal
+            mkNpmMirrorUploadData isOdd v1_0_0 doc artifact `shouldSatisfy` isSourceRefusal
 
 isSourceRefusal :: Either PublishFault a -> Bool
 isSourceRefusal = \case
