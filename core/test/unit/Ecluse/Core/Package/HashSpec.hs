@@ -219,9 +219,9 @@ spec = do
                     hedgehog $ do
                         name <- forAll (Gen.element algorithmNames)
                         mixed <- forAll (toText <$> traverse (\c -> Gen.element [toLower c, toUpper c]) (toString name))
-                        before <- forAll genSpace
-                        after <- forAll genSpace
-                        let raw = before <> mixed <> after
+                        leadingSpace <- forAll genSpace
+                        trailingSpace <- forAll genSpace
+                        let raw = leadingSpace <> mixed <> trailingSpace
                         parseHashAlg raw === baseParseHashAlg raw
 
                 it "preserves arbitrary Unicode input, including raw error text" $
