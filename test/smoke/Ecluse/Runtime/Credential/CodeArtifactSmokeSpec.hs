@@ -11,7 +11,7 @@ import Amazonka.CodeArtifact.Types qualified as CA
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Lens.Micro ((&), (.~), (^.))
+import Lens.Micro ((.~), (^.))
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Test.Hspec
@@ -74,7 +74,8 @@ repositoryEndpoint :: AWS.Env -> ObservationConfig -> IO Text
 repositoryEndpoint env config = do
     let request =
             CA.newGetRepositoryEndpoint (ocDomain config) (ocRepository config) CA.PackageFormat_Pypi
-                & CA.getRepositoryEndpoint_domainOwner .~ ocOwner config
+                & CA.getRepositoryEndpoint_domainOwner
+                .~ ocOwner config
     response <- observationAction EndpointDiscoveryFailed (runResourceT (AWS.send env request))
     expectObservation (maybe (Left EndpointMissing) Right (response ^. CA.getRepositoryEndpointResponse_repositoryEndpoint))
 
