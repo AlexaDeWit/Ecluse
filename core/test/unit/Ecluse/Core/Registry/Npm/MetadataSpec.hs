@@ -59,6 +59,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedD
 import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
+import Ecluse.Core.Registry.Npm.Request (packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
 import Ecluse.Core.Registry.Npm.Wire (distFields)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused, rebaseArtifactUrl)
@@ -229,14 +230,14 @@ integratedFactsSpec = describe "production direct facts against the frozen base"
     for_ integratedReleases $ \(label, release) ->
         it label $ assertIntegrated defaultLimits (factsBody release)
 
-    it "keeps original authors and sorted diagnostics through invalid fallback" $ do
+    it "omits unretained authors and keeps sorted diagnostics through invalid fallback" $ do
         let bad author = policyRelease [("author", author), ("scripts", Bool False)]
             body = "{\"name\":\"thing\",\"versions\":{\"z\":" <> bad (String "original Alice") <> ",\"a\":" <> bad Null <> ",\"ok\":" <> policyRelease [] <> "},\"dist-tags\":{\"z\":false,\"a\":7},\"time\":{\"ok\":false,\"z\":false}}"
         assertIntegrated defaultLimits body
         (info, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [body]) [body])
         map (\entry -> (invalidKind entry, invalidKey entry)) (infoInvalidEntries info)
             `shouldBe` [(InvalidVersionManifest, "a"), (InvalidVersionManifest, "z"), (InvalidDistTag, "a"), (InvalidDistTag, "z"), (InvalidPublishTime, "ok")]
-        map (fieldAt "author" . invalidValue) (take 2 (infoInvalidEntries info)) `shouldBe` [Just Null, Just (String "original Alice")]
+        map (fieldAt "author" . invalidValue) (take 2 (infoInvalidEntries info)) `shouldBe` [Nothing, Nothing]
         let absent = factsBody (policyRelease [("scripts", Bool False)])
         (withoutAuthor, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [absent]) [absent])
         map (fieldAt "author" . invalidValue) (infoInvalidEntries withoutAuthor) `shouldBe` [Nothing]
@@ -307,7 +308,7 @@ baseFullRead limits name bound chunks = do
     Walked table acc <- first (streamError limits) (streamValue streamed)
     baseFinishPacked limits name pointer (docTable (tableTexts table)) acc
   where
-    pointer = "See https://registry.npmjs.org/" <> renderPackageName name
+    pointer = "See " <> fromRight (captureRegistry <> "/" <> renderPackageName name) (packageUrl captureRegistry name)
     setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked BasePackedRead)))
     setup = do
         let Interned authorKey withKey = internName (decodedName "author") (testTable releaseUniqueFields)
