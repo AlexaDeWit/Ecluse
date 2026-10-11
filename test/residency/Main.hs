@@ -25,7 +25,6 @@ main =
         ["--metadata-evaluation-probe", path] -> packageMain probeEvaluation path
         ["--metadata-listing-probe", path] -> packageMain probeListing path
         ["--metadata-merge-probe", private, public, path] -> packageMain (probeMerge private public) path
-        ["--metadata-source-probe", mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain "npm" mode name version limit path
         ["--metadata-source-probe", ecosystem, mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain ecosystem mode name version limit path
         ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
         ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path

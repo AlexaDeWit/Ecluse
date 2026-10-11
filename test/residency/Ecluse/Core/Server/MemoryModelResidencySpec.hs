@@ -5,12 +5,15 @@
 -- | Corpus-authenticated metadata measurements in one child process per retained shape or listing.
 module Ecluse.Core.Server.MemoryModelResidencySpec (spec, sourceMain, selectedMain, probeIdentity, probeLimits) where
 
+import Prelude hiding (universe)
+
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Data.Universe.Class (universe)
 import GHC.Conc (getNumProcessors)
 import Test.Hspec
 import UnliftIO.Async (pooledMapConcurrentlyN)
@@ -19,25 +22,34 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Composition.MemoryPlan.Transient (meterStepBytes)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Package (PackageName, pkgEcosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataChargeFactors))
-import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille, cfOutputPermille))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, writeMergeDocuments)
+import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..), PeakLimits (..), Residency (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), SingleListing (..), measureInChild, packages, probeSelected, probeSource, requireResidency, writeMergeDocuments)
 import Ecluse.Core.Snapshot (digestBytes)
-import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CaptureRecord (crBytes, crSha256), CorpusPackage (cpPackage, cpPath), cpName, readCaptureRecords)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 
 -- | Reject unauthenticated captures, failed retention or release, and listings that outgrow admission charges.
 spec :: Spec
 spec = do
+    describe "metadata residency coverage" $
+        for_ universe $ \ecosystem ->
+            when (isJust (adapterFor ecosystem)) $
+                it ("covers registered adapter " <> show ecosystem) $ do
+                    record <- requireResidency ecosystem
+                    length (residencyPackages record) `shouldSatisfy` (> 0)
+                    map (pkgEcosystem . cpPackage) (residencyPackages record) `shouldSatisfy` all (== ecosystem)
+                    let limits = residencyPeakLimits record
+                    readPeakLimit limits `shouldSatisfy` (> 0)
+                    outputLimit limits `shouldSatisfy` (> 0)
+                    for_ [minBound .. maxBound] $ \shape -> residencyEnvelope record shape `shouldSatisfy` (> 0)
     describe "metadata retained heap" $ do
         it "includes an authenticated capture above the previous 3,687,514-byte maximum" $ do
             sizes <- traverse authenticate packages
@@ -53,8 +65,11 @@ spec = do
                             checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
     describe "listing peak heap" $ do
         it "keeps each regression limit below its charge" $
-            for_ [Npm, PyPI] $ \ecosystem ->
-                for_ ((,) <$> chargeFactors ecosystem <*> peakLimits ecosystem) $ \(factors, limits) -> do
+            for_ universe $ \ecosystem ->
+                for_ (adapterFor ecosystem) $ \adapter -> do
+                    record <- requireResidency ecosystem
+                    let factors = metadataChargeFactors (adapterMetadata adapter)
+                        limits = residencyPeakLimits record
                     readPeakLimit limits `shouldSatisfy` (< toInteger (cfFullReadPermille factors))
                     outputLimit limits `shouldSatisfy` (< toInteger (cfOutputPermille factors))
         forM_ packages $ \package -> it (toString (cpName package)) $ do
@@ -73,12 +88,13 @@ spec = do
                         peaks
                     listingSourceBytes peaks `shouldBe` size
                     listingBasisBytes peaks `shouldBe` size
-                    for_ (listingBounds package) $ \(factors, limits) -> do
-                        checkPaid factors peaks
-                        checkReadPeak limits peaks
-                        checkOutputCharge factors peaks
-                        checkOutputLimit limits peaks
-                    when (entryBelowSource (pkgEcosystem (cpPackage package))) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
+                    (record, factors) <- listingBounds package
+                    let limits = residencyPeakLimits record
+                    checkPaid factors peaks
+                    checkReadPeak limits peaks
+                    checkOutputCharge factors peaks
+                    checkOutputLimit limits peaks
+                    when (residencyEntryBelowSource record) (rise listingEntryLive listingBaseline peaks `shouldSatisfy` (< toInteger size))
                     singleDocumentLive single `shouldSatisfy` (> 0)
                     singleDocumentLive single `shouldSatisfy` (<= toInteger (singleDocumentCharge single))
     describe "merged listing peak heap" $ beforeAll measureMerges $ forM_ merges $ \(package, shape) ->
@@ -90,10 +106,11 @@ spec = do
                 Just (Right peaks) -> do
                     reportListing "metadata-merge" ["shape" .= (show shape :: Text)] package peaks
                     checkBasis shape size peaks
-                    for_ (listingBounds package) $ \(factors, limits) -> do
-                        checkPaid factors peaks
-                        checkOutputCharge factors peaks
-                        when (realisticShape shape) (checkOutputLimit limits peaks)
+                    (record, factors) <- listingBounds package
+                    let limits = residencyPeakLimits record
+                    checkPaid factors peaks
+                    checkOutputCharge factors peaks
+                    when (realisticShape shape) (checkOutputLimit limits peaks)
 
 merges :: [(CorpusPackage, MergeShape)]
 merges = [(package, shape) | package <- packages, shape <- [minBound .. maxBound]]
@@ -112,57 +129,26 @@ measureMerges = do
 
 checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
 checkMeasurement ecosystem shape size result = do
+    record <- requireResidency ecosystem
+    factors <- maybe (fail "residency ecosystem has no adapter") pure (chargeFactors ecosystem)
     let retained = toInteger (heldLive result) - toInteger (baselineLive result)
         residual = max 0 (toInteger (releasedLive result) - toInteger (baselineLive result))
     wireBytes result `shouldBe` size
     retained `shouldSatisfy` (> 0)
     residual `shouldSatisfy` (<= 16 * 1024)
     (10 * residual) `shouldSatisfy` (<= retained)
-    (1000 * retained) `shouldSatisfy` (<= envelopePermille ecosystem shape * toInteger size)
+    (1000 * retained) `shouldSatisfy` (<= residencyEnvelope record shape * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
-    when (shape == Shared) $ for_ (chargeFactors ecosystem) $ \factors -> do
+    when (shape == Shared) $ do
         (1000 * retained) `shouldSatisfy` (<= toInteger (cfFullReadPermille factors) * toInteger size)
         (2000 * toInteger (compactBytes result)) `shouldSatisfy` (<= toInteger (cfOutputPermille factors) * toInteger size)
-
--- Retained gates stay independent of admission. Shared entries must also fit the full-read charge.
-envelopePermille :: Ecosystem -> Shape -> Integer
-envelopePermille Npm Typed = 500
-envelopePermille Npm Shared = 1000
-envelopePermille PyPI Typed = 1750
-envelopePermille PyPI Shared = 3500
-envelopePermille _ shape = case shape of
-    Wire -> 1250
-    Raw -> 7000
-    Typed -> 2250
-    Shared -> 7500
 
 -- A fixed old generation and 128 KiB nursery sample live data at nearly every collection.
 majorSampling :: [String]
 majorSampling = ["+RTS", "-F1", "-A128k", "-RTS"]
 
--- Regression limits per source byte, in thousandths.
-data PeakLimits = PeakLimits
-    { readPeakLimit :: Integer
-    , outputLimit :: Integer
-    -- ^ Per byte of the output basis.
-    }
-
--- From one meter step up, limits round 1.08 times the measured maximum up to a quarter step.
-peakLimits :: Ecosystem -> Maybe PeakLimits
-peakLimits = \case
-    Npm -> Just PeakLimits{readPeakLimit = 1000, outputLimit = 1750}
-    PyPI -> Just PeakLimits{readPeakLimit = 2750, outputLimit = 1500}
-    RubyGems -> Nothing
-
--- PyPI's packed files and typed facts still outgrow their source, so only npm has this bound.
-entryBelowSource :: Ecosystem -> Bool
-entryBelowSource = \case
-    Npm -> True
-    PyPI -> False
-    RubyGems -> False
-
-listingBounds :: CorpusPackage -> Maybe (ChargeFactors, PeakLimits)
-listingBounds package = (,) <$> chargeFactors ecosystem <*> peakLimits ecosystem
+listingBounds :: CorpusPackage -> IO (Residency, ChargeFactors)
+listingBounds package = (,) <$> requireResidency ecosystem <*> maybe (fail "residency ecosystem has no adapter") pure (chargeFactors ecosystem)
   where
     ecosystem = pkgEcosystem (cpPackage package)
 
@@ -303,15 +289,9 @@ sourceMain rawEcosystem rawMode rawName rawVersion rawLimit path = do
 -- | Parse explicit ecosystem identities independently of capture filenames.
 probeIdentity :: String -> String -> String -> IO (PackageName, Version)
 probeIdentity ecosystem name version = do
-    (kind, parsed) <- case ecosystem of
-        "npm" -> pure (Npm, projectName (toText name))
-        "pypi" -> pure (PyPI, PyPI.projectName (toText name))
-        _ -> fail "probe ecosystem must be npm or pypi"
-    package <- either (fail . show) pure parsed
-    selected <- case kind of
-        PyPI -> maybe (fail "invalid PEP 440 probe version") pure (canonicalPep440 (toText version))
-        _ -> pure (mkVersion kind (toText version))
-    pure (package, selected)
+    kind <- maybe (fail "unknown probe ecosystem") pure (parseEcosystem (toText ecosystem))
+    record <- requireResidency kind
+    residencyIdentity record name version
 
 -- | Report selected or discard-control samples without treating unresolved growth as retention.
 selectedMain :: SelectedShape -> String -> String -> String -> String -> FilePath -> IO ()

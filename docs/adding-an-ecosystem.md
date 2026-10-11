@@ -328,14 +328,15 @@ To calibrate them:
 
 - Add the ecosystem to the residency tier as the metadata residency row of
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap,
-  read-peak and output limits.
+  read-peak and output limits. The tier requires a residency record for every registered adapter,
+  with non-empty captures and its own limits and envelopes.
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
 - Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports
   the read peak per source byte, the basis and the output working set per basis byte. Give
   `Ecluse.Test.Corpus.Subset` a cut for the ecosystem's document, as npm and PyPI have, so the
   probes can shape its captures. Give `Ecluse.Test.Corpus.Merge` the ecosystem's heavy-base text,
-  and an arm in its `keepVersions`, which cuts an ecosystem it does not name as npm.
+  and explicit arms in its `keepVersions` and `weighDown`.
 - Derive the read-peak and output limits by the rule in [Listing peaks](testing.md#listing-peaks),
   and add the captures to that section's tables.
 

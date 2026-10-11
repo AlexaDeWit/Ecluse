@@ -10,6 +10,10 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     Shape (..),
     Measurement (..),
     packages,
+    Residency (..),
+    PeakLimits (..),
+    residencyFor,
+    requireResidency,
     probe,
     Evaluated (..),
     probeEvaluation,
@@ -28,12 +32,15 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     probeSource,
 ) where
 
+import Prelude hiding (universe)
+
 import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Universe.Class (universe)
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats, getRTSStatsEnabled)
@@ -44,10 +51,11 @@ import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource), mergePackuments)
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata), adapterFor)
+import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
@@ -56,8 +64,11 @@ import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
+import Ecluse.Core.Registry.Npm.Project qualified as Npm
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
+import Ecluse.Core.Registry.WireSupport (Projection)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
@@ -65,7 +76,7 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..))
 import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
-import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -169,7 +180,65 @@ data HeapSample = HeapSample
 
 -- | Use the same complete package catalogue as the performance harnesses.
 packages :: [CorpusPackage]
-packages = corpusPackages <> pypiCorpusPackages
+packages = concatMap residencyPackages (mapMaybe residencyFor universe)
+
+-- | All mandatory measurements and probe hooks for one registered ecosystem.
+data Residency = Residency
+    { residencyPackages :: [CorpusPackage]
+    , residencyMetadata :: AdapterMetadata
+    , residencyUpstream :: CaptureUpstream
+    , residencyEnvelope :: Shape -> Integer
+    , residencyPeakLimits :: PeakLimits
+    , residencyEntryBelowSource :: Bool
+    , residencyLegacyProject :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
+    , residencyLegacyHeld :: PackageInfo -> Value -> Int -> ContentDigest -> Held
+    , residencyIdentity :: String -> String -> IO (PackageName, Version)
+    , residencyVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
+    }
+
+-- | Regression limits per source byte, in thousandths.
+data PeakLimits = PeakLimits
+    { readPeakLimit :: Integer
+    , outputLimit :: Integer
+    -- ^ Per byte of the output basis.
+    }
+
+-- | RubyGems has no registered adapter and stays outside the residency tier.
+residencyFor :: Ecosystem -> Maybe Residency
+residencyFor = \case
+    Npm ->
+        Just
+            Residency
+                { residencyPackages = corpusPackages
+                , residencyMetadata = adapterMetadata npmAdapter
+                , residencyUpstream = npmCaptureUpstream
+                , residencyEnvelope = \case Wire -> 1250; Raw -> 7000; Typed -> 500; Shared -> 1000
+                , residencyPeakLimits = PeakLimits 1000 1750
+                , residencyEntryBelowSource = True
+                , residencyLegacyProject = parsePackageInfoFromValue
+                , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
+                , residencyIdentity = \name version -> (,mkVersion Npm (toText version)) <$> either (fail . show) pure (Npm.projectName (toText name))
+                , residencyVersionList = readVersionList
+                }
+    PyPI ->
+        Just
+            Residency
+                { residencyPackages = pypiCorpusPackages
+                , residencyMetadata = adapterMetadata pypiAdapter
+                , residencyUpstream = pypiCaptureUpstream
+                , residencyEnvelope = \case Wire -> 1250; Raw -> 7000; Typed -> 1750; Shared -> 3500
+                , residencyPeakLimits = PeakLimits 2750 1500
+                , residencyEntryBelowSource = False
+                , residencyLegacyProject = projectSimpleIndexFromValue
+                , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
+                , residencyIdentity = \name version -> (,) <$> either (fail . show) pure (PyPI.projectName (toText name)) <*> maybe (fail "invalid PEP 440 probe version") pure (canonicalPep440 (toText version))
+                , residencyVersionList = \_ _ -> pure (Left "PyPI exposes no version-list-only read")
+                }
+    RubyGems -> Nothing
+
+-- | Missing residency wiring fails a probe instead of skipping its checks.
+requireResidency :: Ecosystem -> IO Residency
+requireResidency ecosystem = maybe (fail ("no metadata residency record for " <> toString (ecosystemName ecosystem))) pure (residencyFor ecosystem)
 
 -- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
 measureInChild :: (FromJSON a) => [String] -> CorpusPackage -> IO (Either String a)
@@ -199,9 +268,7 @@ corpusPackageAt path = maybe (fail "unknown metadata residency corpus path") pur
 probe :: Shape -> CorpusPackage -> IO Measurement
 probe shape package = measureRetained (prepare shape package)
 
-{- | Sample live bytes with the read result rooted as production holds it, then again after forcing it
-where it is rooted. Both samples share one heap layout, so only deferred work separates them.
--}
+-- | Compare the rooted read result before and after forcing in the same heap layout.
 probeEvaluation :: CorpusPackage -> IO Evaluated
 probeEvaluation package = do
     enabled <- getRTSStatsEnabled
@@ -227,9 +294,7 @@ prepareEntry package = do
 forceEntry :: StablePtr CacheEntry -> IO ()
 forceEntry root = deRefStablePtr root >>= void . forceShown
 
-{- | Read one capture as a public-only listing does, then render its served body. High-water marks
-come from major collections, so the caller runs this where most collections are major.
--}
+-- | Measure a public-only listing where most collections are major.
 probeListing :: CorpusPackage -> IO SingleListing
 probeListing package = do
     peaks <- probeReads [(GatedSource, cpPath package)] package
@@ -265,9 +330,7 @@ probeReads documents package = do
                     , listingPeak = samplePeakLive rendered
                     }
 
-{- | Read the capture again, and sample its entry before and after it drops the served document. A
-sample counts what the code still to run references, so both samples fall inside this function.
--}
+-- Both samples stay in this function so each counts only the entry fields still reachable.
 {-# NOINLINE documentLive #-}
 documentLive :: CorpusPackage -> IO (Integer, Int)
 documentLive package = do
@@ -305,7 +368,7 @@ prepareListingReads name documents = do
 {-# NOINLINE prepareListingRender #-}
 prepareListingRender :: Ecosystem -> [Contribution] -> IO (StablePtr ByteString, Int)
 prepareListingRender ecosystem sources = do
-    metadata <- maybe noRubyGemsCorpus (pure . adapterMetadata) (adapterFor ecosystem)
+    metadata <- residencyMetadata <$> requireResidency ecosystem
     plan <- maybe (fail "capture has no merge plan") pure (mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources])
     basis <- evaluate (outputBasisBytes plan sources)
     served <- either throwIO (evaluate . LBS.toStrict) (metadataSerialise metadata (assembleServedBody metadata syntheticProxyBase sources plan))
@@ -421,21 +484,16 @@ prepare shape package = do
 project :: CorpusPackage -> ByteString -> IO (PackageInfo, CachedDoc)
 project package bytes = (\manifest -> (manifestInfo manifest, manifestRaw manifest)) <$> readCapture package bytes
 
--- The production full read of a capture's held bytes, as a fetch from the capture's registry returns it.
 readCapture :: CorpusPackage -> ByteString -> IO Manifest
 readCapture package bytes = do
-    (metadata, upstream) <- maybe noRubyGemsCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
+    (metadata, upstream) <- maybe noResidencyCorpus pure (captureSource (pkgEcosystem (cpPackage package)))
     captureManifest metadata upstream (cpPackage package) [bytes] >>= either (fail . show) pure
 
--- Each ecosystem's adapter reads, and the registry its captures came from.
 captureSource :: Ecosystem -> Maybe (AdapterMetadata, CaptureUpstream)
-captureSource = \case
-    Npm -> Just (adapterMetadata npmAdapter, npmCaptureUpstream)
-    PyPI -> Just (adapterMetadata pypiAdapter, pypiCaptureUpstream)
-    RubyGems -> Nothing
+captureSource = fmap (\record -> (residencyMetadata record, residencyUpstream record)) . residencyFor
 
-noRubyGemsCorpus :: IO a
-noRubyGemsCorpus = fail "no RubyGems metadata residency corpus"
+noResidencyCorpus :: IO a
+noResidencyCorpus = fail "no metadata residency record"
 
 forceShown :: (Show a) => a -> IO Int
 forceShown value = evaluate (length (show value :: String))
@@ -507,34 +565,33 @@ prepareSource mode limits name version path =
                 root <- newStablePtr held
                 pure (Right (root, (bytes', compactBytes', count', digest')))
 
-{- | Read one source in a mode. A full read and the legacy read hash the source inside the measured
-read. The selected and version-list reads take no digest, so they return none.
--}
 readSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readSource mode limits name version next = case (pkgEcosystem name, mode) of
-    (RubyGems, _) -> pure (Left "no RubyGems source-read measurement")
-    (_, BufferedLegacy) -> readLegacySource limits name next
-    (_, BufferedCompact) -> boundedRead bound next >>= either (pure . Left . show) (fmap (fmap heldEntry) . readFull limits name . heldBody . one . snd)
-    (_, StreamedFull) -> fmap heldEntry <$> readFull limits name (sourceBody next)
-    (_, StreamedSelected) -> streamSelected limits name version next
-    (Npm, StreamedVersions) -> readJsonStream bound (versionListParser limits) (collectVersionList limits) emptyVersionList next <&> (first show >=> versionsResult)
-    (PyPI, StreamedVersions) -> pure (Left "PyPI exposes no version-list-only read")
+readSource mode limits name version next = do
+    record <- requireResidency (pkgEcosystem name)
+    case mode of
+        BufferedLegacy -> readLegacySource record limits name next
+        BufferedCompact -> boundedRead bound next >>= either (pure . Left . show) (fmap (fmap heldEntry) . readFull limits name . heldBody . one . snd)
+        StreamedFull -> fmap heldEntry <$> readFull limits name (sourceBody next)
+        StreamedSelected -> streamSelected limits name version next
+        StreamedVersions -> residencyVersionList record limits next
   where
     bound = MetadataBodyLimit (maxMetadataBytes limits)
+
+readVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
+readVersionList limits next = readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (versionListParser limits) (collectVersionList limits) emptyVersionList next <&> (first show >=> versionsResult)
+  where
     versionsResult streamed = do
         selected <- first show (streamValue streamed >>= finishVersionList)
         pure (HeldVersions selected, streamBytes streamed, Nothing)
 
--- | The production full read of a body, as a fetch from the capture's registry runs it.
 readFull :: Limits -> PackageName -> Body -> IO (Either Text CacheEntry)
 readFull limits name body = case captureSource (pkgEcosystem name) of
-    Nothing -> pure (Left "no RubyGems source-read measurement")
+    Nothing -> pure (Left "no metadata residency record")
     Just (metadata, upstream) -> bimap show manifestEntry <$> readManifest (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name body
 
--- | The production selected read of a source's chunks, which takes no digest.
 streamSelected :: Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
 streamSelected limits name version next = case captureSource (pkgEcosystem name) of
-    Nothing -> pure (Left "no RubyGems source-read measurement")
+    Nothing -> pure (Left "no metadata residency record")
     Just (metadata, upstream) ->
         bimap show (\selected -> (HeldSelected selected, vrBodyBytes selected, Nothing))
             <$> readVersion (metadataRead metadata) passthroughTracingPort (sourceTerms limits upstream) name version (sourceBody next)
@@ -549,21 +606,14 @@ manifestEntry manifest = CacheEntry (manifestInfo manifest) (manifestRaw manifes
 heldEntry :: CacheEntry -> (Held, Int, Maybe ContentDigest)
 heldEntry entry = (HeldShared entry, entryBodyBytes entry, Just (entryDigest entry))
 
-readLegacySource :: Limits -> PackageName -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readLegacySource limits name next = boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next <&> (first show >=> projectBody)
+readLegacySource :: Residency -> Limits -> PackageName -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
+readLegacySource record limits name next = boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next <&> (first show >=> projectBody)
   where
     projectBody (size, body) = do
-        (info, raw) <- first show (projectMetadata reference limits body)
+        (info, raw) <- first show (projectMetadata (residencyLegacyProject record name) limits body)
         let digest = digestOf body
-            held = case pkgEcosystem name of
-                PyPI -> HeldLegacy info raw
-                _ -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
-        pure (held, size, Just digest)
-    reference = case pkgEcosystem name of
-        PyPI -> projectSimpleIndexFromValue name
-        _ -> parsePackageInfoFromValue name
+        pure (residencyLegacyHeld record info raw size digest, size, Just digest)
 
--- | Force retained fields through their accounting traversal without rendering them.
 sourceSize :: Held -> Int
 sourceSize = \case
     HeldShared entry -> fromIntegral (weighCachedDoc (entryRaw entry)) + infoSize (entryInfo entry)
@@ -576,7 +626,6 @@ sourceSize = \case
   where
     infoSize = Map.foldl' (\total details -> total + weighVersion (untaggedRead (Just details))) 0 . infoVersions
 
--- | Return the compact structural charge and retained version count.
 sourceSummary :: Held -> (Int64, Int)
 sourceSummary = \case
     HeldShared entry -> (weighCachedDoc (entryRaw entry), Map.size (infoVersions (entryInfo entry)))
