@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic unit test for ci-gate-verdict.sh, the CI gate's verdict. The gate is the
-# branch-protection authority, so the one case that must never pass is a job that never
-# ran without a classifier filter behind it. Run via `task test-scripts`.
+# A skipped job without a classifier filter must fail. Run via `task test-scripts`.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,9 +24,9 @@ check() {
 all_pass=(
   CHANGES=success STATIC_CHECKS=success BUILD=success ALLOCATION=success COVERAGE=success CODECOV_NOTIFY=success
   DOCS=success E2E=success WEEDER=success STAN=success RELEASE_DRY_RUN=success
-  RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_BUILD=true
+  RELEASE_DRY_RUN_ASSEMBLE=success RELEASE_DRY_RUN_BOOT=success RELEASE_COMPARE=success RELEASE_BUILD=true
 )
-dry_run_skipped=(RELEASE_DRY_RUN=skipped RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped)
+release_skipped=(RELEASE_DRY_RUN=skipped RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped RELEASE_COMPARE=skipped)
 
 check "a code PR with every job green passes" 0 \
   "${all_pass[@]}" DOCS_ONLY=false
@@ -54,11 +52,11 @@ check "an unsent Codecov status fails behind green coverage" 1 \
 check "a skipped Codecov notify fails behind green coverage" 1 \
   "${all_pass[@]}" CODECOV_NOTIFY=skipped DOCS_ONLY=false
 
-check "a documentation-only PR passes with the Haskell jobs, notify, and the dry-run skipped" 0 \
+check "a documentation-only PR passes with the Haskell jobs, notify, and release jobs skipped" 0 \
   CHANGES=success STATIC_CHECKS=success \
   BUILD=skipped ALLOCATION=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
   DOCS=skipped E2E=skipped WEEDER=skipped STAN=skipped \
-  "${dry_run_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false
+  "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=false
 
 check "a failed classifier fails, so a broken filter never waves a PR through" 1 \
   "${all_pass[@]}" CHANGES=failure DOCS_ONLY=true
@@ -69,17 +67,17 @@ check "static-checks is never skippable, even on a documentation-only PR" 1 \
 check "a cancelled job fails" 1 \
   "${all_pass[@]}" STAN=cancelled DOCS_ONLY=false
 
-check "a source-only PR passes with the release dry-run skipped" 0 \
-  "${all_pass[@]}" "${dry_run_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=false
+check "a source-only PR passes with the release jobs skipped" 0 \
+  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=false
 
 check "a skipped dry-run fails when the change reaches the release build" 1 \
-  "${all_pass[@]}" "${dry_run_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=true
+  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=true
 
 check "a skipped dry-run fails when the classifier output is missing" 1 \
-  "${all_pass[@]}" "${dry_run_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=
+  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=false RELEASE_BUILD=
 
 check "the documentation-only filter never skips the dry-run on its own" 1 \
-  "${all_pass[@]}" "${dry_run_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=true
+  "${all_pass[@]}" "${release_skipped[@]}" DOCS_ONLY=true RELEASE_BUILD=true
 
 check "a failed dry-run fails" 1 \
   "${all_pass[@]}" RELEASE_DRY_RUN=failure RELEASE_DRY_RUN_ASSEMBLE=skipped RELEASE_DRY_RUN_BOOT=skipped
@@ -92,5 +90,29 @@ check "an image that fails to start fails" 1 \
 
 check "a skipped boot behind a green dry-run fails whatever the filter says" 1 \
   "${all_pass[@]}" RELEASE_DRY_RUN_BOOT=skipped RELEASE_BUILD=false
+
+check "an image mismatch fails the gate" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=failure
+
+check "a cancelled image comparison fails the gate" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=cancelled
+
+check "a skipped comparison after a failed rebuild fails the gate" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=skipped
+
+check "a skipped comparison after a failed dry-run fails the gate" 1 \
+  "${all_pass[@]}" RELEASE_DRY_RUN=failure RELEASE_COMPARE=skipped
+
+check "a skipped comparison fails when the classifier output is missing" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=skipped RELEASE_BUILD=
+
+check "the documentation-only filter never skips the comparison on its own" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=skipped DOCS_ONLY=true
+
+check "a missing comparison result fails the gate" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=
+
+check "a failed comparison is not excused by the release filter" 1 \
+  "${all_pass[@]}" RELEASE_COMPARE=failure RELEASE_BUILD=false
 
 exit "$fail"

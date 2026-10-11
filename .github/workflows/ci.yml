@@ -84,10 +84,8 @@ jobs:
       - name: Build every target, then residency, doctest, and cabal check
         run: nix develop .#ci --command task build test-residency doctest cabal-check
 
-      # Sole writer of the two cabal-side caches, and only from main. !cancelled()
-      # keeps the warm store when a later target fails: the deps built fine either way.
-      # The dist key ends in the commit, so each main run writes a new entry, except on
-      # a re-run whose entry the restore already found.
+      # Only this job writes the cabal caches, on main even if a later target fails.
+      # The commit-specific dist key gives each main run a new entry, except a rerun with a cache hit.
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -296,9 +294,8 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-    # The real OCI image, an nginx stub, and Verdaccio, driven by the real npm and pip
-    # clients. It is hermetic unlike smoke, so it gates. Drop it from the gate only as a
-    # last resort.
+    # Real npm and pip clients exercise the OCI image against an nginx stub and Verdaccio.
+    # This hermetic tier gates. Drop it from the gate only as a last resort.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -591,10 +588,8 @@ jobs:
       artifact-prefix: rebuild-
       sbom: false
 
-  # Report-only: absent from the gate's `needs`. A difference fails this job and the
-  # run, and `CI gate` stays green.
   release-compare:
-    name: Image comparison (${{ matrix.arch }}, report-only)
+    name: Image comparison (${{ matrix.arch }})
     needs: [release-dry-run, release-rebuild]
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 15
@@ -628,9 +623,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: bash scripts/image-archive.sh compare "first/image-${ARCH}.tar" "second/image-${ARCH}.tar"
 
-  # grype findings arrive with disclosure time, not with a change, so the scan runs
-  # nightly (and on dispatch) over the dry-run's SBOMs and never gates. !cancelled()
-  # keeps one architecture's scan when the other architecture's build failed.
+  # Nightly and dispatched grype scans cover the dry-run SBOMs without gating because disclosures change.
+  # !cancelled() keeps one architecture's scan when the other build fails.
   grype:
     name: Vulnerability scan (grype, report-only)
     needs: release-dry-run
@@ -680,7 +674,7 @@ jobs:
   gate:
     name: CI gate
     # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
-    # smoke, grype, and release-compare do not gate. Required contexts are in .agents/orchestration-strategy.md.
+    # smoke and grype do not gate. Required contexts are in .agents/orchestration-strategy.md.
     needs:
       - changes
       - build
@@ -695,6 +689,7 @@ jobs:
       - release-dry-run
       - release-dry-run-assemble
       - release-dry-run-boot
+      - release-compare
     if: always()
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
@@ -723,4 +718,5 @@ jobs:
           RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}
           RELEASE_DRY_RUN_ASSEMBLE: ${{ needs.release-dry-run-assemble.result }}
           RELEASE_DRY_RUN_BOOT: ${{ needs.release-dry-run-boot.result }}
+          RELEASE_COMPARE: ${{ needs.release-compare.result }}
         run: bash scripts/ci-gate-verdict.sh
