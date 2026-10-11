@@ -19,7 +19,7 @@ import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (.
 import Ecluse.Core.Registry.Json.Walk (FieldStep, Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.FileWriter (FileValue, FileWriter)
-import Ecluse.Core.Registry.PyPI.PendingSidecar (PendingSidecar (..))
+import Ecluse.Core.Registry.PyPI.PendingSidecar (readPendingSidecar)
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
@@ -148,10 +148,8 @@ selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = field
                     afterKey
             | otherwise -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
                 continue (collect table' memo file (HashesValue scalar)) afterValue
-        "core-metadata" -> case listedMember fields name of
-            Just (key, shape) -> readShape PendingSidecar shape Keep table value afterKey $ \pending table' afterValue ->
-                continue (collect table' memo file (FileScalar key pending)) afterValue
-            Nothing -> skipFrom value afterKey (continue (Selecting table memo file))
+        "core-metadata" -> readPendingSidecar budget hashes table value afterKey $ \pending table' afterValue ->
+            continue (collect table' memo file (FileScalar "core-metadata" pending)) afterValue
         _ -> case listedMember fields name of
             Just (key, shape) -> readShape Trees shape Keep table value afterKey $ \scalar table' afterValue ->
                 case collect table' memo file (FileScalar key scalar) of

@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Core.Registry.Json.Shape (Mode (Keep), Shape (ObjectWith, Scalar), Trees (..), knownMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
-import Ecluse.Core.Registry.PyPI.PendingSidecar (PendingSidecar (..))
+import Ecluse.Core.Registry.PyPI.PendingSidecar (readPendingSidecar)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks)
 
@@ -18,14 +18,15 @@ spec :: Spec
 spec = describe "PendingSidecar" $
     for_ declarations $ \body ->
         for_ [0 .. 3] $ \depth ->
-            it ("matches the eager tree for " <> decodeUtf8 body <> " at depth " <> show depth) $
+            it ("matches the eager tree for " <> show body <> " at depth " <> show depth) $
                 for_ [0 .. BS.length body] $ \split -> do
-                    let shape = ObjectWith depth (knownMembers ["sha256"] (Scalar (depth - 1))) (Scalar depth)
+                    let members = knownMembers ["sha256"] (Scalar (depth - 1))
+                        shape = ObjectWith depth members (Scalar depth)
                         table = testTable []
                         bound = MetadataBodyLimit (BS.length body)
                         chunks = filter (not . BS.null) [BS.take split body, BS.drop split body]
                         deferred tokens = withElement tokens $ \element rest ->
-                            readShape PendingSidecar shape Keep table element rest (\value _ _ -> Finished value)
+                            readPendingSidecar depth members table element rest (\value _ _ -> Finished value)
                         eager tokens = withElement tokens $ \element rest ->
                             readShape Trees shape Keep table element rest (\value _ _ -> Finished value)
                     readOutcome (walkJsonChunks bound deferred chunks) `shouldBe` readOutcome (walkJsonChunks bound eager chunks)
@@ -39,6 +40,13 @@ declarations =
     , "[]"
     , "{}"
     , "{\"sha256\":\"digest\"}"
+    , "{\"custom\":\"digest\"}"
+    , "{\"\":\"\"}"
+    , "{\"sha256\":\"digest\""
+    , "{\"\\u0073ha256\":\"digest\"}"
+    , "{\"\\uQQQQ\":\"digest\"}"
+    , "{\"sha256\":\"\x01\"}"
+    , "{\"sha256\":\"\xff\"}"
     , "{\"custom\":\"first\",\"sha256\":\"second\",\"other\":\"third\"}"
     , "{\"sha256\":null,\"sha256\":\"repair\"}"
     , "{\"sha256\":\"first\",\"sha256\":null}"
