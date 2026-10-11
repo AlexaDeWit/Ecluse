@@ -58,7 +58,7 @@ contractMain catalogue actions prerequisites = do
                 die $ T.unlines faults
 
 -- | Each completed group is persisted before the next acquisition begins.
-executeGroups :: Identity -> RunOptions -> [Group] -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO Report
+executeGroups :: ExecutionIdentity -> RunOptions -> [Group] -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO Report
 executeGroups executionIdentity options groups actions prerequisites = Exception.mask $ \restore -> do
     reportRef <- newIORef $ Report 1 executionIdentity shard (runRepeat options) [] [] (runSeed options) groups
     persist options =<< readIORef reportRef
@@ -170,7 +170,7 @@ auditFiles compiled path reportPaths = do
     unless (null faults) $ die $ T.unlines faults
     putTextLn "Every required group and case passed with matching execution identities."
 
-readIdentity :: Bool -> Bool -> Text -> IO Identity
+readIdentity :: Bool -> Bool -> Text -> IO ExecutionIdentity
 readIdentity forceRequired imageRequired planDigest = do
     explicit <- (== Just "1") <$> lookupEnv "ECLTEST_REQUIRED"
     ci <- (== Just "true") <$> lookupEnv "CI"
@@ -186,7 +186,7 @@ readIdentity forceRequired imageRequired planDigest = do
     runId <- field "ECLTEST_RUN_ID" "local"
     declaredDigest <- field "ECLTEST_PLAN_DIGEST" planDigest
     unless (declaredDigest == planDigest) $ die "plan digest differs from the selected catalogue"
-    pure $ Identity source image architecture planDigest runId
+    pure $ ExecutionIdentity source image architecture planDigest runId
 
 jsonLine :: (ToJSON a) => a -> ByteString
 jsonLine value = BL.toStrict (encode value) <> "\n"

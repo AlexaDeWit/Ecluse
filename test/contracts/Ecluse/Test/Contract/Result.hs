@@ -5,7 +5,7 @@
 -- | Execution evidence must cover the planned groups and cases exactly once.
 module Ecluse.Test.Contract.Result (
     Plan (..),
-    Identity (..),
+    ExecutionIdentity (..),
     Status (..),
     GroupResult (..),
     CaseResult (..),
@@ -38,7 +38,7 @@ instance ToJSON Plan where toJSON = genericToJSON (wire "plan")
 instance FromJSON Plan where parseJSON = genericParseJSON (wire "plan")
 
 -- | Reports from a different checkout, image, architecture, plan, or run cannot be combined.
-data Identity = Identity
+data ExecutionIdentity = ExecutionIdentity
     { identitySource :: Text
     , identityImage :: Text
     , identityArchitecture :: Text
@@ -47,8 +47,8 @@ data Identity = Identity
     }
     deriving stock (Eq, Show, Generic)
 
-instance ToJSON Identity where toJSON = genericToJSON (wire "identity")
-instance FromJSON Identity where parseJSON = genericParseJSON (wire "identity")
+instance ToJSON ExecutionIdentity where toJSON = genericToJSON (wire "identity")
+instance FromJSON ExecutionIdentity where parseJSON = genericParseJSON (wire "identity")
 
 -- | Only Passed contributes successful required coverage.
 data Status = Passed | Failed | Pending | SetupFailed | Cancelled | TimedOut
@@ -103,7 +103,7 @@ instance FromJSON CaseResult where parseJSON = genericParseJSON (wire "cr")
 -- | Repeat attempts have separate reports and never fill omissions in the primary partition.
 data Report = Report
     { reportSchemaVersion :: Int
-    , reportIdentity :: Identity
+    , reportIdentity :: ExecutionIdentity
     , reportShard :: Text
     , reportRepeat :: Bool
     , reportGroups :: [GroupResult]
@@ -156,7 +156,7 @@ auditSelection groups actualGroups actualCases =
     expectedCases = map fst ownership
 
 -- | Missing shard files, repeats, pending cases, and mismatched identities fail the primary audit.
-auditReports :: Identity -> Plan -> [Report] -> [Text]
+auditReports :: ExecutionIdentity -> Plan -> [Report] -> [Text]
 auditReports expected plan reports =
     ["unsupported plan schema" | planSchemaVersion plan /= 1]
         <> fromLeft [] (validateCatalogue $ planCatalogue plan)
@@ -181,7 +181,7 @@ auditReports expected plan reports =
                 (reportGroups report)
                 (reportCases report)
 
-identityFields :: Identity -> [(Text, Text)]
+identityFields :: ExecutionIdentity -> [(Text, Text)]
 identityFields executionIdentity =
     [ ("source", identitySource executionIdentity)
     , ("image", identityImage executionIdentity)

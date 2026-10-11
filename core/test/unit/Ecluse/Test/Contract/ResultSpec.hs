@@ -47,7 +47,7 @@ invalidReports =
     , ("does not replace a missing primary report with a repeat", [report{reportRepeat = True}])
     ]
 
-identityChanges :: [Identity]
+identityChanges :: [ExecutionIdentity]
 identityChanges =
     [ executionIdentity{identitySource = "other"}
     , executionIdentity{identityImage = "other"}

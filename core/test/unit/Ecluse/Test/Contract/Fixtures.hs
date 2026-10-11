@@ -30,8 +30,8 @@ item :: Case
 item = Case "example/read/identity" ["read/identity"]
 
 -- | All five execution identities are independently checked.
-executionIdentity :: Identity
-executionIdentity = Identity "source" "image" "architecture" "digest" "run"
+executionIdentity :: ExecutionIdentity
+executionIdentity = ExecutionIdentity "source" "image" "architecture" "digest" "run"
 
 -- | A complete primary report for the fixture catalogue.
 report :: Report
