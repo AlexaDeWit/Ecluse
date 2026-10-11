@@ -1,158 +1,73 @@
-name: Load test
-
-# Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
+# SPDX-FileCopyrightText: 2026 Alexandra DeWit
+# SPDX-License-Identifier: MIT
+name: Fixed RTT pairs for PR 1635 (diagnostic)
 on:
   workflow_dispatch:
-    inputs:
-      pod-shape:
-        description: "Proxy CPU-time quota and memory limit (2cpu means two CPUs' worth of time), or thrash for the GC-thrash probe"
-        type: choice
-        options:
-          - all
-          - unlimited
-          - 2cpu-1gib
-          - 4cpu-1gib
-          - 4cpu-2gib
-          - thrash
-        default: all
-      scenarios:
-        description: "Comma-separated scenario keys, such as npm/merge-cold,npm/herd (blank: every scenario)"
-        required: false
-      thrash-limits-mib:
-        description: "Memory limits in MiB the GC-thrash probe steps down through, highest first"
-        required: false
-        default: "2048,1536,1024,768,512"
-      duration-seconds:
-        description: "Seconds each scenario, or each ramp step, applies load"
-        required: false
-        default: "30"
-      concurrency:
-        description: "Concurrent connections oha holds open"
-        required: false
-        default: "100"
-      serve-max-in-flight:
-        description: "Maximum concurrent packument fetches (blank exercises the proxy's computed default, as a scheduled run does)"
-        required: false
-      payload-bytes:
-        description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 363520, about the median popular-package tarball)"
-        required: false
-  schedule:
-    - cron: "17 4 * * *"
-
-# One run per ref and pod-shape choice. Never cancel a scheduled or dispatched run mid-flight.
 concurrency:
-  group: bench-load-${{ github.ref }}-${{ inputs.pod-shape || 'all' }}
+  group: measure-1635-fixed-rtt-${{ github.ref }}
   cancel-in-progress: false
-
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
 permissions:
   contents: read
-
 env:
-  # Pin the cabal store to a deterministic, cacheable location, as the other Haskell jobs do.
   CABAL_DIR: ${{ github.workspace }}/.cabal
-  # The load knobs, from the dispatch inputs (defaulted for a scheduled run). They travel
-  # through the environment, never interpolated into a shell command, so a malformed value
-  # can only mis-size a measurement, never inject. Blank admission leaves the proxy's
-  # computed default in force, which is what an unconfigured deployment gets.
-  BENCH_LOAD_DURATION_SECONDS: ${{ inputs.duration-seconds || '30' }}
-  BENCH_LOAD_CONCURRENCY: ${{ inputs.concurrency || '100' }}
-  BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ inputs.serve-max-in-flight }}
-  BENCH_LOAD_PAYLOAD_BYTES: ${{ inputs.payload-bytes || '363520' }}
-  BENCH_LOAD_SCENARIOS: ${{ inputs.scenarios }}
+  MEASURE_CANDIDATE_SHA: 4008730ad590c81f897f736d1ab29c5731aee7b3
+  MEASURE_BASELINE_SHA: efece1f1fca410dc1d214dcc76a99f106e2a0ff7
+  BENCH_LOAD_POD: 4cpu-1gib
+  BENCH_LOAD_PROBE_RTT: "0"
+  BENCH_LOAD_UPSTREAM_LATENCY_MS: "5"
+  BENCH_LOAD_DURATION_SECONDS: "30"
+  BENCH_LOAD_CONCURRENCY: "100"
+  BENCH_LOAD_PAYLOAD_BYTES: "363520"
+  BENCH_LOAD_CACHE_MAX_ENTRIES: "3"
+  BENCH_LOAD_WORKING_SET: "64"
+  BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ""
+  BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST: ""
+  BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST: ""
+  BENCH_LOAD_THRASH_LIMITS_MIB: ""
   BENCH_LOAD_ISOLATE_OHA: "1"
-  # The proxy's own cgroups sit beside the harness under this directory (see the steps).
   BENCH_LOAD_CGROUP: /sys/fs/cgroup/ecluse-bench-load
-
+  BENCH_LOAD_SCENARIOS: npm/merge-cold,npm/herd,npm/ramp,npm/warm-under-cold,pypi/index-cold
 jobs:
   bench-load:
-    name: Load test (${{ matrix.pod-shape }}, inform-only)
+    name: Three sequential H/D pairs (diagnostic, not held to floors)
+    if: github.ref == 'refs/heads/measure/1635-fixed-rtt'
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-1gib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
-    env:
-      # The probe sets its own shape per step, so the shape here only matters for the passes.
-      BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
-      BENCH_LOAD_THRASH_LIMITS_MIB: ${{ matrix.pod-shape == 'thrash' && (inputs.thrash-limits-mib || '2048,1536,1024,768,512') || '' }}
-      # CPU-time quota in CPU equivalents, not GHC capabilities.
-      BENCH_LOAD_THRASH_CPUS: "2"
+    timeout-minutes: 180
     steps:
-      - name: Checkout
+      - name: Checkout measurement wrapper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
-
-      # Skipped on an exact cabal-store cache hit: the restored index already covers
-      # cabal.project's pinned index-state.
-      - name: Update package index
-        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
-        run: nix develop .#ci --command task update
-
-      - name: Build the harness
-        run: nix develop .#ci --command cabal build -v0 exe:bench-load
-
-      # The harness bounds each proxy with a cgroup of its own, so it needs a subtree it may
-      # write. Swap goes off, or a pod shape could page instead of meeting its limit.
-      - name: Delegate a cgroup subtree to the harness
+          dist-cache: "false"
+      - name: Checkout immutable candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.MEASURE_CANDIDATE_SHA }}
+          path: candidate
+          persist-credentials: false
+      - name: Checkout immutable baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.MEASURE_BASELINE_SHA }}
+          path: baseline
+          persist-credentials: false
+      - name: Build both executables and measure six passes
+        timeout-minutes: 160
+        env:
+          MEASURE_CABAL_CACHE_HIT: ${{ steps.toolchain.outputs.cabal-cache-hit }}
         run: |
           set -euo pipefail
-          sudo swapoff -a
-          sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
-          sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
-          echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
-          echo "controllers enabled for the proxy cgroups: $(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")"
-
-      # pipefail preserves the harness exit code through tee's output capture.
-      - name: Run load tests
-        run: |
-          set -eo pipefail
-          # This shell, and so the harness, joins the leaf beside the proxy cgroups.
-          echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
-          # oha is pinned to logical CPU 0. -N3 sets three GHC capabilities for the harness
-          # and scenario children via GHCRTS. It does not reserve CPUs or exclude CPU 0.
-          # Each proxy gets only -T and derives its own capabilities at boot.
-          nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
-
-      # Off main only: the runs on main are the baseline, and each pod shape takes the
-      # newest run that measured it. The GC-thrash probe has no scenario table to compare. A
-      # missing baseline renders as "no baseline". Both steps continue on error and stop after
-      # five minutes, so neither can fail or stall the job.
-      - name: Fetch the latest results on main for this pod shape
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        env:
-          GH_TOKEN: ${{ github.token }}
-          POD_SHAPE: ${{ matrix.pod-shape }}
-        run: bash scripts/perf-baseline.sh bench-load.yml "bench-load-results-$RUNNER_ARCH-$POD_SHAPE-" "$RUNNER_TEMP/perf-baseline"
-
-      - name: Compare successes and latency with main
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' && matrix.pod-shape != 'thrash' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task against-main KIND=load BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=bench-load-results.md | tee against-main.md
-
-      # Preserve partial output when the harness fails.
-      - name: Upload this run's results
+          mkdir -p fixed-rtt-results
+          nix develop .#ci --command bash scripts/measure-1635-fixed-rtt.sh 2>&1 | tee fixed-rtt-results/session.log
+      - name: Preserve every report and failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-load-results-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
-          path: |
-            bench-load-results.md
-            against-main.md
-          if-no-files-found: warn
+          name: measure-1635-fixed-rtt-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: fixed-rtt-results/
+          if-no-files-found: error
