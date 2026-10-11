@@ -2,8 +2,8 @@
 # Build first, then retain every sample from two balanced rotations on one runner.
 set -euo pipefail
 
-readonly main_revision=7f214208ea93a54584f0687bef6870d68f7ac8a8
-readonly native_revision=3cd3773270773a40389160f713271031b433f784
+readonly main_revision=b795016660d171db729bc773a9a8c495e38d3294
+readonly native_revision=854da92680eb61d5e2c4ac14fdd11549144c7cc6
 readonly implementations=(main native)
 readonly revisions=("$main_revision" "$native_revision")
 readonly rotations=('main native' 'native main')
