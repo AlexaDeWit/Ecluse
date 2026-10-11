@@ -52,17 +52,17 @@ spec = modifyMaxSuccess (const 2000) $ do
                 let sliced = T.drop 1 (T.dropEnd 1 ("\x1f600" <> text <> "\\"))
                     expected = toStrict (encodingToLazyByteString (Encoding.text text))
                     len = BS.length expected
-                    guarded = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
-                writtenString len (writeEncodedSized sliced len) === (len + 3, guarded)
-                writtenString len (writeEncoded sliced) === (len + 3, guarded)
+                    expectedBuffer = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
+                writtenString len (writeEncodedSized sliced len) === (len + 3, expectedBuffer)
+                writtenString len (writeEncoded sliced) === (len + 3, expectedBuffer)
 
         it "preserves the pinned writer's bytes for plain text, UTF-8, every control and escapes" $
             forM_ legacyStrings $ \(text, expected) -> do
                 let len = BS.length expected
-                    guarded = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
+                    expectedBuffer = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
                 encodedLength text `shouldBe` len
-                writtenString len (writeEncodedSized text len) `shouldBe` (len + 3, guarded)
-                writtenString len (writeEncoded text) `shouldBe` (len + 3, guarded)
+                writtenString len (writeEncodedSized text len) `shouldBe` (len + 3, expectedBuffer)
+                writtenString len (writeEncoded text) `shouldBe` (len + 3, expectedBuffer)
 
     describe "docTable" $ do
         it "renders each sliced string between adjacent offsets with unequal encoded lengths" $ do
