@@ -59,7 +59,10 @@ scenarios = describe "PyPI advisory policy through pip" $ do
             assertPipRefused e2e "flask" "1.19"
             assertDenial e2e "flask" "1.19" "BlockedByDefault" Nothing
 
-    it "quarantines a recent release when the raw advisory fix has a different spelling" $ \plane ->
+    it "quarantines a recent release when the raw advisory fix has a different spelling" $ \plane -> do
+        withPolicy ["advisory-deny" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]] plane $ \e2e -> do
+            assertPipRefused e2e "e2e-raw-fix" "1.18"
+            assertDenial e2e "e2e-raw-fix" "1.18" "DenyIfCve" (Just "GHSA-e2e-raw-fix")
         withPolicy [] plane $ \e2e -> do
             files <- advertisedFiles e2e "e2e-raw-fix"
             map fst files `shouldBe` [pypiWheelFor "e2e-raw-fix" "1.18"]
