@@ -2,25 +2,80 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Discovery must retain independently declared live and retention obligations.
+-- | Audit actual smoke and retention declarations without running their examples.
 module Ecluse.Test.Contract.MeasurementSpec (spec) where
 
 import Test.Hspec
+import Test.Hspec.Core.Spec (Item (itemRequirement), filterForest, mapSpecForest, mapSpecItem_)
 
-import Ecluse.Test.Contract.Catalogue (validateCatalogue)
-import Ecluse.Test.Contract.Measurement (measurementCatalogue)
-import Ecluse.Test.Contract.Types (Catalogue (catalogueGroups), Group (groupCases))
+import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmRetention
+import Ecluse.Core.Registry.NpmSmokeSpec qualified as NpmSmoke
+import Ecluse.Core.Registry.PyPI.ReaderResidencySpec qualified as PyPIRetention
+import Ecluse.Core.Registry.PyPISmokeSpec qualified as PyPISmoke
+import Ecluse.Test.Contract.Binding (labelledCaseIds)
+import Ecluse.Test.Contract.Catalogue (caseLabel, labelCaseId, validateCatalogue)
+import Ecluse.Test.Contract.Measurement (measurementCatalogue, measurementRegistration)
+import Ecluse.Test.Contract.Types (Case (Case), Catalogue, Group (groupCases, groupId), Tier (Residency, Smoke))
 
--- | Removing any registered case fails before acquiring a live service or a heap probe.
+-- | Deleting or corrupting an actual declaration must leave an unsatisfied obligation.
 spec :: Spec
 spec = describe "measurement catalogue" $ do
-    it "covers the production adapters and independent case obligations" $
-        validateCatalogue measurementCatalogue `shouldBe` Right measurementCatalogue
-    it "rejects every individually omitted group" $
-        for_ (catalogueGroups measurementCatalogue) $ \omitted ->
-            validateCatalogue measurementCatalogue{catalogueGroups = filter (/= omitted) (catalogueGroups measurementCatalogue)} `shouldSatisfy` isLeft
-    it "rejects every individually omitted case" $
-        for_ (catalogueGroups measurementCatalogue) $ \registeredGroup ->
-            for_ (groupCases registeredGroup) $ \omitted -> do
-                let replace original = if original == registeredGroup then original{groupCases = filter (/= omitted) (groupCases original)} else original
-                validateCatalogue measurementCatalogue{catalogueGroups = map replace (catalogueGroups measurementCatalogue)} `shouldSatisfy` isLeft
+    it "covers independent obligations with actual smoke and retention declarations" $ do
+        catalogue <- inspect registrations
+        validateCatalogue catalogue `shouldBe` Right catalogue
+    it "rejects every omitted provider registration" $
+        for_ registrations $ \(metadata, _) ->
+            reject (filter ((/= groupId metadata) . groupId . fst) registrations)
+    it "rejects deletion of each actual labelled example" $
+        forEachCase $ \provider identifier ->
+            reject (changeDeclaration provider (mapSpecForest (filterForest ((/= Just identifier) . labelCaseId . itemRequirement))))
+    it "rejects malformed labels on each actual example" $
+        forEachCase $ \provider identifier ->
+            reject (changeDeclaration provider (renameCase identifier "[malformed ID] example"))
+    it "rejects unknown labels on each actual example" $
+        forEachCase $ \provider identifier ->
+            reject (changeDeclaration provider (renameCase identifier (caseLabel ("unknown/" <> identifier) "example")))
+    it "rejects an added malformed label without erasing required examples" $
+        for_ registrations $ \(metadata, _) ->
+            reject (changeDeclaration (groupId metadata) (withExtraExample "[malformed ID] example"))
+    it "rejects an added unknown label without erasing required examples" $
+        for_ registrations $ \(metadata, _) ->
+            reject (changeDeclaration (groupId metadata) (withExtraExample (caseLabel "unknown/example" "example")))
+    it "rejects duplicate actual examples" $
+        for_ registrations $ \(metadata, _) ->
+            reject (changeDeclaration (groupId metadata) (\declaration -> declaration >> declaration))
+
+registrations :: [(Group, Spec)]
+registrations =
+    [ (measurementRegistration "retention/npm" "retention" "measurement/npm" Residency [] ["rts-stats", "serial-heap"] [], NpmRetention.spec)
+    , (measurementRegistration "retention/pypi" "retention" "measurement/pypi" Residency [] ["rts-stats", "serial-heap"] [], PyPIRetention.spec)
+    , (measurementRegistration "live/npm" "live-metadata" "measurement/npm" Smoke ["public-network"] [] [], NpmSmoke.spec)
+    , (measurementRegistration "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] [], PyPISmoke.spec)
+    ]
+
+inspect :: [(Group, Spec)] -> IO Catalogue
+inspect declarations = measurementCatalogue <$> traverse observed declarations
+  where
+    observed (metadata, declaration) = do
+        identifiers <- labelledCaseIds declaration
+        pure metadata{groupCases = [Case identifier [groupId metadata] | identifier <- identifiers]}
+
+reject :: [(Group, Spec)] -> Expectation
+reject declarations = inspect declarations >>= (\catalogue -> validateCatalogue catalogue `shouldSatisfy` isLeft)
+
+forEachCase :: (Text -> Text -> Expectation) -> Expectation
+forEachCase assertCase = for_ registrations $ \(metadata, declaration) ->
+    labelledCaseIds declaration >>= traverse_ (assertCase (groupId metadata))
+
+changeDeclaration :: Text -> (Spec -> Spec) -> [(Group, Spec)]
+changeDeclaration provider change =
+    [(metadata, if groupId metadata == provider then change declaration else declaration) | (metadata, declaration) <- registrations]
+
+renameCase :: Text -> String -> Spec -> Spec
+renameCase identifier replacement = mapSpecItem_ $ \item ->
+    if labelCaseId (itemRequirement item) == Just identifier then item{itemRequirement = replacement} else item
+
+withExtraExample :: String -> Spec -> Spec
+withExtraExample label declaration = do
+    declaration
+    it label (expectationFailure "declaration inspection must not execute examples")

@@ -900,8 +900,14 @@ test-suite ecluse-core-unit
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  hs-source-dirs:     core/test/unit
+  -- Extra roots supply declarations for coverage audits, not discovered executable examples.
+  hs-source-dirs:     core/test/unit test/smoke test/residency
   other-modules:
+    Ecluse.Core.Registry.NpmSmokeSpec
+    Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.Npm.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Json.WalkProbe
     Ecluse.Test.Contract.BindingSpec
     Ecluse.Test.Contract.CatalogueSpec
     Ecluse.Test.Contract.Fixtures
@@ -1126,14 +1132,17 @@ test-suite ecluse-core-unit
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , hspec             ^>=2.11
+    , hspec-core        ^>=2.11
     , hspec-hedgehog    ^>=0.3
     , http-client       ^>=0.7
+    , http-client-tls   >=0.3.6 && <0.5
     , http-types        ^>=0.12
     , iproute           ^>=1.7
     , katip             ^>=0.8.8
     , ram               ^>=0.22
     , network           ^>=3.2
     , primitive         ^>=0.9
+    , process           ^>=1.6
     , retry             ^>=0.9
     , exceptions        ^>=0.10
     , scientific        ^>=0.3

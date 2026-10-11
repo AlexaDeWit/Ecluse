@@ -27,3 +27,8 @@ spec = describe "labelledCaseIds" $ do
         labelledCaseIds body `shouldReturn` ["read/identity", "read/identity"]
     it "keeps native unlabelled cases outside the migrated inventory" $
         labelledCaseIds (it "native parser oracle" (pure () :: Expectation)) `shouldReturn` []
+    it "preserves malformed explicit labels for catalogue rejection" $
+        for_ ["[INVALID] identity", "[read/identity]", "[read/identity identity", "[] identity"] $ \label ->
+            labelledCaseIds (it label (pure () :: Expectation)) `shouldReturn` ["malformed:" <> toText label]
+    it "preserves unknown valid labels for obligation rejection" $
+        labelledCaseIds (it (caseLabel "unknown/identity" "identity") (pure () :: Expectation)) `shouldReturn` ["unknown/identity"]

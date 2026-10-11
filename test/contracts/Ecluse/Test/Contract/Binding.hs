@@ -11,8 +11,14 @@ import Test.Hspec.Core.Spec (Item (itemRequirement))
 
 import Ecluse.Test.Contract.Catalogue (labelCaseId)
 
--- | Read labels without running examples or hooks. Specifications must not acquire resources through runIO.
+-- | Inspect declarations, retaining malformed labels. Specifications must not acquire resources through runIO.
 labelledCaseIds :: SpecWith a -> IO [Text]
 labelledCaseIds spec = do
     (_, forest) <- evalSpec defaultConfig spec
-    pure $ concatMap (mapMaybe (labelCaseId . itemRequirement) . toList) forest
+    pure $ concatMap (mapMaybe (registeredId . itemRequirement) . toList) forest
+  where
+    registeredId label = case labelCaseId label of
+        Just identifier -> Just identifier
+        Nothing -> case label of
+            '[' : _ -> Just ("malformed:" <> toText label)
+            _ -> Nothing

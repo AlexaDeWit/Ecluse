@@ -137,9 +137,12 @@ Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves uniq
 
 ## Smoke and measurement
 
-`Ecluse.Test.Contract.Measurement` declares the migrated smoke and reader-retention groups.
+`Ecluse.Test.Contract.Measurement` holds independent obligations and provider metadata for the migrated smoke and reader-retention cases.
 Its independent obligation rows require every listed case before a live fetch or a heap probe can count as registered coverage.
-`MeasurementSpec` removes each case and group in turn and requires validation to fail.
+The core-unit `MeasurementSpec` reads the four actual npm/PyPI smoke and reader-retention declaration trees through `Binding.labelledCaseIds`.
+It checks their labels against independent obligations without executing network calls, fixture hooks, GC samples, or reader probes.
+Mutation controls delete each real provider or example and replace each case label with malformed or unknown text.
+Each mutation must fail validation. Genuine unlabelled native smoke examples remain outside the migrated inventory.
 `RegistrySmokeSpec` and `RetentionSpec` supply deliberately wrong observations to test the shared verdicts.
 
 | Original assertion | Replacement case IDs | Preserved conditions |

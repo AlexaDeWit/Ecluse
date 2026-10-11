@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pure discovery of migrated live and retention cases, without fetching or probing.
-module Ecluse.Test.Contract.Measurement (measurementCatalogue) where
+-- | Independent obligations and provider metadata for live and retention audits.
+module Ecluse.Test.Contract.Measurement (measurementCatalogue, measurementRegistration) where
 
 import Prelude hiding (universe)
 
@@ -13,9 +13,9 @@ import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Test.Contract.Types
 
--- | Native protocol checks remain in each case alongside its shared law.
-measurementCatalogue :: Catalogue
-measurementCatalogue =
+-- | Compare actual registrations with independent live and retention obligations.
+measurementCatalogue :: [Group] -> Catalogue
+measurementCatalogue registrations =
     Catalogue
         { catalogueProductionEcosystems = map ecosystemName (filter (isJust . adapterFor) universe)
         , catalogueProfiles =
@@ -52,42 +52,15 @@ measurementCatalogue =
                 ["live/npm/react", "live/npm/types-node", "live/npm/lodash", "live/npm/typescript"]
             , required "live/pypi" "measurement/pypi" "live-metadata" ["live/pypi/sampleproject"]
             ]
-        , catalogueGroups =
-            [ measurementGroup
-                "retention/npm"
-                "retention"
-                "measurement/npm"
-                Residency
-                []
-                ["rts-stats", "serial-heap"]
-                ( ["retention/npm/" <> mode <> "/" <> shape | mode <- ["selected", "full"], shape <- ["keys", "members", "dependencies"]]
-                    <> ["retention/npm/selected/containers"]
-                )
-            , measurementGroup
-                "retention/pypi"
-                "retention"
-                "measurement/pypi"
-                Residency
-                []
-                ["rts-stats", "serial-heap"]
-                ["retention/pypi/" <> item | item <- ["selected/containers", "selected/members", "selected/other-releases", "full/members", "full/past-limit"]]
-            , measurementGroup
-                "live/npm"
-                "live-metadata"
-                "measurement/npm"
-                Smoke
-                ["public-network"]
-                []
-                ["live/npm/" <> package | package <- ["react", "types-node", "lodash", "typescript"]]
-            , measurementGroup "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] ["live/pypi/sampleproject"]
-            ]
+        , catalogueGroups = registrations
         }
 
 required :: Text -> Text -> Text -> [Text] -> Obligation
 required identifier profile contract = Obligation identifier profile contract Supported (capabilities contract)
 
-measurementGroup :: Text -> Text -> Text -> Tier -> [Text] -> [Text] -> [Text] -> Group
-measurementGroup identifier contract profile tier prerequisites isolation cases =
+-- | Attach discovered case IDs to the provider's lifecycle and capability metadata.
+measurementRegistration :: Text -> Text -> Text -> Tier -> [Text] -> [Text] -> [Text] -> Group
+measurementRegistration identifier contract profile tier prerequisites isolation cases =
     Group identifier contract profile tier "measurement" [Case item [identifier] | item <- cases] (capabilities contract) prerequisites [] isolation
 
 capabilities :: Text -> [Text]
