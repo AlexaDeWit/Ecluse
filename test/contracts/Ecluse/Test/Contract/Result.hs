@@ -12,6 +12,7 @@ module Ecluse.Test.Contract.Result (
     Report (..),
     makePlan,
     auditReports,
+    auditFullReport,
     auditSelection,
 ) where
 
@@ -158,28 +159,42 @@ auditSelection groups actualGroups actualCases =
 -- | Missing shard files, repeats, pending cases, and mismatched identities fail the primary audit.
 auditReports :: ExecutionIdentity -> Plan -> [Report] -> [Text]
 auditReports expected plan reports =
-    ["unsupported plan schema" | planSchemaVersion plan /= 1]
-        <> fromLeft [] (validateCatalogue $ planCatalogue plan)
-        <> exact "plan partition" cataloguePartitions (planPartitions plan)
-        <> ["empty expected identity: " <> name | (name, value) <- identityFields expected, T.null value]
+    auditPlan expected plan
         <> exact "shard" (planPartitions plan) (map reportShard primary)
         <> concatMap reportProblems reports
         <> auditSelection groups (concatMap reportGroups primary) (concatMap reportCases primary)
   where
     groups = catalogueGroups $ planCatalogue plan
-    cataloguePartitions = Set.toAscList $ Set.fromList $ map groupPartition groups
     primary = filter (not . reportRepeat) reports
     reportProblems report =
-        ["unsupported report schema: " <> reportShard report | reportSchemaVersion report /= 1]
-            <> ["execution identity mismatch: " <> reportShard report | reportIdentity report /= expected]
-            <> ["unknown shard: " <> reportShard report | reportShard report `notElem` planPartitions plan]
-            <> [ "selected manifest mismatch: " <> reportShard report
-               | List.sortOn groupId (reportSelectedGroups report) /= List.sortOn groupId (filter ((== reportShard report) . groupPartition) groups)
-               ]
-            <> auditSelection
-                (filter ((== reportShard report) . groupPartition) groups)
-                (reportGroups report)
-                (reportCases report)
+        ["unknown shard: " <> reportShard report | reportShard report `notElem` planPartitions plan]
+            <> auditReportGroups expected (filter ((== reportShard report) . groupPartition) groups) report
+
+-- | A single primary report must cover the complete plan, regardless of partition assignments.
+auditFullReport :: ExecutionIdentity -> Plan -> Report -> [Text]
+auditFullReport expected plan report =
+    auditPlan expected plan
+        <> ["full-suite report must use shard all" | reportShard report /= "all"]
+        <> ["full-suite report cannot be a repeat" | reportRepeat report]
+        <> auditReportGroups expected (catalogueGroups $ planCatalogue plan) report
+
+auditPlan :: ExecutionIdentity -> Plan -> [Text]
+auditPlan expected plan =
+    ["unsupported plan schema" | planSchemaVersion plan /= 1]
+        <> fromLeft [] (validateCatalogue $ planCatalogue plan)
+        <> exact "plan partition" cataloguePartitions (planPartitions plan)
+        <> ["empty expected identity: " <> name | (name, value) <- identityFields expected, T.null value]
+  where
+    cataloguePartitions = Set.toAscList $ Set.fromList $ map groupPartition $ catalogueGroups $ planCatalogue plan
+
+auditReportGroups :: ExecutionIdentity -> [Group] -> Report -> [Text]
+auditReportGroups expected groups report =
+    ["unsupported report schema: " <> reportShard report | reportSchemaVersion report /= 1]
+        <> ["execution identity mismatch: " <> reportShard report | reportIdentity report /= expected]
+        <> [ "selected manifest mismatch: " <> reportShard report
+           | List.sortOn groupId (reportSelectedGroups report) /= List.sortOn groupId groups
+           ]
+        <> auditSelection groups (reportGroups report) (reportCases report)
 
 identityFields :: ExecutionIdentity -> [(Text, Text)]
 identityFields executionIdentity =

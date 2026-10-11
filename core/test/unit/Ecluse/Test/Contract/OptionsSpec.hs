@@ -17,6 +17,11 @@ spec = describe "parseCommand" $ do
         parseCommand ["--catalogue-plan"] `shouldBe` Right PrintPlan
     it "retains an audit with no reports so completeness rejects missing artifacts" $
         parseCommand ["--audit", "plan.json"] `shouldBe` Right (Audit "plan.json" [])
+    it "accepts exactly one full-suite report" $
+        parseCommand ["--audit-full", "plan.json", "report.json"] `shouldBe` Right (AuditFull "plan.json" "report.json")
+    it "rejects missing or extra full-suite reports" $ do
+        parseCommand ["--audit-full", "plan.json"] `shouldSatisfy` isLeft
+        parseCommand ["--audit-full", "plan.json", "first.json", "second.json"] `shouldSatisfy` isLeft
     it "passes exact selection and replay information" $
         parseCommand ["--group", "example/read", "--seed", "42", "--timeout", "60", "--report", "result.json"]
             `shouldBe` Right (Execute $ RunOptions emptySelection{selectionGroup = Just "example/read"} (Just "result.json") 42 (Just 60) False)

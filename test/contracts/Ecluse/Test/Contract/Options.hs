@@ -8,7 +8,7 @@ module Ecluse.Test.Contract.Options (Command (..), RunOptions (..), parseCommand
 import Ecluse.Test.Contract.Types
 
 -- | Discovery and audit never evaluate a registered specification.
-data Command = ListCatalogue | PrintPlan | SelectCatalogue Selection | Audit FilePath [FilePath] | Execute RunOptions
+data Command = ListCatalogue | PrintPlan | SelectCatalogue Selection | Audit FilePath [FilePath] | AuditFull FilePath FilePath | Execute RunOptions
     deriving stock (Eq, Show)
 
 -- | A timeout bounds a complete lifecycle, including acquisition and teardown.
@@ -26,6 +26,7 @@ parseCommand :: [String] -> Either Text Command
 parseCommand ["--catalogue-list"] = Right ListCatalogue
 parseCommand ["--catalogue-plan"] = Right PrintPlan
 parseCommand ("--catalogue-select" : arguments) = SelectCatalogue . runSelection <$> parseRun (RunOptions emptySelection Nothing 1 Nothing False) arguments
+parseCommand ["--audit-full", plan, report] = Right (AuditFull plan report)
 parseCommand ("--audit" : plan : reports) = Right (Audit plan reports)
 parseCommand arguments = Execute <$> parseRun (RunOptions emptySelection Nothing 1 Nothing False) arguments
 

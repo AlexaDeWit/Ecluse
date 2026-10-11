@@ -45,6 +45,7 @@ contractMain catalogue actions prerequisites = do
         PrintPlan -> BS.putStr $ jsonLine plan
         SelectCatalogue selection -> either (failRunner . T.unlines) (BS.putStr . jsonLine) $ selectGroups selection catalogue
         Audit path reportPaths -> auditFiles plan path reportPaths
+        AuditFull path reportPath -> auditFullFile plan path reportPath
         Execute options -> do
             groups <- either (failRunner . T.unlines) pure $ selectGroups (runSelection options) catalogue
             executionIdentity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
@@ -160,14 +161,27 @@ persist options report = forM_ (runReportPath options) $ \path -> do
 
 auditFiles :: Plan -> FilePath -> [FilePath] -> IO ()
 auditFiles compiled path reportPaths = do
-    bytes <- BS.readFile path
-    plan <- decodeFileBytes bytes
-    unless (plan == compiled) $ failRunner "downloaded plan differs from the compiled catalogue"
-    expected <- readIdentity True (usesProductImage plan) $ digest bytes
+    (plan, expected) <- loadAuditPlan compiled path
     reports <- traverse (BS.readFile >=> decodeFileBytes) reportPaths
     let faults = auditReports expected plan reports
     unless (null faults) $ failRunner $ T.unlines faults
     putTextLn "Every required group and case passed with matching execution identities."
+
+auditFullFile :: Plan -> FilePath -> FilePath -> IO ()
+auditFullFile compiled path reportPath = do
+    (plan, expected) <- loadAuditPlan compiled path
+    report <- BS.readFile reportPath >>= decodeFileBytes
+    let faults = auditFullReport expected plan report
+    unless (null faults) $ failRunner $ T.unlines faults
+    putTextLn "The full suite passed every required group and case with matching execution identities."
+
+loadAuditPlan :: Plan -> FilePath -> IO (Plan, ExecutionIdentity)
+loadAuditPlan compiled path = do
+    bytes <- BS.readFile path
+    plan <- decodeFileBytes bytes
+    unless (plan == compiled) $ failRunner "downloaded plan differs from the compiled catalogue"
+    expected <- readIdentity True (usesProductImage plan) $ digest bytes
+    pure (plan, expected)
 
 readIdentity :: Bool -> Bool -> Text -> IO ExecutionIdentity
 readIdentity forceRequired imageRequired planDigest = do
