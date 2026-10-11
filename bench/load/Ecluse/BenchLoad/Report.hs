@@ -69,8 +69,8 @@ renderReports section =
             <> rulePolicyLines c1Reports reports
             <> [ "### At a glance"
                , ""
-               , "| scenario | connections | successes | floor | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
-               , "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
+               , "| scenario | description | connections | successes | floor | refusals | transport failures | successful req/s | success p50 | success p99 | alloc / success (upper bound) | GC share | memory peak / max | ending |"
+               , "| --- | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |"
                ]
             <> map (glanceRow (floorOf Loaded)) reports
             <> [""]
@@ -150,7 +150,8 @@ glanceRow floorOf r =
         <> ") | "
         <> T.intercalate
             " | "
-            [ show (lsConnections load)
+            [ srDescription r
+            , show (lsConnections load)
             , show (lsSuccesses load) <> (if null (srSteps r) then "" else " (last step)")
             , floorCell r (floorOf (srName r))
             , show (lsRefusals load)
@@ -215,6 +216,8 @@ renderScenario :: ScenarioReport -> [Text]
 renderScenario r =
     [ "### " <> srName r
     , ""
+    , srDescription r
+    , ""
     , "| metric | value |"
     , "| --- | --- |"
     ]
@@ -227,7 +230,7 @@ renderScenario r =
         <> stepsTable (srSteps r)
         <> [maybe "" renderReplayTotals (srReplayTotals r), srEvidence r]
         <> maybe [] proxyDetail (srProxy r)
-        <> ["> " <> srDescription r, ""]
+        <> [""]
 
 loadRows :: LoadSummary -> [Text]
 loadRows l =

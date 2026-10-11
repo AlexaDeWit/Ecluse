@@ -30,30 +30,27 @@ import Data.Time (UTCTime)
 import Data.Universe.Class (Universe (universe))
 import Security.CVSS (cvssScore, parseCVSS)
 
+import Ecluse.Core.Cve (AdvisoryRange (..), affecting, packageAdvisories)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvExportDirectory)
 import Ecluse.Core.Osv.Epss (EpssScores, epssForIds)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise)
 import Ecluse.Core.Text (joinUrlPath)
-import Ecluse.Core.Version (parseVersionKey)
+import Ecluse.Core.Version (mkVersion, parseVersionKey, versionKey)
 
 -- | The OSV fields used to select and score active advisory evidence.
 data OsvAdvisory = OsvAdvisory
     { osvId :: Text
     , osvAliases :: Maybe [Text]
-    {- ^ The same vulnerability's identifiers in other databases. An npm advisory is
-    GHSA-keyed, so its CVE ids live here, and they are what the EPSS feed keys on.
-    -}
+    -- ^ EPSS joins a GHSA-keyed advisory through its CVE aliases.
     , osvAffected :: Maybe [OsvAffected]
     , osvSeverity :: Maybe [OsvSeverityEntry]
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     , osvWithdrawn :: Maybe UTCTime
     -- ^ A withdrawn record supplies no active evidence, even when it retains affected ranges.
     , osvModified :: Maybe Text
-    {- ^ When the source database last changed this record, as written. It is read where the
-    pass judges it, so a value no grammar accepts costs the date and not the record.
-    -}
+    -- ^ The source modification date as written. An unreadable date does not discard the record.
     }
     deriving stock (Show, Eq)
 
@@ -68,9 +65,7 @@ instance FromJSON OsvAdvisory where
             <*> v .:? "withdrawn"
             <*> v .:? "modified"
 
-{- | One entry of an advisory's @severity@ array: a scoring-system tag (@CVSS_V3@) and
-its value. For a CVSS system that value is the /vector string/, not a number.
--}
+-- | A severity system and its value. CVSS values contain a vector string.
 data OsvSeverityEntry = OsvSeverityEntry
     { sevType :: Text
     , sevScore :: Text
@@ -86,9 +81,7 @@ instance FromJSON OsvSeverityEntry where
 -- | The subset of an advisory's @database_specific@ block the pipeline consumes.
 newtype OsvDatabaseSpecific = OsvDatabaseSpecific
     { dbsSeverity :: Maybe Text
-    {- ^ The source database's qualitative severity label (for GHSA-sourced npm
-    advisories: @LOW@, @MODERATE@, @HIGH@, or @CRITICAL@).
-    -}
+    -- ^ The source's qualitative label, such as @HIGH@ or @CRITICAL@.
     }
     deriving stock (Show, Eq)
 
@@ -97,13 +90,12 @@ instance FromJSON OsvDatabaseSpecific where
         OsvDatabaseSpecific
             <$> v .:? "severity"
 
+-- | One package's range evidence and enumerated affected versions.
 data OsvAffected = OsvAffected
     { affectedPackage :: OsvPackage
     , affectedRanges :: Maybe [OsvRange]
     , affectedVersions :: Maybe [Text]
-    {- ^ Exact affected versions enumerated outside any range, each an affected point.
-    Much of the npm malware feed names the single bad version here with no @ranges@.
-    -}
+    -- ^ Exact affected points. Malware records can supply these without ranges.
     }
     deriving stock (Show, Eq)
 
@@ -114,6 +106,7 @@ instance FromJSON OsvAffected where
             <*> v .:? "ranges"
             <*> v .:? "versions"
 
+-- | The package identity as written by the OSV source.
 data OsvPackage = OsvPackage
     { packageName :: Text
     , packageEcosystem :: Text
@@ -126,6 +119,7 @@ instance FromJSON OsvPackage where
             <$> v .: "name"
             <*> v .: "ecosystem"
 
+-- | Bound events with a type tag. Only version-based types supply affected intervals.
 data OsvRange = OsvRange
     { rangeType :: Text
     , rangeEvents :: [OsvEvent]
@@ -138,9 +132,7 @@ instance FromJSON OsvRange where
             <$> v .: "type"
             <*> v .: "events"
 
-{- | One event in a range's ordered event list, carrying exactly one bound. @introduced@ opens
-the affected interval inclusively, @fixed@ closes it exclusively, and @last_affected@ inclusively.
--}
+-- | One bound event: @introduced@ and @last_affected@ are inclusive, @fixed@ is exclusive.
 data OsvEvent = OsvEvent
     { eventIntroduced :: Maybe Text
     , eventFixed :: Maybe Text
@@ -155,9 +147,7 @@ instance FromJSON OsvEvent where
             <*> v .:? "fixed"
             <*> v .:? "last_affected"
 
-{- | An artifact segment keyed by the ecosystem's canonical package name.
-A missing introduced bound means affected from the beginning.
--}
+-- | A canonical package segment. No introduced bound means affected from the beginning.
 data ExtractedOsv = ExtractedOsv
     { extPackage :: Text
     , extEcosystem :: Text
@@ -165,13 +155,9 @@ data ExtractedOsv = ExtractedOsv
     , extIntroduced :: Maybe Text
     , extUpperBound :: UpperBound
     , extSeverity :: Maybe Double
-    {- ^ The advisory's CVSS base score (0 to 10), carried onto each of its segments.
-    'Nothing' when the advisory is unscored, as much of the npm malware feed is.
-    -}
+    -- ^ CVSS base score (0 to 10), absent for unscored advisories.
     , extEpss :: Maybe Double
-    {- ^ The advisory's EPSS probability (0 to 1), carried onto each of its segments.
-    'Nothing' when the feed scores none of its identifiers.
-    -}
+    -- ^ EPSS probability (0 to 1), absent when the feed scores none of the identifiers.
     }
     deriving stock (Show, Eq)
 
@@ -201,9 +187,7 @@ ghsaSeverityCeiling label = case T.toUpper (T.strip label) of
     "CRITICAL" -> Just 10.0
     _ -> Nothing
 
-{- | Emit only active advisory segments, with canonical package keys and raw version bounds.
-Withdrawn records emit nothing. Unknown ecosystems keep their package spelling.
--}
+-- | Emit active rows, dropping orderable points covered by the same advisory. Unknown ecosystems retain every point.
 extractFromAdvisory :: EpssScores -> OsvAdvisory -> [ExtractedOsv]
 extractFromAdvisory scores adv = do
     guard (isNothing (osvWithdrawn adv))
@@ -211,7 +195,12 @@ extractFromAdvisory scores adv = do
     let pkg = affectedPackage aff
         eco = find ((== packageEcosystem pkg) . osvExportDirectory . osvEcosystemFor) universe
         name = maybe id canonicalise eco (packageName pkg)
-    Segment intro upper <- affectedSegments aff
+    let samePackage other =
+            let otherPkg = affectedPackage other
+             in packageEcosystem otherPkg == packageEcosystem pkg
+                    && maybe id canonicalise eco (packageName otherPkg) == name
+        ranges = concatMap rangeSegments (filter samePackage (fromMaybe [] (osvAffected adv)))
+    Segment intro upper <- affectedSegments eco ranges aff
     pure $
         ExtractedOsv
             { extPackage = name
@@ -223,22 +212,19 @@ extractFromAdvisory scores adv = do
             , extEpss = epss
             }
   where
-    -- Shared across every segment the advisory yields: both scores are a property of
-    -- the advisory, not of a segment.
     severity = advisorySeverity adv
-    -- The feed keys on CVE ids, and an npm row keys on the GHSA id, so the join runs
-    -- over the advisory's own id and its aliases together.
     epss = epssForIds scores (osvId adv : fromMaybe [] (osvAliases adv))
 
-{- | Does every bound this segment carries parse under the ecosystem's version grammar? A bound
-that does not leaves 'Ecluse.Core.Cve.affecting' matching every version, fail-closed.
--}
+-- | Whether every bound parses. Unorderable bounds cannot justify dropping an exact version.
 orderableBounds :: Ecosystem -> ExtractedOsv -> Bool
 orderableBounds eco = null . unorderableBounds eco
 
 -- | The bounds this segment carries that the ecosystem's version grammar cannot parse.
 unorderableBounds :: Ecosystem -> ExtractedOsv -> [Text]
-unorderableBounds eco osv = filter (not . parses) (catMaybes [extIntroduced osv, upperBound (extUpperBound osv)])
+unorderableBounds eco osv = unorderableSegmentBounds eco (Segment (extIntroduced osv) (extUpperBound osv))
+
+unorderableSegmentBounds :: Ecosystem -> Segment -> [Text]
+unorderableSegmentBounds eco (Segment introduced upper) = filter (not . parses) (catMaybes [introduced, upperBound upper])
   where
     parses = isRight . parseVersionKey eco
 
@@ -250,22 +236,30 @@ unorderableBounds eco osv = filter (not . parses) (catMaybes [extIntroduced osv,
 -- One affected interval: an inclusive lower bound and where it closes.
 data Segment = Segment (Maybe Text) UpperBound
 
--- OSV spells "affected from the beginning" as @introduced: "0"@, which semver rejects. Decoded here
--- to no lower bound. An enumerated version of @"0"@ is a version, not a sentinel, and never comes here.
+-- OSV's introduced "0" means no lower bound. An enumerated "0" remains a version.
 rangeSegment :: Maybe Text -> UpperBound -> Segment
 rangeSegment introduced = Segment (introduced >>= beyondTheBeginning)
   where
     beyondTheBeginning i = if i == "0" then Nothing else Just i
 
-affectedSegments :: OsvAffected -> [Segment]
-affectedSegments aff =
-    maybe [] (concatMap (extractRange . rangeEvents) . filter versionTyped) (affectedRanges aff)
-        <> maybe [] (map exactVersion) (affectedVersions aff)
+affectedSegments :: Maybe Ecosystem -> [Segment] -> OsvAffected -> [Segment]
+affectedSegments eco ranges aff =
+    rangeSegments aff <> [Segment (Just v) (LastAffected v) | v <- fromMaybe [] (affectedVersions aff), not (covered v)]
   where
-    exactVersion v = Segment (Just v) (LastAffected v)
+    covered = case eco of
+        Nothing -> const False
+        Just ecosystem ->
+            let orderable = filter (null . unorderableSegmentBounds ecosystem) ranges
+                rows = [AdvisoryRange "" Nothing introduced upper Nothing | Segment introduced upper <- orderable]
+                advisories = packageAdvisories ecosystem rows
+             in \v ->
+                    let version = mkVersion ecosystem v
+                     in isJust (versionKey version) && not (null (affecting advisories version))
 
-    -- Git commits are not version bounds. Treating them as unorderable versions would deny every release.
-    versionTyped :: OsvRange -> Bool
+rangeSegments :: OsvAffected -> [Segment]
+rangeSegments = maybe [] (concatMap (extractRange . rangeEvents) . filter versionTyped) . affectedRanges
+  where
+    -- Git commits are not version bounds and cannot cover an enumerated release.
     versionTyped r = T.toUpper (T.strip (rangeType r)) `elem` ["SEMVER", "ECOSYSTEM"]
 
 -- An introduced event closes an already-open interval as unbounded.

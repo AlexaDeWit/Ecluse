@@ -10,6 +10,7 @@ module Ecluse.BenchLoad.Patterns (
     ClientTrace (..),
     RequestTrace (..),
     patternName,
+    patternDescription,
     makeTrace,
     workingBytes,
 ) where
@@ -62,6 +63,17 @@ patternName = \case
     Zipf -> "pattern-zipf"
     Restart -> "pattern-restart"
     Scan -> "pattern-scan"
+
+-- | The client schedule and package overlap each replay family exercises.
+patternDescription :: Pattern -> Text
+patternDescription = \case
+    HotSet -> "Staggered clients repeatedly request the same package set. The run includes the first cold requests and later reuse."
+    ColdInstall -> "One client requests each selected package once, without repeats."
+    CiFleet -> "Staggered clients each request the same package sequence once, modelling CI builds with matching dependency lists."
+    Heterogeneous -> "Staggered clients each request a partly shared package list once. The overlap fraction sets the common packages. Each client's remaining packages are disjoint."
+    Zipf -> "Staggered clients sample packages with a Zipf distribution: higher-ranked packages receive more requests. The exponent controls skew, and the seed fixes the finite draws."
+    Restart -> "Clients arrive at fixed intervals into a fresh proxy with empty caches, each requesting the same package sequence once. No running proxy is restarted."
+    Scan -> "One client repeatedly scans the entire selected package set in order."
 
 -- | Reject impossible distinct-name counts and overlap before allocating the finite schedule.
 makeTrace :: Pattern -> PatternKnobs -> [Text] -> Either Text RequestTrace
