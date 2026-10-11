@@ -3,6 +3,36 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
+validate_raw_report() {
+  jq -e -s '
+    def counter: type == "number" and (tostring | test("^(0|[1-9][0-9]*)$"));
+    if length != 1 then error("expected one JSON report") else .[0] end
+    | if (.srRtsWindow | type) != "object" then error("missing allocation window") else . end
+    | if (.srRtsEnd | type) != "object" then error("missing closing RTS snapshot") else . end
+    | if (.srRtsWindow.rwAllocatedBytes | counter | not) then
+        error("rwAllocatedBytes must be a nonnegative integer") else . end
+    | if (.srRtsEnd.rsAllocatedBytes | counter | not) then
+        error("rsAllocatedBytes must be a nonnegative integer") else . end
+    | if ([.srLoad, .srCompanion, .srSteps[]?] | any(
+        . != null and ((.lsSuccesses // 0) > 0 or (.lsCompleted // 0) > 0 or (.lsTransportFailures // 0) > 0)))
+        and .srRtsWindow.rwAllocatedBytes == 0 then
+        error("zero window allocation despite measured work") else . end
+    | if .srRtsEnd.rsMaxHeapBytes != 905969664 or .srRtsEnd.rsCapabilities != 4
+        or .srRtsEnd.rsAllocAreaBytes != 33554432 then
+        error("closing RTS posture differs from the fixed pod settings") else . end
+    | {rwAllocatedBytes: .srRtsWindow.rwAllocatedBytes,
+       rsAllocatedBytes: .srRtsEnd.rsAllocatedBytes,
+       rsMaxHeapBytes: .srRtsEnd.rsMaxHeapBytes,
+       rsCapabilities: .srRtsEnd.rsCapabilities,
+       rsAllocAreaBytes: .srRtsEnd.rsAllocAreaBytes}
+  ' "$1"
+}
+
+if [[ "${1:-}" == --validate-raw-report ]]; then
+  validate_raw_report "${2:?expected a raw report path}"
+  exit 0
+fi
+
 [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/measure/1635-fixed-rtt ]]
 root="${GITHUB_WORKSPACE:?}"
 cd "$root"
@@ -39,6 +69,7 @@ done
   printf '%s\n' '# PR 1635 fixed RTT diagnostic' ''
   printf '%s\n' 'Six subset reports. Not held to success floors. The full acceptance criteria still apply.' ''
   printf '%s\n' 'Each pass preserves seven raw JSON reports, including exact total allocated bytes, ramp steps, and paired loads.' ''
+  printf '%s\n' 'The raw opening allocation counter is unavailable. The window delta and closing counter do not prove monotonicity.' ''
   printf 'Wrapper: %s\nCandidate: %s\nBaseline: %s\n' "$(git -C "$root" rev-parse HEAD)" "$MEASURE_CANDIDATE_SHA" "$MEASURE_BASELINE_SHA"
   printf 'Compiled sources: each original HEAD plus the identical Main observer, SHA-256 %s\n' "$observer_sha"
   printf 'Build flags: %s\n' "${build_flags[*]}"
@@ -186,16 +217,30 @@ for run in "${order[@]}"; do
     for raw_report in "${raw_reports[@]}"; do
       if [[ -s "$out/$run/raw/$raw_report" ]]; then
         sha256sum "$out/$run/raw/$raw_report"
+        if validate_raw_report "$out/$run/raw/$raw_report"; then
+          printf 'Validated allocation and closing posture: %s\n' "$raw_report"
+        else
+          printf 'CAPTUREFAILURE: invalid allocation report: %s\n' "$raw_report"
+          raw_failed=1
+        fi
       else
-        printf 'Missing or empty raw report: %s\n' "$raw_report"
+        printf 'CAPTUREFAILURE: missing or empty raw report: %s\n' "$raw_report"
         raw_failed=1
       fi
     done
     raw_count="$(find "$out/$run/raw" -type f -name '*.json' | wc -l)"
     printf 'Raw JSON reports: %s, expected 7\n' "$raw_count"
-    if [[ "$raw_count" != 7 ]]; then raw_failed=1; fi
-  } > "$out/$run/raw-capture-check.txt"
-  if [[ "$raw_failed" != 0 ]]; then failed=1; fi
+    if [[ "$raw_count" != 7 ]]; then
+      printf '%s\n' 'CAPTUREFAILURE: raw report count differs from seven'
+      raw_failed=1
+    fi
+  } > "$out/$run/raw-capture-check.txt" 2>&1
+  if [[ "$raw_failed" != 0 ]]; then
+    printf '%s\n' 'Raw capture: CAPTUREFAILURE' >> "$out/$run/status.txt"
+    failed=1
+  else
+    printf '%s\n' 'Raw capture: validated seven reports' >> "$out/$run/status.txt"
+  fi
   cat "$report" "$out/$run/status.txt" "$out/$run/settings-check.txt" "$out/$run/raw-capture-check.txt" >> "$summary"
   if ! verify_cleanup > "$out/$run/cleanup.txt"; then
     printf '%s\n' 'Cleanup failed. Remaining passes stay unrun to prevent overlapping proxies.' | tee -a "$out/$run/status.txt" "$summary"
