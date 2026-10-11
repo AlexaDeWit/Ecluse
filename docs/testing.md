@@ -592,11 +592,6 @@ The cases depend on uncontrolled external services, so an occasional failure is 
 and never blocks a merge. The CI `gate` does not depend on them. Treat a failure as a
 prompt to investigate (protocol drift or flakiness?), not a blocker. Run: `cabal test ecluse-smoke`.
 
-The telemetry Datadog check lives here too. With Datadog API credentials in the environment, it emits
-a uniquely stamped span and metric through the real export path. It then polls the Datadog API until
-they appear. It is secret-gated (skipped without credentials) and non-gating, so a Datadog outage or
-ingestion lag never blocks a merge. It is the only telemetry check that reaches the Datadog SaaS.
-
 The hermetic span and metric assertions run in `ecluse-integration`. A request drives an in-process
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
