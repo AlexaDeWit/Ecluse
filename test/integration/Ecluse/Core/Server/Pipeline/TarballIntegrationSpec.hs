@@ -522,7 +522,7 @@ headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)
 
 availabilitySpec :: Spec
 availabilitySpec = describe "deprecated public artifacts" $
-    for_ [("obsolete release line", 403), ("", 200)] $ \(notice, expected) ->
+    for_ [("obsolete release line" :: Text, 403), ("", 200)] $ \(notice, expected) ->
         it ("applies the typed deprecation flag before fetching, notice=" <> toString notice) $ do
             privateUp <- privateArtifactMiss
             let metadata base = packument [("1.0.0", withKeys ["deprecated" .= notice] (selfHostedVersion base "1.0.0"))] "1.0.0" [("1.0.0", publishedDaysAgo 30)]

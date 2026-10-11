@@ -637,7 +637,7 @@ etagOf = maybe (throwIO NoETag) pure . header "ETag"
 
 availabilitySpec :: Spec
 availabilitySpec = describe "admission-only deprecation policy" $
-    for_ [(False, "obsolete release line", 403), (False, "", 200), (True, "obsolete release line", 200)] $ \(stored, notice, expected) ->
+    for_ [(False, "obsolete release line" :: Text, 403), (False, "", 200), (True, "obsolete release line", 200)] $ \(stored, notice, expected) ->
         it ("serves deprecated stored=" <> show stored <> ", notice=" <> toString notice) $ do
             let version = withKeys ["deprecated" .= notice] (plainVersion "1.0.0")
                 metadata = encodePackument (packument [("1.0.0", version)] "1.0.0" [("1.0.0", publishedDaysAgo 30)])

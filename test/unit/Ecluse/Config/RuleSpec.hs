@@ -327,7 +327,7 @@ rulePolicySpec = describe "rulePolicySpec" $ do
                 `shouldBe` Right [atPrecedence defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
 
     describe "availability rule phases" $
-        for_ [("DenyIfYanked", DenyIfYanked), ("DenyIfDeprecated", DenyIfDeprecated)] $ \(ty, rule) ->
+        for_ [("DenyIfYanked" :: Text, DenyIfYanked), ("DenyIfDeprecated", DenyIfDeprecated)] $ \(ty, rule) ->
             it ("preserves, widens and disables " <> toString ty) $ do
                 let added = "{\"rules\":{\"availability\":{\"type\":\"" <> encodeUtf8 ty <> "\"}}}"
                     limited = RulePolicy (Map.singleton "availability" (admissionOnly (atPrecedence 300 rule)))
