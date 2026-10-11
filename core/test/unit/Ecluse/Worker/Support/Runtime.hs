@@ -63,7 +63,8 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishFault,
  )
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
+import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorInput, npmPublishDocument)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..), PublishPlan)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
@@ -87,22 +88,25 @@ data PublishLog = PublishLog
     { plDocuments :: [ByteString]
     -- ^ The verified tarball bytes, not the assembled publish document the codec renders.
     , plArtifacts :: [MirrorArtifact]
+    , plPublications :: [ByteString]
     , plPlans :: [PublishPlan]
-    -- ^ The version and release tag each write declared.
+    -- ^ The release tag each write declared.
     }
 
 -- | A log that has recorded nothing, so a new field never has to be spelled at every call site.
 emptyPublishLog :: PublishLog
-emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPlans = []}
+emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPublications = [], plPlans = []}
 
 -- | Record publications with a fixed outcome. The inventory probe answers @404@, a known-empty store.
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
         { mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
-        , mpPublishArtifact = \_ plan artifact document -> do
-            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPlans = plan : plPlans l}, ()))
-            pure outcome
+        , mpPrepareArtifact = \name version doc artifact -> do
+            input <- mkNpmMirrorInput name version doc artifact
+            pure $ PreparedMirror $ \plan document -> do
+                atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPublications = npmPublishDocument plan input document : plPublications l, plPlans = plan : plPlans l}, ()))
+                pure outcome
         }
 
 -- | 'recordingPublish' whose inventory probe __reports__ the given versions present at the mirror target, for the dedup and release-tag cases.

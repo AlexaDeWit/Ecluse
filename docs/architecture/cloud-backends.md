@@ -23,7 +23,10 @@ A separate worker receives jobs and, for each one:
    tarball-host gate. The worker drops a version refused since its serve-time admit: a new
    advisory, a raised floor, a withdrawn file. Such a version never freezes into the
    rule-exempt mirror.
-3. Fetches the artifact from the public upstream.
+3. Checks the native publication input against the admitted snapshot before fetching the artifact.
+   npm requires the complete one-tarball inventory, matching identity and artifact facts, and the
+   paired source version object. Missing or inconsistent input retires the job without a download
+   or write. The native writer accepts only this checked input.
 4. **Verifies its bytes against the re-admitted artifact's integrity digest**: npm
    `dist.integrity`, read from the current metadata. The queue payload carries no digest at all.
 5. Publishes to the mirror target and acknowledges the job. The publish document carries the

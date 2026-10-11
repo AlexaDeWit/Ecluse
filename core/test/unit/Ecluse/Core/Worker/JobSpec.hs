@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishPlan (ppLatest, ppMetadata),
+    PublishPlan (ppLatest),
     newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
@@ -55,16 +55,17 @@ import Ecluse.Core.Worker (
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
-import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail)
 import Ecluse.Worker.Support
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types.Status (status404)
+import Network.HTTP.Types.Status (status200, status404)
 
 spec :: Spec
 spec = do
@@ -274,8 +275,9 @@ spec = do
                 withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
                     job <- enqueueAndReceive queue (jobWith url)
                     runWM runtime (processJob job) `shouldReturn` Succeeded
-                    plans <- plPlans <$> readIORef logRef
-                    map ppMetadata plans `shouldBe` [admissionObject]
+                    publications <- plPublications <$> readIORef logRef
+                    decoded <- traverse decodeJsonOrFail publications
+                    map (\document -> fieldAt "versions" document >>= fieldAt "1.0.0" >>= fieldAt "marker") decoded `shouldBe` [Just (String "admission-time")]
 
         it "refuses, apart from a policy deny, a job whose re-admission carries no source version object, without publishing" $
             withUpstream $ \url ->
@@ -287,9 +289,7 @@ spec = do
                     plans <- plPlans <$> readIORef logRef
                     plans `shouldBe` []
 
-        it "reports the codec's own refusal of a carried document that is not an npm object as source-unavailable, not dropped" $
-            -- The type admits a document the npm codec cannot read, so its refusal is folded onto
-            -- the same outcome as the pre-plan one, and the write never leaves the codec.
+        it "reports invalid native source as source-unavailable before publication" $
             withUpstream $ \url ->
                 withStub status404 "" $ \mirror -> do
                     publish <- codecPublishAt (stubBaseUrl mirror)
@@ -299,6 +299,18 @@ spec = do
                         outcome `shouldSatisfy` isSourceUnavailable
                         outcome `shouldSatisfy` (not . isDropped)
                         -- The inventory probe reached the target; the write never did.
+                        written <- filter (== "PUT") . map capMethod <$> allCaptured mirror
+                        written `shouldBe` []
+
+        it "refuses malformed native source before downloading the artifact" $
+            withStub status200 (toLazy tarballBytes) $ \upstream ->
+                withStub status404 "" $ \mirror -> do
+                    publish <- codecPublishAt (stubBaseUrl mirror)
+                    let policies = npmPolicies (resolverCarrying (fst npmCached (String "not an object"))) [admitRule]
+                    withRuntimeRegistry (const publish) policies noopWorkerMetricsPort $ \runtime queue _ -> do
+                        queued <- enqueueAndReceive queue (jobWith (stubBaseUrl upstream))
+                        runWM runtime (processJob queued) >>= (`shouldSatisfy` isSourceUnavailable)
+                        allCaptured upstream `shouldReturn` []
                         written <- filter (== "PUT") . map capMethod <$> allCaptured mirror
                         written `shouldBe` []
 

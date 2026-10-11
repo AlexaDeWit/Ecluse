@@ -8,7 +8,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
-import Ecluse.Core.Registry.Publish (MirrorPublish (mpPublishArtifact))
+import Ecluse.Core.Registry.Publish (MirrorPublish (mpPrepareArtifact), PreparedMirror (..))
 import Ecluse.Core.Worker (
     Liveness (Liveness, liveHealthy, liveLastPoll),
     alwaysLive,
@@ -48,9 +48,11 @@ spec = do
                 let base = recordingPublish logRef (Right ())
                     snapshotOnPublish =
                         base
-                            { mpPublishArtifact = \p v art doc -> do
-                                lastPoll heartbeat >>= \snap -> modifyIORef' seen (snap :)
-                                mpPublishArtifact base p v art doc
+                            { mpPrepareArtifact = \p v doc art -> do
+                                prepared <- mpPrepareArtifact base p v doc art
+                                pure $ PreparedMirror $ \plan bytes -> do
+                                    lastPoll heartbeat >>= \snap -> modifyIORef' seen (snap :)
+                                    publishPrepared prepared plan bytes
                             }
                 queue <- newTestMemoryQueue
                 withWiredRuntimeHeartbeat heartbeat queue (withPublish snapshotOnPublish admitPolicies) noopWorkerMetricsPort $ \runtime -> do

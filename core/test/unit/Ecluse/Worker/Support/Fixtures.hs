@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The values the worker unit specs decide over: the stub upstream's tarball bytes and every
-digest computed from them, the job and version-snapshot fixtures, the npm re-evaluation policies,
-and the small predicates that read an outcome back.
-
-The digests come in matching and non-matching pairs, because the worker's tamper gate is the
-axis most of these specs vary. "Ecluse.Worker.Support.Runtime" holds the effectful doubles.
+{- | Worker policy and artifact fixtures shared by the unit specs.
+The runtime fixtures supply the queue and recording publication capability.
 -}
 module Ecluse.Worker.Support.Fixtures (
     -- * The stub upstream's bytes, and digests over them
@@ -90,7 +86,7 @@ import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..))
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, DenyByIdentity))
 import Ecluse.Core.Security (HostPort, Limits (maxMirrorArtifactBytes), defaultLimits)
@@ -290,7 +286,7 @@ unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
         { mpProbeMetadata = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
-        , mpPublishArtifact = \_ _ _ _ -> throwIO (TestContractEscape "unwiredPublish: publish consulted")
+        , mpPrepareArtifact = \_ _ _ _ -> Right (PreparedMirror (\_ _ -> throwIO (TestContractEscape "unwiredPublish: publish consulted")))
         }
 
 {- | The default admitting policy. The version resolves present and an always-admit rule

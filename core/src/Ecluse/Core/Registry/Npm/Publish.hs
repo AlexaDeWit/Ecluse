@@ -2,13 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm mirror publication through "Ecluse.Core.Registry.Publish", plus identity
-extraction for the first-party publish guard. Published SRI retains all alternatives
-at its strongest algorithm, matching the worker's verification contract. The published version
-object keeps what the author wrote and strips what the public registry issued about itself, and
-a plan whose version object is not an npm object is refused rather than reduced.
+{- | Native npm mirror input, publication, and the first-party identity guard.
+The checked input keeps publication fields paired with the admitted tarball.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
+    NpmMirrorInput,
+    mkNpmMirrorInput,
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
@@ -30,11 +29,12 @@ import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential, Secret, bareCredential)
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, Scope, hashAlg, hashValue, pkgEcosystem, pkgNamespace, renderPackageName)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
-    MirrorArtifact (maFilename, maHashes),
+    MirrorArtifact (maFilename, maHashes, maSize),
     PublishError (PublishError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     UrlFormationError,
@@ -42,11 +42,39 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
-import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
+import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Version (renderVersion)
+import Ecluse.Core.Version (Version, renderVersion)
+
+-- | A complete npm tarball inventory with its paired native publication fields.
+data NpmMirrorInput = NpmMirrorInput
+    { nmiName :: PackageName
+    , nmiVersion :: Version
+    , nmiArtifact :: MirrorArtifact
+    , nmiFields :: KeyMap Value
+    }
+    deriving stock (Eq, Show)
+
+-- | Refuse a mismatched identity, incomplete npm inventory, or missing native source before fetching bytes.
+mkNpmMirrorInput :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault NpmMirrorInput
+mkNpmMirrorInput name version doc admitted = do
+    unless (pkgEcosystem name == Npm && pkgName details == name && pkgVersion details == version) $
+        Left (PublishSourceUnavailable "the admitted snapshot belongs to another package or version")
+    case pkgArtifacts details of
+        artifact :| []
+            | artFilename artifact == unFilename (maFilename admitted)
+            , artHashes artifact == toList (maHashes admitted)
+            , artSize artifact == maSize admitted ->
+                pure ()
+        _ -> Left (PublishSourceUnavailable "the admitted descriptor does not cover the complete npm inventory")
+    raw <- maybeToRight (PublishSourceUnavailable "the resolver carried no source version object") (vdRaw doc)
+    fields <- authoredFields raw
+    pure (NpmMirrorInput name version admitted fields)
+  where
+    details = vdDetails doc
 
 -- | Probe an abbreviated packument and publish verified bytes with their strongest SRI alternatives.
 npmPublishCodec :: PublishCodec
@@ -54,28 +82,15 @@ npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
         , pcVersionListParser = Project.versionListParser
+        , pcPrepareInput = mkNpmMirrorInput
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
         }
 
-npmPublishRequestFor ::
-    Text ->
-    Maybe Secret ->
-    PackageName ->
-    PublishPlan ->
-    MirrorArtifact ->
-    ByteString ->
-    Either PublishFault Request
-npmPublishRequestFor targetUrl token name plan artifact bytes = do
-    document <-
-        npmPublishDocument
-            name
-            plan
-            (unFilename (maFilename artifact))
-            (strongestSriValue artifact)
-            (firstHashValue SHA1 artifact)
-            bytes
-    first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
+npmPublishRequestFor :: Text -> Maybe Secret -> PublishPlan -> NpmMirrorInput -> ByteString -> Either PublishFault Request
+npmPublishRequestFor targetUrl token plan input bytes =
+    first (PublishFetch . FetchUrlUnformable) $
+        publishRequest targetUrl (bareCredential <$> token) (nmiName input) (npmPublishDocument plan input bytes)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do
@@ -101,25 +116,10 @@ publishRequest baseUrl credential name document = do
     url <- packageUrl baseUrl name
     jsonPutRequest credential url document
 
-{- | Assemble one version from the plan's metadata, under local authority for the name, version,
-and verified @dist@ fields. The declared @latest@ is the plan's: a registry left to choose can retag.
--}
-npmPublishDocument ::
-    PackageName ->
-    PublishPlan ->
-    -- | The tarball's filename: the @_attachments@ key and tarball file segment.
-    Text ->
-    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-..."@).
-    Maybe Text ->
-    -- | The @dist.shasum@ (SHA-1, hex), if known.
-    Maybe Text ->
-    -- | The verified tarball bytes.
-    ByteString ->
-    Either PublishFault ByteString
-npmPublishDocument name plan filename integrity shasum tarball = do
-    authored <- authoredFields (ppMetadata plan)
-    let manifest = versionManifestObject rendered versionText (distObject filename integrity shasum (objectAt "dist" authored)) authored
-    pure . toStrict . Aeson.encode $
+-- | Preserve native source fields while replacing identity, attachment controls, and verified distribution facts.
+npmPublishDocument :: PublishPlan -> NpmMirrorInput -> ByteString -> ByteString
+npmPublishDocument plan input tarball =
+    toStrict . Aeson.encode $
         object
             [ "_id" .= rendered
             , "name" .= rendered
@@ -128,8 +128,13 @@ npmPublishDocument name plan filename integrity shasum tarball = do
             , "_attachments" .= object [Key.fromText filename .= attachmentObject tarball]
             ]
   where
-    versionText = renderVersion (ppVersion plan)
-    rendered = renderPackageName name
+    artifact = nmiArtifact input
+    filename = unFilename (maFilename artifact)
+    authored = nmiFields input
+    dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (objectAt "dist" authored)
+    manifest = versionManifestObject rendered versionText dist authored
+    versionText = renderVersion (nmiVersion input)
+    rendered = renderPackageName (nmiName input)
 
 -- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
 authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)

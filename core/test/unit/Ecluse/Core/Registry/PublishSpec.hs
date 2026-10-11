@@ -21,10 +21,11 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpProbeMetadata, mpPublishArtifact),
+    MirrorPublish (mpPrepareArtifact, mpProbeMetadata),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
+    PreparedMirror (publishPrepared),
     PublishCodec (..),
-    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
 import Ecluse.Core.Registry.VersionList (VersionListItem (VersionListObject))
@@ -32,7 +33,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooL
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
-import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
 import Ecluse.Test.Stub (
     Captured (capPath),
     Stub,
@@ -43,6 +44,7 @@ import Ecluse.Test.Stub (
     withRoutedStub,
     withStub,
  )
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -62,7 +64,7 @@ spec = do
         it "mints the bearer per publish and attaches it to the wire" $
             withStub status200 "{}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
-                _ <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
+                _ <- publishFixture publish
                 captured <- lastCaptured stub
                 headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
                 minted <- readIORef mints
@@ -75,7 +77,7 @@ spec = do
 
         it "reports an unformable publish URL as a PublishFault value, never thrown" $ do
             publish <- publishAt ""
-            outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
+            outcome <- publishFixture publish
             outcome `shouldSatisfy` isUrlUnformablePublish
 
         it "reports a probe transport failure as a FetchTransport value, never thrown" $ do
@@ -110,23 +112,22 @@ spec = do
                             , ptLimits = defaultLimits{maxMetadataBytes = 16}
                             }
                     publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
+                outcome <- publishFixture publish
                 outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
-            -- The shared single attach point pins redirectCount 0, so a credential-bearing probe
-            -- never follows a redirect.
             case pcProbeRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd of
                 Left err -> fail ("expected a formed probe request, got " <> show err)
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
-        it "the publish request attaches the bearer at the single attach point with redirects disabled" $
-            case pcPublishRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd planV1 dummyArtifact "bytes" of
-                Left err -> fail ("expected a formed publish request, got " <> show err)
-                Right request -> do
+        it "the publish request attaches the bearer with redirects disabled" $
+            case npmPublishCodec of
+                PublishCodec{pcPrepareInput, pcPublishRequest} -> do
+                    input <- expectRight (pcPrepareInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
+                    request <- expectRight (pcPublishRequest "https://mirror.test" (Just (mkSecret "tok")) planV1 input "bytes")
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
@@ -142,7 +143,7 @@ spec = do
         it "refuses to chase a redirect on the write leg, where the bearer rides" $
             withRoutedStub (redirectFrom "/write") $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
+                _ <- publishFixture publish
                 servedPaths stub `shouldReturn` ["/write"]
 
         it "identifies the proxy on the wire, whatever headers the codec set" $
@@ -159,16 +160,21 @@ unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcVersionListParser = const (pure VersionListObject)
-        , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
+        , pcPrepareInput = \_ _ _ _ -> Right ()
+        , pcPublishRequest = \targetUrl _token _plan () _bytes ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = const (Right ())
         }
   where
     unsealed url = maybe (Left (UnparseableUrl url)) Right (Client.parseRequest (toString url))
 
--- One write of @1.0.0@ declaring itself latest, the shape these transport cases do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
+planV1 = PublishPlan{ppLatest = v1_0_0}
+
+publishFixture :: MirrorPublish -> IO (Either PublishFault ())
+publishFixture publish = do
+    prepared <- expectRight (mpPrepareArtifact publish isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
+    publishPrepared prepared planV1 "bytes"
 
 unsealedPublishAt :: Stub -> IO MirrorPublish
 unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)

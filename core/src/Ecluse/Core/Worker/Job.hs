@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Deciding one mirror job: probe the mirror target, re-run current policy, fetch, verify, and
-publish. Every step reports its verdict as a 'JobOutcome' value, which
-"Ecluse.Core.Worker.Realise" realises at the queue handle.
-
-The receipt is held for the whole job by the lease controller ("Ecluse.Core.Worker.Lease"), so
-nothing here touches the queue. Nothing here acks either: a transient failure simply reports
-'Retried', and the un-acked message redelivers.
+{- | Decide mirror admission, preparation, integrity, and publication outcomes.
+The lease controller owns the receipt, and "Ecluse.Core.Worker.Realise" applies queue outcomes.
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
@@ -48,15 +43,15 @@ import Ecluse.Core.Registry (
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
-    VersionDoc (vdDetails, vdRaw),
+    VersionDoc (vdDetails),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     versionTransience,
  )
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpProbeMetadata, mpPublishArtifact),
-    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    MirrorPublish (mpPrepareArtifact, mpProbeMetadata),
+    PreparedMirror (publishPrepared),
+    PublishPlan (PublishPlan, ppLatest),
  )
 import Ecluse.Core.Rules.Render (renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
@@ -203,12 +198,11 @@ probeParseReason job detail =
         <> detail
         <> "); refusing to publish a release tag chosen without it"
 
-{- What re-evaluation settled for one job: the descriptor the gate re-admitted, the upstream's own
-release tag, and the version object current metadata carried, all read from the one fetch. -}
+-- Native preparation binds publication to the same snapshot the gate admitted.
 data Readmitted = Readmitted
     { raArtifact :: MirrorArtifact
     , raUpstreamLatest :: Maybe Version
-    , raMetadata :: CachedDoc
+    , raPrepared :: PreparedMirror
     }
 
 {- Re-check the fetch URL against the mount's tarball-host gate, because the queue payload is a
@@ -241,11 +235,11 @@ admitEvaluation policy job evaluation = case evaluation of
         -- is not resolved for its context.
         ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
         admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) (vdDetails doc))
-        pure $ do
-            artifact <- outcomeOfAdmission job admission
-            -- Decided after admission, so a policy deny still reports as one.
-            raw <- maybeToRight (SourceUnavailable (sourceUnavailableReason job "the resolver carried none")) (vdRaw doc)
-            pure Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raMetadata = raw}
+        case outcomeOfAdmission job admission of
+            Left outcome -> pure (Left outcome)
+            Right artifact -> case mpPrepareArtifact (wpPublish policy) (jobPackage job) (jobVersion job) doc artifact of
+                Left fault -> Left <$> outcomeOfPublish job (Left fault)
+                Right prepared -> pure (Right Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raPrepared = prepared})
   where
     unresolved = retryOrDrop (versionTransience evaluation)
 
@@ -321,24 +315,22 @@ mirrorLatest upstreamLatest inventory published =
 version latest merely by finishing last. -}
 publishAdmitted :: WorkerPolicy -> MirrorJob -> [Version] -> Readmitted -> WorkerM JobOutcome
 publishAdmitted policy job inventory readmitted =
-    mirrorArtifact policy job plan (raArtifact readmitted)
+    mirrorArtifact policy job plan (raPrepared readmitted) (raArtifact readmitted)
   where
     plan =
         PublishPlan
-            { ppVersion = jobVersion job
-            , ppLatest = mirrorLatest (raUpstreamLatest readmitted) inventory (jobVersion job)
-            , ppMetadata = raMetadata readmitted
+            { ppLatest = mirrorLatest (raUpstreamLatest readmitted) inventory (jobVersion job)
             }
 
-mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> WorkerM JobOutcome
-mirrorArtifact policy job plan admitted = do
+mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirror -> MirrorArtifact -> WorkerM JobOutcome
+mirrorArtifact policy job plan prepared admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
     fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) (jobArtifactUrl job)
     case fetched of
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and the realisation
         -- half logs the reason at the queue handle.
         Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason job) fault)
-        Right bytes -> publishIfIntact policy job plan admitted bytes
+        Right bytes -> publishIfIntact job plan prepared admitted bytes
 
 -- The client's rendered exception would print the request path, query, and headers, so a
 -- transport reason names only the authority and the cause.
@@ -350,21 +342,19 @@ artifactFetchReason job = \case
 
 -- A tampered artifact must never reach the private upstream, which later serves it without the
 -- rules, so the bytes are verified against the re-admitted digests before any publish.
-publishIfIntact :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishIfIntact policy job plan admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
+publishIfIntact :: MirrorJob -> PublishPlan -> PreparedMirror -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
+publishIfIntact job plan prepared admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
     IntegrityMismatch detail -> do
         logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
         pure (Dropped ("integrity mismatch: " <> detail))
-    IntegrityVerified -> publishVerified policy job plan admitted bytes
+    IntegrityVerified -> publishVerified job plan prepared bytes
 
 -- Publish already-verified bytes to the mirror target. The publish document is assembled from the
 -- re-admitted descriptor, so no queue-payload text reaches the trusted-tier packument.
-publishVerified :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishVerified policy job plan admitted bytes = do
+publishVerified :: MirrorJob -> PublishPlan -> PreparedMirror -> ByteString -> WorkerM JobOutcome
+publishVerified job plan prepared bytes = do
     metrics <- asks wrMetrics
-    -- The publish is the long, network-bound step. Time it for the publish-latency
-    -- histogram whichever way the registry responds.
-    (result, seconds) <- timedSeconds (liftIO (mpPublishArtifact (wpPublish policy) (jobPackage job) plan admitted bytes))
+    (result, seconds) <- timedSeconds (liftIO (publishPrepared prepared plan bytes))
     liftIO (wmpMirrorPublishDuration metrics seconds)
     outcomeOfPublish job result
 

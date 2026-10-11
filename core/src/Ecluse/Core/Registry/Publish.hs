@@ -2,16 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-write capability: a shared transport, an adapter-provided protocol codec, and the
-married 'MirrorPublish' handle a worker bundle carries. A new ecosystem contributes a codec and
-never a transport.
-
-The transport mints the bearer per call and re-seals every request, so no codec can ship a write
-that follows a redirect.
+{- | Bind a native mirror codec to the shared bounded transport.
+Native preparation runs before artifact download, and every request disables redirects.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * What one write declares
     PublishPlan (..),
+    PreparedMirror (..),
 
     -- * The adapter's protocol codec
     PublishCodec (..),
@@ -39,44 +36,33 @@ import Ecluse.Core.Registry (
     PublishFault (PublishFetch),
     UrlFormationError,
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
+import Ecluse.Core.Registry.Metadata (VersionDoc)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
-{- | What one mirror write declares: the version, the release tag the store must carry once it
-lands, and the version's own metadata. The caller decides the tag, so no codec derives one.
--}
-data PublishPlan = PublishPlan
-    { ppVersion :: Version
-    -- ^ The version these bytes publish.
-    , ppLatest :: Version
-    -- ^ Always a version the store holds after this write, the published one when it is alone.
-    , ppMetadata :: CachedDoc
-    -- ^ Supported source fields paired with the release admitted for mirroring.
+-- | The release tag the target must carry after publication.
+newtype PublishPlan = PublishPlan
+    { ppLatest :: Version
     }
     deriving stock (Eq, Show)
 
-{- | One ecosystem's mirror-write protocol, all pure. The endpoint and bearer arrive as arguments,
-so a codec holds no URL, credential, or connection state.
--}
-data PublishCodec = PublishCodec
+-- | A native input checked against the admitted snapshot, bound to its target and credential mint.
+newtype PreparedMirror = PreparedMirror
+    { publishPrepared :: PublishPlan -> ByteString -> IO (Either PublishFault ())
+    }
+
+-- | The codec keeps its checked native input private to its constructor and writer.
+data PublishCodec = forall input. PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
-    -- ^ Form the metadata read the presence probe makes against the mirror target.
     , pcVersionListParser :: Limits -> J.Parser VersionListItem
-    -- ^ Select usable version identifiers without retaining source release objects.
-    , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either PublishFault Request
-    {- ^ Form the complete publish request for one verified artifact. A plan whose version object
-    the codec cannot read refuses as a value.
-    -}
+    , pcPrepareInput :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault input
+    , pcPublishRequest :: Text -> Maybe Secret -> PublishPlan -> input -> ByteString -> Either PublishFault Request
     , pcPublishOutcome :: Int -> Either PublishFault ()
-    {- ^ Classify the status answer. Registries disagree on how an immutable re-publish answers,
-    so the codec counts an idempotent already-present as success.
-    -}
     }
 
 {- | The ecosystem-agnostic half of the mirror write. The composition root builds one per
@@ -97,33 +83,29 @@ mint. The worker never sees the codec, the transport, or the adapter.
 data MirrorPublish = MirrorPublish
     { mpProbeMetadata :: PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
     -- ^ Every failure is a 'FetchFault' value, so the probe's fall-through match is total.
-    , mpPublishArtifact :: PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-    {- ^ Every failure is a 'PublishFault' value, so the worker's retry-vs-drop decision is
-    total at the call site.
-    -}
+    , mpPrepareArtifact :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault PreparedMirror
+    -- ^ Refuse inconsistent source input before fetching artifact bytes or minting a write credential.
     }
 
 -- | Marry a protocol codec to the shared transport against one mirror-target endpoint.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> PublishCodec -> MirrorPublish
-newMirrorPublish transport target codec =
+newMirrorPublish transport target PublishCodec{pcProbeRequest, pcVersionListParser, pcPrepareInput, pcPublishRequest, pcPublishOutcome} =
     MirrorPublish
-        { mpProbeMetadata = probeMetadata transport targetUrl codec
-        , mpPublishArtifact = publishArtifact transport targetUrl codec
+        { mpProbeMetadata = probeMetadata transport targetUrl pcProbeRequest pcVersionListParser
+        , mpPrepareArtifact = \name version doc artifact -> do
+            input <- pcPrepareInput name version doc artifact
+            pure (PreparedMirror (publishArtifact transport targetUrl pcPublishRequest pcPublishOutcome input))
         }
   where
-    -- The codec forms URLs from characters, so the egress witness is read once here
-    -- rather than at every formation.
     targetUrl = registryUrlText target
 
--- Execute the codec's probe read over the transport: mint, form, seal, dial, and read the
--- body bounded, with every failure folded into the typed 'FetchFault' channel.
-probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
-probeMetadata transport targetUrl codec name = do
+probeMetadata :: MirrorTransport -> Text -> (Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request) -> (Limits -> J.Parser VersionListItem) -> PackageName -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
+probeMetadata transport targetUrl request parser name = do
     token <- ptMintToken transport
     formThen
         FetchUrlUnformable
-        (fetchVersionList (ptManager transport) (ptLimits transport) (pcVersionListParser codec (ptLimits transport)))
-        (sealRequest <$> pcProbeRequest codec targetUrl token name)
+        (fetchVersionList (ptManager transport) (ptLimits transport) (parser (ptLimits transport)))
+        (sealRequest <$> request targetUrl token name)
 
 -- | Read a codec's identifiers inside the response lifetime, preserving transport and HTTP outcomes.
 fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
@@ -132,19 +114,17 @@ fetchVersionList manager limits parser request =
   where
     versions streamed = streamValue streamed >>= finishVersionList
 
-publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-publishArtifact transport targetUrl codec name plan artifact bytes = do
+publishArtifact :: MirrorTransport -> Text -> (Text -> Maybe Secret -> PublishPlan -> input -> ByteString -> Either PublishFault Request) -> (Int -> Either PublishFault ()) -> input -> PublishPlan -> ByteString -> IO (Either PublishFault ())
+publishArtifact transport targetUrl request outcome input plan bytes = do
     token <- ptMintToken transport
     either
         (pure . Left)
-        (writeArtifact transport codec . sealRequest)
-        (pcPublishRequest codec targetUrl token name plan artifact bytes)
+        (writeArtifact transport outcome . sealRequest)
+        (request targetUrl token plan input bytes)
 
--- Read the codec's verdict from the answered status. The 'const' projection drops the
--- target's body, which the write has no use for, and the exchange bounds it either way.
-writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
-writeArtifact transport codec request =
+writeArtifact :: MirrorTransport -> (Int -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())
+writeArtifact transport outcome request =
     boundedExchange (\status _ _ -> status) (ptManager transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
         <&> \case
             Left fault -> Left (PublishFetch fault)
-            Right status -> pcPublishOutcome codec status
+            Right status -> outcome status

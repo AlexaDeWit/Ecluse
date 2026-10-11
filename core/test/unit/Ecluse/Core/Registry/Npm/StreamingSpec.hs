@@ -14,26 +14,27 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Artifact (artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashValue)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashValue)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry (MirrorArtifact (..), ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
-import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Npm.Project (versionListParser)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorInput, npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, finishTree, treeStep)
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits)
+import Ecluse.Core.Server.Path (mkFilename)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
@@ -95,10 +96,11 @@ spec = describe "npmFields" $ do
         sharesString "1.0.0" (versionKeys <> mapMaybe (fieldAt "version") (releases compact)) `shouldReturn` True
 
     it "mirrors the same supported fields and source author pointer" $ do
-        (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)
-        let version = mkVersion Npm "1.0.0"
-        selected <- maybe (fail "missing selected metadata") pure (selectNpmVersionDoc version (fst npmCached compact))
-        mirroredBytes <- expectRight (npmPublishDocument name (PublishPlan version version selected) "thing-1.0.0.tgz" Nothing Nothing "tarball bytes")
+        let dist = object ["tarball" .= ("https://registry.npmjs.org/thing/-/thing-1.0.0.tgz" :: Text), "shasum" .= validSha1]
+            source = object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("dist", dist)] release]]
+        selected <- expectRight (projectNpmVersion defaultLimits name (mkVersion Npm "1.0.0") (toStrict (encode source)))
+        doc <- maybe (fail "missing selected version") pure (vrVersion selected)
+        mirroredBytes <- mirrorSelected (mkVersion Npm "1.0.0") doc
         mirrored <- expectRight (eitherDecodeStrict mirroredBytes)
         let releaseDoc = fieldAt "versions" mirrored >>= fieldAt "1.0.0"
         (releaseDoc >>= fieldAt "author") `shouldBe` Just (String "See https://registry.npmjs.org/thing")
@@ -120,7 +122,8 @@ spec = describe "npmFields" $ do
         let served = assembleMergedPackument "https://proxy.example/npm" (Map.singleton 0 (Snapshot digest compact)) plan compact
             servedDist = withKeys [("tarball", String "https://proxy.example/npm/thing/-/thing-1.0.0.tgz")] contractDist
         (fieldAt "versions" served >>= fieldAt "1.0.0") `shouldBe` Just (withKeys [("dist", servedDist)] contractExpected)
-        mirroredBytes <- expectRight (npmPublishDocument name (PublishPlan version version selectedRaw) "thing-1.0.0.tgz" (Just validSha512Sri) (Just validSha1) "tarball bytes")
+        doc <- maybe (fail "missing selected version") pure (vrVersion selected)
+        mirroredBytes <- mirrorSelected version doc
         mirrored <- expectRight (eitherDecodeStrict mirroredBytes)
         let mirroredDist = object ["tarball" .= ("thing-1.0.0.tgz" :: Text), "integrity" .= validSha512Sri, "shasum" .= validSha1, "fileCount" .= (2 :: Int), "unpackedSize" .= (123 :: Int)]
             mirroredExpected = case withKeys [("dist", mirroredDist)] contractExpected of
@@ -549,3 +552,11 @@ releaseDepthCases =
         <> [ (Key.toText field <> " optional leaf", 6, object [field .= object ["dep" .= object ["optional" .= True]]])
            | field <- ["dependenciesMeta", "peerDependenciesMeta"]
            ]
+
+mirrorSelected :: Version -> VersionDoc -> IO ByteString
+mirrorSelected version doc = do
+    let artifact :| _ = pkgArtifacts (vdDetails doc)
+    filename <- maybe (fail "invalid fixture filename") pure (mkFilename (artFilename artifact))
+    hashes <- maybe (fail "missing fixture digests") pure (nonEmpty (artHashes artifact))
+    input <- expectRight (mkNpmMirrorInput name version doc (MirrorArtifact filename hashes (artSize artifact)))
+    pure (npmPublishDocument (PublishPlan version) input "tarball bytes")

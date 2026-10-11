@@ -21,27 +21,29 @@ import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shou
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), mkHash, mkSriHashes)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA256, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), mkHash, mkSriHashes)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
-    MirrorArtifact (maHashes, maSize),
+    MirrorArtifact (maFilename, maHashes, maSize),
     PublishError (publishErrorMessage),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
  )
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
+import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorInput, npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpPublishArtifact),
+    MirrorPublish (mpPrepareArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    PreparedMirror (publishPrepared),
+    PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
-import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
-import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
+import Ecluse.Test.Package (hexSha1Of, pypiVersion, sriSha256Of, sriSha512Of, unsafeFilename, unsafeHash, unscopedNpm, unscopedPyPI, v1_0_0, validSha1, validSha256)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
@@ -63,13 +65,14 @@ spec = do
     publishSpec
     integritySpec
     fieldRewriteSpec
+    checkedInputSpec
 
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
     it "PUTs the publish document to the package path" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            _ <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
+            _ <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
@@ -78,7 +81,7 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
 
     it "declares the plan's latest, not the version it publishes" $ do
         let plan = planV1{ppLatest = mkVersion Npm "2.0.0"}
-        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
+        document <- decodeJsonOrFail =<< expectRight (documentOf isOddVersionDoc plan sizedArtifact) :: IO Object
         tags <- expectRight (parseEither (.: "dist-tags") document)
         versions <- expectRight (parseEither (.: "versions") document) :: IO Object
         KeyMap.lookup "latest" tags `shouldBe` Just (String "2.0.0")
@@ -87,28 +90,28 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
     it "treats a 2xx as success" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
+            publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "treats a 409 Conflict as idempotent success (the immutable version is already present)" $
         withStub status409 "{\"error\":\"version already exists\"}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
+            publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "reports a 404 as a publish error naming the status (so the mirror job is retried)" $
         withStub status404 "{\"error\":\"Not found\"}" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
+            outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "404")
 
     it "reports a 500 as a publish error" $
         withStub status500 "boom" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
+            outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "500")
 
     it "reports a transport failure as a PublishFetch value, never thrown" $ do
         publish <- publishAt "http://127.0.0.1:1"
-        outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
+        outcome <- publishFixture publish isOddVersionDoc planV1 sizedArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
 
 integritySpec :: Spec
@@ -134,7 +137,7 @@ assertPublishedIntegrity tokens expectedIntegrity =
             artifact = sizedArtifact{maHashes = hashes}
         verifyIntegrity hashes dummyTarballBytes `shouldBe` IntegrityVerified
         publish <- stubPublish stub
-        mpPublishArtifact publish isOdd planV1 artifact dummyTarballBytes `shouldReturn` Right ()
+        publishFixture publish isOddVersionDoc planV1 artifact dummyTarballBytes `shouldReturn` Right ()
         cap <- lastCaptured stub
         document <- decodeJsonOrFail (capBody cap) :: IO Object
         manifest <- expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
@@ -199,31 +202,31 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         KeyMap.lookup "_hasShrinkwrap" manifest `shouldBe` Just (Bool False)
 
     it "never lets an unverified source digest survive the absence of a verified one" $ do
-        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd (planWith (fst npmCached sourceVersion)) "is-odd-1.0.0.tgz" Nothing Nothing dummyTarballBytes) :: IO Object
+        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion) planV1 sizedArtifact{maHashes = unsafeHash SHA256 validSha256 :| []}) :: IO Object
         dist <- distOf <$> (expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document) :: IO Object)
         KeyMap.lookup "integrity" dist `shouldBe` Nothing
         KeyMap.lookup "shasum" dist `shouldBe` Nothing
         KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
 
     it "refuses, as a value, a version object another ecosystem injected" $
-        documentOf (fst pypiSimpleCached (documentFromValue sourceVersion)) `shouldSatisfy` isSourceRefusal
+        checked (fst pypiSimpleCached (documentFromValue sourceVersion)) `shouldSatisfy` isSourceRefusal
 
     it "refuses, as a value, a carried version object that is not a JSON object" $
-        documentOf (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal
+        checked (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal
 
     it "writes nothing to the mirror target for a refused version object" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd (planWith (fst npmCached (String "not an object"))) sizedArtifact dummyTarballBytes
+            outcome <- publishFixture publish (fst npmCached (String "not an object")) planV1 sizedArtifact dummyTarballBytes
             outcome `shouldSatisfy` isSourceRefusal
             allCaptured stub `shouldReturn` []
   where
     publishedManifest :: IO Object
     publishedManifest = do
-        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion)) :: IO Object
+        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion) planV1 verifiedArtifact) :: IO Object
         expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
-    documentOf raw = npmPublishDocument isOdd (planWith raw) "is-odd-1.0.0.tgz" (Just verifiedSri) (Just validSha1) dummyTarballBytes
-    planWith raw = planV1{ppMetadata = raw}
+    checked raw = mkNpmMirrorInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw verifiedArtifact) verifiedArtifact
+    verifiedArtifact = sizedArtifact{maHashes = unsafeHash SHA1 validSha1 :| [unsafeHash SRI verifiedSri]}
     distOf :: Object -> Object
     distOf manifest = case KeyMap.lookup "dist" manifest of
         Just (Object dist) -> dist
@@ -278,12 +281,43 @@ sizedArtifact = dummyArtifact{maSize = Just 1234}
 dummyTarballBytes :: ByteString
 dummyTarballBytes = "tarball-bytes"
 
--- A write of @1.0.0@ that also declares it latest, the shape most cases here do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
+planV1 = PublishPlan{ppLatest = v1_0_0}
 
 publishDoc :: IO ByteString
-publishDoc = expectRight (npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes)
+publishDoc = expectRight (documentOf isOddVersionDoc planV1 sizedArtifact)
+
+documentOf :: CachedDoc -> PublishPlan -> MirrorArtifact -> Either PublishFault ByteString
+documentOf raw plan artifact =
+    (\input -> npmPublishDocument plan input dummyTarballBytes) <$> mkNpmMirrorInput isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw artifact) artifact
+
+publishFixture :: MirrorPublish -> CachedDoc -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
+publishFixture publish raw plan artifact bytes =
+    case mpPrepareArtifact publish isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 raw artifact) artifact of
+        Left fault -> pure (Left fault)
+        Right prepared -> publishPrepared prepared plan bytes
+
+checkedInputSpec :: Spec
+checkedInputSpec = describe "checked native mirror input" $ do
+    let doc = mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc sizedArtifact
+        details = vdDetails doc
+        changed update = doc{vdDetails = update details}
+        check snapshot = mkNpmMirrorInput isOdd v1_0_0 snapshot sizedArtifact
+    it "refuses another ecosystem even when its snapshot identity agrees" $ do
+        let name = unscopedPyPI "is-odd"
+            version = pypiVersion "1.0.0"
+        mkNpmMirrorInput name version (mirrorVersionDoc name version isOddVersionDoc sizedArtifact) sizedArtifact `shouldSatisfy` isSourceRefusal
+    it "refuses missing source metadata" $
+        check doc{vdRaw = Nothing} `shouldSatisfy` isSourceRefusal
+    it "refuses a snapshot belonging to another package" $
+        check (changed (\d -> d{pkgName = unscopedNpm "other"})) `shouldSatisfy` isSourceRefusal
+    it "refuses a snapshot belonging to another version" $
+        check (changed (\d -> d{pkgVersion = mkVersion Npm "2.0.0"})) `shouldSatisfy` isSourceRefusal
+    it "refuses to publish one selected artifact from a larger inventory" $
+        check (changed (\d -> d{pkgArtifacts = pkgArtifacts d <> pkgArtifacts d})) `shouldSatisfy` isSourceRefusal
+    for_ [sizedArtifact{maFilename = unsafeFilename "other.tgz"}, sizedArtifact{maSize = Nothing}, sizedArtifact{maHashes = unsafeHash SRI (sriSha512Of "other") :| []}] $ \artifact ->
+        it ("refuses an inconsistent admitted descriptor: " <> show artifact) $
+            mkNpmMirrorInput isOdd v1_0_0 doc artifact `shouldSatisfy` isSourceRefusal
 
 isSourceRefusal :: Either PublishFault a -> Bool
 isSourceRefusal = \case

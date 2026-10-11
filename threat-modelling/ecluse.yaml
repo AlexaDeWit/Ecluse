@@ -929,7 +929,7 @@ mitigations:
       - bd6136ad-e767-424b-bda4-53144a8a7f10
   - id: mit-worker-reevaluation
     title: Worker re-evaluation before mirroring
-    prose: Public admission applies the configured rules before a version is queued, and the worker applies them again, with its current first-party predicate, before it downloads the artifact. A winning named deny stops new admission when its evidence is available, and the worker drops a queued job for a first-party name.
+    prose: Public admission applies the configured rules before a version is queued, and the worker applies them again, with its current first-party predicate, before it downloads the artifact. A winning named deny stops new admission when its evidence is available, and the worker drops a queued job for a first-party name. Before downloading, the npm mirror constructor checks the admitted identity and complete one-tarball inventory against the publication descriptor and requires the paired native source object. The writer accepts only that checked input.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d

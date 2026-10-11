@@ -4,21 +4,23 @@
 
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (status200, status201, status409, status503)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SRI), mkPackageName)
+import Ecluse.Core.Package (HashAlg (SRI), PackageDetails (pkgArtifacts), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (enqueue, receive),
+    MirrorQueue (ack, enqueue, receive),
     Seconds (Seconds),
  )
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Core.Worker (WorkerPolicies)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (wpResolveVersion))
 import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
     defaultQueueOptions,
@@ -37,7 +39,7 @@ import Ecluse.Integration.WorkerLoop (
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Rules (admitRule, denyRule)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (expectRightIO)
 
 {- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
@@ -60,6 +62,27 @@ spec =
                         -- The worker acked the job, so it does not redeliver.
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
+
+            it "retires an incomplete npm inventory without fetching or publishing a selected subset" $ \container ->
+                withStub status200 "artifact bytes" $ \upstream ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-incomplete-native-input" defaultQueueOptions
+                        acknowledged <- newIORef False
+                        let observedQueue =
+                                queue
+                                    { ack = \receipt -> do
+                                        result <- ack queue receipt
+                                        when (isRight result) (writeIORef acknowledged True)
+                                        pure result
+                                    }
+                        env <- newQueueEnv observedQueue
+                        policies <- Map.map duplicateInventory <$> faithfulPolicies mirrorUrl
+                        expectRightIO (enqueue queue (job (stubBaseUrl upstream)))
+                        runLoopUntil policies env (readIORef acknowledged)
+                        readIORef acknowledged `shouldReturn` True
+                        readIORef publishLog `shouldReturn` []
+                        allCaptured upstream `shouldReturn` []
+                        expectRightIO (receive queue) `shouldReturn` []
 
             it (caseLabel "integration/worker/native-002" "publishes nothing when the artifact fails its integrity digest") $ \container ->
                 withUpstream $ \upstreamUrl ->
@@ -220,3 +243,12 @@ job upstreamUrl =
 -- A WAI upstream serving the artifact bytes at any path, yielding its base URL.
 withUpstream :: (Text -> IO a) -> IO a
 withUpstream body = withStub status200 tarballBytes (body . stubBaseUrl)
+
+duplicateInventory :: WorkerPolicy -> WorkerPolicy
+duplicateInventory policy = policy{wpResolveVersion = \name version -> duplicateVersionInventory <$> wpResolveVersion policy name version}
+
+duplicateVersionInventory :: VersionEvaluation -> VersionEvaluation
+duplicateVersionInventory (VersionPresent doc latest) =
+    let details = vdDetails doc
+     in VersionPresent doc{vdDetails = details{pkgArtifacts = pkgArtifacts details <> pkgArtifacts details}} latest
+duplicateVersionInventory other = other
