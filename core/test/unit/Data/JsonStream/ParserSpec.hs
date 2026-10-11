@@ -8,6 +8,7 @@ module Data.JsonStream.ParserSpec (spec) where
 import Control.Exception qualified as Exception
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Test.Hspec
@@ -47,6 +48,18 @@ parserSpec = describe "public parser compatibility" $ do
                 J.ParseFailed _ -> pure ()
                 result -> expectationFailure ("expected the original split-number failure, got " <> show result)
             result -> expectationFailure ("expected an input request, got " <> show result)
+
+    it "preserves ErrorCall for missing input through both throwing entry points" $ do
+        Exception.evaluate (J.parseByteString J.string BS.empty) `shouldThrow` hasErrorMessage "Not enough data."
+        Exception.evaluate (J.parseLazyByteString J.string LBS.empty) `shouldThrow` hasErrorMessage "Not enough data."
+
+    it "preserves the reported parser failure in throwing entry points" $ do
+        let body = "\"\\x\""
+        case J.runParser' J.string body of
+            J.ParseFailed message -> do
+                Exception.evaluate (J.parseByteString J.string body) `shouldThrow` hasErrorMessage message
+                Exception.evaluate (J.parseLazyByteString J.string (LBS.fromStrict body)) `shouldThrow` hasErrorMessage message
+            other -> expectationFailure ("expected a reported failure, got " <> show other)
 
     it "accepts a retained string larger than the bounded registry driver's pieces" $ do
         let value = T.replicate largeStringBytes "a"
@@ -100,7 +113,7 @@ objectSpec = describe "typed one-pass object fields" $ do
 
     it "rejects duplicate declarations before mixing their distinct field types" $
         Exception.evaluate (J.objectOf ((,) <$> "same" J..: J.string <*> "same" J..: (J.integer :: J.Parser Int)))
-            `shouldThrow` duplicateField
+            `shouldThrow` hasErrorMessage "JStream Object - duplicate field access: same"
 
     it "preserves lazy field values until the caller demands them" $ do
         let deferred = fmap (const (Exception.throw DeferredField)) J.string :: J.Parser Text
@@ -125,8 +138,8 @@ collectParser parser = collect (J.runParser parser)
     collect (J.ParseFailed message) _ = Left message
     collect (J.ParseDone _) _ = Right []
 
-duplicateField :: Exception.ErrorCall -> Bool
-duplicateField (Exception.ErrorCall message) = message == "JStream Object - duplicate field access: same"
+hasErrorMessage :: String -> Exception.ErrorCall -> Bool
+hasErrorMessage expected (Exception.ErrorCall message) = message == expected
 
 data DeferredField = DeferredField
     deriving stock (Eq, Show)

@@ -282,19 +282,15 @@ decodeText bs = do
 
         state_input4b :: Int -> Int -> Word8 -> Word8 -> ST s (Either UnicodeException Text)
         state_input4b !out !inp !b1 !b2 = readByte inp $ \w8 ->
-            if
-                | (w8 .&. twoBytePrefix) == continuationPrefix ->
-                    state_input4c out (inp + 1) b1 b2 w8
-                | otherwise ->
-                    pure (Left decodeError)
+            if (w8 .&. twoBytePrefix) == continuationPrefix
+                then state_input4c out (inp + 1) b1 b2 w8
+                else pure (Left decodeError)
 
         state_input4 :: Int -> Int -> Word8 -> ST s (Either UnicodeException Text)
         state_input4 !out !inp !b1 = readByte inp $ \w8 ->
-            if
-                | (w8 .&. twoBytePrefix) == continuationPrefix ->
-                    state_input4b out (inp + 1) b1 w8
-                | otherwise ->
-                    pure (Left decodeError)
+            if (w8 .&. twoBytePrefix) == continuationPrefix
+                then state_input4b out (inp + 1) b1 w8
+                else pure (Left decodeError)
 
         state_input3b :: Int -> Int -> Word8 -> Word8 -> ST s (Either UnicodeException Text)
         state_input3b !out !inp !b1 !b2 = readByte inp $ \w8 ->
@@ -311,11 +307,9 @@ decodeText bs = do
 
         state_input3 :: Int -> Int -> Word8 -> ST s (Either UnicodeException Text)
         state_input3 !out !inp !b1 = readByte inp $ \w8 ->
-            if
-                | (w8 .&. twoBytePrefix) == continuationPrefix ->
-                    state_input3b out (inp + 1) b1 w8
-                | otherwise ->
-                    pure (Left decodeError)
+            if (w8 .&. twoBytePrefix) == continuationPrefix
+                then state_input3b out (inp + 1) b1 w8
+                else pure (Left decodeError)
 
         state_input2 :: Int -> Int -> Word8 -> ST s (Either UnicodeException Text)
         state_input2 !out !inp !b1 = readByte inp $ \w8 ->

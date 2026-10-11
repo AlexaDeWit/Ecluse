@@ -107,6 +107,7 @@ import Data.JsonStream.CLexer (tokenParser, unescapeText)
 import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
 import Data.JsonStream.Unescape (unsafeDecodeASCII)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 
 objectKeyStringLimit :: Int
 objectKeyStringLimit = 65536
@@ -767,19 +768,19 @@ runParser parser = runParser' parser BS.empty
 parseByteString :: Parser a -> BS.ByteString -> [a]
 parseByteString parser startdata = loop (runParser' parser startdata)
   where
-    loop (ParseNeedData _) = parserException "Not enough data."
+    loop (ParseNeedData _) = parserException MissingInput
     loop (ParseDone _) = []
-    loop (ParseFailed err) = parserException err
+    loop (ParseFailed err) = parserException (InvalidInput err)
     loop (ParseYield v np) = v : loop np
 
 -- | Parse a lazy bytestring, generate lazy list of parsed values. If an error occurs, throws an exception.
 parseLazyByteString :: Parser a -> BL.ByteString -> [a]
 parseLazyByteString parser input = loop input (runParser parser)
   where
-    loop BL.Empty (ParseNeedData _) = parserException "Not enough data."
+    loop BL.Empty (ParseNeedData _) = parserException MissingInput
     loop (BL.Chunk dta rest) (ParseNeedData np) = loop rest (np dta)
     loop _ (ParseDone _) = []
-    loop _ (ParseFailed err) = parserException err
+    loop _ (ParseFailed err) = parserException (InvalidInput err)
     loop rest (ParseYield v np) = v : loop rest np
 
 {- | Deserialise one JSON value, allowing only whitespace after it.
@@ -842,7 +843,7 @@ instance Functor Object where
 joinObjectFieldWith :: ([a] -> [b] -> [c]) -> Object a -> Object b -> Object c
 joinObjectFieldWith combine (Object afields azero aresults) (Object bfields bzero bresults) =
     let fields = Map.unionWithKey duplicate (fmap (fmap updateLeft) afields) (fmap (fmap updateRight) bfields)
-        duplicate key _ _ = parserException ("JStream Object - duplicate field access: " <> T.unpack key)
+        duplicate key _ _ = parserException (DuplicateField key)
         updateLeft update (a, b) = let !next = update a in (next, b)
         updateRight update (a, b) = let !next = update b in (a, next)
      in fields `seq` Object fields (azero, bzero) (\(a, b) -> combine (aresults a) (bresults b))
@@ -877,9 +878,16 @@ objectOf :: Object a -> Parser a
 objectOf (Object fields initial results) =
     unFoldI $ results <$> foldI (flip ($)) initial (object' False parseKey)
   where
-    parseKey key = case Map.lookup key fields of
-        Nothing -> ignoreVal
-        Just parser -> parser
+    parseKey key = fromMaybe ignoreVal (Map.lookup key fields)
 
-parserException :: String -> a
-parserException = throw . ErrorCall
+data ParserFailure = MissingInput | InvalidInput ~String | DuplicateField ~T.Text
+
+parserException :: ParserFailure -> a
+parserException = throw . failureError
+
+-- The throwing entry points retain ErrorCall for existing callers.
+failureError :: ParserFailure -> ErrorCall
+failureError failure = ErrorCall $ case failure of
+    MissingInput -> "Not enough data."
+    InvalidInput message -> message
+    DuplicateField key -> "JStream Object - duplicate field access: " <> T.unpack key
