@@ -50,7 +50,7 @@ module Ecluse.E2E.Harness.Docker (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Network.HTTP.Client (
     Manager,
     Request (method),
@@ -261,7 +261,7 @@ withE2EWith cfg action gdp =
     usingExistingPlane >>= \case
         True -> do
             manager <- newManager defaultManagerSettings
-            action (environment gdp manager "http://127.0.0.1:4873" "ecluse-proxy" (if ecCollector cfg then Just "otelcol" else Nothing))
+            environment gdp manager "http://127.0.0.1:4873" "ecluse-proxy" (if ecCollector cfg then Just "otelcol" else Nothing) >>= action
         False -> do
             image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
             sfx <- uniqueSuffix
@@ -283,6 +283,7 @@ withE2EWith cfg action gdp =
                 -- Pick the host port up front: ECLUSE_SERVER__PUBLIC_URL must be known before the
                 -- container starts, and it makes the proxy rewrite dist.tarball to an absolute URL.
                 proxyPort <- freeHostPort
+                configuredEnv <- proxyEnv (gdpTopology gdp) proxyPort queueUrl
                 -- The product image is built by `task test-e2e` or the CI e2e job, never pulled, so
                 -- it is 'LocallyBuilt' and unpinned: the pin invariant covers only registry pulls.
                 let proxRun =
@@ -290,48 +291,62 @@ withE2EWith cfg action gdp =
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
                             , drMounts = [(certsDir, "/certs:ro")]
                             , drTmpfs = [advisoryDataTmpfs]
-                            , drEnv = proxyEnv (gdpTopology gdp) proxyPort queueUrl <> ecExtraEnv cfg
+                            , drEnv = configuredEnv <> ecExtraEnv cfg
                             , drCmd = ecArgs cfg
                             }
                 withDockerContainer labelArgs proxRun $ \_ -> do
                     let base = "http://127.0.0.1:" <> show proxyPort
-                        e2e = environment gdp manager base prox collectorName
+                    e2e <- environment gdp manager base prox collectorName
                     ready <- waitFor manager (base <> "/readyz") 200
                     unless ready (fail "proxy did not become ready on /readyz within the timeout")
                     action e2e
 
-environment :: GlobalDataPlane -> Manager -> Text -> String -> Maybe String -> E2E
-environment plane manager base proxy collector =
-    E2E
-        { e2eClientEndpoints = Map.fromList [(ecosystem, base <> mountPath ecosystem) | ecosystem <- topologyMounts (gdpTopology plane)]
-        , e2eBaseUrl = base
-        , e2eStore = gdpStore plane
-        , e2ePlane = plane
-        , e2eProxyContainer = proxy
-        , e2eCollectorContainer = collector
-        , e2eManager = manager
-        }
+environment :: GlobalDataPlane -> Manager -> Text -> String -> Maybe String -> IO E2E
+environment plane manager base proxy collector = do
+    endpoints <- forM (topologyMounts (gdpTopology plane)) $ \ecosystem -> do
+        path <- mountPath ecosystem
+        pure (ecosystem, base <> path)
+    pure
+        E2E
+            { e2eClientEndpoints = Map.fromList endpoints
+            , e2eBaseUrl = base
+            , e2eStore = gdpStore plane
+            , e2ePlane = plane
+            , e2eProxyContainer = proxy
+            , e2eCollectorContainer = collector
+            , e2eManager = manager
+            }
   where
-    mountPath Npm = "/npm/"
-    mountPath PyPI = "/pypi/simple/"
+    mountPath Npm = pure "/npm/"
+    mountPath PyPI = pure "/pypi/simple/"
+    mountPath RubyGems = throwIO $ UnsupportedTopology RubyGems
 
-proxyEnv :: Topology -> Int -> Maybe Text -> [(Text, Text)]
-proxyEnv topology hostPort queueUrl =
-    [ ("ECLUSE_SERVER__PORT", "4873")
-    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
-    , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0}}")
-    ]
-        <> concatMap mountEnv (topologyMounts topology)
-        <> maybe [] (\url -> [("ECLUSE_QUEUE__URL", url), ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)]) queueUrl
-        <> [entry | topologyStore topology, entry <- mirrorTargetEnv]
-        <> [entry | topologyAws topology, entry <- ministackAwsEnv]
+newtype UnsupportedTopology = UnsupportedTopology Ecosystem
+    deriving stock (Show)
+
+instance Exception UnsupportedTopology
+
+proxyEnv :: Topology -> Int -> Maybe Text -> IO [(Text, Text)]
+proxyEnv topology hostPort queueUrl = do
+    mounts <- concat <$> traverse mountEnv (topologyMounts topology)
+    pure $
+        [ ("ECLUSE_SERVER__PORT", "4873")
+        , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
+        , ("SSL_CERT_FILE", "/certs/bundle.pem")
+        , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
+        , ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0}}")
+        ]
+            <> mounts
+            <> maybe [] (\url -> [("ECLUSE_QUEUE__URL", url), ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)]) queueUrl
+            <> [entry | topologyStore topology, entry <- mirrorTargetEnv]
+            <> [entry | topologyAws topology, entry <- ministackAwsEnv]
   where
     mountEnv Npm =
-        [("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)]
-            <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror) | topologyStore topology]
-    mountEnv PyPI = [("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)]
+        pure $
+            [("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)]
+                <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl Mirror) | topologyStore topology]
+    mountEnv PyPI = pure [("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)]
+    mountEnv RubyGems = throwIO $ UnsupportedTopology RubyGems
 
 mirrorTargetEnv :: [(Text, Text)]
 mirrorTargetEnv =
@@ -420,9 +435,7 @@ otlpCollectorEnv =
     ]
         <> telemetryExportTuning
 
-{- | The Datadog unified-service-tag identity the Datadog scenario configures and asserts on.
-Named constants, so the proxy environment and the assertions cannot drift apart.
--}
+-- | The Datadog unified-service-tag identity configured in the proxy environment.
 ddTagService, ddTagEnv, ddTagVersion :: Text
 ddTagService = "ecluse-e2e-dd"
 ddTagEnv = "e2e-staging"

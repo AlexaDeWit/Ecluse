@@ -5,7 +5,6 @@
 -- | Supervised fixture waits fail when progress never arrives.
 module Ecluse.Test.PollSpec (spec) where
 
-import Control.Concurrent.MVar (tryReadMVar)
 import Test.Hspec
 import UnliftIO.Exception (finally, throwIO)
 

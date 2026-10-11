@@ -14,8 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import System.Directory (createDirectoryIfMissing, renameFile)
-import System.Environment (getArgs, getProgName, lookupEnv)
-import System.Exit (exitFailure)
+import System.Environment (getProgName)
 import System.FilePath (takeDirectory)
 import System.Timeout (timeout)
 import Test.Hspec (Spec)
@@ -35,19 +34,19 @@ type GroupAction = PhaseRecorder -> Spec
 -- | The prerequisite callback runs only after pure validation and whole-group selection.
 contractMain :: Catalogue -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO ()
 contractMain catalogue actions prerequisites = do
-    command <- getArgs >>= either die pure . parseCommand
-    plan <- either (die . T.unlines) pure $ makePlan catalogue
+    command <- getArgs >>= either failRunner pure . parseCommand
+    plan <- either (failRunner . T.unlines) pure $ makePlan catalogue
     let expectedActions = map groupId $ catalogueGroups catalogue
         missingActions = filter (`Map.notMember` actions) expectedActions
         unknownActions = filter (`notElem` expectedActions) (Map.keys actions)
-    unless (null missingActions && null unknownActions) $ die $ "spec registration mismatch: " <> show (missingActions, unknownActions)
+    unless (null missingActions && null unknownActions) $ failRunner $ "spec registration mismatch: " <> show (missingActions, unknownActions)
     case command of
         ListCatalogue -> BS.putStr $ jsonLine catalogue
         PrintPlan -> BS.putStr $ jsonLine plan
-        SelectCatalogue selection -> either (die . T.unlines) (BS.putStr . jsonLine) $ selectGroups selection catalogue
+        SelectCatalogue selection -> either (failRunner . T.unlines) (BS.putStr . jsonLine) $ selectGroups selection catalogue
         Audit path reportPaths -> auditFiles plan path reportPaths
         Execute options -> do
-            groups <- either (die . T.unlines) pure $ selectGroups (runSelection options) catalogue
+            groups <- either (failRunner . T.unlines) pure $ selectGroups (runSelection options) catalogue
             executionIdentity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
             report <- executeGroups executionIdentity options groups actions prerequisites
             let faults = auditSelection groups (reportGroups report) (reportCases report)
@@ -55,7 +54,7 @@ contractMain catalogue actions prerequisites = do
                 forM_ (reportGroups report) $ \result ->
                     when (grStatus result /= Passed) $ mapM_ putTextLn (grDiagnostics result)
                 when (isNothing $ runReportPath options) $ BS.putStr $ jsonLine report
-                die $ T.unlines faults
+                failRunner $ T.unlines faults
 
 -- | Each completed group is persisted before the next acquisition begins.
 executeGroups :: ExecutionIdentity -> RunOptions -> [Group] -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO Report
@@ -163,11 +162,11 @@ auditFiles :: Plan -> FilePath -> [FilePath] -> IO ()
 auditFiles compiled path reportPaths = do
     bytes <- BS.readFile path
     plan <- decodeFileBytes bytes
-    unless (plan == compiled) $ die "downloaded plan differs from the compiled catalogue"
+    unless (plan == compiled) $ failRunner "downloaded plan differs from the compiled catalogue"
     expected <- readIdentity True (usesProductImage plan) $ digest bytes
     reports <- traverse (BS.readFile >=> decodeFileBytes) reportPaths
     let faults = auditReports expected plan reports
-    unless (null faults) $ die $ T.unlines faults
+    unless (null faults) $ failRunner $ T.unlines faults
     putTextLn "Every required group and case passed with matching execution identities."
 
 readIdentity :: Bool -> Bool -> Text -> IO ExecutionIdentity
@@ -178,14 +177,14 @@ readIdentity forceRequired imageRequired planDigest = do
     let field name fallback =
             lookupEnv name >>= \case
                 Just value | not (null value) -> pure $ toText value
-                _ | required -> die $ "missing required execution identity: " <> toText name
+                _ | required -> failRunner $ "missing required execution identity: " <> toText name
                 _ -> pure fallback
     source <- field "ECLTEST_SOURCE" "local"
     image <- if imageRequired then field "ECLTEST_IMAGE_ID" "local" else pure "not-applicable"
     architecture <- field "ECLTEST_ARCHITECTURE" "local"
     runId <- field "ECLTEST_RUN_ID" "local"
     declaredDigest <- field "ECLTEST_PLAN_DIGEST" planDigest
-    unless (declaredDigest == planDigest) $ die "plan digest differs from the selected catalogue"
+    unless (declaredDigest == planDigest) $ failRunner "plan digest differs from the selected catalogue"
     pure $ ExecutionIdentity source image architecture planDigest runId
 
 jsonLine :: (ToJSON a) => a -> ByteString
@@ -195,10 +194,10 @@ digest :: ByteString -> Text
 digest bytes = show (hash bytes :: Digest SHA256)
 
 decodeFileBytes :: (FromJSON a) => ByteString -> IO a
-decodeFileBytes = either (die . toText) pure . eitherDecodeStrict'
+decodeFileBytes = either (failRunner . toText) pure . eitherDecodeStrict'
 
-die :: Text -> IO a
-die message = putTextLn message >> exitFailure
+failRunner :: Text -> IO a
+failRunner message = putTextLn message >> exitFailure
 
 usesProductImage :: Plan -> Bool
 usesProductImage = any ((== E2E) . groupTier) . catalogueGroups . planCatalogue
