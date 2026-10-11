@@ -52,7 +52,7 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
--- | Native peaks per source/basis byte: 2.629 read, 1.242 output, from one meter step up. See @docs/testing.md@.
+-- | Provisional packed read charge from the earlier qualification in @docs/testing.md@. Requalify after parser changes.
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3300, cfOutputPermille = 1600}
 
