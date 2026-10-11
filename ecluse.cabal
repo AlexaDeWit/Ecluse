@@ -882,6 +882,7 @@ library ecluse-runtime-test-support
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
     , ecluse:ecluse-test-contracts
+    , directory         ^>=1.3
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
