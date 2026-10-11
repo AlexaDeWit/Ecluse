@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | A backdated PyPI release with a wheel and a source distribution for the nginx upstream.
+-- | PyPI wheels, source distributions, and Simple indexes for end-to-end tests.
 module Ecluse.E2E.Fixtures.PyPI (
     pypiUpstreamUrl,
     pypiProject,
@@ -10,6 +10,8 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiWheelFile,
     pypiSdistFile,
     pypiDistInfo,
+    pypiWheelFor,
+    pypiDistInfoFor,
     buildPyPIFixtures,
 ) where
 
@@ -18,10 +20,12 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.E2E.Harness.Stub (StubRoute (PyPIPublic), stubUrl)
 import Ecluse.Test.Package (hexSha256Of)
 
@@ -29,7 +33,7 @@ import Ecluse.Test.Package (hexSha256Of)
 pypiUpstreamUrl :: Text
 pypiUpstreamUrl = stubUrl PyPIPublic
 
--- | The one project the fixture index serves, in PEP 503 canonical form.
+-- | The ordinary-install project, in PEP 503 canonical form.
 pypiProject :: Text
 pypiProject = "e2e-sample"
 
@@ -39,7 +43,7 @@ pypiVersion = "1.0.0"
 
 -- | The wheel's on-the-wire name, which encodes the project, the release, and its tags.
 pypiWheelFile :: Text
-pypiWheelFile = escapedProject <> "-" <> pypiVersion <> "-py3-none-any.whl"
+pypiWheelFile = pypiWheelFor pypiProject pypiVersion
 
 -- | The source distribution's advertised filename.
 pypiSdistFile :: Text
@@ -47,9 +51,9 @@ pypiSdistFile = pypiProject <> "-" <> pypiVersion <> ".tar.gz"
 
 -- | The metadata directory a wheel install leaves in the client's target.
 pypiDistInfo :: Text
-pypiDistInfo = escapedProject <> "-" <> pypiVersion <> ".dist-info"
+pypiDistInfo = pypiDistInfoFor pypiProject pypiVersion
 
--- | Write both artifact kinds and an index with higher-build wheels that pip must exclude.
+-- | Write ordinary-install artifacts, compatibility controls, and old/recent advisory releases.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
     let projectDir = root </> "simple" </> toString pypiProject
@@ -61,6 +65,8 @@ buildPyPIFixtures root = do
     bytes <- BS.readFile wheelPath
     sourceBytes <- BS.readFile sdistPath
     writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes) (hexSha256Of sourceBytes)))
+    now <- renderIso8601Utc <$> getCurrentTime
+    for_ ["flask", "e2e-raw-fix"] $ \project -> buildAdvisoryWheels root project now
 
 -- The filename the nginx stub aliases a project's index request onto.
 indexFile :: FilePath
@@ -70,20 +76,23 @@ indexFile = "index.json"
 escapedProject :: Text
 escapedProject = T.replace "-" "_" pypiProject
 
-{- A wheel is a zip of the importable package beside its .dist-info metadata, staged in
-@work@ and archived by `python3 -m zipfile`, as the npm fixtures archive with `tar`. -}
 buildWheel :: FilePath -> FilePath -> IO ()
-buildWheel work wheelPath = do
-    let moduleDir = work </> toString escapedProject
-        metadataDir = work </> toString pypiDistInfo
+buildWheel = buildWheelFor pypiProject pypiVersion metadataFile
+
+buildWheelFor :: Text -> Text -> Text -> FilePath -> FilePath -> IO ()
+buildWheelFor project version metadata work wheelPath = do
+    let escaped = T.replace "-" "_" project
+        distInfo = pypiDistInfoFor project version
+        moduleDir = work </> toString escaped
+        metadataDir = work </> toString distInfo
     createDirectoryIfMissing True moduleDir
     createDirectoryIfMissing True metadataDir
-    writeFileText (moduleDir </> "__init__.py") ("VERSION = \"" <> pypiVersion <> "\"\n")
-    writeFileText (metadataDir </> "METADATA") metadataFile
+    writeFileText (moduleDir </> "__init__.py") ("VERSION = \"" <> version <> "\"\n")
+    writeFileText (metadataDir </> "METADATA") metadata
     writeFileText (metadataDir </> "WHEEL") wheelMetadataFile
-    writeFileText (metadataDir </> "RECORD") recordFile
+    writeFileText (metadataDir </> "RECORD") (recordFileFor project version)
     runProcess_ . setWorkingDir work $
-        proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escapedProject, toString pypiDistInfo]
+        proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escaped, toString distInfo]
 
 buildSdist :: FilePath -> FilePath -> IO ()
 buildSdist work sdistPath = do
@@ -95,11 +104,14 @@ buildSdist work sdistPath = do
     runProcess_ (proc "tar" ["-czf", sdistPath, "-C", work, toString distribution])
 
 metadataFile :: Text
-metadataFile =
+metadataFile = metadataFileFor pypiProject pypiVersion
+
+metadataFileFor :: Text -> Text -> Text
+metadataFileFor project version =
     T.unlines
         [ "Metadata-Version: 2.1"
-        , "Name: " <> pypiProject
-        , "Version: " <> pypiVersion
+        , "Name: " <> project
+        , "Version: " <> version
         , "Summary: An Ecluse end-to-end fixture distribution"
         ]
 
@@ -114,13 +126,13 @@ wheelMetadataFile =
 
 -- pip reads RECORD to write its own install manifest and checks no digest in it, so the
 -- entries carry the filename alone. The wheel's own sha256 is what this tier verifies.
-recordFile :: Text
-recordFile =
+recordFileFor :: Text -> Text -> Text
+recordFileFor project version =
     T.unlines
-        [ escapedProject <> "/__init__.py,,"
-        , pypiDistInfo <> "/METADATA,,"
-        , pypiDistInfo <> "/WHEEL,,"
-        , pypiDistInfo <> "/RECORD,,"
+        [ T.replace "-" "_" project <> "/__init__.py,,"
+        , pypiDistInfoFor project version <> "/METADATA,,"
+        , pypiDistInfoFor project version <> "/WHEEL,,"
+        , pypiDistInfoFor project version <> "/RECORD,,"
         ]
 
 simpleIndex :: Text -> Text -> Value
@@ -133,15 +145,20 @@ simpleIndex digest sourceDigest =
         ]
 
 wheelEntry :: Text -> Value
-wheelEntry digest =
+wheelEntry = wheelEntryFor pypiProject pypiVersion "2020-01-01T00:00:00Z"
+
+wheelEntryFor :: Text -> Text -> Text -> Text -> Value
+wheelEntryFor project version uploaded digest =
     object
-        [ "filename" .= pypiWheelFile
-        , "url" .= (pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> pypiWheelFile)
+        [ "filename" .= filename
+        , "url" .= (pypiUpstreamUrl <> "simple/" <> project <> "/" <> filename)
         , "hashes" .= object ["sha256" .= digest]
         , "requires-python" .= (">=3.8" :: Text)
-        , "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
+        , "upload-time" .= uploaded
         , "core-metadata" .= True
         ]
+  where
+    filename = pypiWheelFor project version
 
 sdistEntry :: Text -> Value
 sdistEntry digest =
@@ -160,3 +177,25 @@ excludedWheel build key value digest = case wheelEntry digest of
   where
     filename = escapedProject <> "-" <> pypiVersion <> "-" <> build <> "-py3-none-any.whl"
     url = pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> filename
+
+-- | The wheel filename for a PEP 503 canonical project and its release spelling.
+pypiWheelFor :: Text -> Text -> Text
+pypiWheelFor project version = T.replace "-" "_" project <> "-" <> version <> "-py3-none-any.whl"
+
+-- | The installed metadata directory for a fixture wheel.
+pypiDistInfoFor :: Text -> Text -> Text
+pypiDistInfoFor project version = T.replace "-" "_" project <> "-" <> version <> ".dist-info"
+
+buildAdvisoryWheels :: FilePath -> Text -> Text -> IO ()
+buildAdvisoryWheels root project now = do
+    let projectDir = root </> "simple" </> toString project
+    createDirectoryIfMissing True projectDir
+    files <- forM [("1.18", "2020-01-01T00:00:00Z"), ("1.19", now)] $ \(version, uploaded) -> do
+        let filename = pypiWheelFor project version
+            wheelPath = projectDir </> toString filename
+            work = root </> toString (".work-" <> project <> "-" <> version)
+        buildWheelFor project version (metadataFileFor project version) work wheelPath
+        bytes <- BS.readFile wheelPath
+        pure (wheelEntryFor project version uploaded (hexSha256Of bytes))
+    writeFileLBS (projectDir </> indexFile) . Aeson.encode $
+        object ["name" .= project, "meta" .= object ["api-version" .= ("1.1" :: Text)], "versions" .= (["1.18", "1.19"] :: [Text]), "files" .= files]

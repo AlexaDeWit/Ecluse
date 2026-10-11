@@ -265,6 +265,11 @@ names exact object keys must name these keys. The artifact stores canonical pack
 names for PyPI). A consumer rejects an artifact from any other epoch and waits for its first
 compatible sync. Nothing rewrites an old artifact.
 
+An enabled `pypi` mount reads `pypi-osv-schema4.db` under the `advisories.url` prefix.
+The npm artifact cannot supply PyPI advisory decisions. Publish the PyPI artifact with
+`ecluse pilot compile --ecosystem pypi --out DIR --upload` before you enable PyPI advisory denies.
+See [per-mount readiness](@/docs/operations.md#health-probes) for routing and availability signals.
+
 **Failed and empty compilations.** A corrupt or truncated export aborts the compile without
 publishing, so a running consumer keeps its last good database. Pilot also refuses a compilation in
 two cases:
