@@ -13,6 +13,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 readonly input_paths=(cabal.project cabal.project.freeze flake.nix flake.lock)
 readonly upstream_url=https://github.com/ondrap/json-stream.git
 readonly upstream_revision=537a43a775e64f50dc63c373193323de98619799
+readonly reference_revision=${BENCH_REFERENCE_SHA:-$upstream_revision}
 readonly input_copy_count=2
 readonly baseline_fold_api=${BENCH_BASELINE_FOLD_API:-auto}
 readonly candidate_fold_api=${BENCH_CANDIDATE_FOLD_API:-auto}
@@ -32,6 +33,10 @@ for revision in "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"; do
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || fail "Expected a full commit SHA: $revision"
   git -C "$BENCH_REPO" cat-file -e "$revision^{commit}"
 done
+if [[ -n ${BENCH_REFERENCE_SHA:-} ]]; then
+  [[ "$reference_revision" =~ ^[0-9a-f]{40}$ ]] || fail "Expected a full reference SHA: $reference_revision"
+  git -C "$BENCH_REPO" cat-file -e "$reference_revision^{commit}"
+fi
 if [[ "$baseline_fold_api" != "$candidate_fold_api" ]]; then
   git -C "$BENCH_REPO" diff --quiet "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA" -- vendor/json-stream ||
     fail 'Comparing different fold APIs requires identical baseline and candidate vendor sources'
@@ -45,6 +50,11 @@ for path in "${input_paths[@]}"; do
   git -C "$BENCH_REPO" show "$BENCH_CANDIDATE_SHA:$path" > "$artifact_dir/inputs/candidate.$path"
   cmp -- "$artifact_dir/inputs/baseline.$path" "$artifact_dir/inputs/candidate.$path" ||
     fail "Benchmark dependency/toolchain inputs differ: $path"
+  if [[ -n ${BENCH_REFERENCE_SHA:-} ]]; then
+    git -C "$BENCH_REPO" show "$reference_revision:$path" > "$artifact_dir/inputs/original.$path"
+    cmp -- "$artifact_dir/inputs/original.$path" "$artifact_dir/inputs/candidate.$path" ||
+      fail "Reference dependency/toolchain inputs differ: $path"
+  fi
 done
 cmp -- "$BENCH_REPO/flake.lock" "$artifact_dir/inputs/candidate.flake.lock"
 cmp -- "$BENCH_REPO/flake.nix" "$artifact_dir/inputs/candidate.flake.nix"
@@ -76,10 +86,17 @@ for variant in "${variants[@]}"; do
   mkdir -- "$target"
   git -C "$upstream_repo" archive "$upstream_revision" | tar -xf - -C "$target"
   revision=$upstream_revision
+  source_repository=upstream
   native=false
   owned=false
-  if [[ "$variant" != original ]]; then
-    if [[ "$variant" == baseline ]]; then revision=$BENCH_BASELINE_SHA; else revision=$BENCH_CANDIDATE_SHA; fi
+  facade=false
+  if [[ "$variant" != original || -n ${BENCH_REFERENCE_SHA:-} ]]; then
+    source_repository=project
+    case "$variant" in
+      original) revision=$reference_revision ;;
+      baseline) revision=$BENCH_BASELINE_SHA ;;
+      candidate) revision=$BENCH_CANDIDATE_SHA ;;
+    esac
     # Both paths were created by this invocation from the pinned upstream archive.
     rm -rf -- "$target/Data" "$target/c_lib"
     git -C "$BENCH_REPO" archive "$revision" vendor/json-stream |
@@ -88,6 +105,9 @@ for variant in "${variants[@]}"; do
   fi
   [[ ! -f "$target/Data/JsonStream/Lexer/Internal.hs" ]] || native=true
   [[ ! -f "$target/Data/JsonStream/TokenReader.hs" ]] || owned=true
+  [[ ! -f "$target/Data/JsonStream/Lexer.hs" ]] || facade=true
+  lex_type=false
+  [[ ! -f "$target/Data/JsonStream/CLexType.hs" && ! -f "$target/Data/JsonStream/CLexType.hsc" ]] || lex_type=true
   fold_api=token_parser
   [[ "$owned" != true ]] || fold_api=owned_reader
   requested_api=auto
@@ -101,16 +121,18 @@ for variant in "${variants[@]}"; do
     owned=false
   fi
   if [[ "$native" == true ]]; then
-    awk '
+    awk -v facade="$facade" -v lex_type="$lex_type" '
       /^  (c-sources|includes|include-dirs|cc-options):/ {next}
+      /^    Data.JsonStream.CLexType$/ && lex_type == "false" {next}
       {print}
       /^    Data.JsonStream.Unescape$/ {
         print "    Data.JsonStream.Lexer.Internal"
         print "    Data.JsonStream.Number"
+        if (facade == "true") print "    Data.JsonStream.Lexer"
       }
     ' "$target/benchmarks/aeson-benchmarks.cabal" > "$target/benchmarks/package.tmp"
     mv -- "$target/benchmarks/package.tmp" "$target/benchmarks/aeson-benchmarks.cabal"
-  elif [[ "$variant" != original ]]; then
+  elif [[ "$source_repository" == project ]]; then
     sed 's|^  c-sources:.*|  c-sources: ../c_lib/lexer.c|' \
       "$target/benchmarks/aeson-benchmarks.cabal" > "$target/benchmarks/package.tmp"
     mv -- "$target/benchmarks/package.tmp" "$target/benchmarks/aeson-benchmarks.cabal"
@@ -132,11 +154,16 @@ executable token-fold
   ghc-options: -O2 -Wall -rtsopts
   build-depends: base, aeson, bytestring, text, scientific, primitive, deepseq
   other-modules:
-    Data.JsonStream.CLexType
     Data.JsonStream.CLexer
     Data.JsonStream.TokenParser
     Data.JsonStream.Unescape
 CABAL
+  if [[ "$lex_type" == true ]]; then
+    printf '    Data.JsonStream.CLexType\n' >> "$target/harness/token-fold.cabal"
+  fi
+  if [[ "$facade" == true ]]; then
+    printf '    Data.JsonStream.Lexer\n' >> "$target/harness/token-fold.cabal"
+  fi
   if [[ "$owned" == true ]]; then
     printf '    Data.JsonStream.TokenReader\n' >> "$target/harness/token-fold.cabal"
   fi
@@ -150,6 +177,7 @@ CABAL
     cpp_options+=(-DOWNED_READER)
   elif [[ "$fold_api" == pure_cursor ]]; then
     cpp_options+=(-DPURE_CURSOR)
+    [[ "$facade" != true ]] || cpp_options+=(-DLEXER_FACADE)
   fi
   if [[ "$fold_full_laziness" == disabled ]]; then
     cpp_options+=(-DFOLD_NO_FULL_LAZINESS)
@@ -167,9 +195,11 @@ CABAL
   done
   hash_sources "$target" > "$artifact_dir/$variant.sources.sha256"
   jq -nc --arg variant "$variant" --arg revision "$revision" --arg fold_api "$fold_api" --argjson native "$native" \
-    --arg full_laziness "$fold_full_laziness" \
+    --arg full_laziness "$fold_full_laziness" --arg repository "$source_repository" \
+    --arg benchmark_revision "$upstream_revision" --argjson facade "$facade" \
     '{variant:$variant, revision:$revision, native_lexer:$native, owned_fold:($fold_api == "owned_reader"),
-      fold_api:$fold_api, fold_full_laziness:$full_laziness}' >> "$artifact_dir/variants.jsonl"
+      fold_api:$fold_api, fold_full_laziness:$full_laziness, source_repository:$repository,
+      upstream_benchmark_revision:$benchmark_revision, public_lexer_facade:$facade}' >> "$artifact_dir/variants.jsonl"
 done
 jq -s . "$artifact_dir/variants.jsonl" > "$artifact_dir/variants.json"
 check_inputs

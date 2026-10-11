@@ -30,7 +30,11 @@ import Text.Read (readMaybe)
 #endif
 
 #ifdef PURE_CURSOR
+#ifdef LEXER_FACADE
+import qualified Data.JsonStream.Lexer as Tokens
+#else
 import qualified Data.JsonStream.Lexer.Internal as Tokens
+#endif
 #elif defined(OWNED_READER)
 import Control.Monad.ST (runST)
 import qualified Data.JsonStream.TokenReader as Tokens
@@ -85,7 +89,12 @@ record verify (Totals count bytes checksum) element =
         Tokens.ArrayEnd -> (arrayEndTag, 0, 0)
         Tokens.ObjectEnd -> (objectEndTag, 0, 0)
         Tokens.StringEnd -> (stringEndTag, 0, 0)
+#ifdef LEXER_FACADE
+        Tokens.StringPlain plain -> stringFields asciiStringTag (Tokens.plainBytes plain)
+        Tokens.StringEncoded text -> stringFields encodedStringTag text
+#else
         Tokens.StringRaw text ascii -> stringFields (if ascii then asciiStringTag else encodedStringTag) text
+#endif
 #else
         Tokens.ArrayEnd _ -> (arrayEndTag, 0, 0)
         Tokens.ObjectEnd _ -> (objectEndTag, 0, 0)

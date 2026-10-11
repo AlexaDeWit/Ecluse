@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   upstream:
-    name: Checked byte lookup (${{ matrix.laziness }})
+    name: Native lexer interface (${{ matrix.laziness }})
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 45
     strategy:
@@ -20,10 +20,11 @@ jobs:
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       BENCH_REPO: ${{ github.workspace }}
-      BENCH_BASELINE_SHA: 9aa5076ccfd803ebd8f3f56e256df219f103de16
+      BENCH_REFERENCE_SHA: dc1bfb3571d33500a945a23a88eea935bcd80d23
+      BENCH_BASELINE_SHA: 3b074ce62e7a1584fe3b638f2375b79f443e0f72
       BENCH_BASELINE_FOLD_API: pure_cursor
       BENCH_CANDIDATE_FOLD_API: pure_cursor
-      BENCH_CANDIDATE_SHA: 95cfae7b8af7d9fb33fd599b7df4e6627feabb44
+      BENCH_CANDIDATE_SHA: ca9b1b531bf1589136112ca05fa8446d8d0a6ded
       BENCH_FOLD_FULL_LAZINESS: ${{ matrix.laziness }}
       BENCH_REPEATS: "5"
       BENCH_SECONDS: "0.3"
@@ -33,8 +34,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fetch both pinned source commits
-        run: git fetch --no-tags --depth=1 origin "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"
+      - name: Fetch all three pinned source commits
+        run: git fetch --no-tags --depth=1 origin "$BENCH_REFERENCE_SHA" "$BENCH_BASELINE_SHA" "$BENCH_CANDIDATE_SHA"
 
       - name: Set up toolchain
         id: toolchain
