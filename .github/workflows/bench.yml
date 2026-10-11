@@ -1,90 +1,70 @@
-name: Benchmarks
+name: Temporary PR 1619 cost attribution
 
-# Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
+# The registered filename permits dispatch from this temporary branch.
 on:
-  pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
-# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
-# the latest commit's numbers matter. Never cancel a manual dispatch.
-concurrency:
-  group: bench-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
 permissions:
   contents: read
 
+concurrency:
+  group: cost-profile-1619-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  bench:
-    name: Work-per-request benchmarks (inform-only)
+  cost-profile:
+    if: github.ref == 'refs/heads/measure/1619-cost-profile'
+    name: PyPI cold full-read cost attribution
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 210
     env:
-      # Pin the cabal store to a deterministic, cacheable location, as the other
-      # Haskell jobs do.
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
-      - name: Checkout
+      - name: Checkout measurement harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout immutable native candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d263d5a18c9975395193fbd3ba6654aae640439b
+          fetch-depth: 2
+          path: scratchpad/cost-profile-sources/d263d5a18c9975395193fbd3ba6654aae640439b
+          persist-credentials: false
+
+      - name: Checkout immutable main parent
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 4b0b5d12d478fc5dac4112e374f4b2d030b640cf
+          path: scratchpad/cost-profile-sources/4b0b5d12d478fc5dac4112e374f4b2d030b640cf
           persist-credentials: false
 
       - name: Set up toolchain
-        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore the warm cabal store (this job compiles the benchmark).
           cabal-cache: "true"
+          dist-cache: "false"
 
-      # An exact cabal-store hit already covers cabal.project's pinned index-state.
-      - name: Update package index
-        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
-        run: nix develop .#ci --command task update
+      - name: Profile the two captures at both sources
+        run: bash scripts/profile-1619-cost.sh
 
-      # pipefail preserves the harness exit code through tee's output capture.
-      - name: Run benchmarks
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
-
-      # The renderer accepts partial CSV output and reports a missing CSV without failing.
-      - name: Render results to the run summary
+      - name: Record job status
         if: always()
-        run: nix develop .#ci --command task bench-report
-
-      # Off main only: the runs on main are the baseline. A missing baseline renders as
-      # "no baseline". Both steps continue on error and stop after five minutes, so neither
-      # can fail or stall the job.
-      - name: Fetch the latest results on main
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/perf-baseline.sh bench.yml "bench-results-$RUNNER_ARCH-" "$RUNNER_TEMP/perf-baseline"
-
-      - name: Compare time with main
-        if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
+          COST_JOB_STATUS: ${{ job.status }}
         run: |
-          set -eo pipefail
-          nix develop .#ci --command task against-main KIND=bench BASELINE="$RUNNER_TEMP/perf-baseline" REPORT=bench-results.csv | tee against-main.md
+          mkdir -p scratchpad/1619-cost-profile
+          printf 'job_status=%s\n' "$COST_JOB_STATUS" > scratchpad/1619-cost-profile/job-status.txt
 
-      # Preserve partial output when the harness fails.
-      - name: Upload this run's results
+      - name: Upload profiles and partial evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-results-${{ runner.arch }}-${{ github.sha }}
-          path: |
-            bench-results.csv
-            bench-output.txt
-            against-main.md
-          if-no-files-found: warn
+          name: cost-profile-1619-${{ runner.arch }}-${{ github.sha }}
+          path: scratchpad/1619-cost-profile/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
