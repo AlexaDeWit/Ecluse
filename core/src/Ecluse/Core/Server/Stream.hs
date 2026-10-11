@@ -2,36 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bounded-memory artifact streaming: the constant-memory serve path.
-
-The proxy serves an artifact by __streaming it through__ from upstream, never buffering it
-whole, so a multi-hundred-megabyte tarball never becomes a local memory spike. The mirror
-worker's whole-artifact fetch ('Ecluse.Core.Worker.Fetch.fetchArtifactBytes') is the
-separate, buffered mirroring concern.
-
-== Resource lifetime
-
-A WAI streaming body __runs after the handler returns__, so an upstream connection released
-lexically is already gone by the time the body streams. Raw WAI avoids that: the relay opens
-the connection with @responseOpen@ before it commits the response, and closes it through
-@finally@ around the whole relay. The open-to-@finally@ handoff is masked, so the request
-timeout's kill or Warp's teardown on client disconnect cannot strand the connection between
-@responseOpen@ returning and @finally@ arming @responseClose@.
-
-== Backpressure
-
-'pumpBody' writes each chunk through the sink's bounded output buffer before pulling the
-next, and the write blocks once that buffer spills. The proxy therefore reads upstream only
-as fast as the client drains, in __constant memory whatever the artifact's size__. Only the
-first chunk is flushed, for a prompt first byte: at relay byte rates a per-chunk flush
-degenerates into one socket send per upstream read (see @docs\/architecture\/web-layer.md@ →
-"Streaming and resource lifetime").
-
-== Progress
-
-The pump reads under the "Ecluse.Core.Registry.Progress" watchdog, which counts only the time
-spent waiting on upstream. An upstream that falls below the floor aborts the relay mid-stream,
-and a client that drains slowly does not.
+{- | Artifact relays with bounded memory and upstream backpressure.
+The connection stays open until the responder finishes. The progress watchdog
+counts upstream waits, excluding time spent waiting for the client.
 -}
 module Ecluse.Core.Server.Stream (
     -- * A typed relay responder
@@ -39,7 +12,9 @@ module Ecluse.Core.Server.Stream (
 
     -- * Relaying an upstream response through
     UpstreamBody (..),
+    UpstreamResult (..),
     withUpstreamWhen,
+    withUpstreamResult,
 
     -- * The pump
     pumpBody,
@@ -57,9 +32,7 @@ import Ecluse.Core.Registry.Progress (meteredReader, watchedRaising)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
 
-{- | The two ways an upstream relay can answer, over the caller's route-scoped response value. WAI
-construction stays out of this module, so no pipeline holds an unrestricted WAI responder.
--}
+-- | Route-scoped responders that keep WAI response construction at the caller.
 data RelayResponder response = RelayResponder
     { relayStreamResponse :: Status -> ResponseHeaders -> StreamingBody -> IO response
     -- ^ Commit a status, headers, and bounded-memory streaming body.
@@ -69,58 +42,74 @@ data RelayResponder response = RelayResponder
 
 -- | Whether a relay pumps the upstream body through, or answers bodiless.
 data UpstreamBody
-    = {- | Stream the body through. A @304@ still answers bodiless, because it carries no body
-      (RFC 9110 15.4.5) and upstream's reader is never read.
-      -}
+    = -- | Stream the body, except for a bodiless @304@.
       StreamBody
-    | {- | Answer bodiless and never read upstream's body reader, so a @HEAD@ cannot make the
-      proxy stream a whole artifact to nowhere.
-      -}
+    | -- | Never read the upstream body, including for @HEAD@.
       NoBody
     deriving stock (Eq, Show)
 
-{- | Relay an upstream response when its status passes @accept@. 'Nothing' is a recoverable
-miss that commits nothing, and a failure after the commit propagates rather than re-answering.
--}
+-- | Relay accepted responses, combining pre-commit misses as 'Nothing' and propagating failures after the commit.
 withUpstreamWhen ::
     Manager ->
     ProgressFloor ->
     Request ->
     UpstreamBody ->
-    -- | Whether upstream's status is a hit. A rejected status is a clean miss.
     (Status -> Bool) ->
-    {- | Run once, pre-commit, on the accepted status and headers: the client-facing status and
-    headers, plus the caller's own verdict on the relay.
-    -}
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->
     IO (Maybe (verdict, response))
 withUpstreamWhen manager progress request body accept relay respond =
+    toMaybe <$> withUpstreamResult manager progress request body accept relay respond
+  where
+    toMaybe = \case
+        UpstreamRelayed received -> Just received
+        UpstreamRejected _ -> Nothing
+        UpstreamTransportFailure -> Nothing
+
+-- | A committed relay, or the reason no response was committed.
+data UpstreamResult a
+    = -- | The responder finished, including any body streaming.
+      UpstreamRelayed a
+    | -- | The upstream answered a status the caller did not accept.
+      UpstreamRejected Status
+    | -- | The upstream connection failed before a response was available.
+      UpstreamTransportFailure
+    deriving stock (Eq, Show)
+
+-- | Relay accepted responses, preserving pre-commit misses and propagating failures after the commit.
+withUpstreamResult ::
+    Manager ->
+    ProgressFloor ->
+    Request ->
+    UpstreamBody ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
+    RelayResponder response ->
+    IO (UpstreamResult (verdict, response))
+withUpstreamResult manager progress request body accept relay respond =
     -- Masked from 'responseOpen' to 'finally' arming 'responseClose', so an async exception
     -- between the two cannot strand the connection. 'restore' keeps the relay interruptible.
     mask $ \restore ->
         tryAny (restore (responseOpen request manager)) >>= \case
-            Left _ -> pure Nothing
+            Left _ -> pure UpstreamTransportFailure
             Right upstream -> restore (answer upstream) `finally` responseClose upstream
   where
     answer upstream
-        | not (accept upstreamStatus) = pure Nothing
+        | not (accept upstreamStatus) = pure (UpstreamRejected upstreamStatus)
         | otherwise = do
             (status, headers, verdict) <- relay upstreamStatus (responseHeaders upstream)
             received <-
                 if bodiless
                     then relayEmptyResponse respond status headers
                     else relayStreamResponse respond status headers pump
-            pure (Just (verdict, received))
+            pure (UpstreamRelayed (verdict, received))
       where
         upstreamStatus = responseStatus upstream
         bodiless = body == NoBody || isNotModified upstreamStatus
         pump write flush =
             watchedRaising progress (\watch -> pumpBody (meteredReader watch (brRead (HTTP.responseBody upstream))) write flush)
 
-{- | Pump a chunked body from a reader to a WAI stream sink in constant memory. An empty chunk
-is @http-client@'s 'BodyReader' end-of-body terminator, and the pump never writes it.
--}
+-- | Pump chunks with one opening flush. An empty chunk marks the end of the body.
 pumpBody :: BodyReader -> (Builder -> IO ()) -> IO () -> IO ()
 pumpBody readChunk write flush = do
     opening <- readChunk

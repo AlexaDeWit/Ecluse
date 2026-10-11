@@ -1069,6 +1069,7 @@ test-suite ecluse-core-unit
     -- Test-only: the reference parser that SemverSpec holds the semver scanner to.
     , versions          ^>=6.0
     , wai               ^>=3.2
+    , wai-extra         ^>=3.1
     , warp              ^>=3.4
     -- Test-only: a gzipped body proves the bounded metadata read bounds DECOMPRESSED
     -- bytes. The fixture is a small compressed blob that inflates past the cap.

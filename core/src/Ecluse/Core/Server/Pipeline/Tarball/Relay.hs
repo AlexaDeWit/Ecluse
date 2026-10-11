@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Relay (
 
     -- * Relaying the upstream response
     relayUpstreamWhen,
+    relayUpstreamResult,
     acceptArtifact,
     relayUnjudged,
     relayJudged,
@@ -33,21 +34,17 @@ import Data.ByteString qualified as BS
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Security (ProgressFloor)
 import Ecluse.Core.Server.Conditional (isNotModified)
-import Ecluse.Core.Server.Stream (RelayResponder, UpstreamBody (NoBody, StreamBody), withUpstreamWhen)
+import Ecluse.Core.Server.Stream (RelayResponder, UpstreamBody (NoBody, StreamBody), UpstreamResult, withUpstreamResult, withUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublicRelayAnomaly))
 import Ecluse.Core.Version (Version, renderVersion)
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 
-{- | The artifact serve mode, threaded through the artifact path so @GET@ and @HEAD@ share one
-gate and one upstream-request construction.
--}
+-- | The artifact method and whether a public admit enqueues a mirror job.
 data ArtifactServe
     = -- | A @GET@: stream the artifact body through, enqueuing a mirror job on a public admit.
       ServeFull
-    | {- | A @HEAD@: probe upstream as a @HEAD@ and relay the headers with no body. It serves no
-      bytes, so it mirrors nothing.
-      -}
+    | -- | Probe with @HEAD@ without streaming bytes or enqueuing a mirror job.
       ServeHead
 
 -- | Tag an upstream artifact request with the serve mode's method. 'ServeFull' keeps the @GET@.
@@ -56,16 +53,12 @@ withMethod = \case
     ServeFull -> id
     ServeHead -> \req -> req{HTTP.method = methodHead}
 
-{- | Relay the client's conditional validators onto an upstream artifact request, so upstream can
-answer a @304 Not Modified@ instead of resending an unchanged body.
--}
+-- | Forward conditional validators so upstream can answer @304@.
 withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
 withValidators validators req =
     req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
 
-{- | Relay an upstream artifact response in the serve mode. Both modes keep the same
-recoverable-miss and committed split, so a @HEAD@ falls through a private miss as a @GET@ does.
--}
+-- | Relay in the serve mode, combining all pre-commit misses as 'Nothing'.
 relayUpstreamWhen ::
     ArtifactServe ->
     Manager ->
@@ -76,28 +69,38 @@ relayUpstreamWhen ::
     RelayResponder response ->
     IO (Maybe (verdict, response))
 relayUpstreamWhen mode manager progress request =
-    withUpstreamWhen manager progress request $ case mode of
-        ServeFull -> StreamBody
-        ServeHead -> NoBody
+    withUpstreamWhen manager progress request (upstreamBody mode)
+
+-- | Relay in the serve mode, preserving an upstream rejection or transport failure.
+relayUpstreamResult ::
+    ArtifactServe ->
+    Manager ->
+    ProgressFloor ->
+    HTTP.Request ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
+    RelayResponder response ->
+    IO (UpstreamResult (verdict, response))
+relayUpstreamResult mode manager progress request =
+    withUpstreamResult manager progress request (upstreamBody mode)
+
+upstreamBody :: ArtifactServe -> UpstreamBody
+upstreamBody = \case
+    ServeFull -> StreamBody
+    ServeHead -> NoBody
 
 -- | A successful artifact response, including a matching conditional validator.
 acceptArtifact :: Status -> Bool
 acceptArtifact s = statusIsSuccessful s || isNotModified s
 
-{- | The trusted leg's pre-commit relay. It judges nothing, so the private path pays no header
-scan for an anomaly only the public leg can have.
--}
+-- | Forward private headers without the public leg's anomaly scan.
 relayUnjudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, ())
 relayUnjudged status headers = pure (status, forwardedHeaders headers, ())
 
-{- | The public leg's pre-commit relay. The verdict is decided before any body moves, so a
-committed relay always carries exactly one.
--}
+-- | Judge public headers before committing the response.
 relayJudged :: Status -> ResponseHeaders -> IO (Status, ResponseHeaders, RelayVerdict)
 relayJudged status headers = pure (status, forwardedHeaders headers, relayVerdict status headers)
 
-{- Drop only the hop-by-hop framing headers. The content headers and the @ETag@ pass through, so
-the client can verify the bytes. -}
 forwardedHeaders :: ResponseHeaders -> ResponseHeaders
 forwardedHeaders = filter (not . isHopByHop . fst)
   where
@@ -126,9 +129,7 @@ relayVerdict status headers
     textualContentType raw =
         "text/" `BS.isPrefixOf` raw || "application/json" `BS.isPrefixOf` raw
 
-{- | Observe one public-relay verdict. An anomaly counts on the bounded
-@ecluse.serve.relay.anomalies@ metric, and the unbounded detail stays on the log line.
--}
+-- | Count bounded anomaly classes and log their unbounded detail.
 observeRelayAnomaly :: forall m. (KatipContext m) => MetricsPort -> PackageName -> Version -> RelayVerdict -> m ()
 observeRelayAnomaly metrics name version = \case
     RelayedArtifact -> pass
