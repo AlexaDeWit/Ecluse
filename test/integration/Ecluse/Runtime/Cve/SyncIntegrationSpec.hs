@@ -78,10 +78,10 @@ spec =
                             let ruleDeps = slotRuleDeps slot
                                 syncEnv =
                                     SyncEnv
-                                        { syncFetch = s3CveFetchFor cveSource bucket "npm-osv-schema4.db" (512 * 1024 * 1024)
+                                        { syncFetch = s3CveFetchFor cveSource bucket "npm-osv-schema5.db" (512 * 1024 * 1024)
                                         , syncEcosystem = Npm
                                         , syncEpssRequirement = EpssOptional
-                                        , syncDbPath = dataDir <> "/npm-osv-schema4.db"
+                                        , syncDbPath = dataDir <> "/npm-osv-schema5.db"
                                         , syncSlot = slot
                                         , syncStoreRef = "s3://" <> bucket
                                         }
@@ -107,7 +107,7 @@ spec =
 
                                 -- The fetch fails fast on the declared length, before any bytes
                                 -- sink to disk.
-                                let cappedFetch = s3CveFetchFor cveSource bucket "npm-osv-schema4.db" 16
+                                let cappedFetch = s3CveFetchFor cveSource bucket "npm-osv-schema5.db" 16
                                 fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
                                     `shouldReturn` Left (OsvDbTooLarge 16)
   where

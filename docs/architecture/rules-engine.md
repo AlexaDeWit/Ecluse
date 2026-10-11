@@ -205,9 +205,14 @@ malicious publish.
   quarantine instead of being admitted on an unverified claim.
 
 It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the scope
-allow-list, so a trusted scope never pays the advisory read. The fix test is an exact text match on
-the advisory's `fixed` version as written. A fix published under any other spelling waits out the
-quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range membership
+allow-list, so a trusted scope never pays the advisory read. Pilot stores version bounds and exact
+points under one ecosystem spelling. The remediation lookup renders served versions and its parsed
+fixed bound through the same renderer. PyPI `1.19.0` and `1.19` identify the same fix. npm advisory
+`v1.2.0` identifies served `1.2.0`, while public npm parsing remains strict. Semver build metadata
+remains part of exact fix identity, even though precedence ignores it. RubyGems uses its canonical
+token spelling. Unparseable fixes retain literal matching and conservative affected membership.
+This replaces the earlier raw-string decision (#1574). Wire versions and artifact URLs retain their
+published text. The rule decides range membership
 in Haskell with the same per-ecosystem ordering as
 [`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison counts
 as affected, so the lane only opens on evidence.
@@ -338,7 +343,7 @@ path, since Écluse checks a version only before mirroring it and serves it rule
 #### The artifact contract
 
 The object key is stable per ecosystem and embeds the table-schema epoch,
-`<ecosystem>-osv-schema<N>.db` (currently `npm-osv-schema4.db`). That stability is what makes
+`<ecosystem>-osv-schema<N>.db` (currently `npm-osv-schema5.db`). That stability is what makes
 ETag polling work. The epoch is a hand-bumped constant shared by the Pilot writer and the proxy
 reader ([`Ecluse.Core.Osv.Schema`](../../core/src/Ecluse/Core/Osv/Schema.hs)), stamped inside
 the artifact as SQLite's `user_version`. A mismatch keeps the last-good database and alarms.
@@ -347,7 +352,7 @@ The artifact is **immutable and rebuilt from scratch** on every compilation, so 
 migrations, only a read-compatibility contract. Advance the epoch for an incompatible table shape
 or an incompatible meaning of stored values, even if the columns remain unchanged. A compatible
 addition does not bump it, because readers select explicit columns. What the reader requires is a
-separate question from what the epoch names: within epoch 4
+separate question from what the epoch names: within epoch 5
 the reader requires `severity` and `epss_score` on `package_vulnerability_ranges`, so an artifact
 missing a required column, or carrying it under a different declared type, fails schema
 conformance (`CveDbSchemaNonConformant`) and the last-good database keeps serving.
@@ -355,13 +360,13 @@ conformance (`CveDbSchemaNonConformant`) and the last-good database keeps servin
 Successful compilation records `epss_status=available` in the `meta` table, including when the
 valid feed omits optional dates or has no scores matching this artifact's advisories. This marker
 records whole-feed enrichment. An individual `epss_score` can still be absent. The added key
-preserves epoch 4. Consumers enforce their resolved policy's requirement before accepting an artifact.
-Older epoch 4 artifacts can lack the marker and remain acceptable only without EPSS-dependent rules.
+was compatible within epoch 4. Consumers enforce their resolved policy's requirement before accepting an artifact.
+An artifact without the marker remains acceptable only without EPSS-dependent rules.
 A pass whose optional feed failed records `epss_status=unavailable`, no scores, and no EPSS source
 or dates. That whole-feed state is distinct from an available feed that scores none of the
 artifact's advisories, and only an ecosystem without EPSS-dependent rules accepts it.
 
-Epoch 4 stores canonical package names: PEP 503 for PyPI, verbatim for npm and RubyGems.
+Epoch 5 retains the canonical package names introduced in epoch 4: PEP 503 for PyPI, verbatim for npm and RubyGems.
 Rules query the same canonical key for denial and remediation. Dredger parses the stored keys
 and store names into the same package identity before evaluating the shared rules.
 Display spelling remains available for decision messages.
@@ -375,9 +380,15 @@ canonicalisation itself because configured exports can carry other spellings. Ep
 enforce this stored meaning, so epoch 4 consumers reject those artifacts despite their matching
 table shape. Unknown ecosystems retain their package spelling.
 
+Epoch 5 changes the meaning of stored version bounds and points to their canonical ecosystem
+rendering. It rejects epoch 4 even when the columns conform. Rebuild and publish the new artifact
+before rolling out consumers. During a mixed rollout, old consumers select epoch 4 keys and new
+consumers select epoch 5 keys. No alias or in-place migration accepts the old format. An absent
+new artifact follows the existing first-sync, readiness and alarm contract.
+
 Pilot also decodes a version sentinel: OSV writes "affected from the beginning" as an `introduced`
 of `0`, which semver rejects, so the compile records no lower bound and leaves the `fixed` or
-`last_affected` bound beside it unchanged. A version at or above the fix then computes as
+`last_affected` bound beside it under its canonical ecosystem spelling. A version at or above the fix then computes as
 admitted and one below it as denied.
 
 A bound the ecosystem's version grammar cannot parse is a signal rather than a filter. The

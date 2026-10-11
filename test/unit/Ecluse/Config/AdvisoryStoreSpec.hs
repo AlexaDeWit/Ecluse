@@ -59,12 +59,12 @@ spec = describe "mkAdvisoryStoreUrl" $ do
 
     describe "addresses an object the same way for Pilot and the proxy" $ do
         it "writes the bare file name with no prefix" $
-            fmap (\u -> (advisoryStoreBucket u, advisoryObjectKey u "npm-osv-schema4.db")) store
-                `shouldBe` Right ("my-advisories", "npm-osv-schema4.db")
+            fmap (\u -> (advisoryStoreBucket u, advisoryObjectKey u "npm-osv-schema5.db")) store
+                `shouldBe` Right ("my-advisories", "npm-osv-schema5.db")
 
         it "writes the prefix ahead of the file name" $
-            fmap (`advisoryObjectKey` "npm-osv-schema4.db") prefixed
-                `shouldBe` Right "ecluse/osv/npm-osv-schema4.db"
+            fmap (`advisoryObjectKey` "npm-osv-schema5.db") prefixed
+                `shouldBe` Right "ecluse/osv/npm-osv-schema5.db"
 
     describe "refuses what it cannot dial" $ do
         it "refuses a scheme this build does not know, naming the key" $

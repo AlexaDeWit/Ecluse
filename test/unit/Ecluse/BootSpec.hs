@@ -300,7 +300,7 @@ spec = do
                         withStub status404 "" $ \epssStub -> do
                             outcome <- withEnvVars caseKeys (compileEnv epssRule osvStub epssStub) (try (withArgs ["pilot", "compile", "--out", outDir] run))
                             outcome `shouldBe` expected
-                            doesFileExist (outDir </> "npm-osv-schema4.db") `shouldReturn` not epssRule
+                            doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` not epssRule
 
     describe "check-config (validate and print, boot nothing)" $ do
         it "validates a bootable configuration and exits 0" $

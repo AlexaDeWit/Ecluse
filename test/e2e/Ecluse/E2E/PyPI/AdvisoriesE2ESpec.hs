@@ -59,11 +59,19 @@ scenarios = describe "PyPI advisory policy through pip" $ do
             assertPipRefused e2e "flask" "1.19"
             assertDenial e2e "flask" "1.19" "BlockedByDefault" Nothing
 
-    it "quarantines a recent release when the raw advisory fix has a different spelling" $ \plane -> do
+    it "admits a recent release with a canonicalised advisory fix and preserves refusal controls" $ \plane -> do
         withPolicy ["advisory-deny" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]] plane $ \e2e -> do
             assertPipRefused e2e "e2e-raw-fix" "1.18"
             assertDenial e2e "e2e-raw-fix" "1.18" "DenyIfCve" (Just "GHSA-e2e-raw-fix")
         withPolicy [] plane $ \e2e -> do
+            files <- advertisedFiles e2e "e2e-raw-fix"
+            case lookup (pypiWheelFor "e2e-raw-fix" "1.19") files of
+                Nothing -> expectationFailure "the canonicalised advisory fix was absent from the served index"
+                Just digest ->
+                    withPipProject e2e "e2e-raw-fix" "1.19" digest $ \project -> do
+                        void $ pipInstallIn project >>= shouldSucceedThroughProxy e2e
+                        pipInstalled project (pypiDistInfoFor "e2e-raw-fix" "1.19") `shouldReturn` True
+        withPolicy ["remediation-fast-track" .= object ["enabled" .= False]] plane $ \e2e -> do
             files <- advertisedFiles e2e "e2e-raw-fix"
             map fst files `shouldBe` [pypiWheelFor "e2e-raw-fix" "1.18"]
             assertPipRefused e2e "e2e-raw-fix" "1.19"

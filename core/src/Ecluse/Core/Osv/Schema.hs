@@ -33,7 +33,7 @@ import Data.Universe.Generic (universeGeneric)
 
 -- | Advance for incompatible shape or stored-value semantics, not compatible additions.
 osvSchemaEpoch :: Int
-osvSchemaEpoch = 4
+osvSchemaEpoch = 5
 
 -- | Keep a stable object key until the artifact's read contract changes.
 osvDbFileName :: Text -> FilePath

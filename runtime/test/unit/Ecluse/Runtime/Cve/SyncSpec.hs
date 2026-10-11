@@ -16,6 +16,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian)
+import Database.SQLite.Simple (execute_, withConnection)
 import Katip (KatipContextT)
 import Network.HTTP.Types.Status (status404)
 import System.Directory (copyFile, doesFileExist)
@@ -554,6 +555,37 @@ spec = do
                 void (syncStep (envWith (fetchServing (Just "e2") (`mkMinimalValidDb` "pkg-b"))) (Just (DbEtag "e1")))
                 probesFor slot "pkg-b" `shouldReturn` Just True
                 probesFor slot "pkg-a" `shouldReturn` Just False
+
+        for_ [False, True] $ \warm ->
+            it ("rejects a downloaded epoch 4 artifact " <> if warm then "without changing last-good evidence or publication age" else "before any generation exists") $ do
+                archive <- osvCorpusZip CorpusV1
+                withOsvZipDb Npm archive $ \compiled ->
+                    withSyncEnv $ \_ slot envWith -> do
+                        let accepted = envWith (fetchServingAt (Just publishedAt) (Just "good") (copyFile compiled))
+                            downloadOld dest = do
+                                copyFile compiled dest
+                                withConnection dest (`execute_` "PRAGMA user_version = 4")
+                            rejected = envWith (fetchServingAt (Just (addUTCTime 60 publishedAt)) (Just "old") downloadOld)
+                        when warm (void (syncStep accepted Nothing))
+                        etag <- currentAdvisoryEtag slot
+                        installed <- generationInstalledAt slot
+                        source <- currentAdvisorySource slot
+                        priorBytes <- if warm then Just <$> readFileBS (syncDbPath accepted) else pure Nothing
+                        syncStep rejected etag >>= \case
+                            SyncRejected rejectedEtag reason -> do
+                                rejectedEtag `shouldBe` DbEtag "old"
+                                reason `shouldBe` CveDbWrongEpoch 4
+                            other -> expectationFailure ("expected epoch 4 SyncRejected, got " <> show other)
+                        currentAdvisoryEtag slot `shouldReturn` etag
+                        generationInstalledAt slot `shouldReturn` installed
+                        currentAdvisorySource slot `shouldReturn` source
+                        doesFileExist (syncDbPath rejected <> ".tmp") `shouldReturn` False
+                        case priorBytes of
+                            Just bytes -> do
+                                readFileBS (syncDbPath accepted) `shouldReturn` bytes
+                                probesFor slot "corpus-vuln" `shouldReturn` Just False
+                                withSlotGeneration slot (traverse (\(_, cve, _) -> namesFix cve "corpus-vuln" "1.2.0")) `shouldReturn` Just True
+                            Nothing -> doesFileExist (syncDbPath rejected) `shouldReturn` False
 
         it "a refused artifact is discarded and the last-good generation keeps serving" $
             withSyncEnv $ \_ slot envWith -> do

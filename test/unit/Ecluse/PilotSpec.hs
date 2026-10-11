@@ -107,7 +107,7 @@ spec = do
                             `shouldThrow` (\refusal -> perEcosystem refusal == "npm")
                     filter (T.isInfixOf "mounts no npm ecosystem") (lines logged)
                         `shouldSatisfy` \warned -> length warned == 1 && all (T.isInfixOf "\"sev\":\"Warning\"") warned
-                    doesFileExist (outDir </> "npm-osv-schema4.db") `shouldReturn` False
+                    doesFileExist (outDir </> "npm-osv-schema5.db") `shouldReturn` False
 
         it "fails loudly when an upload is requested without a configured advisory store" $ do
             le <- newTestLogEnv

@@ -178,10 +178,10 @@ spec = do
     describe "uploadTarget -- where one artifact lands in the store" $ do
         it "keys the artifact on its own file name, dropping the local directory" $ do
             store <- storeAt "s3://advisories"
-            uploadTarget store "/var/lib/ecluse/advisories/npm-osv-schema4.db"
-                `shouldBe` ("advisories", "npm-osv-schema4.db")
+            uploadTarget store "/var/lib/ecluse/advisories/npm-osv-schema5.db"
+                `shouldBe` ("advisories", "npm-osv-schema5.db")
 
         it "writes the store's prefix ahead of that name, which is where the sync reads" $ do
             store <- storeAt "s3://advisories/ecluse"
-            uploadTarget store "/var/lib/ecluse/advisories/npm-osv-schema4.db"
-                `shouldBe` ("advisories", "ecluse/npm-osv-schema4.db")
+            uploadTarget store "/var/lib/ecluse/advisories/npm-osv-schema5.db"
+                `shouldBe` ("advisories", "ecluse/npm-osv-schema5.db")

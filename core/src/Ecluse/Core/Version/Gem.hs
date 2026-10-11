@@ -12,6 +12,7 @@ trailing letter segment sorts below the bare release.
 module Ecluse.Core.Version.Gem (
     GemKey (..),
     parseGem,
+    renderGem,
     isGemStable,
 ) where
 
@@ -19,7 +20,7 @@ import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 
 import Ecluse.Core.Text (isAsciiAlphaNum)
-import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, withinVersionLength)
+import Ecluse.Core.Version.Token (VToken (..), classifyRun, digitRuns, renderToken, withinVersionLength)
 
 -- | A parsed @Gem::Version@: a flat token list compared with zero-padding.
 newtype GemKey = GemKey [VToken]
@@ -46,6 +47,11 @@ parseGem raw = do
   where
     validSeg s = not (T.null s) && T.all isAsciiAlphaNum s
     segTokens = map classifyRun . digitRuns
+
+-- | Render canonical Gem tokens, using @0@ for an all-zero release.
+renderGem :: GemKey -> Text
+renderGem (GemKey []) = "0"
+renderGem (GemKey tokens) = T.intercalate "." (map renderToken tokens)
 
 -- | Whether a gem version is stable: every token is numeric, so no prerelease marker.
 isGemStable :: GemKey -> Bool

@@ -14,6 +14,7 @@ module Ecluse.Core.Version.Token (
     numOr0,
     digitRuns,
     classifyRun,
+    renderToken,
     withinVersionLength,
 ) where
 
@@ -62,3 +63,9 @@ digitRuns = T.groupBy (\c1 c2 -> isDigit c1 == isDigit c2)
 -- | Classify one run: all-digit reads as a 'VNum', anything else stays a 'VStr'.
 classifyRun :: Text -> VToken
 classifyRun run = if T.all isDigit run then VNum (numOr0 run) else VStr run
+
+-- | Render a numeric or textual version token without changing its identity.
+renderToken :: VToken -> Text
+renderToken = \case
+    VNum n -> show n
+    VStr s -> s

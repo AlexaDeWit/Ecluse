@@ -229,7 +229,7 @@ beside the verdict, so you can alert on staleness as well as on the `503`
 
 `ecluse pilot` runs as a long-lived loop. A Pilot pod does not need to idle between runs, though:
 `ecluse pilot compile --out DIR` runs one OSV compilation and exits. It fetches one ecosystem's
-advisory export and the EPSS feed, and writes `<ecosystem>-osv-schema4.db` into `DIR`.
+advisory export and the EPSS feed, and writes `<ecosystem>-osv-schema5.db` into `DIR`.
 
 | Flag | Effect |
 |---|---|
@@ -258,14 +258,20 @@ Run the one-shot as a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`, whi
 single instance, and schedule it less often than the proxy polls. Give the pod its role identity
 through IRSA or workload identity rather than mounted keys.
 
-**Artifact keys.** Pilot names each artifact `<ecosystem>-osv-schema4.db`, where `4` is the schema
+**Artifact keys.** Pilot names each artifact `<ecosystem>-osv-schema5.db`, where `5` is the schema
 epoch, and uploads it under whatever prefix `advisories.url` carries. The key is stable per
 ecosystem, so bucket policies and the consumers' ETag polling can target it. An IAM policy that
 names exact object keys must name these keys. The artifact stores canonical package names (PEP 503
-names for PyPI). A consumer rejects an artifact from any other epoch and waits for its first
+names for PyPI) and canonical version bounds and points. A consumer rejects an artifact from any other epoch and waits for its first
 compatible sync. Nothing rewrites an old artifact.
 
-An enabled `pypi` mount reads `pypi-osv-schema4.db` under the `advisories.url` prefix.
+**Epoch 5 rollout.** Run the new Pilot to rebuild and publish `npm-osv-schema5.db` and each other
+enabled ecosystem's artifact before rolling out consumers. Epoch 4 files are incompatible even
+when their tables have the same columns. New consumers select only epoch 5 keys and never migrate
+or alias an old artifact. Old consumers continue selecting epoch 4 during a mixed rollout. If
+an epoch 5 artifact is absent, the existing first-sync, readiness and alarm behaviour applies.
+
+An enabled `pypi` mount reads `pypi-osv-schema5.db` under the `advisories.url` prefix.
 The npm artifact cannot supply PyPI advisory decisions. Publish the PyPI artifact with
 `ecluse pilot compile --ecosystem pypi --out DIR --upload` before you enable PyPI advisory denies.
 See [per-mount readiness](@/docs/operations.md#health-probes) for routing and availability signals.
