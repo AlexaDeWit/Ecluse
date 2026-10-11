@@ -19,6 +19,8 @@ import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (Limits (maxArtifactCount), defaultLimits)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks)
@@ -27,25 +29,25 @@ import Ecluse.Test.Support (expectRight)
 -- | Eight times more dropped files or members may not raise the bytes a read holds.
 spec :: Spec
 spec = describe "pypiWalk live bytes" $ do
-    it "a selected read holds the same bytes however many files arrays repeat the release" $
+    it (caseLabel "retention/pypi/selected/containers" "a selected read holds the same bytes however many files arrays repeat the release") $
         selectedLevel repeatedArrays
-    it "a selected read holds the same bytes however often a file repeats a member" $
+    it (caseLabel "retention/pypi/selected/members" "a selected read holds the same bytes however often a file repeats a member") $
         selectedLevel repeatedMembers
-    it "a selected read holds the same bytes however many other releases the files name" $
+    it (caseLabel "retention/pypi/selected/other-releases" "a selected read holds the same bytes however many other releases the files name") $
         selectedLevel otherReleases
-    it "a full read holds the same bytes however often a kept file repeats a member" $
-        heldFor FullRead defaultLimits repeatedMembers >>= (`shouldSatisfy` level)
-    it "a full read holds the same bytes however many files follow a tripped artifact limit" $
-        heldFor FullRead defaultLimits{maxArtifactCount = 2} filesPastLimit >>= (`shouldSatisfy` level)
+    it (caseLabel "retention/pypi/full/members" "a full read holds the same bytes however often a kept file repeats a member") $
+        boundedRetention allowance (heldFor FullRead defaultLimits repeatedMembers)
+    it (caseLabel "retention/pypi/full/past-limit" "a full read holds the same bytes however many files follow a tripped artifact limit") $
+        boundedRetention allowance (heldFor FullRead defaultLimits{maxArtifactCount = 2} filesPastLimit)
 
 -- A selected read keeps its one file of the release at both sizes, and holds the same bytes.
 selectedLevel :: (Int -> ByteString) -> IO ()
 selectedLevel body = do
-    for_ [fewRepeats, manyRepeats] $ \count -> do
+    for_ [2000, 16000] $ \count -> do
         streamed <- expectRight (projectPyPIChunks defaultLimits thing selected [body count])
         (_, document) <- expectRight (projectPyPIStream defaultLimits thing streamed)
         length (simpleFiles document) `shouldBe` 1
-    heldFor selected defaultLimits body >>= (`shouldSatisfy` level)
+    boundedRetention allowance (heldFor selected defaultLimits body)
 
 -- The release every body's kept file names, under its canonical key.
 selected :: PyPIRead
@@ -54,17 +56,9 @@ selected = SelectedRead thing "1"
 thing :: PackageName
 thing = unscopedPyPI "thing"
 
-fewRepeats, manyRepeats :: Int
-fewRepeats = 2000
-manyRepeats = 16000
-
-heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> IO (Integer, Integer)
-heldFor mode limits body = (,) <$> held fewRepeats <*> held manyRepeats
-  where
-    held count = heldDuring (pypiWalk 64 mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
-
-level :: (Integer, Integer) -> Bool
-level (few, repeated) = repeated - few < allowance
+heldFor :: PyPIRead -> Limits -> (Int -> ByteString) -> Int -> IO Integer
+heldFor mode limits body count =
+    heldDuring (pypiWalk 64 mode (collectField limits mode) keepsFile (testTable fileUniqueFields) (emptyProjection thing)) (body count)
 
 -- Files arrays that each hold one file of the release. Only the first claims the key.
 repeatedArrays :: Int -> ByteString

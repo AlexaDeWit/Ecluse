@@ -5,6 +5,7 @@
 -- | Every scenario the harness defines, and the counts of successes a run of all of them checks.
 module Ecluse.BenchLoad.Scenarios (
     fixtures,
+    checkFixtureCoverage,
     findScenario,
     runsUnder,
     checkedCounts,
@@ -18,10 +19,20 @@ import Ecluse.BenchLoad.Npm (npmFixture)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
 import Ecluse.BenchLoad.PyPI (pypiFixture)
 import Ecluse.BenchLoad.Selection (scenarioKey, selectScenario)
+import Ecluse.Test.EcosystemBench (checkBenchmarkCoverage)
 
 -- | Each ecosystem's fixture, in report order.
 fixtures :: [UpstreamFixture]
 fixtures = [npmFixture, pypiFixture]
+
+-- | Reject missing providers and empty or ambiguous scenario registrations before loading work.
+checkFixtureCoverage :: [UpstreamFixture] -> Either Text ()
+checkFixtureCoverage registered = do
+    checkBenchmarkCoverage (map fixtureEcosystem registered)
+    for_ registered $ \fixture -> do
+        let names = map scenarioName (fixtureScenarios fixture)
+        when (null names) (Left ("empty load fixture: " <> show (fixtureEcosystem fixture)))
+        when (length names /= Set.size (Set.fromList names)) (Left ("duplicate load scenarios: " <> show (fixtureEcosystem fixture)))
 
 -- | The scenario an ecosystem-qualified key names.
 findScenario :: Text -> Maybe Scenario

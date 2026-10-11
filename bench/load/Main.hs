@@ -54,7 +54,7 @@ import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
-import Ecluse.BenchLoad.Scenarios (checkedCounts, findScenario, fixtures, runsUnder)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -73,6 +73,7 @@ main =
 -- Proxy cgroups a killed run left behind are retired before and after, so none outlives a run.
 runDriver :: IO ()
 runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
+    either benchFail pure (checkFixtureCoverage fixtures)
     knobs <- loadKnobsFromEnv
     shape <- podShapeFromEnv
     selected <- selectedKeys

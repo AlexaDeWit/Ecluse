@@ -18,21 +18,21 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     HashAlg (SHA1, SRI),
     PackageInfo (infoDistTags, infoName, infoVersions),
-    PackageName,
     mkHash,
     mkPackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataFetch))
+import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
-import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded, projectNpmManifest)
@@ -85,20 +85,12 @@ spec = describe "live npm registry protocol" $ do
                 [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
 
     -- Live responses check default admission against growth since the complete corpus captures.
-    for_ ["react", "@types/node", "lodash", "typescript"] $ \pkg ->
-        it ("a real large trusted packument is admissible under the default Limits (" <> toString pkg <> ")") $ do
+    for_ [("react", "react"), ("types-node", "@types/node"), ("lodash", "lodash"), ("typescript", "typescript")] $ \(identifier, pkg) ->
+        it (caseLabel ("live/npm/" <> identifier) ("a real large trusted packument is admissible under the default Limits (" <> pkg <> ")")) $ do
             manager <- newManager tlsManagerSettings
             parsed <- either (fail . show) pure (projectName pkg)
-            outcome <- admissibleUnderDefaults manager parsed
-            case outcome of
-                Unreachable fault ->
-                    pendingWith ("npm registry unreachable (" <> toString fault <> "); smoke test skipped")
-                Refused why ->
-                    expectationFailure ("the default Limits refused a real trusted packument: " <> toString why)
-                Admitted name versionCount -> do
-                    name `shouldBe` pkg
-                    versionCount `shouldSatisfy` (> 0)
-                    versionCount `shouldSatisfy` (<= maxVersionCount defaultLimits)
+            config <- publicRegistryOrigin manager
+            void (liveMetadata pkg (fetchManifest npmRead passthroughTracingPort config parsed))
 
 registryBase :: String
 registryBase = "https://registry.npmjs.org"
@@ -119,27 +111,6 @@ liveRegistryDocument extraArgs path = do
                 (\err -> fail (path <> " failed to decode: " <> err))
                 (pure . Just)
                 (eitherDecodeStrict (encodeUtf8 out))
-
--- Only transport failures may make a live bound check pending.
-data Admissibility
-    = -- | The exchange never produced a document, so the case has nothing to judge.
-      Unreachable Text
-    | -- | A bound or the projection turned a real trusted package away.
-      Refused Text
-    | -- | The packument's own name, and the version count the bounds admitted.
-      Admitted Text Int
-    deriving stock (Eq, Show)
-
-admissibleUnderDefaults :: Manager -> PackageName -> IO Admissibility
-admissibleUnderDefaults manager name = do
-    config <- publicRegistryOrigin manager
-    fetched <- fetchManifest npmRead passthroughTracingPort config name
-    pure $ case fetched of
-        Left (MetadataFetch (FetchTransport fault)) -> Unreachable (show fault)
-        Left fault -> Refused ("the streamed fetch refused a real package: " <> show fault)
-        Right manifest ->
-            let info = manifestInfo manifest
-             in Admitted (renderPackageName (infoName info)) (Map.size (infoVersions info))
 
 -- Include raw digests across every version to detect false refusals by mkHash.
 collectDistDigests :: Value -> [(HashAlg, Text)]
