@@ -861,7 +861,8 @@ recoverySpec = describe "owned advisory recovery" $ do
             entered <- newEmptyTMVarIO
             gate <- newEmptyTMVarIO
             calls <- newIORef (0 :: Int)
-            let probe = do
+            let probe :: IO ()
+                probe = do
                     n <- atomicModifyIORef' calls (\count -> (count + 1, count + 1))
                     if afterFault && n == 1
                         then throwIO TestSourceUnavailable

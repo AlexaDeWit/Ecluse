@@ -482,10 +482,10 @@ spec = do
             stateVar <- newTVarIO aCacheState
             forM_ [1 .. 3 :: Int] $ \count -> do
                 claim <- claimExpired stateVar
-                before <- readTVarIO stateVar
-                let settled = onMintFailure claim breakerCfg t0 before
-                csToken settled `shouldBe` csToken before
-                csRefreshDue settled `shouldBe` csRefreshDue before
+                previousState <- readTVarIO stateVar
+                let settled = onMintFailure claim breakerCfg t0 previousState
+                csToken settled `shouldBe` csToken previousState
+                csRefreshDue settled `shouldBe` csRefreshDue previousState
                 csMintClaim settled `shouldBe` Just claim
                 breakerPhase (csBreaker settled)
                     `shouldBe` if count < 3 then Closed count else Open (addUTCTime 30 t0)
@@ -690,31 +690,27 @@ stepRequest m
             then -- Valid but past the threshold: a background refresh fires (if the
             -- breaker admits). The caller still gets the current, valid token.
                 (ServedToken (rmToken m), backgroundRefreshed)
-            else (ServedToken (rmToken m), m) -- valid, no refresh due: serve cached
-    | otherwise = expiredPath -- expired: must mint synchronously
+            else (ServedToken (rmToken m), m)
+    | otherwise = expiredPath
   where
     now = rmNow m
 
-    -- A due background refresh: attempt a mint if the breaker admits, else skip.
     backgroundRefreshed =
-        let (admit, br') = mAdmit now (rmBreaker m)
-         in if not admit
+        let (admitted, br') = mAdmit now (rmBreaker m)
+         in if not admitted
                 then m{rmBreaker = br'}
                 else mintInto m{rmBreaker = br'} (rmFail m)
 
-    -- The expired (synchronous) path: breaker may fast-fail without minting.
     expiredPath =
-        let (admit, br') = mAdmit now (rmBreaker m)
-         in if not admit
-                then (RaisedError, m{rmBreaker = br'}) -- BreakerOpen, no mint
+        let (admitted, br') = mAdmit now (rmBreaker m)
+         in if not admitted
+                then (RaisedError, m{rmBreaker = br'})
                 else
                     let m' = mintInto m{rmBreaker = br'} (rmFail m)
                      in if rmFail m
-                            then (RaisedError, m') -- expired + failed mint surfaces
+                            then (RaisedError, m')
                             else (ServedToken (rmToken m'), m')
 
-    -- Apply one mint. Success installs a fresh token and resets the breaker and the refresh
-    -- schedule. Failure keeps the cached token and advances the breaker.
     mintInto base failed
         | failed =
             base
