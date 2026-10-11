@@ -5,7 +5,7 @@
 -- | The resilience harness around the advisory read, and the engine over rules sharing that read.
 module Ecluse.Core.Rules.EffectfulSpec (spec) where
 
-import Control.Concurrent.STM (check, readTMVar)
+import Control.Concurrent.STM (check)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import UnliftIO (cancel, mapConcurrently, timeout, wait, waitCatch, withAsync)
