@@ -643,6 +643,7 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
 | `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
+| `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | Pilot compiles and uploads PyPI advisories, the PyPI slot syncs them, and pip observes CVE and EPSS denial of an old affected release. The exact matching fix bypasses quarantine, a remediation-disabled control refuses it, and a differently spelled raw fix stays quarantined. Advisory `Flask` matches served `flask`. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 

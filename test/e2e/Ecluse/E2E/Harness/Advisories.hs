@@ -2,15 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The advisory store for end-to-end scenarios: the emulated S3 bucket, the environment every
-role reads it through, and Pilot's own compile-and-upload run against a committed corpus
-generation.
--}
+-- | The emulated advisory store and whole-image Pilot compile-and-upload runs.
 module Ecluse.E2E.Harness.Advisories (
     advisoryBucket,
     advisoryStoreEnv,
     createAdvisoryBucket,
     publishAdvisoryGeneration,
+    publishAdvisoryExport,
 ) where
 
 import Data.Text qualified as T
@@ -26,9 +24,10 @@ import Network.HTTP.Client (
 import Network.HTTP.Types (hAuthorization, statusCode)
 import UnliftIO (handleAny)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
 import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportBase)
 import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
-import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
+import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic, PyPIPublic), stubUrl)
 import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
@@ -37,9 +36,7 @@ import Ecluse.Test.Poll (pollUntil)
 advisoryBucket :: Text
 advisoryBucket = "ecluse-e2e-advisories"
 
-{- | The advisory-store environment every role shares. The poll interval is short because one
-scenario observes two generations, where a deployment waits out the shipped minute.
--}
+-- | The shared store with a short poll interval for scenarios that replace a generation.
 advisoryStoreEnv :: [(Text, Text)]
 advisoryStoreEnv =
     [ ("ECLUSE_ADVISORIES__URL", "s3://" <> advisoryBucket)
@@ -47,9 +44,7 @@ advisoryStoreEnv =
     ]
         <> ministackAwsEnv
 
-{- | Create the advisory bucket in the ministack S3 emulator, retrying while it warms up.
-@CreateBucket@ is idempotent for its own owner, so a retry after a partial answer is safe.
--}
+-- | Retry bucket creation while ministack warms up. Repeated owner requests are idempotent.
 createAdvisoryBucket :: GlobalDataPlane -> IO ()
 createAdvisoryBucket gdp = do
     manager <- newManager defaultManagerSettings
@@ -65,8 +60,7 @@ createAdvisoryBucket gdp = do
             -- 409 is BucketAlreadyOwnedByYou, which a retried create reports.
             pure (statusCode (responseStatus resp) `elem` [200, 409])
 
-{- This suite depends on neither amazonka nor ecluse-runtime, so the bucket is created by hand
-rather than through S3.CreateBucket. The emulator routes on the scope and verifies no signature. -}
+-- The emulator routes on the credential scope and verifies no signature.
 s3CredentialScope :: IO Text
 s3CredentialScope = do
     day <- formatTime defaultTimeLocale "%Y%m%d" <$> getCurrentTime
@@ -77,35 +71,35 @@ s3CredentialScope = do
             <> T.replicate 64 "0"
         )
 
-{- | Compile one corpus generation through the product image's Pilot and upload it to the advisory
-store, the cycle a scheduled export runs. Its archives come from the stub, so it reaches no feed.
--}
+-- | Compile and upload one npm corpus generation through the product image's Pilot.
 publishAdvisoryGeneration :: GlobalDataPlane -> CorpusVersion -> IO RoleRun
 publishAdvisoryGeneration gdp generation =
+    publishAdvisoryExport gdp Npm (advisoryExportBase generation)
+
+-- | Compile and upload one ecosystem's stub export, joined with the local EPSS slice.
+publishAdvisoryExport :: GlobalDataPlane -> Ecosystem -> Text -> IO RoleRun
+publishAdvisoryExport gdp ecosystem exportBase =
     runRoleOnce
         gdp
-        (pilotEnv <> advisorySourceEnv generation)
-        ["pilot", "compile", "--ecosystem", "npm", "--out", advisoryDataDir, "--upload"]
+        (pilotEnv ecosystem <> advisorySourceEnv exportBase)
+        ["pilot", "compile", "--ecosystem", toString (ecosystemName ecosystem), "--out", advisoryDataDir, "--upload"]
 
--- Both feeds, pointed at the stub's copy of this generation and the shared EPSS slice.
-advisorySourceEnv :: CorpusVersion -> [(Text, Text)]
-advisorySourceEnv generation =
-    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", publicUrl (advisoryExportBase generation))
+advisorySourceEnv :: Text -> [(Text, Text)]
+advisorySourceEnv exportBase =
+    [ ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", publicUrl exportBase)
     , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", publicUrl advisoryEpssPath)
     ]
 
--- The public-upstream stub serves the advisory exports beside the package fixtures.
 publicUrl :: Text -> Text
 publicUrl path = stubUrl NpmPublic <> path
 
-{- Pilot's own environment. It declares one mount because a Pilot with no ecosystem has nothing to
-compile and refuses to boot, and that mount makes server.publicUrl required. -}
-pilotEnv :: [(Text, Text)]
-pilotEnv =
+-- Pilot requires an active mount and its server public URL even for one-shot compilation.
+pilotEnv :: Ecosystem -> [(Text, Text)]
+pilotEnv ecosystem =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
-    , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl NpmPublic)
+    , ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName ecosystem) <> "__PUBLIC_UPSTREAM__REGISTRY__URL", stubUrl (if ecosystem == PyPI then PyPIPublic else NpmPublic))
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     ]
