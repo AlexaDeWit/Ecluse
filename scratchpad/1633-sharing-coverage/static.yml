@@ -3,7 +3,7 @@ tasks:
   lint:
     dir: ../..
     cmds:
-      - hlint core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
+      - hlint core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Walk,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter,Reader,StreamingProjection}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter,Reader,StreamingProjection}.hs scratchpad/1633-sharing-coverage/Main.hs
   lint-observed:
     dir: ../..
     cmds:
@@ -11,8 +11,8 @@ tasks:
   format:
     dir: ../..
     cmds:
-      - fourmolu --mode inplace core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
-      - fourmolu --mode check core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter}.hs scratchpad/1633-sharing-coverage/Main.hs
+      - fourmolu --mode inplace core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Walk,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter,Reader,StreamingProjection}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter,Reader,StreamingProjection}.hs scratchpad/1633-sharing-coverage/Main.hs
+      - fourmolu --mode check core/src/Ecluse/Core/Registry/Json/{Intern,Shape,Walk,Writer}.hs core/src/Ecluse/Core/Registry/Npm/{Metadata,VersionWriter,Reader,StreamingProjection}.hs core/src/Ecluse/Core/Registry/PyPI/{Metadata,FileWriter,Reader,StreamingProjection}.hs scratchpad/1633-sharing-coverage/Main.hs
   static:
     dir: ../..
     cmds:

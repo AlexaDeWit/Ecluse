@@ -37,7 +37,7 @@ index 11bed14a..cb6906d9 100644
 --}
 +-- | SipHash with one to four compression and finalisation rounds over little-endian words.
 diff --git a/core/src/Ecluse/Core/Registry/Json/Shape.hs b/core/src/Ecluse/Core/Registry/Json/Shape.hs
-index e66bee6c..68fac84f 100644
+index e66bee6c..34e13df9 100644
 --- a/core/src/Ecluse/Core/Registry/Json/Shape.hs
 +++ b/core/src/Ecluse/Core/Registry/Json/Shape.hs
 @@ -6,5 +6 @@
@@ -47,92 +47,319 @@ index e66bee6c..68fac84f 100644
 -reader builds: aeson's tree, or the packed form a full read writes.
 --}
 +-- | Retained-value shapes and the current-pass builder over native lexer cursors.
-@@ -114,0 +111,4 @@ class (Walk r) => Build b r where
+@@ -114,0 +111,28 @@ class (Walk r) => Build b r where
++    -- | Keep measurement context across suspended chunks until the matching continuation leaves it.
++    enterObservation :: b -> Text -> Text -> r -> r
++    enterObservation _ _ _ next = next
++
++    -- | Leave the field or item at its actual continuation boundary.
++    leaveObservation :: b -> r -> r
++    leaveObservation _ next = next
++
++    -- | Record a lifecycle or skip decision without inspecting skipped contents.
++    observeEvent :: b -> Text -> r -> r
++    observeEvent _ _ next = next
++
++    -- | Record a key read directly by an ecosystem reader.
++    observeReaderName :: b -> Bool -> Mode -> Name -> InternTable -> Maybe Entry -> r -> r
++    observeReaderName build key mode = observeName build key mode False
++
++    -- | Record a decoded member name whose value the existing reader skips.
++    observeSkipped :: b -> Name -> Text -> r -> r
++    observeSkipped _ _ _ next = next
++
++    -- | Use the existing tree builder with this read's measurement ownership.
++    readTreeShape :: b -> Shape -> Mode -> InternTable -> Element -> Cursor -> (Value -> InternTable -> Cursor -> r) -> r
++    readTreeShape _ = readShape Trees
++
 +    -- | A temporary observation of the current choice, before its builder runs.
 +    observeName :: b -> Bool -> Mode -> Bool -> Name -> InternTable -> Maybe Entry -> r -> r
 +    observeName _ _ _ _ _ _ _ next = next
 +
-@@ -278 +278 @@ string build mode table next name after = case mode of
+@@ -198 +222 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -201 +225 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -207 +231 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -211 +235 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -215 +239 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -220 +244 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | otherwise -> skipFrom element rest (\after -> whole build fallback (\value -> next value table after))
++        | otherwise -> observeEvent build "object-fallback-skip" $ skipFrom element rest (\after -> whole build fallback (\value -> next value table after))
+@@ -222 +246 @@ readAt build open raced shape mode table element rest next = case shape of
+-        | budget <= 0 -> tooDeepAt open element rest
++        | budget <= 0 -> observeEvent build "depth-refusal" $ tooDeepAt open element rest
+@@ -268,2 +292,2 @@ readScalar build mode table element rest next container = case element of
+-    ObjectBegin -> skipFrom element rest container
+-    ArrayBegin -> skipFrom element rest container
++    ObjectBegin -> observeEvent build "scalar-container-skip" $ skipFrom element rest container
++    ArrayBegin -> observeEvent build "scalar-container-skip" $ skipFrom element rest container
+@@ -278 +302 @@ string build mode table next name after = case mode of
 -    Keep -> ownString build name (\value -> next value table after)
 +    Keep -> observeName build False Keep False name table Nothing $ ownString build name (\value -> next value table after)
-@@ -280 +280 @@ string build mode table next name after = case mode of
+@@ -280 +304 @@ string build mode table next name after = case mode of
 -        Interned entry held -> sharedString build entry (\value -> next value held after)
 +        Interned entry held -> observeName build False Share False name table (Just entry) $ sharedString build entry (\value -> next value held after)
-@@ -301 +301 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+@@ -293 +317 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+-            _ -> memberName element rest (member table fields) (loop table fields)
++            _ -> memberName element rest (member table fields) (observeEvent build "oversized-shape-key-dropped" . loop table fields)
+@@ -298 +322 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+-            Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
++            Nothing -> enterObservation build (nameText name) "skipped-member" $ observeSkipped build name "unselected-shape-member" $ withElement rest $ \element afterKey -> skipFrom element afterKey (leaveObservation build (loop table fields))
+@@ -301 +325 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
 -        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
-+        Keep -> observeName build True Keep False name table Nothing $ keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
-@@ -303 +303 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
++        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table Nothing False
+@@ -303 +327 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
 -            Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
-+            Interned entry held -> observeName build True Share (isJust prepared) name table (Just entry) $ keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
-@@ -330 +330 @@ data Direct
++            Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held (Just entry) (isJust prepared)
+@@ -305,9 +329,11 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
+-        keyed key !valueMode held = beginMember build key fields $ \ !repeated ->
+-            if repeated
+-                then withElement rest $ \element afterKey ->
+-                    withDirect build (direct shape Keep table element) table (\ignored _ -> dropValue build ignored (loop table fields afterKey)) $
+-                        readAt build open False shape Keep table element afterKey (\ignored _ -> dropValue build ignored . loop table fields)
+-                else withElement rest $ \element afterKey ->
+-                    withDirect build (direct shape valueMode held element) held (\field table' -> addMember build key field fields (\fields' -> loop table' fields' afterKey)) $
+-                        readAt build open False shape valueMode held element afterKey $ \field table' afterValue ->
+-                            addMember build key field fields (\fields' -> loop table' fields' afterValue)
++        keyed key !valueMode held observed preparedName = beginMember build key fields $ \ !repeated ->
++            enterObservation build (nameText name) (if repeated then "duplicate-member-drop" else "member-candidate") $
++                observeName build True mode preparedName name table observed $
++                    if repeated
++                        then observeEvent build "duplicate-value-read-then-drop" $ withElement rest $ \element afterKey ->
++                            withDirect build (direct shape Keep table element) table (\ignored _ -> dropValue build ignored (leaveObservation build (loop table fields afterKey))) $
++                                readAt build open False shape Keep table element afterKey (\ignored _ -> dropValue build ignored . leaveObservation build . loop table fields)
++                        else withElement rest $ \element afterKey ->
++                            withDirect build (direct shape valueMode held element) held (\field table' -> addMember build key field fields (\fields' -> observeEvent build "member-added" $ leaveObservation build (loop table' fields' afterKey))) $
++                                readAt build open False shape valueMode held element afterKey $ \field table' afterValue ->
++                                    addMember build key field fields (\fields' -> observeEvent build "member-added" $ leaveObservation build (loop table' fields' afterValue))
+@@ -322,2 +348,2 @@ readArray build open item mode table0 tokens0 next = openArray build (\items0 ->
+-        _ ->
+-            withDirect build (direct item mode table element) table (\field table' -> addItem build field items (\items' -> loop table' (count + 1) items' rest)) $
++        _ -> enterObservation build (show count) "array-item-candidate" $
++            withDirect build (direct item mode table element) table (\field table' -> addItem build field items (\items' -> leaveObservation build (loop table' (count + 1) items' rest))) $
+@@ -325 +351 @@ readArray build open item mode table0 tokens0 next = openArray build (\items0 ->
+-                    addItem build field items (\items' -> loop table' (count + 1) items' afterValue)
++                    addItem build field items (\items' -> leaveObservation build (loop table' (count + 1) items' afterValue))
+@@ -330 +356 @@ data Direct
 -    = DirectShared !Entry !InternTable
 +    = DirectShared !Name !InternTable !Entry !InternTable
-@@ -339,2 +339,2 @@ withDirect build scalar table next indirect = case scalar of
+@@ -333,0 +360 @@ data Direct
++    | DirectDiscarded !Value
+@@ -339,2 +366,2 @@ withDirect build scalar table next indirect = case scalar of
 -    DirectShared entry held -> sharedString build entry (`next` held)
 -    DirectOwn name -> ownString build name (`next` table)
 +    DirectShared name before entry held -> observeName build False Share False name before (Just entry) $ sharedString build entry (`next` held)
 +    DirectOwn name -> observeName build False Keep False name table Nothing $ ownString build name (`next` table)
-@@ -379 +379 @@ scalarToken mode table = \case
+@@ -342,0 +370 @@ withDirect build scalar table next indirect = case scalar of
++    DirectDiscarded value -> observeEvent build "object-fallback-skip" $ whole build value (`next` table)
+@@ -359,4 +387,4 @@ direct shape mode table element = case shape of
+-        StringPlain{} -> DirectWhole fallback
+-        StringEncoded{} -> DirectWhole fallback
+-        JValue _ -> DirectWhole fallback
+-        JInteger _ -> DirectWhole fallback
++        StringPlain{} -> DirectDiscarded fallback
++        StringEncoded{} -> DirectDiscarded fallback
++        JValue _ -> DirectDiscarded fallback
++        JInteger _ -> DirectDiscarded fallback
+@@ -379 +407 @@ scalarToken mode table = \case
 -            Interned entry held -> DirectShared entry held
 +            Interned entry held -> DirectShared name table entry held
+diff --git a/core/src/Ecluse/Core/Registry/Json/Walk.hs b/core/src/Ecluse/Core/Registry/Json/Walk.hs
+index 16caf51f..4dde3b89 100644
+--- a/core/src/Ecluse/Core/Registry/Json/Walk.hs
++++ b/core/src/Ecluse/Core/Registry/Json/Walk.hs
+@@ -31,0 +32 @@ module Ecluse.Core.Registry.Json.Walk (
++    eachMemberWith,
+@@ -199,3 +200 @@ longString parts tokens next = withElement tokens $ \element rest -> case elemen
+-{- | Visit each member of an object whose opening brace was read, as json-stream's @objectKeyValues@
+-does: every key is decoded, and a key longer than 64 KiB across pieces drops its member unread.
+--}
++-- | Visit decoded keys in order, preserving the existing 64 KiB rule for keys split across chunks.
+@@ -203 +202,6 @@ eachMember :: (Walk r) => (st -> Name -> Cursor -> (st -> Cursor -> r) -> r) ->
+-eachMember visit done = loop
++eachMember = eachMemberWith id
++{-# INLINE eachMember #-}
++
++-- | Keep the existing key reader and report only its actual discard callback.
++eachMemberWith :: (Walk r) => (r -> r) -> (st -> Name -> Cursor -> (st -> Cursor -> r) -> r) -> (st -> Cursor -> r) -> st -> Cursor -> r
++eachMemberWith dropped visit done = loop
+@@ -207,2 +211,2 @@ eachMember visit done = loop
+-        _ -> memberName element rest (\key after -> visit acc key after loop) (loop acc)
+-{-# INLINE eachMember #-}
++        _ -> memberName element rest (\key after -> visit acc key after loop) (dropped . loop acc)
++{-# INLINE eachMemberWith #-}
 diff --git a/core/src/Ecluse/Core/Registry/Json/Writer.hs b/core/src/Ecluse/Core/Registry/Json/Writer.hs
-index ba95ec4e..89ed7957 100644
+index ba95ec4e..543fae74 100644
 --- a/core/src/Ecluse/Core/Registry/Json/Writer.hs
 +++ b/core/src/Ecluse/Core/Registry/Json/Writer.hs
-@@ -10,0 +11,2 @@ module Ecluse.Core.Registry.Json.Writer (
+@@ -10,0 +11,7 @@ module Ecluse.Core.Registry.Json.Writer (
 +    writerStatistics,
 +    printWriterStatistics,
-@@ -20,2 +22,2 @@ module Ecluse.Core.Registry.Json.Writer (
++    observeInitialTable,
++    observeFinalTable,
++    observeChoice,
++    recordObservation,
++    recordBoundary,
+@@ -20,2 +27,2 @@ module Ecluse.Core.Registry.Json.Writer (
 -import Control.Monad.ST (ST)
 -import Data.Aeson (Value (..), toEncoding)
 +import Control.Monad.ST (ST, stToIO)
 +import Data.Aeson (Value (..), encode, object, toEncoding, (.=))
-@@ -34,0 +37,3 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
+@@ -34,0 +42,3 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 +import Data.Set qualified as Set
 +import Data.Text qualified as T
 +import GHC.Exts (RealWorld)
-@@ -36 +41 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
+@@ -36 +46 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 -import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-+import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName, nameText, tableCount)
-@@ -39 +44 @@ import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newSc
++import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName, nameText, tableCount, tableTexts)
+@@ -39 +49 @@ import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newSc
 -import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
-+import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), Mode (..))
-@@ -55,0 +61 @@ data Writer st = Writer
++import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), Mode (..), Trees (..), readShape)
+@@ -55,0 +66,2 @@ data Writer st = Writer
 +    , writerObservations :: MutVar st (Map [Text] Int, Map (Text, Text) (Set Text))
-@@ -58 +64 @@ data Writer st = Writer
++    , writerObservationPath :: MutVar st [(Text, Text)]
+@@ -58 +70 @@ data Writer st = Writer
 --- | Create a read's writer, optionally adding a top-level member. Shared originals are replaced and retained for diagnostics. Owned originals win.
 +-- | Create scratch storage for one read. Owned originals win over added members.
-@@ -73,0 +80,13 @@ newWriter added =
+@@ -73,0 +86,15 @@ newWriter added =
 +        <*> newMutVar (mempty, mempty)
++        <*> newMutVar []
 +
-+-- | Aggregate attempts at packed-value boundaries, including duplicate values later dropped.
++-- | Aggregate current-pass choices and lifecycle events within this read.
 +writerStatistics :: Writer st -> ST st Value
 +writerStatistics writer = do
 +    (counts, _) <- readMutVar (writerObservations writer)
-+    pure (object ["columns" .= (["role", "policy", "input", "lookup", "name", "utf8Bytes", "jsonBytes", "characters", "occurrence"] :: [Text]), "rows" .= [object ["dimensions" .= dimensions, "count" .= count] | (dimensions, count) <- Map.toAscList counts]])
++    path <- readMutVar (writerObservationPath writer)
++    pure (object ["openPath" .= map fst (reverse path), "columns" .= (["role", "policy", "input", "lookup", "name", "utf8Bytes", "jsonBytes", "characters", "occurrence", "domain", "path", "pathDepth", "disposition", "action"] :: [Text]), "rows" .= [object ["dimensions" .= dimensions, "count" .= count] | (dimensions, count) <- Map.toAscList counts]])
 +
 +-- | Emit statistics after the read returns, including a refused or failed partial read.
 +printWriterStatistics :: Writer RealWorld -> IO ()
 +printWriterStatistics writer = do
 +    statistics <- stToIO (writerStatistics writer)
 +    putTextLn ("SHARING " <> decodeUtf8 (LBS.toStrict (encode statistics)))
-@@ -107,0 +127,14 @@ instance Build (Writer st) (ST st (Steps (ST st) s)) where
-+    observeName writer key mode prepared name table entry next = do
-+        (counts, seen) <- readMutVar (writerObservations writer)
-+        let role = if key then "member-key" else "string-value"
-+            policy = case mode of
-+                Share -> "share"
-+                Keep -> "keep"
-+            text = maybe (nameText name) entryText entry
-+            group = (role, policy)
-+            known = Map.findWithDefault mempty group seen
-+            input = foldName (const "plain") (const "decoded") name
-+            lookupResult = maybe "none" (\found -> if entryIndex found < tableCount table then "hit" else "miss") entry
-+            row = [role, policy, input, lookupResult, if prepared then "prepared" else "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), if Set.member text known then "repeated" else "unique"]
-+        writeMutVar (writerObservations writer) (Map.insertWith (+) row 1 counts, Map.insert group (Set.insert text known) seen)
-+        next
+@@ -107,0 +135,7 @@ instance Build (Writer st) (ST st (Steps (ST st) s)) where
++    enterObservation writer path disposition next = enterPath writer path disposition >> next
++    leaveObservation writer next = leavePath writer >> next
++    observeEvent writer event next = recordBoundary writer "lifecycle" event >> next
++    observeReaderName writer key mode name table entry next = observeChoice writer "reader" key mode False name table entry >> next
++    observeSkipped writer name reason next = recordSkipped writer name reason >> next
++    readTreeShape writer = readShape (ObservedTrees writer)
++    observeName writer key mode prepared name table entry next = observeChoice writer "packed-shape" key mode prepared name table entry >> next
+@@ -120 +154 @@ instance Build (Writer st) (ST st (Steps (ST st) s)) where
+-    dropValue writer () next = dropMember writer >> next
++    dropValue writer () next = recordBoundary writer "lifecycle" "packed-member-dropped" >> dropMember writer >> next
+@@ -362,0 +397,4 @@ addTopMember writer (Frame _ base) (key, value) = do
++    enterPath writer (entryText key) "writer-generated-member"
++    recordGenerated writer "member-key" key
++    recordGenerated writer "string-value" value
++    leavePath writer
+@@ -638,0 +677 @@ discard writer = do
++    recordBoundary writer "lifecycle" "packed-entry-discarded"
+@@ -732,0 +772,93 @@ stringText = \case
++
++enterPath :: Writer st -> Text -> Text -> ST st ()
++enterPath writer path disposition = do
++    current <- readMutVar (writerObservationPath writer)
++    writeMutVar (writerObservationPath writer) ((path, disposition) : current)
++
++leavePath :: Writer st -> ST st ()
++leavePath writer = do
++    current <- readMutVar (writerObservationPath writer)
++    when (null current) (recordBoundary writer "observer-context" "underflow")
++    writeMutVar (writerObservationPath writer) (drop 1 current)
++
++-- | Append an event within the current source path, preserving separate accounting domains.
++recordObservation :: Writer st -> Text -> [Text] -> Text -> ST st ()
++recordObservation writer domain dimensions action = do
++    (counts, seen) <- readMutVar (writerObservations writer)
++    path <- readMutVar (writerObservationPath writer)
++    let disposition = show (map snd (reverse path))
++        row = dimensions <> [domain, show (map fst (reverse path)), show (length path), disposition, action]
++    writeMutVar (writerObservations writer) (Map.insertWith (+) row 1 counts, seen)
++
++-- | Observe the returned entry from the actual lookup, without another lookup or insertion.
++observeChoice :: Writer st -> Text -> Bool -> Mode -> Bool -> Name -> InternTable -> Maybe Entry -> ST st ()
++observeChoice writer domain key mode prepared name table entry = do
++    (counts, seen) <- readMutVar (writerObservations writer)
++    let role = if key then "member-key" else "string-value"
++        policy = case mode of
++            Share -> "share"
++            Keep -> "keep"
++        text = maybe (nameText name) entryText entry
++        group = (role, policy)
++        known = Map.findWithDefault mempty group seen
++        input = foldName (const "plain") (const "decoded") name
++        lookupResult = maybe "none" (\found -> if entryIndex found < tableCount table then "hit" else "miss") entry
++        row = [role, policy, input, lookupResult, if prepared then "prepared" else "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), if Set.member text known then "repeated" else "unique"]
++    writeMutVar (writerObservations writer) (counts, Map.insert group (Set.insert text known) seen)
++    recordObservation writer domain row "name-choice"
++
++recordSkipped :: Writer st -> Name -> Text -> ST st ()
++recordSkipped writer name reason = do
++    let text = nameText name
++    recordObservation writer "skip-decision" ["member-key", "skip", foldName (const "plain") (const "decoded") name, "none", "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), "not-counted"] reason
++
++recordGenerated :: Writer st -> Text -> Entry -> ST st ()
++recordGenerated writer role entry = do
++    let text = entryText entry
++    recordObservation writer "generated-member" [role, "share", "generated", "reuse", "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), "not-counted"] "writer-added-member"
++
++-- | Report actual seed slots independently from source-name occurrences.
++observeInitialTable :: Writer st -> InternTable -> ST st ()
++observeInitialTable writer table = do
++    let texts = tableTexts table
++    forM_ (zip [0 :: Int ..] (toList texts)) $ \(index, text) -> do
++        recordObservation writer "table-seed" ["seed", "keep", "decoded", "seed", "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), "not-counted"] ("index=" <> show index)
++    observeFinalTable writer "initial-table" table
++
++-- | Report the actual table cardinality separately from text repetition counters.
++observeFinalTable :: Writer st -> Text -> InternTable -> ST st ()
++observeFinalTable writer phase table = recordObservation writer "table-cardinality" ["table", "none", "none", "none", "none", "-", "-", "-", "not-counted"] (phase <> "=" <> show (tableCount table))
++
++newtype ObservedTrees st = ObservedTrees (Writer st)
++
++instance Build (ObservedTrees st) (ST st (Steps (ST st) s)) where
++    type Built (ObservedTrees st) = Value
++    type Fields (ObservedTrees st) = KeyMap.KeyMap Value
++    type Items (ObservedTrees st) = [Value]
++    enterObservation (ObservedTrees writer) = enterObservation writer
++    leaveObservation (ObservedTrees writer) = leaveObservation writer
++    observeEvent (ObservedTrees writer) = observeEvent writer
++    observeReaderName (ObservedTrees writer) = observeReaderName writer
++    observeSkipped (ObservedTrees writer) = observeSkipped writer
++    readTreeShape (ObservedTrees writer) = readTreeShape writer
++    observeName (ObservedTrees writer) key mode prepared name table entry next = observeChoice writer "tree-shape" key mode prepared name table entry >> next
++    sharedString _ = sharedString Trees
++    ownString _ = ownString Trees
++    integer _ = integer Trees
++    whole _ = whole Trees
++    emptyContainer _ = emptyContainer Trees
++    openObject _ = openObject Trees
++    beginMember _ = beginMember Trees
++    addMember _ = addMember Trees
++    dropValue _ = dropValue Trees
++    closeObject _ = closeObject Trees
++    openArray _ = openArray Trees
++    addItem _ = addItem Trees
++    closeArray _ = closeArray Trees
++
++-- | Share the non-name event dimensions across current-pass projection and walk hooks.
++recordBoundary :: Writer st -> Text -> Text -> ST st ()
++recordBoundary writer domain = recordObservation writer domain boundaryDimensions
++
++boundaryDimensions :: [Text]
++boundaryDimensions = ["boundary", "none", "none", "none", "none", "-", "-", "-", "none"]
 diff --git a/core/src/Ecluse/Core/Registry/Npm/Metadata.hs b/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
-index 63c40504..7626c455 100644
+index 63c40504..c4e7fe92 100644
 --- a/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
 +++ b/core/src/Ecluse/Core/Registry/Npm/Metadata.hs
 @@ -8,5 +8 @@
@@ -142,18 +369,207 @@ index 63c40504..7626c455 100644
 -typed projection with the selected version object, which the mirror write republishes.
 --}
 +-- | npm full and selected metadata reads driven by the production fetch boundary.
+@@ -45 +41 @@ import Ecluse.Core.Registry.Json.Packed (docTable)
+-import Ecluse.Core.Registry.Json.Shape (Trees (..))
++import Ecluse.Core.Registry.Json.Shape (Mode (Share), Trees (..))
 @@ -46,0 +43 @@ import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJ
-+import Ecluse.Core.Registry.Json.Writer (printWriterStatistics)
++import Ecluse.Core.Registry.Json.Writer (observeChoice, observeFinalTable, observeInitialTable, printWriterStatistics, recordBoundary)
 @@ -55 +52 @@ import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, empty
 -import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
 +import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter, packedWriter)
-@@ -90 +87,3 @@ readNpmFull limits name base bound table0 readChunk = do
+@@ -90 +87,15 @@ readNpmFull limits name base bound table0 readChunk = do
 -    readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
 +    result <- readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
++    case result of
++        Right streamed -> forM_ (rightToMaybe (streamValue streamed)) $ \(Walked final _) -> stToIO (observeFinalTable (packedWriter writer) "final-table" final)
++        Left _ -> pure ()
++    stToIO
++        ( recordBoundary
++            (packedWriter writer)
++            "walk-outcome"
++            ( case result of
++                Left fault -> "refused: " <> show fault
++                Right streamed -> either (\fault -> "failed: " <> show fault) (const "walk-finished") (streamValue streamed)
++            )
++        )
 +    printWriterStatistics (packedWriter writer)
 +    pure result
+@@ -94 +105,6 @@ npmFullTable :: Text -> PackageName -> InternTable -> ST st (InternTable, Versio
+-npmFullTable base name table0 = (seeded,) <$> newVersionWriter (Just (authorKey, pointer))
++npmFullTable base name table0 = do
++    writer <- newVersionWriter (Just (authorKey, pointer))
++    observeInitialTable (packedWriter writer) table0
++    observeChoice (packedWriter writer) "author-key-lookup" True Share False (decodedName "author") table0 (Just authorKey)
++    observeChoice (packedWriter writer) "author-pointer-lookup" False Share False (decodedName (authorPointer base name)) withKey (Just pointer)
++    pure (seeded, writer)
+diff --git a/core/src/Ecluse/Core/Registry/Npm/Reader.hs b/core/src/Ecluse/Core/Registry/Npm/Reader.hs
+index 53cc2fb6..6a16967c 100644
+--- a/core/src/Ecluse/Core/Registry/Npm/Reader.hs
++++ b/core/src/Ecluse/Core/Registry/Npm/Reader.hs
+@@ -6,4 +6 @@
+-{- | The packument walk for full and selected reads. It emits the fields that
+-"Ecluse.Core.Registry.Npm.Streaming" emits for the same mode, in the same order, and builds each
+-retained release once with its keys and strings interned as read.
+--}
++-- | npm full and selected walks over the existing retained shapes.
+@@ -20,2 +17,2 @@ import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), entryText,
+-import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), everyMember, namedMembers, prepareMembers, readShape)
+-import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachMember, skipFrom, skipRest, tooDeep, withElement)
++import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), everyMember, namedMembers, prepareMembers, readShape)
++import Ecluse.Core.Registry.Json.Walk (FieldStep, Walk (..), Walked (..), eachMemberWith, skipFrom, skipRest, tooDeep, withElement)
+@@ -29,3 +26 @@ data PackumentRead = WholePackument | OneRelease Text
+-{- | Members whose values differ in every release, so the table keeps them as read. A name matches
+-at any depth, so a rarer member such as @_npmUser.url@ is kept as read too.
+--}
++-- | These member names keep their values as read at every depth.
+@@ -35,3 +30 @@ releaseUniqueFields = ["tarball", "shasum", "integrity", "sig", "url"]
+-{- | Walk one packument into the builder, passing each field to the step as it completes. Only a
+-release the consumer keeps enters the table, and only the first of each member it repeats.
+--}
++-- | Walk source fields in order, retaining only the first release under each key.
+@@ -43 +36 @@ npmWalk build depth mode step keeps table0 initial = start
+-        | depth <= 0 = withElement tokens tooDeep
++        | depth <= 0 = observeEvent build "root-depth-refusal" $ withElement tokens tooDeep
+@@ -45,14 +38,18 @@ npmWalk build depth mode step keeps table0 initial = start
+-            ObjectBegin -> eachMember topField (\walked _ -> finish walked) (Walked table0 initial) rest
+-            _ -> skipFrom element rest (const (finish (Walked table0 initial)))
+-    topField (Walked table acc) name after continue = case nameBytes name of
+-        "name" -> withElement after $ \element rest ->
+-            readShape Trees (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
+-                emit acc (NameField field) (\acc' -> continue (Walked table acc') afterValue)
+-        "versions" -> container VersionsContainer table acc after continue (releases table)
+-        "time" -> container TimeContainer table acc after continue $ case mode of
+-            WholePackument -> everyScalar TimeField table
+-            OneRelease version -> oneScalar (encodeUtf8 version) (TimeField version) table
+-        "dist-tags" -> container TagsContainer table acc after continue $ case mode of
+-            WholePackument -> everyScalar TagField table
+-            OneRelease _ -> oneScalar "latest" (TagField "latest") table
+-        _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked table acc))
++            ObjectBegin -> eachMemberWith (observeEvent build "oversized-reader-key-dropped") topField (\walked _ -> finish walked) (Walked table0 initial) rest
++            _ -> observeEvent build "root-non-object-skip" $ skipFrom element rest (const (finish (Walked table0 initial)))
++    topField (Walked table acc) name after continuation = enterObservation build (nameText name) "reader-envelope-candidate" $
++        case nameBytes name of
++            "name" -> recorded $ withElement after $ \element rest ->
++                readTreeShape build (Scalar (depth - 1)) Keep table element rest $ \field _ afterValue ->
++                    emit acc (NameField field) (\acc' -> continue (Walked table acc') afterValue)
++            "versions" -> recorded $ container VersionsContainer table acc after continue (releases table)
++            "time" -> recorded $ container TimeContainer table acc after continue $ case mode of
++                WholePackument -> everyScalar TimeField table
++                OneRelease version -> oneScalar (encodeUtf8 version) (TimeField version) table
++            "dist-tags" -> recorded $ container TagsContainer table acc after continue $ case mode of
++                WholePackument -> everyScalar TagField table
++                OneRelease _ -> oneScalar "latest" (TagField "latest") table
++            _ -> observeSkipped build name "unknown-top-member" $ withElement after $ \element afterKey -> skipFrom element afterKey (continue (Walked table acc))
++      where
++        recorded = observeReaderName build True Keep name table Nothing
++        continue walked afterValue = leaveObservation build (continuation walked afterValue)
+@@ -67 +64 @@ npmWalk build depth mode step keeps table0 initial = start
+-            then tooDeep element rest
++            then observeEvent build "container-depth-refusal" $ tooDeep element rest
+@@ -73 +70 @@ npmWalk build depth mode step keeps table0 initial = start
+-                _ -> skipFrom element rest (\afterValue -> emit acc (InvalidContainer slot) (\marked -> continue (Walked table marked) afterValue))
++                _ -> observeEvent build "invalid-container-skip" $ skipFrom element rest (\afterValue -> emit acc (InvalidContainer slot) (\marked -> continue (Walked table marked) afterValue))
+@@ -75 +72 @@ npmWalk build depth mode step keeps table0 initial = start
+-    releases table acc rest done = eachMember release done (Walked table acc) rest
++    releases table acc rest done = eachMemberWith (observeEvent build "oversized-reader-key-dropped") release done (Walked table acc) rest
+@@ -81 +78 @@ npmWalk build depth mode step keeps table0 initial = start
+-                Interned entry keyed -> withElement after $ \element rest ->
++                Interned entry keyed -> enterObservation build (nameText key) "retained-release-candidate" $ observeReaderName build True Share key table (Just entry) $ withElement after $ \element rest ->
+@@ -83,2 +80,2 @@ npmWalk build depth mode step keeps table0 initial = start
+-                        emit acc (VersionField (entryText entry) (Just release')) (\acc' -> continue (Walked table' acc') afterValue)
+-            | otherwise -> withElement after $ \element rest ->
++                        emit acc (VersionField (entryText entry) (Just release')) (\acc' -> leaveObservation build (continue (Walked table' acc') afterValue))
++            | otherwise -> enterObservation build (nameText key) "discarded-release-duplicate" $ observeReaderName build True Keep key table Nothing $ withElement after $ \element rest ->
+@@ -86 +83 @@ npmWalk build depth mode step keeps table0 initial = start
+-                    emit acc (VersionField text (Just release')) (\acc' -> continue (Walked table acc') afterValue)
++                    emit acc (VersionField text (Just release')) (\acc' -> leaveObservation build (continue (Walked table acc') afterValue))
+@@ -90,4 +87,4 @@ npmWalk build depth mode step keeps table0 initial = start
+-    everyScalar field table acc rest done = eachMember (timestamp field) done (Walked table acc) rest
+-    timestamp field (Walked table acc) key after continue = withElement after $ \element rest ->
+-        readShape Trees (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
+-            emit acc (field (nameText key) scalar) (\acc' -> continue (Walked table acc') afterValue)
++    everyScalar field table acc rest done = eachMemberWith (observeEvent build "oversized-reader-key-dropped") (timestamp field) done (Walked table acc) rest
++    timestamp field (Walked table acc) key after continue = enterObservation build (nameText key) "time-or-tag-candidate" $ observeReaderName build True Keep key table Nothing $ withElement after $ \element rest ->
++        readTreeShape build (Scalar (depth - 2)) Keep table element rest $ \scalar _ afterValue ->
++            emit acc (field (nameText key) scalar) (\acc' -> leaveObservation build (continue (Walked table acc') afterValue))
+@@ -96 +93 @@ npmWalk build depth mode step keeps table0 initial = start
+-    oneScalar wanted field table acc rest done = eachMember visit done (Walked table acc) rest
++    oneScalar wanted field table acc rest done = eachMemberWith (observeEvent build "oversized-reader-key-dropped") visit done (Walked table acc) rest
+@@ -100 +97 @@ npmWalk build depth mode step keeps table0 initial = start
+-                readShape Trees (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
++                readTreeShape build (Scalar (depth - 2)) Keep held element afterKey $ \scalar _ afterValue ->
+diff --git a/core/src/Ecluse/Core/Registry/Npm/StreamingProjection.hs b/core/src/Ecluse/Core/Registry/Npm/StreamingProjection.hs
+index f50ada03..573cbc7f 100644
+--- a/core/src/Ecluse/Core/Registry/Npm/StreamingProjection.hs
++++ b/core/src/Ecluse/Core/Registry/Npm/StreamingProjection.hs
+@@ -5,4 +5 @@
+-{- | Join streamed npm versions, tags and timestamps without retaining the source document. The typed
+-projection keeps each release's typed facts, and each read keeps the served releases in its own form:
+-aeson's tree, or packed against the read's table.
+--}
++-- | Join npm streamed fields into typed facts and the existing served representation.
+@@ -44 +41 @@ import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
+-import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, replacedMember)
++import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, recordBoundary, replacedMember)
+@@ -232,20 +229,23 @@ packedStep :: VersionWriter st -> Limits -> PackageName -> PackedRead -> NpmFiel
+-packedStep writer limits name (PackedRead acc served) field next = case field of
+-    VersionField key (Just value)
+-        | keepsRelease acc key -> do
+-            sealed <- sealVersion writer tarballHole
+-            (typed, rebased) <- case versionFacts value of
+-                Just facts ->
+-                    pure (Right $! projectVersionManifest name (mkVersion Npm key) Nothing facts, rebases (Just (distTarball (vmDist facts))))
+-                Nothing -> do
+-                    let diagnostic = packedWriter writer
+-                    picked <- decodePicked diagnostic typedMembers sealed
+-                    typed <- case projectRelease name key picked of
+-                        Right details -> pure (Right details)
+-                        Left reason -> (\whole original -> invalidRelease key (asRead original whole) reason) <$> decodeWhole diagnostic sealed <*> replacedMember diagnostic
+-                    pure (typed, rebases (tarballUrl picked))
+-            let !release = if rebased then sealed else withoutHole sealed
+-            next $! do
+-                kept <- collectRelease limits acc field key typed
+-                pure (PackedRead kept ((key, release) : served))
+-        | otherwise -> discardVersion writer >> unchanged
+-    _ -> unchanged
++packedStep writer limits name (PackedRead acc served) field next = do
++    observeProjection writer acc field
++    case field of
++        VersionField key (Just value)
++            | keepsRelease acc key -> do
++                sealed <- sealVersion writer tarballHole
++                (typed, rebased) <- case versionFacts value of
++                    Just facts ->
++                        pure (Right $! projectVersionManifest name (mkVersion Npm key) Nothing facts, rebases (Just (distTarball (vmDist facts))))
++                    Nothing -> do
++                        let diagnostic = packedWriter writer
++                        picked <- decodePicked diagnostic typedMembers sealed
++                        typed <- case projectRelease name key picked of
++                            Right details -> pure (Right details)
++                            Left reason -> (\whole original -> invalidRelease key (asRead original whole) reason) <$> decodeWhole diagnostic sealed <*> replacedMember diagnostic
++                        pure (typed, rebases (tarballUrl picked))
++                recordBoundary (packedWriter writer) "typed-projection" (either (const "invalid-release-facts-raw-retained") (const "valid-release-facts-raw-retained") typed)
++                let !release = if rebased then sealed else withoutHole sealed
++                next $! do
++                    kept <- collectRelease limits acc field key typed
++                    pure (PackedRead kept ((key, release) : served))
++            | otherwise -> discardVersion writer >> unchanged
++        _ -> unchanged
+@@ -280,0 +281,12 @@ finishPacked limits requested authorPointer table (PackedRead acc served) = seco
++
++observeProjection :: VersionWriter st -> NpmProjection -> NpmFieldOf VersionValue -> ST st ()
++observeProjection writer acc field = recordBoundary (packedWriter writer) "typed-projection" event
++  where
++    event = case field of
++        NameField _ -> if isJust (projectedName acc) then "name-duplicate-discarded" else "name-first-retained"
++        TimeField key _ -> if projectedActiveContainer acc /= Just TimeContainer || Map.member key (projectedTimes acc) then "time-discarded" else "time-first-projected"
++        TagField key _ -> if projectedActiveContainer acc /= Just TagsContainer || Map.member key (projectedTags acc) then "tag-discarded" else "tag-first-projected"
++        VersionField key _ -> if keepsRelease acc key then "release-first-projected" else "release-discarded"
++        BeginContainer container -> if Set.member container (projectedContainers acc) then "container-duplicate" else "container-first"
++        InvalidContainer _ -> "invalid-container"
++        IgnoredField -> "container-finished"
 diff --git a/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs b/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
-index b40c4958..6c4933ae 100644
+index b40c4958..d1976a50 100644
 --- a/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
 +++ b/core/src/Ecluse/Core/Registry/Npm/VersionWriter.hs
 @@ -6,4 +6 @@
@@ -162,23 +578,155 @@ index b40c4958..6c4933ae 100644
 -Only the three install hooks retain script names, and no command survives in typed facts.
 --}
 +-- | npm policy facts collected beside packing, with commands retained only in packed data.
-@@ -106,0 +104 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
+@@ -106,0 +104,7 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
++    enterObservation writer = enterObservation (packedWriter writer)
++    leaveObservation writer = leaveObservation (packedWriter writer)
++    observeEvent writer = observeEvent (packedWriter writer)
++    observeReaderName writer = observeReaderName (packedWriter writer)
++    observeSkipped writer = observeSkipped (packedWriter writer)
++    readTreeShape writer = readTreeShape (packedWriter writer)
 +    observeName writer = observeName (packedWriter writer)
 diff --git a/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs b/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
-index d378b1a3..32806158 100644
+index d378b1a3..d8fd8bcc 100644
 --- a/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
 +++ b/core/src/Ecluse/Core/Registry/PyPI/FileWriter.hs
-@@ -72,0 +73 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
+@@ -72,0 +73,7 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
++    enterObservation (FileWriter writer _) = enterObservation writer
++    leaveObservation (FileWriter writer _) = leaveObservation writer
++    observeEvent (FileWriter writer _) = observeEvent writer
++    observeReaderName (FileWriter writer _) = observeReaderName writer
++    observeSkipped (FileWriter writer _) = observeSkipped writer
++    readTreeShape (FileWriter writer _) = readTreeShape writer
 +    observeName (FileWriter writer _) = observeName writer
 diff --git a/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs b/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
-index c128a6f1..d32014a0 100644
+index c128a6f1..335ceaca 100644
 --- a/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
 +++ b/core/src/Ecluse/Core/Registry/PyPI/Metadata.hs
 @@ -28 +28 @@ import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJ
 -import Ecluse.Core.Registry.Json.Writer (Writer, newWriter)
-+import Ecluse.Core.Registry.Json.Writer (Writer, newWriter, printWriterStatistics)
-@@ -73 +73,3 @@ readPyPIFull limits name bound table readChunk = do
++import Ecluse.Core.Registry.Json.Writer (Writer, newWriter, observeFinalTable, observeInitialTable, printWriterStatistics, recordBoundary)
+@@ -38 +38 @@ import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
+-import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, packedFileStep)
++import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishPackedProjection, finishProjection, keepsFile, observeProjectionField, packedFileStep)
+@@ -71,0 +72 @@ readPyPIFull limits name bound table readChunk = do
++    stToIO (observeInitialTable writer table)
+@@ -73 +74,15 @@ readPyPIFull limits name bound table readChunk = do
 -    readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
 +    result <- readJsonWalkST stToIO bound (pypiPackedWalk writer build limits name table) readChunk
++    case result of
++        Right streamed -> forM_ (rightToMaybe (streamValue streamed)) $ \(Walked final _) -> stToIO (observeFinalTable writer "final-table" final)
++        Left _ -> pure ()
++    stToIO
++        ( recordBoundary
++            writer
++            "walk-outcome"
++            ( case result of
++                Left fault -> "refused: " <> show fault
++                Right streamed -> either (\fault -> "failed: " <> show fault) (const "walk-finished") (streamValue streamed)
++            )
++        )
 +    printWriterStatistics writer
 +    pure result
+@@ -78 +93 @@ pypiPackedWalk writer build limits name table =
+-    pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
++    pypiFullWalk build (maxNestingDepth limits) (\acc field next -> observeProjectionField writer acc field >> pureStep (collectField limits FullRead) acc field next) keepsFile (packedFileStep writer limits) table (emptyProjection name)
+diff --git a/core/src/Ecluse/Core/Registry/PyPI/Reader.hs b/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
+index 3e28419e..50e556eb 100644
+--- a/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
++++ b/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
+@@ -18,2 +18,2 @@ import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
+-import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)
+-import Ecluse.Core.Registry.Json.Walk (FieldStep, Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
++import Ecluse.Core.Registry.Json.Shape (Build (..), Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)
++import Ecluse.Core.Registry.Json.Walk (FieldStep, Step, Steps (..), Walk, Walked (..), eachItem, eachMember, eachMemberWith, pureStep, skipFrom, skipRest, tooDeep, withElement)
+@@ -33 +33 @@ pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s ->
+-pypiWalk depth mode step keeps table0 = walkIndex depth mode (pureStep step) (\_ acc -> Finished acc) treeFile table0
++pypiWalk depth mode step keeps table0 = walkIndex Trees depth mode (pureStep step) (\_ acc -> Finished acc) treeFile table0
+@@ -43 +43 @@ pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST
+-pypiFullWalk writer depth step keeps fileStep table0 = walkIndex depth FullRead step (\table acc -> pure (Finished (Walked table acc))) packedFile table0
++pypiFullWalk writer depth step keeps fileStep table0 = walkIndex writer depth FullRead step (\table acc -> pure (Finished (Walked table acc))) packedFile table0
+@@ -47 +47 @@ pypiFullWalk writer depth step keeps fileStep table0 = walkIndex depth FullRead
+-        readShape writer fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
++        observeEvent writer (if keeps acc then "file-retention-enabled" else "file-retention-disabled") $ readShape writer fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
+@@ -50 +50 @@ pypiFullWalk writer depth step keeps fileStep table0 = walkIndex depth FullRead
+-walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
++walkIndex :: (Build b r) => b -> Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
+@@ -52 +52 @@ walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTa
+-walkIndex depth mode step finishRead readIndexFile table0 initial = start
++walkIndex build depth mode step finishRead readIndexFile table0 initial = start
+@@ -55 +55 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-        | depth <= 0 = withElement tokens tooDeep
++        | depth <= 0 = observeEvent build "root-depth-refusal" $ withElement tokens tooDeep
+@@ -57 +57 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-            ObjectBegin -> eachMember topField (\(Walked held acc) _ -> finishRead held acc) (Walked table0 initial) rest
++            ObjectBegin -> eachMemberWith (observeEvent build "oversized-reader-key-dropped") topField (\(Walked held acc) _ -> finishRead held acc) (Walked table0 initial) rest
+@@ -63,8 +63,9 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-    topField walked@(Walked table acc) name after continue = case nameBytes name of
+-        "name" -> envelope "name" (Scalar (depth - 1))
+-        "meta" -> envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
+-        "project-status" | full -> envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
+-        "alternate-locations" | full -> envelope "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1)))
+-        "files" -> shaped FilesShape files walked after continue
+-        "versions" | full -> shaped VersionsShape (eachItem version) walked after continue
+-        _ -> withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
++    topField walked@(Walked table acc) name after continuation = enterObservation build (nameText name) "reader-envelope-candidate" $
++        case nameBytes name of
++            "name" -> recorded $ envelope "name" (Scalar (depth - 1))
++            "meta" -> recorded $ envelope "meta" (ObjectWith (depth - 1) metaFields (Scalar (depth - 1)))
++            "project-status" | full -> recorded $ envelope "project-status" (ObjectWith (depth - 1) statusFields (Scalar (depth - 1)))
++            "alternate-locations" | full -> recorded $ envelope "alternate-locations" (ArrayWith (depth - 1) (Scalar (depth - 2)) (Scalar (depth - 1)))
++            "files" -> recorded $ shaped FilesShape files walked after continue
++            "versions" | full -> recorded $ shaped VersionsShape (eachItem version) walked after continue
++            _ -> observeSkipped build name "unknown-top-member" $ withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
+@@ -71,0 +73,2 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
++        recorded = observeReaderName build True Keep name table Nothing
++        continue state afterValue = leaveObservation build (continuation state afterValue)
+@@ -73 +76 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-            readShape Trees shape Keep table element afterKey $ \value _ afterValue ->
++            readTreeShape build shape Keep table element afterKey $ \value _ afterValue ->
+@@ -81 +84 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-        _ -> skipFrom element rest (\afterValue -> emit acc (claim False) (\marked -> continue (Walked table marked) afterValue))
++        _ -> observeEvent build "invalid-array-skip" $ skipFrom element rest (\afterValue -> emit acc (claim False) (\marked -> continue (Walked table marked) afterValue))
+@@ -91 +94 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-        | otherwise = readIndexFile table acc position element rest (\kept held after -> continue (Walked held kept) after)
++        | otherwise = enterObservation build (show position) "file-candidate" $ readIndexFile table acc position element rest (\kept held after -> leaveObservation build (continue (Walked held kept) after))
+@@ -98,2 +101,2 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-    version (Walked table acc) position element rest continue =
+-        readShape Trees (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->
++    version (Walked table acc) position element rest continue = enterObservation build (show position) "version-list-candidate" $
++        readTreeShape build (Scalar (depth - 2)) Keep table element rest $ \value _ afterValue ->
+@@ -103 +106 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
+-             in emit acc field (\acc' -> continue (Walked table acc') afterValue)
++             in observeEvent build (case value of String _ -> "version-string-ignored"; _ -> "invalid-version-field") $ emit acc field (\acc' -> leaveObservation build (continue (Walked table acc') afterValue))
+diff --git a/core/src/Ecluse/Core/Registry/PyPI/StreamingProjection.hs b/core/src/Ecluse/Core/Registry/PyPI/StreamingProjection.hs
+index a6c8e791..c703e73e 100644
+--- a/core/src/Ecluse/Core/Registry/PyPI/StreamingProjection.hs
++++ b/core/src/Ecluse/Core/Registry/PyPI/StreamingProjection.hs
+@@ -12,0 +13 @@ module Ecluse.Core.Registry.PyPI.StreamingProjection (
++    observeProjectionField,
+@@ -26 +27 @@ import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, withoutHole)
+-import Ecluse.Core.Registry.Json.Writer (Writer, decodeWhole, discard, sealValue)
++import Ecluse.Core.Registry.Json.Writer (Writer, decodeWhole, discard, recordBoundary, sealValue)
+@@ -119 +120 @@ packedFileStep writer limits acc position value next
+-    | not (projectedFilesActive acc) = discard writer >> next (Right acc)
++    | not (projectedFilesActive acc) = recordFileDisposition writer "duplicate-files-array-discarded" >> discard writer >> next (Right acc)
+@@ -120,0 +122 @@ packedFileStep writer limits acc position value next
++        recordFileDisposition writer "past-bound-payload-discarded"
+@@ -128,0 +131 @@ packedFileStep writer limits acc position value next
++                recordFileDisposition writer "valid-file-payload-retained"
+@@ -132,0 +136 @@ packedFileStep writer limits acc position value next
++                recordFileDisposition writer "invalid-file-diagnostic"
+@@ -166,0 +171,13 @@ servedFiles = foldl' serve []
++
++recordFileDisposition :: Writer st -> Text -> ST st ()
++recordFileDisposition writer = recordBoundary writer "typed-projection"
++
++-- | Report the reducer's current envelope and listing ownership before its existing step.
++observeProjectionField :: Writer st -> PyPIProjection -> PyPIField -> ST st ()
++observeProjectionField writer acc field = recordFileDisposition writer $ case field of
++    EnvelopeField key _ -> if KeyMap.member (Key.fromText key) (projectedEnvelope acc) then "envelope-duplicate-discarded" else "envelope-first-retained"
++    FilesShape _ -> if projectedFilesSeen acc then "files-array-duplicate" else "files-array-first"
++    VersionsShape _ -> if projectedVersionsSeen acc then "versions-array-duplicate" else "versions-array-first"
++    InvalidVersionField _ _ -> if projectedVersionsActive acc && isNothing (projectedBound acc) then "invalid-version-retained" else "invalid-version-discarded"
++    FileField _ _ -> "tree-file-field"
++    IgnoredField -> "listing-field-finished"

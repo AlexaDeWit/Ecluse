@@ -2,6 +2,10 @@ name: Sharing coverage preparation
 on:
   workflow_dispatch:
     inputs:
+      reviewed_sha:
+        description: Exact source head approved by the independent reviewer
+        required: true
+        type: string
       lead_reviewed:
         description: Lead reviewed this exact measurement head
         required: true
@@ -19,6 +23,7 @@ jobs:
     timeout-minutes: 60
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      EXPECTED_REVIEWED_SHA: ${{ inputs.reviewed_sha }}
       SHARING_LEAD_REVIEWED: ${{ inputs.lead_reviewed }}
     steps:
       - name: Checkout reviewed measurement head
