@@ -14,9 +14,9 @@ import Control.Monad.ST (ST)
 import Data.Aeson (Value (..), parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (parseMaybe)
+import Data.Bits ((.&.), (.|.))
 import Data.Map.Strict qualified as Map
 import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
-import Data.Set qualified as Set
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Entry (EntryKey (SingletonEntry))
@@ -43,8 +43,9 @@ data FileValue
     | -- | A decoded file, or a failure whose diagnostic needs the packed payload.
       FileValue (Maybe IndexFile)
 
+-- Root keys share one shape mode. The writer tracks shared keys, while Keep mode needs a mask for the eight supported fields.
 data FileFields
-    = FileFields Frame FileFacts (Set Text)
+    = FileFields Frame FileFacts {-# UNPACK #-} !Word8
     | HashFields Frame (Map Text (Maybe Text))
 
 data FileFacts = FileFacts
@@ -74,12 +75,16 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
     openObject (FileWriter writer depth) next = do
         level <- readPrimVar depth
         writePrimVar depth (level + 1)
-        openObject writer (\frame -> next (if level == 0 then FileFields frame emptyFacts mempty else HashFields frame mempty))
+        openObject writer (\frame -> next (if level == 0 then FileFields frame emptyFacts 0 else HashFields frame mempty))
     beginMember (FileWriter writer _) key fields next = beginMember writer key (frameOf fields) $ \repeated ->
-        next (repeated || seenMember (keyText key) fields)
+        next (repeated || seenMember key fields)
     addMember (FileWriter writer _) key value fields next = addMember writer key () (frameOf fields) $ \frame ->
         next $! case fields of
-            FileFields _ facts seen -> FileFields frame (reduceMember (keyText key) value facts) (Set.insert (keyText key) seen)
+            FileFields _ facts seen ->
+                let marked = case key of
+                        OwnKey own -> seen .|. fileFieldBit (Key.toText own)
+                        SharedKey _ -> seen
+                 in FileFields frame (reduceMember (keyText key) value facts) marked
             HashFields _ hashes -> HashFields frame (Map.insert (keyText key) (scalarText value) hashes)
     dropValue (FileWriter writer _) _ = dropValue writer ()
     closeObject (FileWriter writer depth) fields next = do
@@ -116,10 +121,23 @@ keyText = \case
     SharedKey entry -> entryText entry
     OwnKey key -> Key.toText key
 
-seenMember :: Text -> FileFields -> Bool
-seenMember key = \case
-    FileFields _ _ seen -> Set.member key seen
-    HashFields _ hashes -> Map.member key hashes
+seenMember :: MemberKey -> FileFields -> Bool
+seenMember key fields = case (key, fields) of
+    (OwnKey own, FileFields _ _ seen) -> seen .&. fileFieldBit (Key.toText own) /= 0
+    (_, HashFields _ hashes) -> Map.member (keyText key) hashes
+    _ -> False
+
+fileFieldBit :: Text -> Word8
+fileFieldBit = \case
+    "filename" -> 0x01
+    "url" -> 0x02
+    "hashes" -> 0x04
+    "requires-python" -> 0x08
+    "size" -> 0x10
+    "upload-time" -> 0x20
+    "yanked" -> 0x40
+    "provenance" -> 0x80
+    _ -> 0
 
 scalarText :: FileValue -> Maybe Text
 scalarText = \case

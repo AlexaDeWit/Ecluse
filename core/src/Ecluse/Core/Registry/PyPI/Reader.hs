@@ -32,8 +32,9 @@ pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> 
 {-# INLINE pypiWalk #-}
 pypiWalk depth mode step keeps = walkIndex depth mode (pureStep step) (\_ acc -> Finished acc) treeFile
   where
+    fileShape = ObjectOr Null (fileMembers depth)
     treeFile table acc position element rest next =
-        readShape Trees (ObjectOr Null (fileMembers depth)) (if keeps acc then Share else Keep) table element rest $ \payload held after ->
+        readShape Trees fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
             Walk.emit (pureStep step) acc (FileField position (Just payload)) (\kept -> next kept held after)
 
 -- | Walk a full index with typed reduction beside packing, returning the read's final table.
@@ -41,8 +42,9 @@ pypiFullWalk :: FileWriter st -> Int -> FieldStep s PyPIField (ST st (Steps (ST 
 {-# INLINE pypiFullWalk #-}
 pypiFullWalk writer depth step keeps fileStep = walkIndex depth FullRead step (\table acc -> pure (Finished (Walked table acc))) packedFile
   where
+    fileShape = ObjectOr Null (fileMembers depth)
     packedFile table acc position element rest next =
-        readShape writer (ObjectOr Null (fileMembers depth)) (if keeps acc then Share else Keep) table element rest $ \payload held after ->
+        readShape writer fileShape (if keeps acc then Share else Keep) table element rest $ \payload held after ->
             fileStep acc position payload (either Walk.refuse (\kept -> next kept held after))
 
 walkIndex :: (Walk r) => Int -> PyPIRead -> FieldStep s PyPIField r -> (InternTable -> s -> r) -> (InternTable -> s -> Int -> Element -> Cursor -> (s -> InternTable -> Cursor -> r) -> r) -> InternTable -> s -> Cursor -> r
