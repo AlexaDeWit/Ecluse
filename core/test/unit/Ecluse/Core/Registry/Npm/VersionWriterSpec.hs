@@ -229,11 +229,11 @@ genericBaseSequence sealing mode count chunks = readOutcome (walkWritingChunks (
 
 genericContainers :: [(String, ByteString)]
 genericContainers =
-    [("generic dist " <> toString key <> " " <> toString value, requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"" <> key <> "\":" <> value <> "}")) | key <- ["shasum", "integrity", "unpackedSize"], value <- containers]
-        <> [("generic tarball " <> toString value, requiredRelease "dist" ("{\"tarball\":" <> value <> "}")) | value <- containers]
-        <> [("generic licence " <> toString key <> " " <> toString value, extended ("\"license\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["type", "url"], value <- containers]
-        <> [("generic person " <> toString key <> " " <> toString value, extended ("\"_npmUser\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["name", "email", "url"], value <- containers]
-        <> [("generic optional " <> toString key <> " " <> toString value, extended ("\"" <> key <> "\":" <> value)) | key <- ["scripts", "hasInstallScript", "license", "_npmUser", "deprecated"], value <- containers]
+    [("generic dist " <> decodeUtf8 @String @ByteString key <> " " <> decodeUtf8 @String @ByteString value, requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"" <> key <> "\":" <> value <> "}")) | key <- ["shasum", "integrity", "unpackedSize"], value <- containers]
+        <> [("generic tarball " <> decodeUtf8 @String @ByteString value, requiredRelease "dist" ("{\"tarball\":" <> value <> "}")) | value <- containers]
+        <> [("generic licence " <> decodeUtf8 @String @ByteString key <> " " <> decodeUtf8 @String @ByteString value, extended ("\"license\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["type", "url"], value <- containers]
+        <> [("generic person " <> decodeUtf8 @String @ByteString key <> " " <> decodeUtf8 @String @ByteString value, extended ("\"_npmUser\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["name", "email", "url"], value <- containers]
+        <> [("generic optional " <> decodeUtf8 @String @ByteString key <> " " <> decodeUtf8 @String @ByteString value, extended ("\"" <> key <> "\":" <> value)) | key <- ["scripts", "hasInstallScript", "license", "_npmUser", "deprecated"], value <- containers]
   where
     containers = ["[]", "{}", "[{\"name\":\"nested\",\"install\":\"work\"}]", "{\"name\":[],\"scripts\":{\"install\":\"work\"}}"]
 
@@ -292,7 +292,7 @@ typedFieldsSpec :: Spec
 typedFieldsSpec = describe "typed object field parity" $
     for_ [("license", ["type", "url"]), ("_npmUser", ["name", "email", "url"]), ("dist", ["shasum", "integrity", "unpackedSize"])] $ \(container, keys) ->
         for_ keys $ \key ->
-            it ("validates the first " <> toString container <> "." <> toString key <> " including null defaults") $
+            it ("validates the first " <> decodeUtf8 @String @ByteString container <> "." <> decodeUtf8 @String @ByteString key <> " including null defaults") $
                 for_ [("null", "false"), ("false", "null"), ("\"ok\"", "{}"), ("{}", "\"ok\"")] $ \(first', later) -> do
                     let fields = "\"" <> key <> "\":" <> first' <> ",\"" <> key <> "\":" <> later
                         release =
@@ -471,14 +471,14 @@ byteChunks = map BS.singleton . BS.unpack
 
 adverseReleases :: [(String, ByteString)]
 adverseReleases =
-    [("release " <> toString literal, literal) | literal <- ["null", "true", "7", "\"release\"", "[]", "{}"]]
-        <> [("required " <> toString key <> " is " <> toString value, requiredRelease key value) | key <- ["name", "version", "dist"], value <- ["null", "false", "7", "[]", "{}", "\"\""]]
-        <> [("missing " <> toString key, requiredRelease key "") | key <- ["name", "version", "dist"]]
-        <> [("dist " <> toString key <> " is " <> toString value, requiredRelease "dist" ("{\"tarball\":\"a.tgz\"," <> "\"" <> key <> "\":" <> value <> "}")) | key <- ["shasum", "integrity"], value <- ["null", "false", "7", "[]", "{}", "\"invalid\""]]
-        <> [("field " <> toString key <> " is " <> toString value, extended ("\"" <> key <> "\":" <> value)) | key <- ["deprecated", "hasInstallScript", "scripts", "license", "_npmUser"], value <- ["null", "false", "true", "0", "1.5", "\"\"", "\"MIT\"", "[]", "{}"]]
-        <> [("bad script " <> toString value, extended ("\"scripts\":{\"build\":" <> value <> ",\"install\":\"\"}")) | value <- ["null", "false", "true", "0", "1.5", "[]", "{}"]]
-        <> [("licence " <> toString value, extended ("\"license\":" <> value)) | value <- ["{\"type\":null,\"url\":null}", "{\"type\":7}", "{\"url\":false}", "{\"type\":\"MIT\",\"type\":false}", "{\"type\":false,\"type\":\"MIT\"}"]]
-        <> [("advisory size " <> toString value, "{\"name\":\"thing\",\"version\":\"ignored\",\"dist\":{\"tarball\":\"https://example.test/a.tgz\",\"unpackedSize\":" <> value <> "}}") | value <- ["-1", "0", "1.5", "9223372036854775807", "9223372036854775808", "1e1000", "true", "null"]]
+    [("release " <> decodeUtf8 @String @ByteString literal, literal) | literal <- ["null", "true", "7", "\"release\"", "[]", "{}"]]
+        <> [("required " <> decodeUtf8 @String @ByteString key <> " is " <> decodeUtf8 @String @ByteString value, requiredRelease key value) | key <- ["name", "version", "dist"], value <- ["null", "false", "7", "[]", "{}", "\"\""]]
+        <> [("missing " <> decodeUtf8 @String @ByteString key, requiredRelease key "") | key <- ["name", "version", "dist"]]
+        <> [("dist " <> decodeUtf8 @String @ByteString key <> " is " <> decodeUtf8 @String @ByteString value, requiredRelease "dist" ("{\"tarball\":\"a.tgz\"," <> "\"" <> key <> "\":" <> value <> "}")) | key <- ["shasum", "integrity"], value <- ["null", "false", "7", "[]", "{}", "\"invalid\""]]
+        <> [("field " <> decodeUtf8 @String @ByteString key <> " is " <> decodeUtf8 @String @ByteString value, extended ("\"" <> key <> "\":" <> value)) | key <- ["deprecated", "hasInstallScript", "scripts", "license", "_npmUser"], value <- ["null", "false", "true", "0", "1.5", "\"\"", "\"MIT\"", "[]", "{}"]]
+        <> [("bad script " <> decodeUtf8 @String @ByteString value, extended ("\"scripts\":{\"build\":" <> value <> ",\"install\":\"\"}")) | value <- ["null", "false", "true", "0", "1.5", "[]", "{}"]]
+        <> [("licence " <> decodeUtf8 @String @ByteString value, extended ("\"license\":" <> value)) | value <- ["{\"type\":null,\"url\":null}", "{\"type\":7}", "{\"url\":false}", "{\"type\":\"MIT\",\"type\":false}", "{\"type\":false,\"type\":\"MIT\"}"]]
+        <> [("advisory size " <> decodeUtf8 @String @ByteString value, "{\"name\":\"thing\",\"version\":\"ignored\",\"dist\":{\"tarball\":\"https://example.test/a.tgz\",\"unpackedSize\":" <> value <> "}}") | value <- ["-1", "0", "1.5", "9223372036854775807", "9223372036854775808", "1e1000", "true", "null"]]
         <> [ ("first required member wins", "{\"name\":\"thing\",\"name\":false,\"version\":\"opaque\",\"version\":null,\"dist\":{\"tarball\":\"a.tgz\",\"tarball\":null}}")
            , ("invalid first required member wins", "{\"name\":false,\"name\":\"thing\",\"version\":null,\"dist\":{}}")
            , ("multiple invalid optional fields preserve priority", extended "\"hasInstallScript\":7,\"scripts\":false,\"license\":false,\"_npmUser\":false")
