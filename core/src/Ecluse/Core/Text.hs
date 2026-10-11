@@ -19,6 +19,7 @@ module Ecluse.Core.Text (
     httpPrefix,
     lowerPrefixChars,
     isPrefixOfLowered,
+    toLowerUnlessAsciiUnchanged,
     registryPath,
     isAsciiAlphaNum,
     readDecimalText,
@@ -39,9 +40,7 @@ import Data.Text.Read qualified as TR
 import GHC.Exts (Int (I#), sizeofByteArray#)
 import Network.HTTP.Types.URI (urlDecode)
 
-{- | The text trimmed of surrounding whitespace, or 'Nothing' when nothing remains.
-An empty or all-whitespace value therefore counts as absent.
--}
+-- | The text trimmed of surrounding whitespace, or 'Nothing' when nothing remains. An empty or all-whitespace value therefore counts as absent.
 nonBlank :: Text -> Maybe Text
 nonBlank t =
     let trimmed = T.strip t
@@ -51,28 +50,21 @@ nonBlank t =
 stripTrailingSlash :: Text -> Text
 stripTrailingSlash = T.dropWhileEnd (== '/')
 
-{- | Join a URL base and an already-encoded path with exactly one slash, whatever trailing
-slashes the base writes. It appends the path verbatim, and neither encodes nor validates it.
--}
+-- | Join a URL base and an already-encoded path with exactly one slash, whatever trailing slashes the base writes. It appends the path verbatim, and neither encodes nor validates it.
 joinUrlPath :: Text -> Text -> Text
 joinUrlPath b path = stripTrailingSlash b <> "/" <> path
 
-{- | The final URL path component, preserving its encoded spelling without query or fragment.
-Both the raw and once-decoded component must pass 'isSafeComponent', with valid decoded UTF-8.
--}
+-- | The final URL path component, preserving its encoded spelling without query or fragment. Both the raw and once-decoded component must pass 'isSafeComponent', with valid decoded UTF-8.
 urlFilename :: Text -> Maybe Text
 urlFilename url = do
     let filename = urlFilenameComponent url
     guard (isSafeComponent filename)
-    -- A component with no percent sign decodes to itself.
     when (T.any (== '%') filename) $ do
         decoded <- rightToMaybe (TE.decodeUtf8' (urlDecode False (encodeUtf8 filename)))
         guard (isSafeComponent decoded)
     pure filename
 
-{- | The raw final URL path component without query or fragment, possibly empty.
-No decoding or validation occurs. Callers must validate and encode it before URL construction.
--}
+-- | The raw final URL path component without query or fragment, possibly empty. No decoding or validation occurs. Callers must validate and encode it before URL construction.
 urlFilenameComponent :: Text -> Text
 urlFilenameComponent = T.takeWhileEnd (/= '/') . T.takeWhile inPath
   where
@@ -88,15 +80,11 @@ isSafeComponent c =
   where
     safeChar ch = ch /= '/' && ch /= '\\' && not (isControl ch)
 
-{- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator
-matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
--}
+-- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
-{- | A lower-case prefix with its length in characters, so checking for it never measures a text.
-The constructor stays private, so each count sits beside its prefix in this module.
--}
+-- | A lower-case prefix with its length in characters, so checking for it never measures a text. The constructor stays private, so each count sits beside its prefix in this module.
 data LowerPrefix = LowerPrefix Int Text
     deriving stock (Show)
 
@@ -112,18 +100,22 @@ httpPrefix = LowerPrefix 7 "http://"
 lowerPrefixChars :: LowerPrefix -> Int
 lowerPrefixChars (LowerPrefix chars _) = chars
 
-{- | Whether the prefix begins the lower-cased text. It lowers only the prefix's length of the text,
-which suffices because 'T.toLower' maps each character on its own to at least one.
--}
+-- | Whether the prefix begins the lower-cased text. It lowers only the prefix's length of the text, which suffices because 'T.toLower' maps each character on its own to at least one.
 isPrefixOfLowered :: LowerPrefix -> Text -> Bool
 isPrefixOfLowered (LowerPrefix chars prefix) t = lowered == prefix
   where
     -- Equality, not 'T.isPrefixOf', which streams both texts and allocates for each character.
     lowered = T.take chars (T.toLower (T.take chars t))
 
-{- | The path half of an absolute URL, from the first slash after the authority. It splits on the
-first scheme separator, so a later one inside the URL cannot move where the path starts.
--}
+-- | Unicode lowercase, retaining the input when every character is ASCII and none is uppercase.
+toLowerUnlessAsciiUnchanged :: Text -> Text
+toLowerUnlessAsciiUnchanged t
+    | T.all unchanged t = t
+    | otherwise = T.toLower t
+  where
+    unchanged c = c <= '\x7f' && not (isAsciiUpper c)
+
+-- | The path half of an absolute URL, from the first slash after the authority. It splits on the first scheme separator, so a later one inside the URL cannot move where the path starts.
 registryPath :: Text -> Text
 registryPath raw = T.dropWhile (/= '/') (afterFirst "://" raw)
 
@@ -131,15 +123,11 @@ registryPath raw = T.dropWhile (/= '/') (afterFirst "://" raw)
 isAsciiAlphaNum :: Char -> Bool
 isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c
 
-{- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else.
-Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.
--}
+-- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else. Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.
 readDecimalText :: (Integral a) => Text -> Maybe a
 readDecimalText = readWholly TR.decimal
 
-{- | The non-negative integer a bare hexadecimal digit run spells. The @0x@ prefix that
-@Data.Text.Read.hexadecimal@ takes is refused, so a caller strips and judges the prefix itself.
--}
+-- | The non-negative integer a bare hexadecimal digit run spells. The @0x@ prefix that @Data.Text.Read.hexadecimal@ takes is refused, so a caller strips and judges the prefix itself.
 readHexText :: (Integral a) => Text -> Maybe a
 readHexText t
     | isPrefixOfLowered hexPrefix t = Nothing
@@ -155,9 +143,7 @@ readWholly textReader t = case textReader t of
     Right (n, rest) | T.null rest -> Just n
     _ -> Nothing
 
-{- | Write a magnitude in decimal, its last digit at the offset and the digits before it at the offsets below.
-No write is bounds-checked: the caller must have reserved room for every digit.
--}
+-- | Write a magnitude in decimal, its last digit at the offset and the digits before it at the offsets below. No write is bounds-checked: the caller must have reserved room for every digit.
 writeDigits :: MutableByteArray st -> Int -> Word -> ST st ()
 writeDigits buffer !at !value = do
     writeByteArray buffer at (0x30 + fromIntegral (value `rem` 10) :: Word8)

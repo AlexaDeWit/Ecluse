@@ -2,12 +2,18 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Authority extraction, credential refusal and log label contracts.
 module Ecluse.Core.Security.AuthoritySpec (spec) where
 
 import Data.Text qualified as T
+import Hedgehog (forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Security (
+    HostPort (..),
     authorityLabel,
     credentialFreeUrl,
     dialledAuthorityLabel,
@@ -19,6 +25,7 @@ import Ecluse.Core.Security (
     refuseCredentialMaterial,
     splitHostPort,
  )
+import Ecluse.Core.Text (afterFirst, readDecimalText)
 import Ecluse.Security.Support (hp, hpAt, upstreams)
 
 spec :: Spec
@@ -32,6 +39,7 @@ spec = do
     credentialFreeUrlSpec
     refuseCredentialMaterialSpec
     splitHostPortSpec
+    casingDifferentialSpec
 
 hostAddressSpec :: Spec
 hostAddressSpec = describe "hostAddress" $ do
@@ -251,7 +259,6 @@ refuseCredentialMaterialSpec = describe "refuseCredentialMaterial" $ do
 splitHostPortSpec :: Spec
 splitHostPortSpec = describe "splitHostPort" $ do
     it "splits a bracketed IPv6 literal with a port on the closing bracket" $
-        -- The #292/#296 edge: the split never reads an inner '::' as the port separator.
         splitHostPort "[::1]:4566" `shouldBe` Just ("::1", ":4566")
     it "splits a longer bracketed IPv6 literal with a port" $
         splitHostPort "[fd00::1]:4318" `shouldBe` Just ("fd00::1", ":4318")
@@ -275,3 +282,103 @@ splitHostPortSpec = describe "splitHostPort" $ do
         splitHostPort "a:b:c" `shouldBe` Just ("a", ":b:c")
     it "handles empty brackets with port" $
         splitHostPort "[]:80" `shouldBe` Just ("", ":80")
+
+casingDifferentialSpec :: Spec
+casingDifferentialSpec = describe "host extraction against the base implementation" $ do
+    it "preserves hostile authority forms with Unicode hosts and every ASCII delimiter" $
+        forM_ hostileUrls $ \url -> do
+            hostAddress url `shouldBe` baseHostAddress url
+            hostPortAddress url `shouldBe` baseHostPortAddressWithDefault 443 url
+            forM_ [0, 1, 80, 443, 65535] $ \portless ->
+                hostPortAddressWithDefault portless url `shouldBe` baseHostPortAddressWithDefault portless url
+
+    it "preserves extraction for generated ASCII and Unicode input" $
+        hedgehog $ do
+            raw <- forAll (Gen.text (Range.linear 0 120) (Gen.choice [Gen.ascii, Gen.unicodeAll]))
+            prefix <- forAll (Gen.element ["", "https://", "HTTP://user:pass@", "https://["])
+            suffix <- forAll (Gen.element ["", ":443/x", "]:8443/?u=https://evil", "@files.pythonhosted.org#hash"])
+            portless <- forAll (Gen.word16 Range.constantBounded)
+            let url = prefix <> raw <> suffix
+            hostAddress url === baseHostAddress url
+            hostPortAddressWithDefault portless url === baseHostPortAddressWithDefault portless url
+
+hostileUrls :: [Text]
+hostileUrls =
+    [ scheme <> userinfo <> host <> port <> tailText
+    | scheme <- ["", "https://", "HTTP://", " https://", "https://https://"]
+    , userinfo <- ["", "user:pass@", "good@evil@"]
+    , host <-
+        [ ""
+        , "files.pythonhosted.org"
+        , "Registry.NPMJS.org"
+        , "\x130.example"
+        , "\x212a.example"
+        , "\x3a3\x3a3.example"
+        , "caf\xe9.example"
+        , "\x10400.example"
+        , "\x1f600.example"
+        , "127.1"
+        , "0x7f000001"
+        , "[::1]"
+        , "[FE80::1%eth0]"
+        , "[::1"
+        , "[]"
+        , "::1"
+        ]
+            <> [T.pack ['a', c, 'b'] | c <- ['\0' .. '\x7f']]
+    , port <- ["", ":", ":1", ":443", ":65535", ":65536", ":0", ":0443", ":+80", ":9x9", ":80:90", ":\x660"]
+    , tailText <- ["", "/file.whl", "?u=https://evil@other/x", "#sha256=deadbeef"]
+    ]
+
+-- Frozen from ec1b8d8952332ba00dc0048b7eb416093efe0d2f. The unchanged decimal reader and first separator helper are shared.
+baseHostAddress :: Text -> Text
+baseHostAddress raw = T.toLower (maybe "" fst (baseSplitHostPort (baseAuthorityOf raw)))
+
+baseHostPortAddressWithDefault :: Word16 -> Text -> Maybe HostPort
+baseHostPortAddressWithDefault portless raw = do
+    let authority = baseAuthorityOf raw
+    (host, rest) <- baseSplitHostPort authority
+    guard (not (T.null host))
+    port <- baseEffectivePort portless authority rest
+    pure (HostPort (T.toLower host) port)
+
+baseEffectivePort :: Word16 -> Text -> Text -> Maybe Word16
+baseEffectivePort portless authority rest = case T.stripPrefix ":" rest of
+    Just written -> baseParsePort written
+    Nothing
+        | not (T.null rest) -> Nothing
+        | ":" `T.isSuffixOf` authority -> Nothing
+        | otherwise -> Just portless
+
+baseParsePort :: Text -> Maybe Word16
+baseParsePort t = do
+    guard (T.take 1 t /= "0")
+    n <- readDecimalText t :: Maybe Integer
+    guard (n >= 1 && n <= 65535)
+    pure (fromInteger n)
+
+baseAuthoritySpan :: Text -> Text
+baseAuthoritySpan raw = T.takeWhile baseInAuthority (afterFirst "://" raw)
+
+baseInAuthority :: Char -> Bool
+baseInAuthority c = c /= '/' && c /= '?' && c /= '#'
+
+baseAuthorityOf :: Text -> Text
+baseAuthorityOf = baseAfterLast "@" . baseAuthoritySpan
+
+baseAfterLast :: Text -> Text -> Text
+baseAfterLast needle hay =
+    let (pre, post) = T.breakOnEnd needle hay
+     in if T.null pre then hay else post
+
+baseSplitHostPort :: Text -> Maybe (Text, Text)
+baseSplitHostPort authority
+    | T.null authority = Nothing
+    | otherwise = case T.stripPrefix "[" authority of
+        Just rest -> case T.breakOn "]" rest of
+            (_, "") -> Nothing -- an opening bracket with no close: malformed
+            (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
+        Nothing -> case T.breakOn ":" authority of
+            ("", _) -> Nothing
+            (h, "") -> Just (h, "")
+            (h, p) -> if p == ":" then Just (h, "") else Just (h, p)
