@@ -5,8 +5,8 @@
 {- | The resilience harness around the advisory package read: a per-attempt timeout, bounded retry
 with backoff, and a per-rule circuit breaker, attached by 'Ecluse.Core.Rules.prepare'.
 
-Any value the read returns resets the breaker unretried, so only a harness-observed fault advances
-the breaker and returns a 'ReadFault'. 'runResilient' never throws.
+Returned values settle success. Exhausted faults count once per run. Cancellation propagates
+and releases an owned recovery probe without counting a source failure.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
@@ -23,16 +23,20 @@ module Ecluse.Core.Rules.Effectful (
 import Control.Retry (retrying)
 import Data.Time (NominalDiffTime, UTCTime)
 import UnliftIO (timeout, tryAny)
+import UnliftIO.Exception (mask)
 
 import Ecluse.Core.Breaker (
+    Attempt,
     Breaker,
     BreakerReporter,
     admit,
     initialBreaker,
     recordFailure,
     recordSuccess,
+    release,
     reportBreakerChange,
  )
+import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
@@ -44,13 +48,9 @@ data Resilience = Resilience
     , resBreaker :: TVar Breaker
     -- ^ This rule's circuit-breaker state, shared across requests.
     , resBreakerReporter :: BreakerReporter
-    {- ^ The observer this rule's breaker reports state transitions to
-    (@ecluse.rule.breaker.state@). Inert ('Ecluse.Core.Breaker.noBreakerReporter') when unobserved.
-    -}
+    -- ^ Observes coarse transitions for @ecluse.rule.breaker.state@.
     , resClock :: IO UTCTime
-    {- ^ The wall clock the breaker reads for admission and cooldown, separate from the request
-    snapshot 'ctxNow'. A fresh read at failure commit starts the cooldown at the failure.
-    -}
+    -- ^ Fresh clock readings for admission and failure commit, separate from 'ctxNow'.
     }
 
 -- | Why the harness gave a read up. Each rule relying on it resolves this under its own alignment.
@@ -66,29 +66,29 @@ data ReadFault = ReadFault
 
 -- | Run one read under its 'Resilience' policy: the read's value, or why the harness gave it up.
 runResilient :: Resilience -> IO a -> IO (Either ReadFault a)
-runResilient res act = do
-    admitted <- admitProbe res =<< resClock res
-    if not admitted
-        then
-            -- Breaker open and still cooling down: fast-fail without running the read, the cheap
-            -- path a sustained outage stays on.
-            pure (Left (ReadFault (transientCause (resConfig res)) SourceBreakerOpen SourceBreakerOpen))
-        else do
-            result <- attemptWithRetry res act
-            -- Read the clock again after the retry run. An exhausted result then starts its
-            -- cooldown at the failure commit, not at the start of the run.
-            settledNow <- resClock res
-            settleOutcome res settledNow result
+runResilient res act = mask $ \restore -> do
+    now <- resClock res
+    (ticket, old, new) <- atomically (admitProbe res now)
+    case ticket of
+        Nothing -> pure (Left (ReadFault (transientCause (resConfig res)) SourceBreakerOpen SourceBreakerOpen))
+        Just admitted ->
+            guardInFlight restore (const pass) (releaseProbe res admitted) $ do
+                reportBreakerChange (resBreakerReporter res) old new
+                result <- attemptWithRetry res act
+                settledNow <- resClock res
+                settleOutcome res admitted settledNow result
 
--- Settle a finished retry run against the breaker. A value resets it, an exhausted run trips it.
-settleOutcome :: Resilience -> UTCTime -> Either (Transience, Inability) a -> IO (Either ReadFault a)
-settleOutcome res now = \case
+settleOutcome :: Resilience -> Attempt -> UTCTime -> Either (Transience, Inability) a -> IO (Either ReadFault a)
+settleOutcome res ticket now = \case
     Right value -> do
-        commitBreaker res recordSuccess
+        commitBreaker res (recordSuccess ticket)
         pure (Right value)
     Left (transience, detail) -> do
-        commitBreaker res (tripOnFailure (resConfig res) now)
+        commitBreaker res (tripOnFailure (resConfig res) now ticket)
         pure (Left (ReadFault transience EvaluationFailed detail))
+
+releaseProbe :: Resilience -> Attempt -> IO ()
+releaseProbe res ticket = atomically (modifyTVar' (resBreaker res) (release ticket))
 
 -- Attempt the read under the per-attempt timeout until the retry budget is spent. Only a fault retries.
 attemptWithRetry :: Resilience -> IO a -> IO (Either (Transience, Inability) a)
@@ -111,16 +111,12 @@ attemptOnce res act = do
 transientCause :: EffectfulConfig -> Transience
 transientCause cfg = WillResolve (ecRetryAfter cfg)
 
--- Commits what 'Ecluse.Core.Breaker.admit' decided, so the move out of 'Open' takes effect.
-admitProbe :: Resilience -> UTCTime -> IO Bool
+admitProbe :: Resilience -> UTCTime -> STM (Maybe Attempt, Breaker, Breaker)
 admitProbe res now = do
-    (permitted, old, new) <- atomically $ do
-        st <- readTVar (resBreaker res)
-        let (p, st') = admit now st
-        writeTVar (resBreaker res) st'
-        pure (p, st, st')
-    reportBreakerChange (resBreakerReporter res) old new
-    pure permitted
+    old <- readTVar (resBreaker res)
+    let (ticket, new) = admit now old
+    writeTVar (resBreaker res) new
+    pure (ticket, old, new)
 
 -- Reads the breaker before and after in one transaction, so the report reflects exactly the
 -- transition that committed.
@@ -133,36 +129,24 @@ commitBreaker res step = do
         pure (st, st')
     reportBreakerChange (resBreakerReporter res) old new
 
-tripOnFailure :: EffectfulConfig -> UTCTime -> Breaker -> Breaker
+tripOnFailure :: EffectfulConfig -> UTCTime -> Attempt -> Breaker -> Breaker
 tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg)
 
-{- | The resilience knobs around an advisory rule's package read. The breaker's timing reads
-'resClock' fresh at failure commit, not the request snapshot 'ctxNow'.
--}
+-- | Per-rule limits. Breaker timing uses the fresh 'resClock', separate from request snapshots.
 data EffectfulConfig = EffectfulConfig
     { ecTimeout :: Int
-    {- ^ The per-attempt timeout in microseconds. The harness treats an attempt that
-    does not return within it as a failure, a transient and retryable cause.
-    -}
+    -- ^ Per-attempt timeout in microseconds. Expiry is a retryable fault.
     , ecBackoff :: [Int]
-    {- ^ The delay in microseconds before each retry, one entry per retry. Its length is
-    the retry budget, so @[]@ admits no retry at all.
-    -}
+    -- ^ Microsecond delay per retry. An empty list disables retries.
     , ecBreakerThreshold :: Int
     -- ^ Consecutive exhausted reads that trip the breaker, one read per request.
     , ecBreakerCooldown :: NominalDiffTime
-    {- ^ How long the breaker stays open (fast-failing the rule) before it allows a
-    single half-open probe to test recovery.
-    -}
+    -- ^ Cooldown in seconds before one owned recovery run.
     , ecRetryAfter :: Maybe RetryAfter
-    {- ^ The @Retry-After@ hint a faulted evaluation carries back to the client.
-    'Nothing' sends no hint.
-    -}
+    -- ^ Optional client @Retry-After@ hint for a faulted evaluation.
     }
 
-{- | A 2-second per-attempt timeout and two retries, at 100ms then 250ms. The breaker trips after
-5 consecutive failures and cools for 30 seconds.
--}
+-- | Timeout 2s, retries after 100ms and 250ms, trip after five failed runs, cooldown 30s.
 defaultEffectfulConfig :: EffectfulConfig
 defaultEffectfulConfig =
     EffectfulConfig

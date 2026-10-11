@@ -3,9 +3,13 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TupleSections #-}
 
+-- | Unit contracts for the module at the corresponding source path.
 module Ecluse.Core.Credential.Refresh.InternalSpec (spec) where
 
+import Control.Concurrent (ThreadId, myThreadId, throwTo)
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, fromGregorian)
+import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import Hedgehog (
     Callback (Ensure, Update),
     Command (Command),
@@ -19,15 +23,16 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
-import UnliftIO (async, cancel, timeout, wait)
+import UnliftIO (async, cancel, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
+import Ecluse.Core.Breaker (Breaker, BreakerPhase (..), BreakerReporter (..), admit, breakerPhase, initialBreaker, noBreakerReporter, recordFailure)
 import Ecluse.Core.Credential
 import Ecluse.Core.Credential.Refresh
 import Ecluse.Core.Credential.Refresh.Internal (
     CacheState (..),
+    MintClaim,
     ServeAction (..),
     decide,
     onMintFailure,
@@ -36,21 +41,17 @@ import Ecluse.Core.Credential.Refresh.Internal (
     refreshingProviderWith,
     releaseSingleFlight,
  )
+import Ecluse.Core.Rules.Effectful (Resilience (..), defaultEffectfulConfig, newBreaker, runResilient)
 import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Support (newTestClock)
 
--- | An arbitrary "epoch" the refresh tests advance their injected clock from.
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 6 22) 0
 
--- | Build a token that expires the given number of seconds after 't0'.
 tokenExpiringIn :: Text -> NominalDiffTime -> AuthToken
 tokenExpiringIn s ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl t0)}
 
-{- | A 'RefreshConfig' wired to an injected clock and mint, with zero jitter and a small
-breaker, so a test drives the breaker behaviour deterministically.
--}
 testConfig :: IO UTCTime -> IO AuthToken -> RefreshConfig
 testConfig clock mint =
     defaultRefreshConfig
@@ -62,43 +63,28 @@ testConfig clock mint =
         , rcBreakerCooldown = 30
         }
 
-{- | Poll a boolean action until it holds or a generous budget elapses. It awaits a
-background refresh without a fixed, flaky sleep.
--}
 waitUntil :: IO Bool -> IO Bool
 waitUntil = awaitUntil 2_000_000 1_000
 
--- | Spin until a counter reaches @n@, so a test can wait for a background mint to start.
 waitForCount :: IORef Int -> Int -> IO Bool
 waitForCount ref n = waitUntil ((>= n) <$> readIORef ref)
 
-{- | A baseline 'CacheState' for the direct helper tests: healthy, not refreshing, holding
-a long-lived token. Each test tweaks the one axis it exercises.
--}
 aCacheState :: CacheState
 aCacheState =
     CacheState
         { csToken = tokenExpiringIn "cached" 1000
         , csRefreshDue = Just (addUTCTime 800 t0)
-        , csRefreshing = False
+        , csMintClaim = Nothing
+        , csClaimCounter = 0
         , csBreaker = initialBreaker
         }
 
-{- | A 'RefreshConfig' carrying only the breaker knobs the pure fold helpers read. Its
-effectful leaves stay at the loud 'defaultRefreshConfig' defaults, which these helpers never touch.
--}
 breakerCfg :: RefreshConfig
 breakerCfg = defaultRefreshConfig{rcBreakerThreshold = 3, rcBreakerCooldown = 30}
 
-{- | A refresh outcome captured by a test 'RefreshReporter': the result and the
-absolute expiry it carried.
--}
 data RefreshEvent = ReportedSuccess (Maybe UTCTime) | ReportedFailure (Maybe UTCTime)
     deriving stock (Eq, Show)
 
-{- | A pair of capturing reporters appending to their own logs, oldest first. A test can then
-assert the exact order of breaker transitions and refresh outcomes.
--}
 capturingReporters :: IO (IORef [Breaker], IORef [RefreshEvent], BreakerReporter, RefreshReporter)
 capturingReporters = do
     breakerLog <- newIORef []
@@ -111,17 +97,11 @@ capturingReporters = do
                 }
     pure (breakerLog, refreshLog, breakerR, refreshR)
 
-{- | A distinguishable mint failure, so a test can assert the synchronous path rethrows the
-mint's own exception rather than one of its own.
--}
 data MintBoom = MintBoom
     deriving stock (Eq, Show)
 
 instance Exception MintBoom
 
-{- | A mint that runs the next scripted action on each call, so a test drives a deterministic
-sequence of mint outcomes. The eager construction mint consumes the head.
--}
 scriptedMint :: IORef [IO AuthToken] -> IO AuthToken
 scriptedMint ref = join (atomicModifyIORef' ref next)
   where
@@ -130,6 +110,7 @@ scriptedMint ref = join (atomicModifyIORef' ref next)
 
 spec :: Spec
 spec = do
+    recoverySpec
     describe "refreshingProvider" $ do
         it "mints once at construction and serves that token while well inside its life" $ do
             (clock, _setClock) <- newTestClock t0
@@ -484,47 +465,50 @@ spec = do
             let noExpiryToken = AuthToken{authSecret = mkSecret "forever", authExpiresAt = Nothing}
             refreshDueAt defaultRefreshConfig t0 noExpiryToken `shouldReturn` Nothing
 
-    describe "onMintSuccess" $
-        it "installs the new token and due, clears the refreshing flag, and resets the breaker" $ do
-            let token' = tokenExpiringIn "fresh" 1000
-                due' = Just (addUTCTime 800 t0)
-                st0 = aCacheState{csRefreshing = True, csBreaker = Closed 2}
-                st1 = onMintSuccess token' due' st0
-            csToken st1 `shouldBe` token'
-            csRefreshDue st1 `shouldBe` due'
-            -- 'releaseSingleFlight' releases the flag, not this fold, so the success
-            -- fold leaves it untouched.
-            csRefreshing st1 `shouldBe` True
-            csBreaker st1 `shouldBe` initialBreaker
+    describe "mint ownership folds" $ do
+        it "installs a successful token and leaves mint release to the guard" $ do
+            stateVar <- newTVarIO aCacheState
+            claim <- claimExpired stateVar
+            st <- readTVarIO stateVar
+            let token = tokenExpiringIn "fresh" 5000
+                due = Just (addUTCTime 4000 t0)
+                settled = onMintSuccess claim token due st
+            csToken settled `shouldBe` token
+            csRefreshDue settled `shouldBe` due
+            csMintClaim settled `shouldBe` Just claim
+            breakerPhase (csBreaker settled) `shouldBe` Closed 0
 
-    describe "onMintFailure" $ do
-        it "advances the breaker's consecutive-failure count below the threshold" $ do
-            let st1 = onMintFailure breakerCfg t0 aCacheState{csBreaker = Closed 1}
-            csBreaker st1 `shouldBe` Closed 2
+        it "counts failures, trips at the threshold, and retains the cache" $ do
+            stateVar <- newTVarIO aCacheState
+            forM_ [1 .. 3 :: Int] $ \count -> do
+                claim <- claimExpired stateVar
+                before <- readTVarIO stateVar
+                let settled = onMintFailure claim breakerCfg t0 before
+                csToken settled `shouldBe` csToken before
+                csRefreshDue settled `shouldBe` csRefreshDue before
+                csMintClaim settled `shouldBe` Just claim
+                breakerPhase (csBreaker settled)
+                    `shouldBe` if count < 3 then Closed count else Open (addUTCTime 30 t0)
+                atomically (writeTVar stateVar settled)
+                releaseSingleFlight stateVar claim
+            csMintClaim <$> readTVarIO stateVar `shouldReturn` Nothing
 
-        it "trips the breaker open for the cooldown once the threshold is reached" $ do
-            -- breakerCfg threshold = 3, cooldown = 30: the third failure trips it.
-            let st1 = onMintFailure breakerCfg t0 aCacheState{csBreaker = Closed 2}
-            csBreaker st1 `shouldBe` Open (addUTCTime 30 t0)
-
-        it "leaves the cached token and refreshing flag untouched" $ do
-            let st0 = aCacheState{csRefreshing = True}
-                st1 = onMintFailure breakerCfg t0 st0
-            csToken st1 `shouldBe` csToken st0
-            csRefreshDue st1 `shouldBe` csRefreshDue st0
-            csRefreshing st1 `shouldBe` True
-
-    describe "releaseSingleFlight" $ do
-        it "clears the single-flight flag" $ do
-            stateVar <- newTVarIO aCacheState{csRefreshing = True}
-            releaseSingleFlight stateVar
-            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
-
-        it "is idempotent: releasing an already-clear flag is a no-op" $ do
-            stateVar <- newTVarIO aCacheState{csRefreshing = False}
-            releaseSingleFlight stateVar
-            releaseSingleFlight stateVar
-            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+        it "fences stale settlement and cleanup from the next mint owner" $ do
+            stateVar <- newTVarIO aCacheState
+            old <- claimExpired stateVar
+            releaseSingleFlight stateVar old
+            current <- claimExpired stateVar
+            owned <- readTVarIO stateVar
+            let staleSuccess = onMintSuccess old (tokenExpiringIn "stale" 9000) Nothing owned
+                staleFailure = onMintFailure old breakerCfg t0 owned
+            csToken staleSuccess `shouldBe` csToken owned
+            csBreaker staleSuccess `shouldBe` csBreaker owned
+            csBreaker staleFailure `shouldBe` csBreaker owned
+            releaseSingleFlight stateVar old
+            csMintClaim <$> readTVarIO stateVar `shouldReturn` Just current
+            releaseSingleFlight stateVar current
+            releaseSingleFlight stateVar current
+            csMintClaim <$> readTVarIO stateVar `shouldReturn` Nothing
 
     describe "refresh telemetry reporting" $ do
         it "reports each refresh outcome and the breaker trip → probe → reset transitions" $ do
@@ -543,20 +527,20 @@ spec = do
                         }
             provider <- refreshingProvider cfg
             -- Construction's eager mint records nothing: the reporters fire on refreshes.
-            readIORef breakerLog `shouldReturn` []
+            (map breakerPhase <$> readIORef breakerLog) `shouldReturn` []
             readIORef refreshLog `shouldReturn` []
             -- The eager token (expires t0+10) is expired at t0+20, so the serve mints synchronously
             -- and fails. The failure reports the cached expiry.
             setClock (addUTCTime 20 t0)
             currentToken provider `shouldThrow` anyException
-            readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0)]
+            (map breakerPhase <$> readIORef breakerLog) `shouldReturn` [Open (addUTCTime 50 t0)]
             readIORef refreshLog `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0))]
             -- The 30s cooldown elapses by t0+51, so the breaker admits a half-open probe. It
             -- succeeds, resetting the breaker and recording the fresh token's expiry.
             setClock (addUTCTime 51 t0)
             recovered <- currentToken provider
             unSecret (authSecret recovered) `shouldBe` "recovered"
-            readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0), HalfOpen, Closed 0]
+            (map breakerPhase <$> readIORef breakerLog) `shouldReturn` [Open (addUTCTime 50 t0), HalfOpen, Closed 0]
             readIORef refreshLog
                 `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0)), ReportedSuccess (Just (addUTCTime 200 t0))]
 
@@ -570,48 +554,50 @@ spec = do
             currentToken provider `shouldThrow` anyException
 
     describe "decide" $ do
-        it "serves the cached token when it is valid and no refresh is due" $ do
-            let token' = tokenExpiringIn "valid" 1000
-            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0)}
-            -- Well before the 800s due instant: serve cached, no claim.
-            atomically (decide stateVar t0) `shouldReturn` ServeCached token'
-            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+        it "serves a valid token without claiming a mint before its refresh instant" $ do
+            stateVar <- newTVarIO aCacheState
+            atomically (decide stateVar t0) `shouldReturn` ServeCached (csToken aCacheState)
+            csMintClaim <$> readTVarIO stateVar `shouldReturn` Nothing
 
-        it "claims the flag and routes to a background refresh once one is due" $ do
-            let token' = tokenExpiringIn "valid" 1000
-            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0)}
-            -- Past the due instant but still valid: serve it and claim the flag.
-            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeAndRefresh token'
-            csRefreshing <$> readTVarIO stateVar `shouldReturn` True
+        it "claims due background work once and keeps serving the valid cache" $ do
+            stateVar <- newTVarIO aCacheState
+            atomically (decide stateVar (addUTCTime 850 t0)) >>= \case
+                ServeAndRefresh token claim -> do
+                    token `shouldBe` csToken aCacheState
+                    csMintClaim <$> readTVarIO stateVar `shouldReturn` Just claim
+                _ -> expectationFailure "expected a background mint claim"
+            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeCached (csToken aCacheState)
 
-        it "does not re-claim a background refresh that is already in flight" $ do
-            let token' = tokenExpiringIn "valid" 1000
-            stateVar <-
-                newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0), csRefreshing = True}
-            -- Past the due instant but a refresh already holds the flag: just serve.
-            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeCached token'
-
-        it "claims the flag and mints synchronously when the token has expired" $ do
-            let token' = tokenExpiringIn "stale" 1000
-            stateVar <- newTVarIO aCacheState{csToken = token'}
-            -- Past expiry, nothing in flight: claim the flag and mint now.
-            atomically (decide stateVar (addUTCTime 2000 t0)) `shouldReturn` MintNow
-            csRefreshing <$> readTVarIO stateVar `shouldReturn` True
-
-        it "blocks (STM retry) on an expired token when a mint is already in flight" $ do
-            let token' = tokenExpiringIn "stale" 1000
-            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshing = True}
-            -- Expired with a mint already holding the flag: 'decide' must block rather than launch
-            -- a second mint. The transaction never commits, so the timed wait yields Nothing.
+        it "waits for an ordinary in-flight mint after expiry" $ do
+            stateVar <- newTVarIO aCacheState
+            _ <- claimExpired stateVar
             timeout 50_000 (atomically (decide stateVar (addUTCTime 2000 t0))) `shouldReturn` Nothing
+
+        it "refuses expired recovery followers, but serves valid tokens during recovery" $ do
+            stateVar <- newTVarIO aCacheState{csBreaker = trippedAt t0}
+            atomically (decide stateVar (addUTCTime 850 t0)) >>= \case
+                ServeAndRefresh _ _ -> pass
+                _ -> expectationFailure "expected owned background recovery"
+            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeCached (csToken aCacheState)
+            atomically (decide stateVar (addUTCTime 2000 t0)) `shouldReturn` RefuseMint
+
+        it "does not let an old recovery mint settle or release its replacement" $ do
+            stateVar <- newTVarIO aCacheState{csBreaker = trippedAt t0}
+            old <- claimExpired stateVar
+            releaseSingleFlight stateVar old
+            breakerPhase . csBreaker <$> readTVarIO stateVar `shouldReturn` RecoveryReady
+            current <- claimExpired stateVar
+            owned <- readTVarIO stateVar
+            csBreaker (onMintSuccess old (tokenExpiringIn "stale" 9000) Nothing owned) `shouldBe` csBreaker owned
+            csBreaker (onMintFailure old breakerCfg t0 owned) `shouldBe` csBreaker owned
+            releaseSingleFlight stateVar old
+            csMintClaim <$> readTVarIO stateVar `shouldReturn` Just current
+            atomically (decide stateVar (addUTCTime 2000 t0)) `shouldReturn` RefuseMint
 
     describe "refreshingProvider (model-based)" $
         it "agrees with a pure cache/clock/breaker model under random operation sequences" $
             hedgehog refreshModelProperty
 
-{- | Policy constants the model and the provider under test share. They mirror the 'testConfig'
-knobs, so the pure model predicts the implementation exactly.
--}
 modelRefreshAt :: Double
 modelRefreshAt = 0.8
 
@@ -624,21 +610,16 @@ modelBreakerThreshold = 3
 modelBreakerCooldown :: NominalDiffTime
 modelBreakerCooldown = 30
 
--- | A token that lives @ttl@ seconds from the given issue instant.
 tokenLiving :: Text -> UTCTime -> NominalDiffTime -> AuthToken
 tokenLiving s issuedAt ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl issuedAt)}
 
--- | The breaker, modelled exactly as 'Ecluse.Core.Credential.Refresh's private one.
 data MBreaker
     = MClosed Int
     | MOpen UTCTime
     | MHalfOpen
     deriving stock (Eq, Show)
 
-{- | The pure model of a 'refreshingProvider's cache, mirroring its private @CacheState@.
-The expected mint count lets the harness settle a background refresh before each observation.
--}
 data RModel (v :: Type -> Type) = RModel
     { rmToken :: AuthToken
     -- ^ The token the cache currently holds (and will serve while valid).
@@ -656,21 +637,16 @@ data RModel (v :: Type -> Type) = RModel
     -- ^ Index of the next distinct token the mint will hand out on success.
     }
 
--- | Whether a token is usable at @now@. A no-expiry token is always valid.
 mTokenValid :: UTCTime -> AuthToken -> Bool
 mTokenValid now token = case authExpiresAt token of
     Nothing -> True
     Just expiry -> now < expiry
 
--- | Whether a proactive refresh is due at @now@ (mirrors @refreshNeeded@).
 mRefreshNeeded :: UTCTime -> RModel v -> Bool
 mRefreshNeeded now m = case rmRefreshDue m of
     Nothing -> False
     Just due -> now >= due
 
-{- | The refresh instant for a freshly minted token, with zero jitter: the exact
-arithmetic of 'Ecluse.Core.Credential.Refresh's @refreshDueAt@ for the shared knobs.
--}
 mRefreshDueAt :: UTCTime -> AuthToken -> Maybe UTCTime
 mRefreshDueAt issuedAt token = case authExpiresAt token of
     Nothing -> Nothing
@@ -683,9 +659,6 @@ mRefreshDueAt issuedAt token = case authExpiresAt token of
   where
     clamp01 = max 0 . min 1
 
-{- | Whether the breaker admits a mint at @now@, and the breaker state it leaves behind. An
-elapsed 'MOpen' flips to half-open and admits.
--}
 mAdmit :: UTCTime -> MBreaker -> (Bool, MBreaker)
 mAdmit now = \case
     MOpen until'
@@ -693,13 +666,9 @@ mAdmit now = \case
         | otherwise -> (True, MHalfOpen)
     other -> (True, other)
 
--- | Fold a successful mint into the breaker (mirrors @onMintSuccess@): reset it.
 mOnSuccess :: MBreaker
 mOnSuccess = MClosed 0
 
-{- | Advance the breaker on a failed mint (mirrors @onMintFailure@): count up in
-'MClosed' until the threshold trips it open. Any other state re-opens.
--}
 mOnFailure :: UTCTime -> MBreaker -> MBreaker
 mOnFailure now = \case
     MClosed n
@@ -709,9 +678,6 @@ mOnFailure now = \case
   where
     tripped = MOpen (addUTCTime modelBreakerCooldown now)
 
-{- | The outcome the model predicts for a 'RequestToken' at the current clock: the token the
-caller observes, or a thrown error.
--}
 data RequestOutcome
     = ServedToken AuthToken
     | RaisedError
@@ -765,13 +731,9 @@ stepRequest m
                     , rmNextToken = rmNextToken base + 1
                     }
 
--- | The secret text the @n@-th successful mint hands out (distinct per mint).
 mintName :: Int -> Text
 mintName n = "tok-" <> show n
 
-{- | The mutable wiring a model run drives. The in-flight gauge and its high-water mark
-catch a single-flight violation, meaning two mints overlapping.
--}
 data RefreshHarness = RefreshHarness
     { hClock :: IORef UTCTime
     , hFail :: IORef Bool
@@ -791,9 +753,6 @@ newHarness start =
         <*> newIORef 0
         <*> newIORef 0
 
-{- | Build a provider the harness clock and mint drive. The mint records its concurrency,
-so an overlapping pair breaks single-flight, and hands out the next distinct token.
--}
 harnessProvider :: RefreshHarness -> IO CredentialProvider
 harnessProvider h =
     refreshingProvider
@@ -849,9 +808,6 @@ instance FunctorB SetFailInput where
 instance TraversableB SetFailInput where
     btraverse _ (SetFailInput b) = pure (SetFailInput b)
 
-{- | 'AdvanceClock dt': move the injected clock forward by @dt@ seconds. The generated
-deltas are non-negative, and advancing alone never triggers a mint.
--}
 advanceCommand :: RefreshHarness -> Command H.Gen (H.PropertyT IO) RModel
 advanceCommand h =
     Command
@@ -860,9 +816,6 @@ advanceCommand h =
         [ Update $ \m (AdvanceInput d) _out -> m{rmNow = addUTCTime d (rmNow m)}
         ]
 
-{- | 'SetFail b': arm or disarm the next mint to fail, modelling a transient token
-API outage and its recovery. Touches no token state directly.
--}
 setFailCommand :: RefreshHarness -> Command H.Gen (H.PropertyT IO) RModel
 setFailCommand h =
     Command
@@ -871,9 +824,6 @@ setFailCommand h =
         [ Update $ \m (SetFailInput b) _out -> m{rmFail = b}
         ]
 
-{- | 'RequestToken': call 'currentToken', then wait for the predicted mint count so the
-oracle can assert the served token or error, token validity, and single-flight exactly.
--}
 requestCommand :: RefreshHarness -> CredentialProvider -> Command H.Gen (H.PropertyT IO) RModel
 requestCommand h provider =
     Command
@@ -933,9 +883,6 @@ requestCommand h provider =
             annotateShow ("outcome mismatch" :: Text, expected, fmap (unSecret . authSecret) observed)
             H.failure
 
-{- | Wait until no mint is in flight and the count has stopped moving. The stability window
-guards against sampling the gauge before the async refresh has even started.
--}
 settleQuiescent :: RefreshHarness -> IO ()
 settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
   where
@@ -949,9 +896,6 @@ settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
                     else threadDelay 500 >> go (stable + 1) count
             else threadDelay 500 >> go 0 count
 
-{- | Drive a random sequence of request, advance-clock, and set-fail operations against a
-fresh provider and the pure model, asserting they agree at every step.
--}
 refreshModelProperty :: H.PropertyT IO ()
 refreshModelProperty = do
     h <- liftIO (newHarness t0)
@@ -976,3 +920,131 @@ refreshModelProperty = do
             ]
     actions <- H.forAll (Gen.sequential (Range.linear 1 40) initial commands)
     H.executeSequential initial actions
+
+claimExpired :: TVar CacheState -> IO MintClaim
+claimExpired stateVar =
+    atomically (decide stateVar (addUTCTime 2000 t0)) >>= \case
+        MintNow claim -> pure claim
+        _ -> throwIO MintBoom
+
+trippedAt :: UTCTime -> Breaker
+trippedAt clock = case admit clock initialBreaker of
+    (Just ticket, claimed) -> recordFailure 1 30 clock ticket claimed
+    (Nothing, unchanged) -> unchanged
+
+recoverySpec :: Spec
+recoverySpec = describe "owned credential recovery" $ do
+    it "refuses expired followers before a synchronous recovery mint finishes" $ do
+        (clock, setClock) <- newTestClock t0
+        entered <- newEmptyTMVarIO
+        gate <- newEmptyTMVarIO
+        script <-
+            newIORef
+                [ pure (tokenExpiringIn "seed" 10)
+                , throwIO MintBoom
+                , atomically (putTMVar entered ()) >> atomically (takeTMVar gate) >> pure (tokenExpiringIn "fresh" 5000)
+                ]
+        (breakerLog, refreshLog, breakerR, refreshR) <- capturingReporters
+        let cfg = (testConfig clock (scriptedMint script)){rcBreakerThreshold = 1, rcReporters = CredentialReporters breakerR refreshR}
+        provider <- refreshingProvider cfg
+        setClock (addUTCTime 20 t0)
+        currentToken provider `shouldThrow` (== MintBoom)
+        setClock (addUTCTime 50 t0)
+        withAsync (currentToken provider) $ \winner -> do
+            timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+            timeout 1_000_000 (mapConcurrently (const (try (currentToken provider) :: IO (Either CredentialError AuthToken))) [1 .. 8 :: Int])
+                `shouldReturn` Just (replicate 8 (Left BreakerOpen))
+            readIORef refreshLog `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0))]
+            (map breakerPhase <$> readIORef breakerLog) `shouldReturn` [Open (addUTCTime 50 t0), HalfOpen]
+            atomically (putTMVar gate ())
+            unSecret . authSecret <$> wait winner `shouldReturn` "fresh"
+        unSecret . authSecret <$> currentToken provider `shouldReturn` "fresh"
+
+    forM_ [(background, handoff) | background <- [False, True], handoff <- [False, True]] $ \(background, handoff) ->
+        it ("releases cancellation, background = " <> show background <> ", handoff = " <> show handoff) $ do
+            (clock, setClock) <- newTestClock t0
+            failed <- newEmptyTMVarIO
+            entered <- newEmptyTMVarIO
+            gate <- newEmptyTMVarIO
+            calls <- newIORef (0 :: Int)
+            armed <- newIORef False
+            refreshEvents <- newIORef (0 :: Int)
+            let park = myThreadId >>= \tid -> atomically (putTMVar entered tid) >> atomically (takeTMVar gate)
+                hook = whenM (readIORef armed) (when handoff park)
+                mint = do
+                    n <- atomicModifyIORef' calls (\count -> (count + 1, count + 1))
+                    case n of
+                        1 -> pure (tokenExpiringIn "seed" 1000)
+                        2 -> throwIO MintBoom
+                        3 -> whenM (readIORef armed) (unless handoff park) >> pure (tokenExpiringIn "fresh" 5000)
+                        _ -> pure (tokenExpiringIn "fresh" 5000)
+                reporter = noRefreshReporter{onRefreshFailed = \_ -> modifyIORef' refreshEvents (+ 1) >> myThreadId >>= atomically . putTMVar failed}
+                cfg = (testConfig clock mint){rcBreakerThreshold = 1, rcReporters = CredentialReporters noBreakerReporter reporter}
+            provider <- refreshingProviderWith hook cfg
+            setClock (addUTCTime 850 t0)
+            unSecret . authSecret <$> currentToken provider `shouldReturn` "seed"
+            failedWorker <- timeout 1_000_000 (atomically (takeTMVar failed))
+            forM_ failedWorker $ \worker -> waitUntil (threadEnded worker) `shouldReturn` True
+            failedWorker `shouldSatisfy` isJust
+            setClock (addUTCTime (if background then 880 else 1001) t0)
+            writeIORef armed True
+            withAsync (currentToken provider) $ \caller -> do
+                tid <- timeout 1_000_000 (atomically (takeTMVar entered))
+                when background $ do
+                    unSecret . authSecret <$> wait caller `shouldReturn` "seed"
+                    unSecret . authSecret <$> currentToken provider `shouldReturn` "seed"
+                    setClock (addUTCTime 1001 t0)
+                    timeout 1_000_000 (try (currentToken provider) :: IO (Either CredentialError AuthToken))
+                        `shouldReturn` Just (Left BreakerOpen)
+                writeIORef armed False
+                case tid of
+                    Just worker ->
+                        if background
+                            then throwTo worker ThreadKilled >> (waitUntil (threadEnded worker) `shouldReturn` True)
+                            else cancel caller
+                    Nothing -> expectationFailure "recovery did not reach its cancellation barrier"
+            readIORef refreshEvents `shouldReturn` 1
+            setClock (addUTCTime 1001 t0)
+            timeout 1_000_000 (currentToken provider) >>= \case
+                Just token -> unSecret (authSecret token) `shouldBe` "fresh"
+                Nothing -> expectationFailure "cancelled recovery stranded its claim"
+            readIORef calls `shouldReturn` if handoff then 3 else 4
+
+    forM_ [False, True] $ \advisoryOwner ->
+        it ("keeps consumers and providers independent, advisory owner = " <> show advisoryOwner) $ do
+            (clock, setClock) <- newTestClock t0
+            entered <- newEmptyTMVarIO
+            gate <- newEmptyTMVarIO
+            let park = atomically (putTMVar entered ()) >> atomically (takeTMVar gate)
+            script <-
+                newIORef
+                    [ pure (tokenExpiringIn "seed" 10)
+                    , throwIO MintBoom
+                    , unless advisoryOwner park >> pure (tokenExpiringIn "fresh" 5000)
+                    ]
+            firstProvider <- refreshingProvider (testConfig clock (scriptedMint script)){rcBreakerThreshold = 1}
+            otherScript <- newIORef [pure (tokenExpiringIn "other-seed" 10), throwIO MintBoom, pure (tokenExpiringIn "other-fresh" 5000)]
+            other <- refreshingProvider (testConfig clock (scriptedMint otherScript)){rcBreakerThreshold = 1}
+            advisory <- newBreaker
+            atomically (writeTVar advisory (trippedAt t0))
+            let res = Resilience defaultEffectfulConfig advisory noBreakerReporter clock
+                owned = if advisoryOwner then void (runResilient res park) else void (currentToken firstProvider)
+            setClock (addUTCTime 20 t0)
+            currentToken firstProvider `shouldThrow` (== MintBoom)
+            currentToken other `shouldThrow` (== MintBoom)
+            setClock (addUTCTime 50 t0)
+            withAsync owned $ \winner -> do
+                timeout 1_000_000 (atomically (takeTMVar entered)) `shouldReturn` Just ()
+                if advisoryOwner
+                    then unSecret . authSecret <$> currentToken firstProvider `shouldReturn` "fresh"
+                    else runResilient res (pure ()) `shouldReturn` Right ()
+                unSecret . authSecret <$> currentToken other `shouldReturn` "other-fresh"
+                atomically (putTMVar gate ())
+                wait winner `shouldReturn` ()
+
+threadEnded :: ThreadId -> IO Bool
+threadEnded worker =
+    threadStatus worker <&> \case
+        ThreadFinished -> True
+        ThreadDied -> True
+        _ -> False

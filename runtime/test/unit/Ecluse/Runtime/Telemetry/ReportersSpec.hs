@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Credential expiry and breaker observations through the runtime adapters.
 module Ecluse.Runtime.Telemetry.ReportersSpec (spec) where
 
 import Control.Concurrent (yield)
@@ -10,7 +11,7 @@ import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Breaker (Breaker (Closed, Open), BreakerReporter (BreakerReporter))
+import Ecluse.Core.Breaker (BreakerPhase (Closed, Open), BreakerReporter (BreakerReporter), admit, breakerPhase, initialBreaker, recordFailure)
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (currentToken), mkSecret, staticProvider)
 import Ecluse.Core.Credential.Refresh (
     CredentialError (BreakerOpen),
@@ -127,7 +128,7 @@ spec = describe "credential expiry collection" $ do
                         yield
                         demandUntilOpen
             timeout 2_000_000 demandUntilOpen `shouldReturn` Just ()
-            readIORef latestBreaker `shouldReturn` Just (Open (addUTCTime 150 anInstant))
+            (fmap breakerPhase <$> readIORef latestBreaker) `shouldReturn` Just (Open (addUTCTime 150 anInstant))
             points `shouldReturn` expected 10
             counts `shouldReturn` failedCounts
             setClock (addUTCTime 95 anInstant)
@@ -136,7 +137,7 @@ spec = describe "credential expiry collection" $ do
             setClock (addUTCTime 101 anInstant)
             currentToken provider `shouldThrow` (== BreakerOpen)
             readIORef mintCalls `shouldReturn` 6
-            readIORef latestBreaker `shouldReturn` Just (Open (addUTCTime 150 anInstant))
+            (fmap breakerPhase <$> readIORef latestBreaker) `shouldReturn` Just (Open (addUTCTime 150 anInstant))
             points `shouldReturn` expected 0
             setClock (addUTCTime 120 anInstant)
             currentToken provider `shouldThrow` (== BreakerOpen)
@@ -146,7 +147,7 @@ spec = describe "credential expiry collection" $ do
             writeIORef mint (pure replacement)
             setClock (addUTCTime 151 anInstant)
             currentToken provider `shouldReturn` replacement
-            readIORef latestBreaker `shouldReturn` Just (Closed 0)
+            (fmap breakerPhase <$> readIORef latestBreaker) `shouldReturn` Just (Closed 0)
             readIORef mintCalls `shouldReturn` 7
             points `shouldReturn` expected 99
             observed <- counts
@@ -158,11 +159,13 @@ spec = describe "credential expiry collection" $ do
             deferred <- newDeferredMetrics (pure anInstant)
             let BreakerReporter reportBreaker = deferredBreakerReporter deferred CredentialMint
                 refresh = deferredRefreshReporter deferred Npm ProviderCodeArtifact
-            reportBreaker (Open anInstant)
+            case admit anInstant initialBreaker of
+                (Just ticket, claimed) -> reportBreaker (recordFailure 1 0 anInstant ticket claimed)
+                (Nothing, _) -> expectationFailure "expected a healthy admission"
             onRefreshSucceeded refresh (expiry 3600)
             onRefreshFailed refresh Nothing
             newMetrics telemetryDisabled >>= installMetrics deferred
-            reportBreaker (Closed 0)
+            reportBreaker initialBreaker
             onRefreshSucceeded refresh (expiry 3600)
             onRefreshFailed refresh (expiry 3600)
             gaugePoints "ecluse.credential.token.ttl.seconds" meterEnv `shouldReturn` []

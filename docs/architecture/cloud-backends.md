@@ -277,6 +277,13 @@ upstream is anonymous
 tag the mirror target declares picks the mint, see
 [Outbound registry credentials](configuration.md#outbound-registry-credentials).
 
-Only an expired token *and* a still-failing mint fail the dependent operation, the mirror
-publish. The worker leaves that job un-acked, and it retries or dead-letters. This never touches
-the client serve path.
+Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
+expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired
+callers receive `BreakerOpen` immediately, while callers with a valid cached token keep using it.
+Success closes the breaker. A genuine failure starts a fresh cooldown. Cancellation releases the
+mint and recovery claims without counting a failure or adding a cooldown, so another caller can
+probe immediately. Older owners cannot settle or release a newer claim.
+
+An expired token with a failed or refused mint fails the dependent store operation. The mirror
+worker leaves that job un-acked, and it retries or dead-letters. Client reads forward the caller's
+own credential and do not use these providers.
