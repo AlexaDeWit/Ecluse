@@ -8,6 +8,9 @@ The same filename parser supplies coordinates for upstream projection and inboun
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Projection
     projectSimpleIndex,
+    ProjectedFile,
+    projectFile,
+    projectedEntryKey,
 
     -- * File coordinates
     FileCoordinate (..),
@@ -51,6 +54,7 @@ import Ecluse.Core.Package (
     parseHashAlg,
     renderPackageName,
  )
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.Wire (
     IndexFile (..),
@@ -79,8 +83,41 @@ fcVersionKey = renderVersion . fcVersion
 data DistributionKind = Sdist | Wheel
     deriving stock (Eq, Show)
 
+-- | A file's domain facts or identity diagnostic, independent of its decoded wire record.
+data ProjectedFile
+    = ReleaseFile {-# UNPACK #-} !FileRelease
+    | UncoordinatedFile EntryKey InvalidEntry
+
+data FileRelease = FileRelease
+    { frArtifact :: Artifact
+    , frVersion :: Version
+    , frKind :: DistributionKind
+    , frPublishedAt :: Maybe UTCTime
+    , frYanked :: YankState
+    }
+
+-- | Project before retaining a file, so distribution hash maps and wire-only fields can be released.
+projectFile :: IndexFile -> Maybe FileCoordinate -> ProjectedFile
+projectFile file = \case
+    Just coordinate ->
+        ReleaseFile
+            FileRelease
+                { frArtifact = projectArtifact file
+                , frVersion = fcVersion coordinate
+                , frKind = fcKind coordinate
+                , frPublishedAt = ifUploadTime file
+                , frYanked = ifYanked file
+                }
+    Nothing -> UncoordinatedFile (ifEntryKey file) (uncoordinatedDrop file)
+
+-- | The original array coordinate remains available for replay, including rejected filenames.
+projectedEntryKey :: ProjectedFile -> EntryKey
+projectedEntryKey = \case
+    ReleaseFile file -> artEntryKey (frArtifact file)
+    UncoordinatedFile key _ -> key
+
 -- | Group files by canonical release, keeping decode errors before filename errors.
-projectSimpleIndex :: PackageName -> [InvalidEntry] -> [(IndexFile, Maybe FileCoordinate)] -> PackageInfo
+projectSimpleIndex :: PackageName -> [InvalidEntry] -> [ProjectedFile] -> PackageInfo
 projectSimpleIndex name invalid files =
     PackageInfo
         { infoName = name
@@ -91,15 +128,14 @@ projectSimpleIndex name invalid files =
   where
     (versions, fileDrops) = projectVersions name files
 
-projectVersions :: PackageName -> [(IndexFile, Maybe FileCoordinate)] -> (Map Text PackageDetails, [InvalidEntry])
+projectVersions :: PackageName -> [ProjectedFile] -> (Map Text PackageDetails, [InvalidEntry])
 projectVersions name = foldr place (Map.empty, [])
   where
-    place (file, found) (byVersion, dropAcc) = case found of
-        Just coordinate ->
-            ( Map.alter (Just . projectDetails name file coordinate) (fcVersionKey coordinate) byVersion
-            , dropAcc
-            )
-        Nothing -> (byVersion, uncoordinatedDrop file : dropAcc)
+    place (ReleaseFile file) (byVersion, dropAcc) =
+        ( Map.alter (Just . projectDetails name file) (renderVersion (frVersion file)) byVersion
+        , dropAcc
+        )
+    place (UncoordinatedFile _ failure) (byVersion, dropAcc) = (byVersion, failure : dropAcc)
 
 -- 'mkInvalidEntry' reduces the location to its authority before logging.
 uncoordinatedDrop :: IndexFile -> InvalidEntry
@@ -115,30 +151,30 @@ latestTag versions =
     maybe Map.empty (Map.singleton "latest") (selectLatest Nothing (map pkgVersion (Map.elems versions)))
 
 -- A retained release must not keep its decoded files alive.
-projectDetails :: PackageName -> IndexFile -> FileCoordinate -> Maybe PackageDetails -> PackageDetails
-projectDetails name file coordinate held =
+projectDetails :: PackageName -> FileRelease -> Maybe PackageDetails -> PackageDetails
+projectDetails name file held =
     artifact `seq` case held of
         Nothing ->
             PackageDetails
                 { pkgName = name
-                , pkgVersion = fcVersion coordinate
-                , pkgPublishedAt = ifUploadTime file
-                , pkgInstallCode = releaseInstallCode coordinate NoCodeOnInstall
-                , pkgAvailability = releaseAvailability file Yanked
+                , pkgVersion = frVersion file
+                , pkgPublishedAt = frPublishedAt file
+                , pkgInstallCode = releaseInstallCode (frKind file) NoCodeOnInstall
+                , pkgAvailability = releaseAvailability (frYanked file) Yanked
                 , pkgArtifacts = artifact :| []
                 }
         Just details ->
             let artifacts = toList (pkgArtifacts details)
              in artifacts `seq`
                     details
-                        { pkgVersion = fcVersion coordinate
-                        , pkgPublishedAt = newestUpload (ifUploadTime file) (pkgPublishedAt details)
-                        , pkgInstallCode = releaseInstallCode coordinate (pkgInstallCode details)
-                        , pkgAvailability = releaseAvailability file (pkgAvailability details)
+                        { pkgVersion = frVersion file
+                        , pkgPublishedAt = newestUpload (frPublishedAt file) (pkgPublishedAt details)
+                        , pkgInstallCode = releaseInstallCode (frKind file) (pkgInstallCode details)
+                        , pkgAvailability = releaseAvailability (frYanked file) (pkgAvailability details)
                         , pkgArtifacts = artifact :| artifacts
                         }
   where
-    artifact = projectArtifact file
+    artifact = frArtifact file
 
 -- An unknown-age file cannot borrow a sibling's expired quarantine. A later wheel restarts
 -- quarantine when every timestamp is known.
@@ -146,16 +182,16 @@ newestUpload :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
 newestUpload (Just instant) (Just previous) = Just $! max instant previous
 newestUpload _ _ = Nothing
 
-releaseInstallCode :: FileCoordinate -> CodeExecSignal -> CodeExecSignal
-releaseInstallCode coordinate previous
-    | fcKind coordinate == Sdist =
+releaseInstallCode :: DistributionKind -> CodeExecSignal -> CodeExecSignal
+releaseInstallCode kind previous
+    | kind == Sdist =
         RunsCodeOnInstall "offers a source distribution, which runs its own build"
     | otherwise = previous
 
 -- A release is withdrawn only when PEP 592 withdraws every file of it.
-releaseAvailability :: IndexFile -> Availability -> Availability
-releaseAvailability file previous
-    | ifYanked file == FileWithdrawn = previous
+releaseAvailability :: YankState -> Availability -> Availability
+releaseAvailability yanked previous
+    | yanked == FileWithdrawn = previous
     | otherwise = Available
 
 -- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
@@ -167,7 +203,7 @@ projectArtifact file =
         , artFilename = ifFilename file
         , artUrl = ifUrl file
         , artHashes = strictElements (mapMaybe indexHash (Map.toAscList (ifHashes file)))
-        , artCoreMetadata = ifCoreMetadata file
+        , artCoreMetadata = strictElements (ifCoreMetadata file)
         , artSize = ifSize file
         }
 

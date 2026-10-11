@@ -248,8 +248,8 @@ response charge is 1.25 times the highest working set per basis byte that the re
 measures for one ecosystem, from one step of basis up, rounded up to a tenth. It takes the
 realistic shapes: a single document, and merges whose documents are identical, overlap, share no
 version, or put the newest quarter of the versions in the private copy, as a registry that holds
-the versions a deployment consumed does. The same run gives npm's charge as 2.0 (@aws-sdk/client-s3
-at 1.523900) and PyPI's as 1.6 (boto3 at 1.242301). The tier also renders heavy bases that render
+the versions a deployment consumed does. The measurements give npm's charge as 2.0 (@aws-sdk/client-s3
+at 1.523900). PyPI's charge is 1.9 (NumPy at 1.476585 after retaining canonical sidecars). The tier also renders heavy bases that render
 far more than their version count suggests, and from one step of basis up holds each of them
 within the output charge. Below one step, the whole meter steps a response pays for hold every
 listing's output working set, heavy bases included, and the tier checks that too.
@@ -260,7 +260,7 @@ outgrow a charge. From one step up, it fails once a single document's read peak 
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
 least 8% above its measured maximum. The current read limits sit 0.1 under npm's charge
 and 0.45 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
-npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
+npm and PyPI, 0.25 and 0.15 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder

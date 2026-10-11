@@ -90,6 +90,8 @@ pipResolveIn proj project version =
         , "--only-binary=:all:"
         , "--index-url"
         , toString (ppIndex proj)
+        , "--target"
+        , ppDir proj </> targetDir
         , toString (project <> "==" <> version)
         ]
 

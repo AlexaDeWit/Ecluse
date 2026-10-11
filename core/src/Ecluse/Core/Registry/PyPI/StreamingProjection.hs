@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, Meta
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedSimple, simpleDocument, urlHole)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileValue (..))
-import Ecluse.Core.Registry.PyPI.Project (FileCoordinate, FilenameMemo, fcVersionKey, filenameMemo, projectName, projectSimpleIndex, readCoordinate)
+import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, ProjectedFile, fcVersionKey, filenameMemo, projectFile, projectName, projectSimpleIndex, projectedEntryKey, readCoordinate)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifEntryKey, ifFilename, ifUrl), checkApiVersion, decodeIndexFiles)
 import Ecluse.Core.Registry.ServedDocument (rebaseArtifactUrl)
@@ -38,7 +38,7 @@ import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersio
 -- | Pending files wait for the reported name so member order cannot change the package identity.
 data PyPIProjection = PyPIProjection
     { projectedEnvelope :: KeyMap.KeyMap Value
-    , projectedFiles :: [(IndexFile, Maybe FileCoordinate, FilePayload)]
+    , projectedFiles :: [(ProjectedFile, FilePayload)]
     , projectedMemo :: FilenameMemo
     , projectedFileDrops :: [InvalidEntry]
     , projectedVersionDrops :: [InvalidEntry]
@@ -98,7 +98,10 @@ retainFileFact :: Limits -> PyPIRead -> Maybe FilePayload -> PyPIProjection -> I
 retainFileFact limits mode payload current file =
     let (coordinate, memo) = readCoordinate (projectedMemo current) (ifFilename file)
         next = case payload of
-            Just served | isNothing (projectedBound current) -> current{projectedFiles = (file, coordinate, served) : projectedFiles current, projectedMemo = memo}
+            Just served
+                | isNothing (projectedBound current) ->
+                    let !projected = projectFile file coordinate
+                     in current{projectedFiles = (projected, served) : projectedFiles current, projectedMemo = memo}
             _ -> current
      in case (mode, fcVersionKey <$> coordinate) of
             (FullRead, Just version) ->
@@ -145,7 +148,7 @@ finishPackedProjection requested table acc = do
     info <- finishPackage requested acc
     pure (info, packedSimple (projectedEnvelope acc) table (foldl' serve [] (projectedFiles acc)))
   where
-    serve served (file, _, PackedFile payload) = let !key = ifEntryKey file in (key, payload) : served
+    serve served (file, PackedFile payload) = let !key = projectedEntryKey file in (key, payload) : served
     serve served _ = served
 
 finishPackage :: PackageName -> PyPIProjection -> Either MetadataError PackageInfo
@@ -156,11 +159,11 @@ finishPackage requested acc = do
     unless (projectedShape acc) (Left MetadataUndecodable)
     traverse_ (Left . MetadataBoundExceeded) (projectedBound acc)
     let invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
-    pure (projectSimpleIndex reported invalid [(file, coordinate) | (file, coordinate, _) <- reverse (projectedFiles acc)])
+    pure (projectSimpleIndex reported invalid (map fst (reverse (projectedFiles acc))))
 
 -- Restore source order with every key evaluated, so the served list holds no decoded file.
-servedFiles :: [(IndexFile, Maybe FileCoordinate, FilePayload)] -> [(EntryKey, Value)]
+servedFiles :: [(ProjectedFile, FilePayload)] -> [(EntryKey, Value)]
 servedFiles = foldl' serve []
   where
-    serve served (file, _, TreeFile value) = let !key = ifEntryKey file in (key, value) : served
+    serve served (file, TreeFile value) = let !key = projectedEntryKey file in (key, value) : served
     serve served _ = served

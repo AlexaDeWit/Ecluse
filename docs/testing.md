@@ -167,8 +167,13 @@ or derived rendering, so they do not establish the same fully forced retained en
 ### Listing peaks
 
 The [qualified packed integration](#qualified-packed-integration) sets PyPI's full-read charge to 3.2 and its read limit to 2.75.
-npm keeps its full-read charge of 1.1. Output charges remain 2.0 for npm and 1.6 for PyPI.
-The factor-update candidate still needs all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
+npm keeps its full-read charge of 1.1. Output charges are 2.0 for npm and 1.9 for PyPI.
+Retaining canonical PyPI sidecars raises the measured output working set. At `90cd71db7b4c0ab31336c1e086b1f77f8447a485`,
+NumPy's disjoint merge reaches 1.476585 per basis byte, the largest qualifying realistic shape among all 84 listing rows.
+The documented 25% margin rounded up to a tenth gives 1.9. The 8% margin rounded up to a quarter gives a 1.75 regression limit.
+The same run's 48 retained probes include a maximum twice-encoded/source ratio of 1.753574 for requests, within the charge.
+Heavy NumPy's largest output ratio is 1.734852, also within the charge. The source is [Build job 114580453453](https://github.com/AlexaDeWit/Ecluse/actions/runs/38176610435/job/114580453453).
+A representation change requires all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
 The historical snapshots below retain their original measurements and limits.
 
 `MemoryModelResidencySpec` also measures the most live data a listing holds, which the memory gate's
@@ -239,8 +244,8 @@ The checks compare bytes with each ecosystem's charges:
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
 - From one step up, the tier applies read regression limits of 1.0 for npm and 2.75 for PyPI.
-  The output limits remain 1.75 for npm and 1.5 for PyPI. Every limit remains below its charge.
-  The factor-update candidate requires qualification against the same actual main base as its measurements.
+  The output limits are 1.75 for both npm and PyPI. Every limit remains below its charge.
+  Measurements must use the same main base as the candidate.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   Each residency record's `residencyEntryBelowSource` selects this check. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
