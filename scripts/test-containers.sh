@@ -67,9 +67,14 @@ finish() {
 }
 
 stop_child() {
-  local status="$1"
+  local status="$1" attempt
   trap '' INT TERM
   kill -TERM -- "-$child_pid" 2>/dev/null || true
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    kill -0 -- "-$child_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL -- "-$child_pid" 2>/dev/null || true
   wait "$child_pid" || true
   exit "$status"
 }

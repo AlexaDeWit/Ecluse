@@ -74,5 +74,26 @@ kill -TERM "$cancelled"
 status=0
 wait "$cancelled" || status=$?
 [ "$status" = 143 ]
-bash "$script" run true
-printf 'ok - invocation ownership, failures, cancellation and shared daemon exclusion\n'
+timeout 8 bash "$script" run true
+cat > "$work/descendant.sh" <<'CHILD'
+#!/usr/bin/env bash
+trap '' TERM
+printf '%s\n' "$BASHPID" > "$TEST_WORK/descendant-pid"
+while true; do
+  echo heartbeat >> "$TEST_WORK/heartbeat"
+  sleep 0.02
+done
+CHILD
+bash "$script" run bash -c 'bash "$TEST_WORK/descendant.sh" & wait' &
+parent=$!
+wait_for "$work/descendant-pid"
+wait_for "$work/heartbeat"
+kill -TERM "$parent"
+status=0
+wait "$parent" || status=$?
+[ "$status" = 143 ]
+before="$(wc -l < "$work/heartbeat")"
+sleep 0.1
+[ "$(wc -l < "$work/heartbeat")" = "$before" ]
+timeout 8 bash "$script" run true
+printf 'ok - invocation ownership, failures, descendant cancellation and shared daemon exclusion\n'
