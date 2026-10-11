@@ -9,7 +9,7 @@ test can be. Three kinds:
 - **smoke** needs an *un-emulable* live service.
 
 The first two are hermetic and **gate** merges. Smoke makes live calls and is **allowed to fail by
-design**. Two further gating tiers, residency and end-to-end, sit alongside them, for seven `cabal`
+design**. Two further gating tiers, residency and end-to-end, sit alongside them, for ten `cabal`
 test-suites in all. One rule spans every tier (see *What gates, and what doesn't*), so read that
 before you choose a new test's home.
 
@@ -54,24 +54,13 @@ throwaway credentials. The telemetry specs run a real OTLP **Collector** contain
 are hermetic: no real cloud account, no real credentials.
 
 The complete tier needs a running Docker daemon. CI's `ubuntu-26.04-arm` runner provides one.
-Local HTTP groups need no Docker. Run `task test-integration` for every group, or select one by its stable ID:
-
-```bash
-task test-contract-list TIER=integration
-task test-contract-plan TIER=integration
-task test-integration GROUP=integration/pypi
-task test-integration GROUP=integration/queue-sqs
-task test-integration SHARD=http
-```
-
-`ECOSYSTEM`, `BACKEND`, and `CAPABILITY` intersect with `GROUP` and `SHARD`.
-Discovery validates independent obligations without constructing specs, reading credentials, or acquiring services.
-Unknown groups, empty selections, missing prerequisites, pending cases, and missing execution results fail.
-The `http`, `aws`, and `telemetry` partitions are local scheduling data, not a new CI matrix.
-`MATCH` is no longer supported. Discovery accepts `TIER=e2e` or `TIER=integration`, not unit or measurement tiers.
-Reports and the selected manifest go under `scratchpad/integration/<run-id>/`.
+Run `task test-integration` for the complete fixed declaration list in [integration/Spec.hs](../test/integration/Spec.hs).
+The separate `cabal run ecluse-integration-manifest` command prints its JSON manifest without acquiring services.
+Independent obligations and actual Hspec declarations must agree before fixture acquisition.
+Missing prerequisites, empty suites, pending cases, and missing execution results fail.
+Reports and the full manifest go under `scratchpad/integration/<run-id>/`.
 In-process integration records an inapplicable product image identity.
-The instrumented coverage run uses the same runner and always executes every group.
+The instrumented coverage run executes every group and audits the full report.
 It retains one integration report, the other three suite reports, and the existing product-module denominator.
 
 > **Token-mint caveat.** No emulator covers CodeArtifact's `GetAuthorizationToken` API.
@@ -612,7 +601,7 @@ The hermetic span and metric assertions run in `ecluse-integration`. A request d
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
 
-## End-to-end tests: `ecluse-e2e` (gating)
+## End-to-end tests: four fixed components (gating)
 
 The only tier that assembles the whole system through the real composition root and drives it with
 the real `npm` and `pip` clients. It runs the default OCI image built by `nix build .#dockerImage`.
@@ -666,10 +655,10 @@ a separate coordinate, its public install, the mirror wait, and its second fresh
 `Ecluse.Test.CollectorSpec` in the core unit gate checks the shared parser and matching predicates
 against unrelated spans, signals, coordinates, events, links, and malformed attributes.
 
-Each catalogue group owns a complete data-plane lifecycle. Its cases cannot read another group's mutable store state.
+Each declared group owns a complete data-plane lifecycle. Its cases cannot read another group's mutable store state.
 Profiles declare npm, PyPI, or mixed mounts and acquire the clients and services their cases need.
 The harness and fixtures stay in `Ecluse.E2E.Harness.*` and `Ecluse.E2E.Fixtures.*`.
-Discovery reads pure declarations before checking Docker, images, clients, or credentials.
+The runner checks actual declarations against independent obligations before acquiring Docker resources, images, clients, or credentials.
 A required run fails when a prerequisite is absent. Pending examples never satisfy its coverage audit.
 
 One nginx container, the stub, answers for every registry name the product dials: both public
@@ -757,26 +746,22 @@ It catches composition-root and cross-component regressions nothing else does. T
 served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLIC_URL`, because
 `npm` cannot install the path-relative form.
 
-CI prepares the real image once and assigns complete groups to four initial partitions:
-`npm-serving`, `npm-writes`, `pypi`, and `shared-system`.
-Each partition runs on a separate arm64 runner with matrix fail-fast disabled.
-The preparation, partition runs, and execution audit all gate. The existing change classifier alone permits a documentation-only omission.
-The audit runs after failed or cancelled partitions and rejects missing artifacts or execution results.
+The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
+The four components run 49 cases, including 16 Dredger cases.
+Their fixture and provider modules share the `ecluse-e2e-test-support` library.
+Metadata checks declarations and reports. It does not choose test combinations at runtime.
+
+CI prepares the real image once. Each fixed component runs on a separate arm64 runner with matrix fail-fast disabled.
+Preparation, component runs, and the execution audit all gate.
+The existing change classifier alone permits a documentation-only omission.
+The audit runs after failed or cancelled components and rejects missing artifacts or execution results.
 It compares the source revision, architecture, image identity, plan digest, groups, and case IDs.
-Partition assignments live in the catalogue, so rebalancing does not change contracts.
+Changing a component's direct declaration list can rebalance work without changing contract bodies.
 No timing improvement is claimed until comparable runs measure it.
 
-The tier stays outside local `task gate` and `task check`. Run these commands inside the Nix flake:
-
-```bash
-task test-contract-list TIER=e2e
-task test-contract-plan TIER=e2e
-task test-e2e
-```
-
-Listing and planning need the compiled runner but no services.
-`task test-e2e` prepares, loads, and runs the image in a fresh `scratchpad/e2e/run.*` directory.
-It prints the artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later reruns or auditing.
+The tier stays outside local `task gate` and `task check`. Run `task test-e2e` inside the Nix flake.
+It prepares, loads, and runs all four components serially in a fresh `scratchpad/e2e/run.*` directory, then audits their reports.
+It prints the artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 Staged commands require an explicit directory:
 
 ```bash
@@ -784,7 +769,10 @@ mkdir -p scratchpad/e2e
 export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
 task test-e2e-prepare
 task test-e2e-load
-task test-e2e-run
+task test-e2e-npm-serving
+task test-e2e-npm-writes
+task test-e2e-pypi
+task test-e2e-shared-system
 task test-e2e-audit
 ```
 
@@ -793,13 +781,13 @@ Another preparation cannot overwrite that directory, including after a failed pr
 An artifact lock prevents overlapping preparation, loading, execution, or auditing in the same directory.
 `test-e2e-load` validates the prepared identity before loading the archive.
 `test-e2e-audit` checks current reports against the complete plan and identity.
-For a targeted rerun, use `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
+Rerun a component with its fixed task, such as `task test-e2e-pypi`.
 Each attempt invalidates its previous published report before checking prerequisites.
-Only a successful runner and cleanup publish the current report.
-Failed reports and logs remain under `reports/attempts/` and cannot satisfy the audit.
-A group rerun without `SHARD` replaces `reports/all.json`. Mixing full and partition reports fails the audit.
-Use a group ID from `test-contract-list` when reproducing a failure.
-The [contract coverage map](test-contracts.md) records migrated assertions and native extensions.
+Only a successful runner and cleanup publish the current `reports/<component>.json`.
+Failed reports, status, and logs remain under `reports/attempts/` and cannot satisfy the audit.
+Test entrypoints accept no custom selection arguments.
+`ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds.
+The separate manifest and audit commands appear in the [coverage and reproduction map](test-contracts.md#reproduction).
 
 The egress guard refuses internal addresses on the public path. So the containers run on
 the RFC 5737 documentation subnet `203.0.113.0/24`, which the guard treats as external. The real
@@ -894,7 +882,7 @@ leg close to its budget can read differently there. The job is not part of `task
 
 ## Benchmarks (non-gating)
 
-Use the benchmark tier to assess cost alongside the seven Cabal test suites. None of its
+Use the benchmark tier to assess cost alongside the ten Cabal test suites. None of its
 three workflows gates a merge or belongs in branch protection as a required check.
 The workflow YAML owns schedules and run options.
 Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
@@ -1515,7 +1503,7 @@ Contracts own scenario order and expected observations. Drivers return facts thr
 Native syntax, backend faults, raw-wire oracles, and independent expected output fixtures stay with their providers.
 A contract never selects a backend by name or accepts a callback that conceals its complete verdict.
 
-The pure catalogue records profiles, capabilities, obligations, lifecycle groups, and case IDs.
+The pure catalogue records capability metadata, obligations, lifecycle groups, and case IDs for explicit source declarations.
 Reviewed obligations remain independent of concrete registrations and production capability discovery.
 An omitted supported provider or required case fails validation before fixture acquisition.
 Unsupported combinations carry reasons. Planned operations carry their delivery references and create no passing test result.
@@ -1535,7 +1523,8 @@ Register new modules in [ecluse.cabal](../ecluse.cabal) and the applicable harne
 `<Ecosystem>` denotes the module component, such as `Npm` or `PyPI`, and `<ecosystem>` denotes the corpus directory name.
 The pending links identify work needed to bring existing ecosystems up to this bar.
 Supply drivers for applicable canonical contracts before adding native examples.
-Register stable case IDs, a capability profile, and independently reviewed obligations.
+Write direct contract calls with named concrete fixtures in the applicable suite entrypoint.
+Register stable case IDs, capability metadata, and independently reviewed obligations.
 Demonstrate that omitted registrations and deliberately wrong observations fail.
 Keep live unavailability distinct from refused product behaviour and planned coverage.
 
@@ -1545,8 +1534,8 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Recorded corpus outputs, gating in `ecluse-core-unit` | List the captures in [Ecluse.Test.Corpus](../test/support/Ecluse/Test/Corpus.hs) with a `CaptureUpstream`, give `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/StreamingSpec.hs` a `CorpusRead`, and record each capture's lines in [corpus-outputs.tsv](../core/test/unit/fixtures/corpus-outputs.tsv) | The [npm](../core/test/unit/Ecluse/Core/Registry/Npm/StreamingSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/StreamingSpec.hs) specs compare each capture's outputs, computed through `Ecluse.Test.Corpus.Outputs`, with its recorded lines. No tool writes the file. A new capture's spec fails, and its failure output lists the computed lines as Haskell string literals, with each tab shown as `\t`, to review and record. |
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
-| At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
-| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end tests](#end-to-end-tests-ecluse-e2e-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
+| At least one real-client install, gating in the fixed E2E components | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
+| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in the fixed E2E components | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end tests](#end-to-end-tests-four-fixed-components-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
 | Metadata residency captures and limits, gating in `ecluse-residency` | Add one `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), with captures, retained-heap envelopes, peak limits, the entry bound and each probe hook. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | The tier checks every ecosystem with a registered adapter for a residency record, non-empty captures, positive peak limits and an envelope for each retained shape. Each record supplies the probe hooks and listing checks without generic ecosystem defaults. The same lookup excludes ecosystems without adapters, including RubyGems. Each regression limit stays below its adapter charge. The complete corpus includes a capture above 3,687,514 bytes. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
@@ -1745,10 +1734,10 @@ the integration tier, so it needs a Docker daemon. Without one it fails and poin
 For a quick, Docker-free loop, `task coverage-unit` (default `SUITE=ecluse-unit`, or another suite)
 measures one tier and prints loudly that it is a partial view.
 
-Integration coverage rejects runner selection, discovery, report overrides, and extra suite targets in `COVERAGE_FLAGS`.
+Integration coverage rejects selection arguments, report overrides, and extra suite targets in `COVERAGE_FLAGS`.
 Accepted options are `-fdev-http-egress` (or `--flags=dev-http-egress`), `--enable-coverage`, `--builddir=dist-coverage`, and `--test-show-details=direct`.
-After execution, the same instrumented binary audits the report against the full compiled catalogue.
-Discovery and auditing use separate temporary `.tix` files, preserving the suite's coverage ticks.
+Separate manifest and audit executables check the report against every compiled integration declaration.
+The test binary retains its own `.tix` file, preserving the suite's coverage ticks.
 
 **What CI uploads.** The `coverage` job is a four-leg matrix, one runner per instrumented suite.
 Each leg builds and runs its own suite through `scripts/coverage.sh` and uploads the JSON that

@@ -4,7 +4,7 @@ This map records the assertion-preserving extraction for [#1657](https://github.
 The suite boundary follows the real collaborator. A shared contract does not move an emulator test into the unit tier.
 Case IDs identify Hspec examples, each of which can contain several assertions.
 `Contract.*` below abbreviates `Ecluse.Test.Contract.*` under `test/contracts/`.
-E2E execution reports audit those IDs against the selected manifest.
+E2E execution reports audit those IDs against the fixed execution manifest.
 Lower-tier catalogues validate registration independently of fixture availability.
 Performance runners keep their native sampling and verdict paths.
 
@@ -191,17 +191,23 @@ Run commands inside `env -u IN_NIX_SHELL nix develop`.
 Use `task test` for core/runtime/application contract checks, `task test-residency` for unchanged heap probes, and `task test-smoke` for live drift checks.
 Use `task perf-allocation` for the allocation gate and the documented benchmark/load targets for measured runs.
 
-E2E and integration discovery need no Docker or credentials.
-The scripts compile their runner if needed. `TIER` accepts only `e2e` and `integration`.
-Run the complete E2E suite with fresh artifacts:
+Each test entrypoint runs its fixed declaration list. It accepts no custom selection arguments.
+Separate manifest tools print fixed coverage metadata without Docker or credentials:
 
 ```bash
-task test-contract-list TIER=e2e
-task test-contract-plan TIER=e2e
-task test-e2e
+cabal run ecluse-e2e-manifest
+cabal run ecluse-integration-manifest
 ```
 
-The task prints its new artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path before running `task test-e2e-audit`.
+Both print JSON to stdout. The audit tools accept the plan and report paths:
+
+```bash
+cabal run ecluse-e2e-audit -- PLAN REPORT...
+cabal run ecluse-integration-audit -- PLAN REPORT
+```
+
+Run `task test-e2e` for fresh artifacts, all four fixed components, and the full audit.
+The task prints its artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 For staged preparation, choose a fresh directory explicitly:
 
 ```bash
@@ -209,38 +215,49 @@ mkdir -p scratchpad/e2e
 export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
 task test-e2e-prepare
 task test-e2e-load
-task test-e2e-run
+task test-e2e-npm-serving
+task test-e2e-npm-writes
+task test-e2e-pypi
+task test-e2e-shared-system
 task test-e2e-audit
 ```
 
-Preparation cannot overwrite an existing attempt. Commands that share an artifact directory hold the same lock.
-For a targeted rerun, choose `task test-e2e-run SHARD=pypi` or `task test-e2e-run -- --group pypi/install`.
-These selections reuse the prepared image and plan. A subset report cannot satisfy the full-suite audit.
-Before prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
-Only successful execution and cleanup publish `reports/all.json` or `reports/<shard>.json`.
-Failed-attempt evidence remains available for diagnosis but does not count towards completion.
-The full audit requires every primary group and case exactly once, with matching execution identities.
+Preparation cannot overwrite an existing artifact directory. Commands sharing that directory hold the same lock.
+Rerun a fixed component with its named task. It reuses the prepared image and immutable plan.
+Before checking prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
+Only successful execution and cleanup publish `reports/<component>.json`.
+Failed-attempt reports, logs, and status remain available for diagnosis and cannot satisfy completion.
+The full audit requires every group and case exactly once, with matching execution identities.
+`ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
 
-Integration supports stable group, partition, ecosystem, backend, and capability selection:
+Run the complete integration tier with `task test-integration`.
+Its Task wrapper supplies container ownership and daemon exclusion controls.
+Unit declaration audits run through `task test`. Smoke and residency retain their existing commands.
+Integration coverage runs and audits the complete manifest.
+`COVERAGE_FLAGS` cannot select cases, bypass execution, or change the report path.
 
-```bash
-task test-contract-list TIER=integration
-task test-contract-plan TIER=integration
-task test-integration GROUP=integration/queue-sqs
-task test-integration SHARD=http
-```
+## Fixed E2E entrypoints
 
-`GROUP`, `SHARD`, `ECOSYSTEM`, `BACKEND`, and `CAPABILITY` filters intersect.
-`MATCH` is no longer supported. A required empty selection fails before services start.
-Unit catalogue audits run through `task test`. They have no `TIER=unit` list or plan command.
-Smoke and residency retain their existing suite commands. Measurement registration does not add a measurement execution CLI.
-Run integration through its Task wrapper so selected Docker groups receive ownership and daemon exclusion controls.
-Integration coverage always runs and audits the complete catalogue. `COVERAGE_FLAGS` cannot select cases, bypass execution, or change the report path.
+Read each suite's declaration list to see the contracts and concrete fixtures it runs.
+The four Cabal components are `ecluse-e2e-npm-serving`, `ecluse-e2e-npm-writes`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
+
+| Suite entrypoint | Explicit contract calls | Cases |
+|---|---|---|
+| [NpmServing.hs](../test/e2e/Ecluse/E2E/Suites/NpmServing.hs) | `installationContract npmRegistryFixture` | 9 |
+| [NpmWrites.hs](../test/e2e/Ecluse/E2E/Suites/NpmWrites.hs) | `mirrorContract npmMirrorFixture`, `publicationContract npmPublicationFixture`, `dredgerContract npmDredgerFixture` | 6 + 2 + 16 = 24 |
+| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `installationContract pypiPublicFixture`, `advisoryContract pypiPilotFixture` | 5 + 4 = 9 |
+| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | `telemetryContract npmTelemetryFixture`, `mixedMountContract mixedRegistryFixture` | 6 + 1 = 7 |
+
+These lists run 49 cases in total, including the 16 Dredger cases.
+[Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
+The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
+Metadata checks the actual declarations and reports. It does not choose test combinations at runtime.
 
 ## Canonical E2E module index
 
 These modules live under `test/contracts/Ecluse/Test/Contract/` and take observations from the native E2E providers.
-The existing ecosystem spec modules still own fixture construction and lifecycle registration.
+The ecosystem spec modules retain native observations and scenario providers.
+Fixed suite lists bind their contract functions to concrete fixtures.
 
 | Canonical module | Registered cases | Native evidence retained |
 |---|---|---|
@@ -265,7 +282,7 @@ Native deprecation/yank handling, npm publication metadata and tamper-refusal as
 ## E2E assertion identities
 
 The following original example descriptions retain their assertions and negative controls under stable IDs.
-The native module remains the registration home even when its scenario body moves to an E2E contract.
+The native modules retain scenario providers. The fixed suite declarations register their contract calls.
 
 ### `test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs`
 
@@ -367,7 +384,7 @@ Descriptions never determine the IDs. Keep the numeric ID when changing a descri
 The pure catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
 Removing a case, profile, or required capability fails catalogue validation.
 Mutation checks exercise every registered case and capability without constructing integration specs.
-The shared runner compares actual Hspec result IDs against each selected group's declared case set.
+The shared runner compares actual Hspec result IDs against each group's declared case set.
 A deleted action cannot satisfy the catalogue merely because its metadata remains.
 
 The previous `hspec-discover` output registered `PipelineIntegrationSpec` alongside all three modules it called.
@@ -399,9 +416,9 @@ Every ID labels its original Hspec example in the module listed above.
 That example retains all of its prior assertions, negative controls, and resource hooks.
 The independent obligation file enumerates every expanded parameter case.
 
-Use `task test-contract-list TIER=integration` or `task test-contract-plan TIER=integration` without Docker.
-Use `task test-integration GROUP=integration/queue-sqs` for the emulator queue group.
-Use `task test-integration SHARD=http` for the in-process HTTP groups without Docker.
+Read the explicit contract list in [integration/Spec.hs](../test/integration/Spec.hs).
+Run `cabal run ecluse-integration-manifest` to inspect the fixed manifest without Docker.
+Run `task test-integration` for the complete tier.
 Coverage remains one full integration invocation with the same Cabal instrumentation and four total uploads.
 
 ## Unit registration validation

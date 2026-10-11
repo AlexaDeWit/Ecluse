@@ -16,12 +16,13 @@ Keep protocol decoding, request construction, native observations, and raw-wire 
 Do not copy an existing contract's business assertions into a new spec.
 The [contract coverage map](test-contracts.md) identifies shared laws and native extensions.
 
-Register the supported profile, required capabilities, lifecycle groups, and stable case IDs.
+Add direct contract calls with named concrete fixtures to the applicable suite entrypoint.
+Register supported capabilities, lifecycle groups, and stable case IDs as metadata for those declarations.
 Declare obligations independently of driver availability, then check them against the production adapter registry.
 A missing driver for a supported operation fails coverage. A planned operation records its delivery issue and runs no placeholder.
 Provide negative controls that prove incorrect observations and missing registrations fail.
-Use `task test-contract-list` and `task test-contract-plan` to inspect E2E obligations without services.
-Run a new E2E group alone with `task test-e2e-run -- --group <group-id>` after `task test-e2e-prepare` and `task test-e2e-load`.
+Read the [fixed suite contract lists](test-contracts.md#fixed-e2e-entrypoints) and run `cabal run ecluse-e2e-manifest` without services.
+Run the applicable fixed E2E task after `task test-e2e-prepare` and `task test-e2e-load` with an explicit `ECLTEST_ARTIFACT_DIR`.
 
 Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
 Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.
