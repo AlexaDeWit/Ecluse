@@ -8,6 +8,8 @@ rules that apply at revocation must never block a version the whole policy admit
 -}
 module Ecluse.Core.Rules.TypesSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Universe.Class (Universe (universe))
 import Hedgehog (Gen, forAll)

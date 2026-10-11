@@ -5,6 +5,8 @@
 
 module Ecluse.Config.RuleSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Aeson (Value (Object), eitherDecodeStrict)
 import Data.Aeson.Types (parseEither, (.!=), (.:?))
 import Data.Map.Strict qualified as Map

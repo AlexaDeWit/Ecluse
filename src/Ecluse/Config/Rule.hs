@@ -22,6 +22,8 @@ module Ecluse.Config.Rule (
     renderPolicyError,
 ) where
 
+import Prelude hiding (universe)
+
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
