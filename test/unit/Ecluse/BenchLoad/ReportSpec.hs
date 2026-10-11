@@ -19,8 +19,8 @@ spec :: Spec
 spec = describe "renderServiceTime" $ do
     case findScenario "npm/tarball-ceiling" of
         Nothing -> it "has a ceiling scenario" (expectationFailure "missing npm/tarball-ceiling scenario")
-        Just ceiling -> do
-            let report = (scenarioReport "npm/tarball-ceiling" 100 0 2.5 4){srPublicLegUnavailableReason = scenarioPublicLegUnavailableReason ceiling}
+        Just ceilingScenario -> do
+            let report = (scenarioReport "npm/tarball-ceiling" 100 0 2.5 4){srPublicLegUnavailableReason = scenarioPublicLegUnavailableReason ceilingScenario}
             it "keeps raw totals and a reason without subtracting either public baseline" $
                 for_ [MeasuredRtt 150 8, InjectedFallback 17] $ \baseline -> do
                     let rendered = renderServiceTime baseline [report]

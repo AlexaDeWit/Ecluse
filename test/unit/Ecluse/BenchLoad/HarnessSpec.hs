@@ -16,16 +16,16 @@ spec = do
     describe "tarball-ceiling settings" $
         case findScenario "npm/tarball-ceiling" of
             Nothing -> it "exists" (expectationFailure "missing npm/tarball-ceiling scenario")
-            Just ceiling -> do
+            Just ceilingScenario -> do
                 it "uses one service connection and preserves four-times loaded scaling" $ do
-                    lkConcurrency (scenarioKnobs ConcurrencyOne knobs ceiling) `shouldBe` 1
-                    lkConcurrency (scenarioKnobs Loaded knobs ceiling) `shouldBe` 148
+                    lkConcurrency (scenarioKnobs ConcurrencyOne knobs ceilingScenario) `shouldBe` 1
+                    lkConcurrency (scenarioKnobs Loaded knobs ceilingScenario) `shouldBe` 148
                 it "keeps the fixed private delay at a different global latency in both passes" $
                     for_ [Loaded, ConcurrencyOne] $ \whichPass ->
-                        scenarioKnobs whichPass knobs ceiling
+                        scenarioKnobs whichPass knobs ceilingScenario
                             `shouldBe` knobs{lkConcurrency = if whichPass == Loaded then 148 else 1, lkUpstreamLatencyMicros = 2_000}
                 it "declares the actual private-hit role unavailable for public attribution" $
-                    scenarioPublicLegUnavailableReason ceiling `shouldBe` Just "the private-hit artifact relay has no public leg"
+                    scenarioPublicLegUnavailableReason ceilingScenario `shouldBe` Just "the private-hit artifact relay has no public leg"
     describe "ordinary scenario settings" $
         for_ ["npm/merge-cold", "pypi/index-cold"] $ \name ->
             case findScenario name of

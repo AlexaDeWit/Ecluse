@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Check service attribution and saturation arithmetic and rendering.
 module Ecluse.BenchLoad.NormaliseSpec (spec) where
 
 import Data.Text qualified as T
