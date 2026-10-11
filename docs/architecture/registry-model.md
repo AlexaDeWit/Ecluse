@@ -132,6 +132,14 @@ cannot disagree.
 For npm, a packument that names a tarball on a foreign host drops that version from the served
 document.
 
+### CodeArtifact PyPI observation: pending
+
+The owner-run [index observation](../testing.md#owner-run-codeartifact-pypi-observation) is prepared,
+but no live file authority is recorded here. [#1184](https://github.com/AlexaDeWit/Ecluse/issues/1184)
+remains open until the owner records the safe output, date, code revision and repository context.
+The observed authority will determine the follow-up. This preparation changes no authority policy
+and introduces no operator setting for a fourth authority.
+
 ## Serving a tarball
 
 A tarball is one concrete version from one source, so the proxy streams a private-upstream hit

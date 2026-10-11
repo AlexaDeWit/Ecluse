@@ -605,6 +605,57 @@ The hermetic span and metric assertions run in `ecluse-integration`. A request d
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
 
+### Owner-run CodeArtifact PyPI observation
+
+`CodeArtifactSmokeSpec` can read one existing package's Simple index and report the file authorities
+it names. This case prepares the live criterion in [#1184](https://github.com/AlexaDeWit/Ecluse/issues/1184).
+The observation is still pending until the repo owner runs it with a sandbox repository and records
+the result. Preparation and passing offline tests do not establish CodeArtifact's file authority.
+
+The owner supplies AWS identity privately through the standard AWS credential chain. The identity
+needs `codeartifact:GetAuthorizationToken`, `sts:GetServiceBearerToken`,
+`codeartifact:GetRepositoryEndpoint` and `codeartifact:ReadFromRepository` permissions for the sandbox.
+Choose an existing small package. The case creates no repository, uploads nothing and fetches no
+distribution files. It discovers the HTTPS PyPI endpoint through AWS, with no endpoint override.
+
+Configure these nonsecret inputs before running the suite:
+
+| Input | Meaning |
+|---|---|
+| `ECLTEST_SMOKE_CODEARTIFACT_REGION` | The sandbox's AWS region. |
+| `ECLTEST_SMOKE_CODEARTIFACT_DOMAIN` | The CodeArtifact domain. |
+| `ECLTEST_SMOKE_CODEARTIFACT_DOMAIN_OWNER` | Optional owning account for a cross-account domain. |
+| `ECLTEST_SMOKE_CODEARTIFACT_REPOSITORY` | An existing PyPI repository in that domain. |
+| `ECLTEST_SMOKE_CODEARTIFACT_PACKAGE` | An existing package's PyPI name. |
+
+```bash
+env -u IN_NIX_SHELL nix develop --command task test-smoke
+```
+
+With both repository and package inputs absent, the observation stays pending and the token-only
+case remains available. Once either input is set, partial configuration, empty supplied fields and
+invalid package names fail before either case discovers AWS credentials. Configured AWS and
+transport failures fail the case. The smoke tier remains non-gating.
+
+The index request uses Basic username `aws`, the minted token, the shipped JSON Accept header,
+metadata byte limit, progress floor and serve deadline. Redirects are disabled. Only status `200`
+with a matching project, no dropped entries and at least one file yields evidence.
+
+Output rows are sorted and distinct. Each reports `endpoint` and `file` authorities with effective
+ports, the file `scheme`, original `reference` kind and `same-authority` comparison. Relative file
+URLs resolve against the exact index request URL. The observation applies no artifact authority
+filter and does not upgrade HTTP references, because it never fetches them.
+
+The `path` field replaces arbitrary components with `<segment>`. Only `pypi`, `simple`, separators
+and recognised `.whl`, `.tar.gz` or `.zip` suffixes remain. `query` and `fragment` record presence as
+booleans. Output excludes credentials, URL userinfo, raw paths, query and fragment values, response
+bodies and exception details. Failures use fixed labels, input keys and typed status or cause values.
+
+After a successful run, record its safe output, date, code revision and repository context in
+the [artifact authority note](architecture/registry-model.md#codeartifact-pypi-observation-pending).
+Then assess #1184's conditional follow-up against the observed authority and current authority policy.
+The issue's older wording about an operator-declared fourth authority does not add a setting.
+
 ## End-to-end tests: `ecluse-e2e` (gating)
 
 The only tier that assembles the whole system through the real composition root and drives it with
