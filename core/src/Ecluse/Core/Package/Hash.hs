@@ -188,7 +188,14 @@ renderHashAlg = \case
 
 -- | Parse canonical names and single-dash aliases, ignoring case and surrounding whitespace. SRI is not selectable.
 parseHashAlg :: Text -> Either Text HashAlg
-parseHashAlg raw = case toLowerUnlessAsciiUnchanged (T.strip raw) of
+parseHashAlg raw = hashAlgNamed fallback stripped
+  where
+    stripped = T.strip raw
+    fallback = hashAlgNamed (Left ("unknown integrity algorithm: " <> raw)) (toLowerUnlessAsciiUnchanged stripped)
+
+-- The fallback stays lazy so an exact name does not force normalisation.
+hashAlgNamed :: Either Text HashAlg -> Text -> Either Text HashAlg
+hashAlgNamed onUnknown = \case
     "md5" -> Right MD5
     "sha1" -> Right SHA1
     "sha-1" -> Right SHA1
@@ -199,7 +206,7 @@ parseHashAlg raw = case toLowerUnlessAsciiUnchanged (T.strip raw) of
     "sha512" -> Right SHA512
     "sha-512" -> Right SHA512
     "blake2b" -> Right Blake2b
-    _ -> Left ("unknown integrity algorithm: " <> raw)
+    _ -> onUnknown
 
 -- | The token before the first dash. Without a dash, the entire string is the prefix.
 sriPrefix :: Text -> Text
