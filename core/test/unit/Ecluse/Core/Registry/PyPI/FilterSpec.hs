@@ -5,7 +5,7 @@
 -- | PyPI assembly preserves admitted entries, refuses locations it cannot rebase, and keeps served bytes.
 module Ecluse.Core.Registry.PyPI.FilterSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Number, Object, String), encode, object, toJSON, (.=))
+import Data.Aeson (Value (Array, Bool, Number, Object, String), eitherDecode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
@@ -27,7 +27,8 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, restrictToSurvivors
 import Ecluse.Core.Package.Integrity (IntegrityFloor, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource, TrustedSource), SourceId, mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiPacked, pypiRendered, pypiSimpleCached)
-import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleFiles)
+import Ecluse.Core.Registry.Metadata (MetadataError)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), SimpleDocument, simpleFiles)
 import Ecluse.Core.Registry.PyPI.Filter qualified as Filter
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked)
 import Ecluse.Core.Registry.PyPI.Project (projectName)
@@ -57,6 +58,84 @@ spec = do
     sidecarSpec
     serialiseSpec
     packedSerialiseSpec
+    packedAdverseSpec
+
+packedAdverseSpec :: Spec
+packedAdverseSpec = describe "packed adverse assembly" $ do
+    for_ [("refused first", id), ("refused last", reverse)] $ \(order, arrange) -> describe order $ do
+        it "omits an authority-refused sibling after projection, admission and merge" $ do
+            source@(Snapshot _ (info, _)) <- projectPackedAdmitted defaultMinIntegrity (arrange [foreignDuplicate, admittedDuplicate])
+            map (\entry -> (invalidKind entry, invalidKey entry)) (infoInvalidEntries info)
+                `shouldBe` [(InvalidIndexFile, duplicateFilename)]
+            (plan, served) <- assemblePackedDuplicates [(GatedSource, source)]
+            Map.map (fmap admittedFilename) (mpArtifacts plan) `shouldBe` Map.singleton "1" (duplicateFilename :| [])
+            servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+        for_ [("no digest", Object mempty), ("SHA-1 only", object ["sha1" .= validSha1])] $ \(label, hashes) ->
+            it ("omits a sibling refused for " <> label) $ do
+                let refused = withFileKeys [("hashes", hashes)] otherDuplicate
+                source <- projectPackedAdmitted defaultMinIntegrity (arrange [refused, admittedDuplicate])
+                (plan, served) <- assemblePackedDuplicates [(GatedSource, source)]
+                Map.map (fmap admittedFilename) (mpArtifacts plan) `shouldBe` Map.singleton "1" (duplicateFilename :| [])
+                servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+        it "applies the trusted floor to each same-name sibling" $ do
+            source <- projectPackedAdmitted defaultMinTrustedIntegrity (arrange [weakDuplicate, admittedDuplicate])
+            (_, served) <- assemblePackedDuplicates [(TrustedSource, source)]
+            servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+        it "keeps valid same-name siblings in source order" $ do
+            let files = arrange [otherDuplicate, admittedDuplicate]
+            source <- projectPackedAdmitted defaultMinIntegrity files
+            (_, served) <- assemblePackedDuplicates [(GatedSource, source)]
+            servedFiles served `shouldBe` map rebasedDuplicate files
+
+    it "keeps repeated valid entries and gaps from malformed or refused siblings" $ do
+        source <- projectPackedAdmitted defaultMinIntegrity [Number 1, foreignDuplicate, admittedDuplicate, admittedDuplicate]
+        (_, served) <- assemblePackedDuplicates [(GatedSource, source)]
+        servedFiles served `shouldBe` replicate 2 (rebasedDuplicate admittedDuplicate)
+
+    for_ [("trusted first", id), ("trusted last", reverse)] $ \(order, arrange) ->
+        it ("takes duplicate entries only from the winning source: " <> order) $ do
+            private <- projectPackedAdmitted defaultMinTrustedIntegrity [admittedDuplicate, otherDuplicate]
+            public <- projectPackedAdmitted defaultMinIntegrity [withFileKeys [("size", Number 33)] admittedDuplicate]
+            (_, served) <- assemblePackedDuplicates (arrange [(TrustedSource, private), (GatedSource, public)])
+            servedFiles served `shouldBe` map rebasedDuplicate [admittedDuplicate, otherDuplicate]
+
+    it "refuses entries from a different source or digest" $ do
+        source <- projectPackedAdmitted defaultMinIntegrity [admittedDuplicate]
+        (plan, sources) <- duplicatePlan [(GatedSource, source)]
+        served <- servePacked sources plan Nothing
+        servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+        wrongSource <- servePacked (Map.mapKeys (+ 1) sources) plan Nothing
+        servedFiles wrongSource `shouldBe` []
+        wrongDigest <- servePacked (fmap (\snapshot -> snapshot{snapshotDigest = digestOf "different upstream bytes"}) sources) plan Nothing
+        servedFiles wrongDigest `shouldBe` []
+
+    it "refuses ambiguous source coordinates" $ do
+        source <- projectPackedAdmitted defaultMinIntegrity [admittedDuplicate]
+        (plan, sources) <- duplicatePlan [(GatedSource, source)]
+        let repeated document = document{packedFiles = packedFiles document <> packedFiles document}
+        served <- servePacked (fmap (fmap repeated) sources) plan Nothing
+        servedFiles served `shouldBe` []
+
+    for_ [String "https://files.pythonhosted.org/a\\..\\x", String "https://files.pythonhosted.org/%2e%2e", String "https://files.pythonhosted.org/a%2fb", String "https://files.pythonhosted.org/.. ", Number 1] $ \url ->
+        it ("omits a duplicate named entry with an unrebasable URL: " <> show url) $ do
+            let filename = "requests-2.34.2.tar.gz"
+                valid = simpleFile filename
+                refused = withFileKeys [("url", url)] valid
+                expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] valid
+            for_ [[refused, valid], [valid, refused]] $ \files -> do
+                served <- assemblePackedOne files
+                servedFiles served `shouldBe` [expected]
+
+    it "omits a duplicate named entry with no URL" $ do
+        let filename = "requests-2.34.2.tar.gz"
+            valid = simpleFile filename
+            missing = object ["filename" .= filename]
+            expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] valid
+        served <- assemblePackedOne [missing, valid]
+        servedFiles served `shouldBe` [expected]
 
 packedSerialiseSpec :: Spec
 packedSerialiseSpec = describe "packed served bytes" $
@@ -216,8 +295,17 @@ admissionSpec = describe "replaying per-entry admission for duplicate filenames"
             servedFiles served `shouldBe` map rebasedDuplicate [admittedDuplicate, otherDuplicate]
 
 projectAdmitted :: (IntegrityFloor floor) => floor -> [Value] -> IO (Snapshot (PackageInfo, SimpleDocument))
-projectAdmitted floorSpec files = do
-    Snapshot digest (info, raw) <- projectJsonSnapshot (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests")) (indexOf files)
+projectAdmitted = projectAdmittedWith (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests"))
+
+projectPackedAdmitted :: (IntegrityFloor floor) => floor -> [Value] -> IO (Snapshot (PackageInfo, PackedSimple))
+projectPackedAdmitted = projectAdmittedWith projectPackedIndex
+
+projectPackedIndex :: ByteString -> Either MetadataError (PackageInfo, PackedSimple)
+projectPackedIndex bytes = projectPyPIPackedChunks defaultLimits requestsName [bytes] >>= projectPyPIPacked defaultLimits requestsName
+
+projectAdmittedWith :: (IntegrityFloor floor) => (ByteString -> Either MetadataError (PackageInfo, document)) -> floor -> [Value] -> IO (Snapshot (PackageInfo, document))
+projectAdmittedWith projectIndex floorSpec files = do
+    Snapshot digest (info, raw) <- projectJsonSnapshot projectIndex (indexOf files)
     let located = enforceArtifactLocations (ecosystemArtifactAuthorities ["https://files.pythonhosted.org"]) "https://pypi.org" info
         (admitted, _) =
             admitByIntegrity
@@ -229,9 +317,34 @@ projectAdmitted floorSpec files = do
 
 assembleDuplicates :: [(Provenance, Snapshot (PackageInfo, SimpleDocument))] -> IO (MergePlan, Value)
 assembleDuplicates contributions = do
+    (plan, sources) <- duplicatePlan contributions
+    pure (plan, simpleValue (Filter.assembleSimpleIndex mountBase sources plan (compactFixture (indexOf []))))
+
+duplicatePlan :: [(Provenance, Snapshot (PackageInfo, document))] -> IO (MergePlan, Map SourceId (Snapshot document))
+duplicatePlan contributions = do
     plan <- expectRight (maybeToRight ("expected a merge plan" :: Text) (mergePackuments (map (second (fmap fst)) contributions)))
     let sources = Map.fromList [(sid, snd <$> source) | (sid, (_, source)) <- zip [0 ..] contributions]
-    pure (plan, simpleValue (Filter.assembleSimpleIndex mountBase sources plan (compactFixture (indexOf []))))
+    pure (plan, sources)
+
+assemblePackedDuplicates :: [(Provenance, Snapshot (PackageInfo, PackedSimple))] -> IO (MergePlan, Value)
+assemblePackedDuplicates contributions = do
+    (plan, sources) <- duplicatePlan contributions
+    (_, base) <- expectRight (projectPackedIndex (encodeStrict (indexOf [])))
+    (plan,) <$> servePacked sources plan (Just base)
+
+assemblePackedOne :: [Value] -> IO Value
+assemblePackedOne files = do
+    let raw = indexOf files
+        plan = planFor requestsName [(0, raw)] [("2.34.2", 0)] [("2.34.2", ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"])]
+    (_, document) <- expectRight (projectPackedIndex (encodeStrict raw))
+    servePacked (Map.singleton 0 (Snapshot (digestOf (encodeStrict raw)) document)) plan (Just document)
+
+servePacked :: Map SourceId (Snapshot PackedSimple) -> MergePlan -> Maybe PackedSimple -> IO Value
+servePacked sources plan base = do
+    let document = Filter.assembleSimpleDocument mountBase (fmap (fmap (fst pypiPacked)) sources) plan (fst pypiPacked <$> base)
+    snd pypiRendered document `shouldSatisfy` isJust
+    body <- expectRight (Filter.serialiseSimpleDocument document)
+    expectRight (eitherDecode body)
 
 duplicateFilename :: Text
 duplicateFilename = "requests-1.0.0.tar.gz"

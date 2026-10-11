@@ -113,9 +113,7 @@ retainFileFact limits mode payload current file =
 withBound :: Either LimitError () -> PyPIProjection -> PyPIProjection
 withBound result current = current{projectedBound = projectedBound current <|> either Just (const Nothing) result}
 
-{- | Keep counting after a bound stops retention, so later version faults retain their priority.
-Decode whole files only when recording their invalid-entry diagnostics.
--}
+-- | Continue typed counts after retention stops so later version faults retain priority. Decode whole files only for recorded invalid-entry diagnostics.
 packedFileStep :: Writer st -> Limits -> PyPIProjection -> Int -> FileValue -> (Either LimitError PyPIProjection -> ST st r) -> ST st r
 packedFileStep writer limits acc position value next
     | not (projectedFilesActive acc) = discard writer >> next (Right acc)

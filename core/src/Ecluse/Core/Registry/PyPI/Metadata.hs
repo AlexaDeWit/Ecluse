@@ -55,9 +55,7 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
-{- | PyPI's charges cover read peaks of 3.112 bytes per source byte and realistic output working sets
-of 1.242 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
--}
+-- | PyPI's calibrated peaks are 3.196 bytes per source byte for reads and 1.242 bytes per basis byte for output. These cover sources from one meter step up. See @docs/testing.md@.
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
 

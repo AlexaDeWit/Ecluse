@@ -34,9 +34,7 @@ import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentTop), packum
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, packedEnvelope, packedSimpleDocument, packedSimpleResident, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel (chargeForResident)
 
-{- | A serving document the pipeline threads and permitted caches hold. The derived 'Show' and 'Eq' are a
-debug and test affordance, not a projection.
--}
+-- | Serving documents held by the pipeline and permitted caches. Derived 'Show' and 'Eq' support debugging and tests, not wire projection.
 data CachedDoc
     = CachedNpm Value ~Int64
     | CachedPyPISimple SimpleDocument ~Int64
@@ -46,9 +44,7 @@ data CachedDoc
     | RenderedPyPI RenderPlan
     deriving stock (Eq, Show)
 
-{- | Cached estimate of compact bytes. This is an accounting input, not measured resident memory. A
-packed form charges the heap bytes it holds, in the compact units a consumer expands.
--}
+-- | Estimate compact cache units without measuring retained heap. Packed storage estimates use the consumer's expansion factor.
 weighCachedDoc :: CachedDoc -> Int64
 weighCachedDoc = \case
     CachedNpm _ charge -> charge
@@ -58,9 +54,7 @@ weighCachedDoc = \case
     PackedPyPI document -> estimateValueBytes (Object (packedEnvelope document)) + fromIntegral (chargeForResident (packedSimpleResident document))
     RenderedPyPI plan -> estimateValueBytes (Object (planMembers plan)) + fromIntegral (chargeForResident (planResident plan))
 
-{- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here. A packed
-or rendered document projects as its tree, or as 'Nothing' when it names a string or table it lacks.
--}
+-- | Explicit cases require updates for new ecosystems. npm projects packed or rendered forms to trees, refusing missing strings or tables.
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
 npmCached = (\v -> CachedNpm v (estimateValueBytes v), project)
   where

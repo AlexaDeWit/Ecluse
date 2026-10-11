@@ -187,9 +187,7 @@ hexDigit digit
 quote :: Word8
 quote = 0x22
 
-{- | Each value's first byte. A table index, a count, or an inline length and aeson's bytes follow. A
-member key is twice its table index, or twice its inline length plus one followed by its bytes.
--}
+-- | Value tags precede table indices, counts or inline lengths and aeson's bytes. Keys encode twice their table index, or twice their inline length plus one followed by bytes.
 opNull, opFalse, opTrue, opShared, opObject, opArray, opInline :: Word8
 opNull = 0
 opFalse = 1
@@ -285,9 +283,7 @@ tableEntry (DocTable _ offsets) index
 tableArena :: DocTable -> ByteArray
 tableArena (DocTable arena _) = arena
 
-{- | One retained value: its opcodes, where its hole's string starts, or -1, and the length of its
-encoding as read, over the table its read seals.
--}
+-- | Opcodes over a sealed read table, the string-hole offset (-1 for none), and the original encoded length.
 data Packed = Packed !ByteArray !Int !Int
     deriving stock (Eq, Show)
 
@@ -328,9 +324,7 @@ scalarSource table blob position
     | otherwise = case readVarint blob (position + 1) of
         (# len, next #) -> (# blob, next, len, next + len #)
 
-{- | A URL prefix a render writes in place of a hole's URL, before the URL's file name: the bytes
-aeson writes for its characters, quotes excluded.
--}
+-- | Aeson's encoded prefix bytes without quotes, inserted before the filename when rebasing a URL hole.
 newtype UrlPrefix = UrlPrefix ByteArray
     deriving stock (Eq, Show)
 
@@ -424,9 +418,7 @@ pokePacked target limit start table prefix (Packed blob hole _) = do
     value
     readPrimVar out
 
-{- | A string or number as aeson reads the bytes aeson wrote for it. A number written in exponent or
-fraction form reads back with an exponent aeson writes in that form again.
--}
+-- | Decode aeson's string or number bytes, preserving a number's exponent or fraction encoding on re-encoding.
 decodeScalar :: ByteArray -> Int -> Int -> Value
 decodeScalar array start len
     | len >= 2 && opening == quote = if noEscape (start + 1) then String (copyText (start + 1) (len - 2)) else escaped
@@ -507,9 +499,7 @@ instance TableStrings OfTable where
             String text -> Key.fromText text
             _ -> ""
 
-{- | Read the value at the position the variable holds back as aeson's tree, and move the variable
-past it. The strings resolve a table index to its string and to its key.
--}
+-- | Decode the value at the cursor and advance past it. Table indices resolve through 'TableStrings' to strings and keys.
 decodeWith :: (TableStrings t) => t st -> ByteArray -> PrimVar st Int -> ST st Value
 decodeWith strings blob at = do
     position <- readPrimVar at
@@ -606,15 +596,11 @@ rebasedValue table prefix value@(Packed blob hole _) = case prefix of
 data Piece = Piece !Int !Packed
     deriving stock (Eq, Show)
 
-{- | The packed member of a rendered document: an object's members, sorted by key with no key twice,
-or an array's items. A render writes them in list order.
--}
+-- | Object members sorted by key without duplicates, or array items. Both render in list order.
 data Pieces = ObjectPieces ![(Text, Piece)] | ArrayPieces ![Piece]
     deriving stock (Eq, Show)
 
-{- | An assembled document: small members aeson encodes, and one member that renders from pieces over
-its sources' tables, each hole rebased onto the prefix when the document rebases.
--}
+-- | Small members encoded by aeson and one packed member over source tables, with each URL hole rebased onto the plan's prefix.
 data RenderPlan = RenderPlan
     { planMembers :: !(KeyMap.KeyMap Value)
     , planSlot :: !Key.Key
@@ -655,9 +641,7 @@ partsLength plan parts = (separators (length parts) +) . sum <$> traverse partLe
         guard (len >= 0)
         pure len
 
-{- | Render an assembled document into one buffer of its exact length, or nothing when a piece names a
-table or string the plan lacks, or the render does not fill the buffer exactly.
--}
+-- | Write one buffer of the exact output length. Refuse missing tables or strings and a buffer the render does not fill exactly.
 renderPlan :: RenderPlan -> Maybe ByteString
 renderPlan plan = do
     size <- partsLength plan parts
@@ -692,9 +676,7 @@ renderPlan plan = do
   where
     parts = planParts plan
 
-{- | The assembled document as aeson's tree, as its render writes it, or nothing when a piece names a
-table or string the plan lacks.
--}
+-- | The tree the plan renders, or 'Nothing' for missing tables or strings.
 planValue :: RenderPlan -> Maybe Value
 planValue plan = (\slotValue -> Object (KeyMap.insert (planSlot plan) slotValue (planMembers plan))) <$> slot
   where

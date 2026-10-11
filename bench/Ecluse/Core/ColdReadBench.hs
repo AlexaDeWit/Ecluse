@@ -22,7 +22,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataClient (..), MetadataError (MetadataFetch), VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
@@ -130,11 +130,11 @@ sameSelected expected actual =
     sameRaw (Just left) (Just right) = sameDocument left right
     sameRaw _ _ = False
 
--- Comparing the payload avoids forcing the lazy cache-accounting estimate on an uncached read. Packed
--- documents compare as held, so no release decodes inside the timed read.
+-- Compare held payloads without forcing cache estimates or decoding packed releases and files during timing.
 sameDocument :: CachedDoc -> CachedDoc -> Bool
-sameDocument left right = case (snd npmPacked left, snd npmPacked right) of
-    (Just expected, Just actual) -> expected == actual
+sameDocument left right = case (snd npmPacked left, snd npmPacked right, snd pypiPacked left, snd pypiPacked right) of
+    (Just expected, Just actual, _, _) -> expected == actual
+    (_, _, Just expected, Just actual) -> expected == actual
     _ -> snd npmCached left == snd npmCached right && snd pypiSimpleCached left == snd pypiSimpleCached right
 
 metadataClient :: HTTP.Manager -> EcosystemBench -> Limits -> IO MetadataClient
