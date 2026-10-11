@@ -38,11 +38,9 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
 
-import Ecluse.Core.Text (isAsciiAlphaNum)
+import Ecluse.Core.Text (isAsciiAlphaNum, toLowerUnlessAsciiUnchanged)
 
-{- | A hash algorithm an integrity digest is computed with. The 'Ord' instance is integrity
-authority, not constructor order: @SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@.
--}
+-- | A digest algorithm, ordered by integrity authority: @SRI < MD5 < SHA1 < SHA256 < SHA384 < Blake2b < SHA512@.
 data HashAlg
     = SHA1
     | SHA256
@@ -54,15 +52,13 @@ data HashAlg
       SRI
     deriving stock (Eq, Generic, Show)
 
--- Derived from Generic so a new HashAlg needs no hand-maintained list. The cross-module
--- floor-vs-compute invariant test relies on this enumeration being exhaustive.
+-- The floor-vs-compute invariant test requires an exhaustive enumeration.
 instance Universe HashAlg where universe = universeGeneric
 
 instance Ord HashAlg where
     compare a b = compare (hashAlgRank a) (hashAlgRank b)
 
--- Explicit integrity ordering, weakest to strongest. The gaps are only for
--- readability: order, not arithmetic distance, is the policy.
+-- Admission depends on order, not the distance between ranks.
 hashAlgRank :: HashAlg -> Int
 hashAlgRank = \case
     SRI -> 0
@@ -76,11 +72,9 @@ hashAlgRank = \case
 -- | An artifact digest validated by 'mkHash'. Record updates must preserve its encoding and length.
 data Hash = Hash
     { hashAlg :: HashAlg
-    -- ^ The algorithm the digest was computed with.
+    -- ^ The digest algorithm.
     , hashValue :: Text
-    {- ^ The digest itself, in the algorithm's wire encoding (e.g. hex, or the
-    single @sha512-…@ component for 'SRI').
-    -}
+    -- ^ Hex, or one @sha512-…@ component for 'SRI'.
     }
     deriving stock (Eq, Show)
 
@@ -98,16 +92,15 @@ mkSriHashes wire = case nonEmpty (T.words wire) of
     Just (only :| []) | only == wire -> pure <$> mkHash SRI wire
     Just comps -> traverse (mkHash SRI) comps
 
--- Answers what 'isJust' of 'decodeHash' answers, from the length and the alphabet alone.
 isWellFormed :: HashAlg -> Text -> Bool
 isWellFormed SRI value = maybe False (isBase64Digest (sriBody value)) (sriAlgorithm value >>= digestSize)
 isWellFormed alg value = maybe False (isHexDigest value) (digestSize alg)
 
--- Either case passes, as 'decodeHash' lowercases first. No character outside ASCII lowercases to a hex digit.
+-- No character outside ASCII lowercases to a hex digit.
 isHexDigest :: Text -> Int -> Bool
 isHexDigest value size = T.compareLength value (2 * size) == EQ && T.all isHexDigit value
 
--- The standard alphabet and exact padding. Like the decoder, it leaves the last digit's spare bits unchecked.
+-- Like the decoder, this leaves the last digit's spare bits unchecked.
 isBase64Digest :: Text -> Int -> Bool
 isBase64Digest body size =
     T.compareLength digits digitCount == EQ && T.compareLength padding padCount == EQ && T.all (== '=') padding
@@ -119,7 +112,6 @@ isBase64Digest body size =
 isBase64Digit :: Char -> Bool
 isBase64Digit c = isAsciiAlphaNum c || c == '+' || c == '/'
 
--- The digest length in bytes. An 'SRI' component takes the length of the algorithm it names.
 digestSize :: HashAlg -> Maybe Int
 digestSize = \case
     SHA1 -> Just (Crypto.hashDigestSize Crypto.SHA1)
@@ -138,9 +130,7 @@ hexDigestText d = decodeUtf8 (convertToBase Base16 d :: ByteString)
 base64DigestText :: ByteString -> Text
 base64DigestText d = decodeUtf8 (convertToBase Base64 d :: ByteString)
 
-{- | Lowercase hex for comparison, or 'Nothing' if a record update introduced an invalid digest.
-The original 'hashValue' remains unchanged.
--}
+-- | Comparison hex without changing 'hashValue', or 'Nothing' after an invalid record update.
 canonicalHashValue :: Hash -> Maybe Text
 canonicalHashValue h = hexDigestText <$> decodeHash (hashAlg h) (hashValue h)
 
@@ -157,8 +147,6 @@ decodeDigest base alg value = do
     guard (digestLengthOk alg bytes)
     pure bytes
 
--- 'digestFromByteString' is the length check: it accepts only an input of exactly the
--- algorithm's digest size.
 digestLengthOk :: HashAlg -> ByteString -> Bool
 digestLengthOk alg bytes = case alg of
     SHA1 -> isJust (digestFromByteString @SHA1 bytes)
@@ -200,7 +188,14 @@ renderHashAlg = \case
 
 -- | Parse canonical names and single-dash aliases, ignoring case and surrounding whitespace. SRI is not selectable.
 parseHashAlg :: Text -> Either Text HashAlg
-parseHashAlg raw = case T.toLower (T.strip raw) of
+parseHashAlg raw = hashAlgNamed fallback stripped
+  where
+    stripped = T.strip raw
+    fallback = hashAlgNamed (Left ("unknown integrity algorithm: " <> raw)) (toLowerUnlessAsciiUnchanged stripped)
+
+-- The fallback stays lazy so an exact name does not force normalisation.
+hashAlgNamed :: Either Text HashAlg -> Text -> Either Text HashAlg
+hashAlgNamed onUnknown = \case
     "md5" -> Right MD5
     "sha1" -> Right SHA1
     "sha-1" -> Right SHA1
@@ -211,7 +206,7 @@ parseHashAlg raw = case T.toLower (T.strip raw) of
     "sha512" -> Right SHA512
     "sha-512" -> Right SHA512
     "blake2b" -> Right Blake2b
-    _ -> Left ("unknown integrity algorithm: " <> raw)
+    _ -> onUnknown
 
 -- | The token before the first dash. Without a dash, the entire string is the prefix.
 sriPrefix :: Text -> Text
