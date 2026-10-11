@@ -812,7 +812,8 @@ retires any proxy cgroup a killed run left. A scheduled run measures `unlimited`
 `4cpu-1gib`, and `4cpu-2gib` in a matrix. A dispatch picks one shape, `all`, or `thrash` for the
 GC-thrash probe. To measure a branch, dispatch the workflow on that branch after merging this
 harness into it.
-Hosted runners have four processors, so a four-core shape shares them with `oha` and the stubs.
+Hosted runners have four logical processors. A four-CPU quota still shares those processors
+with `oha` and the stubs.
 
 Each scenario reports:
 

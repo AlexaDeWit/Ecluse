@@ -27,7 +27,7 @@ spec = do
         it "names the four scheduled shapes" $
             map renderPodShape scheduledPodShapes `shouldBe` ["unlimited", "2cpu-1gib", "4cpu-1gib", "4cpu-2gib"]
     describe "cpuMaxValue" $
-        it "grants whole cores over the default period" $
+        it "sets a CPU-time quota in whole CPU equivalents over the default period" $
             cpuMaxValue 2 `shouldBe` "200000 100000"
     describe "keyedCounters" $ do
         it "reads memory.events and skips a line it cannot read" $ do

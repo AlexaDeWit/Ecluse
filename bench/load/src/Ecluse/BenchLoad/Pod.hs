@@ -46,10 +46,10 @@ gib = 1024 * mib
 parsePodShape :: Text -> Either Text PodShape
 parsePodShape raw = case T.splitOn "-" (T.toLower (T.strip raw)) of
     ["unlimited"] -> Right Unlimited
-    [cpuPart, memoryPart] -> Limited <$> cores cpuPart <*> memory memoryPart
+    [cpuPart, memoryPart] -> Limited <$> cpuEquivalents cpuPart <*> memory memoryPart
     _ -> Left refusal
   where
-    cores part = maybe (Left refusal) Right (T.stripSuffix "cpu" part >>= positive)
+    cpuEquivalents part = maybe (Left refusal) Right (T.stripSuffix "cpu" part >>= positive)
     memory part
         | Just n <- T.stripSuffix "gib" part >>= positive = Right (n * gib)
         | Just n <- T.stripSuffix "mib" part >>= positive = Right (n * mib)
@@ -57,7 +57,7 @@ parsePodShape raw = case T.splitOn "-" (T.toLower (T.strip raw)) of
     positive digits
         | not (T.null digits) && T.all isDigit digits = mfilter (> 0) (readMaybe (toString digits))
         | otherwise = Nothing
-    refusal = "pod shape " <> show raw <> " is not unlimited or <cores>cpu-<size>mib or <cores>cpu-<size>gib"
+    refusal = "pod shape " <> show raw <> " is not unlimited or <cpu-equivalents>cpu-<size>mib or <cpu-equivalents>cpu-<size>gib"
 
 -- | The inverse of 'parsePodShape', in gibibytes when the limit is a whole number of them.
 renderPodShape :: PodShape -> Text

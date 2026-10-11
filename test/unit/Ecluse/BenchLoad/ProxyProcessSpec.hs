@@ -158,7 +158,7 @@ environmentSpec = describe "proxyEnvironment" $ do
         lookup "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" podEnvironment `shouldBe` Just "https://localhost:9002"
         lookup "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" (proxyEnvironment (proxySettings PyPI 0) Unlimited 3 "/tmp/proxy" (1, 2, 3) 9001 Nothing [])
             `shouldBe` Just "https://localhost:9001"
-    it "leaves the cores to the cgroup under a pod shape, and pins them when unlimited" $ do
+    it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"
     it "names only keys the proxy's configuration loads, and a boot plan the serve role accepts" $
