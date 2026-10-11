@@ -31,7 +31,7 @@ import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 -- | One origin's coordinates, credential posture, and response bound.
 data OriginClient = OriginClient
     { ocBaseUrl :: RegistryUrl
-    -- ^ The https-only egress witness the proxy appends a package path to.
+    -- ^ The https-only endpoint witness from which the adapter forms native request URLs.
     , ocManager :: Manager
     -- ^ The shared @http-client@ 'Manager' to issue requests through.
     , ocToken :: Maybe ClientCredential

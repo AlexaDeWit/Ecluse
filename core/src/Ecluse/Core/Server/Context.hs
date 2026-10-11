@@ -185,9 +185,7 @@ tarballHostHonoured origin deps =
 -- | First-party publish inputs. Their presence enables the mount's publish route.
 data PublishDeps = PublishDeps
     { pubTargetUrl :: RegistryUrl
-    {- ^ The publication target endpoint (@mounts.npm.publicationTarget@) a client
-    @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
-    -}
+    -- ^ The publication target endpoint. The adapter forms its native write URL.
     , pubAllowed :: PackageName -> Bool
     {- ^ Whether this package may publish here, refused before any upstream write: the same
     first-party predicate the serve path reads as 'pdFirstParty'.

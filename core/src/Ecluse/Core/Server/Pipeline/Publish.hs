@@ -13,15 +13,15 @@ module Ecluse.Core.Server.Pipeline.Publish (
     servePublish,
 ) where
 
-import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status401, status403, status405, status413, status500, status502)
-import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength)
+import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential, bareCredential)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay), PublishBody (..))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes, progressFloor), boundedRead)
@@ -39,7 +39,9 @@ import Ecluse.Core.Server.Response (appendHelp)
 
 -- | Route-owned replies, including the publication target's unrestricted status codes.
 data PublishReplies response = PublishReplies
-    { publishRelayed :: Status -> ResponseHeaders -> LByteString -> response
+    { publishAllowedMethods :: ByteString
+    -- ^ Methods the route serves when publication is disabled.
+    , publishRelayed :: Status -> ResponseHeaders -> LByteString -> response
     -- ^ Relay the publication target's status and bytes.
     , publishError :: Status -> ResponseHeaders -> Text -> response
     -- ^ Emit an ecosystem-shaped local error.
@@ -48,7 +50,7 @@ data PublishReplies response = PublishReplies
 -- | Relay a configured first-party publish after authentication and body guards.
 servePublish ::
     PublishReplies response ->
-    PackageName ->
+    Maybe PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
@@ -62,15 +64,16 @@ publishWithDeps ::
     PublishReplies response ->
     PublishDeps ->
     Maybe ClientCredential ->
-    PackageName ->
+    Maybe PackageName ->
     Request ->
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 publishWithDeps replies deps clientToken name request respond
     | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
         liftIO (respond (publishError replies status401 [] unauthorisedMessage))
-    | not (pubAllowed deps name) =
-        liftIO (respond (outOfScope replies deps name))
+    | Just pathName <- name
+    , not (pubAllowed deps pathName) =
+        liftIO (respond (outOfScope replies deps pathName))
     | overDeclaredCap =
         liftIO (respond (publishTooLarge replies deps))
     | otherwise = do
@@ -94,15 +97,32 @@ readAndRelay ::
     PublishReplies response ->
     PublishDeps ->
     OriginClient ->
-    PackageName ->
+    Maybe PackageName ->
     Request ->
     IO response
 readAndRelay replies deps target name request =
     boundedRead (PublishRequestBodyLimit (maxPublishRequestBytes (pubLimits deps))) (getRequestBodyChunk request) >>= \case
         Left _ -> pure (publishTooLarge replies deps)
-        Right (_, body) -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
-            Just declared -> pure (bodyNameMismatch replies deps name declared)
-            Nothing -> renderRelay replies deps <$> withinServeCap (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target name body)
+        Right (_, bytes) -> do
+            let body = PublishBody (lookup "Content-Type" (requestHeaders request)) bytes
+            declared <- publishDeclaredNames (pubAdapter deps) body
+            case agreedName replies deps name declared of
+                Left refusal -> pure refusal
+                Right agreed ->
+                    renderRelay replies deps <$> withinServeCap (progressFloor (pubLimits deps)) id (publishRelay (pubAdapter deps) target agreed body)
+
+agreedName :: PublishReplies response -> PublishDeps -> Maybe PackageName -> [Text] -> Either response PackageName
+agreedName replies deps pathName declared = do
+    name <- case pathName of
+        Just known -> Right known
+        Nothing -> case declared of
+            firstName : _ | not (T.null firstName), Just parsed <- pubProjectName deps firstName -> Right parsed
+            _ -> Left (publishError replies status403 [] (appendHelp (pubHelp deps) "refusing to publish: the document body declares no valid package name"))
+    case find (\raw -> T.null raw || pubProjectName deps raw /= Just name) declared of
+        Just disagreeing -> Left (bodyNameMismatch replies deps name disagreeing)
+        Nothing
+            | pubAllowed deps name -> Right name
+            | otherwise -> Left (outOfScope replies deps name)
 
 publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
 publicationTarget deps rt clientToken =
@@ -146,11 +166,10 @@ publishTooLarge :: PublishReplies response -> PublishDeps -> response
 publishTooLarge replies deps =
     publishError replies status413 [] (appendHelp (pubHelp deps) "the publish body exceeds the maximum accepted request size")
 
--- A @405@ for a publish on a mount with no publication target configured. The @Allow@
--- header advertises the read methods the package route does serve.
+-- The route declares its methods even when no publication target is configured.
 publishDisabled :: PublishReplies response -> response
 publishDisabled replies =
-    publishError replies status405 [("Allow", "GET, HEAD")] message
+    publishError replies status405 [("Allow", publishAllowedMethods replies)] message
   where
     -- The remediation stays ecosystem-neutral, because this pipeline serves every
     -- ecosystem: it names no client's own commands or configuration keys.
@@ -180,13 +199,3 @@ bodyNameMismatch replies deps name declared =
             <> "': the document body declares the name '"
             <> declared
             <> "', which disagrees with the requested package name the first-party guard authorised (the anti-shadowing guard against publishing a name the guard never saw)"
-
--- A body-driven target must not write a name the URL-path guard never authorised.
-bodyNameDisagreement :: (LByteString -> [Text]) -> (Text -> Maybe PackageName) -> PackageName -> LByteString -> Maybe Text
-bodyNameDisagreement declaredNames canonicalise name body =
-    find disagrees (declaredNames body)
-  where
-    disagrees :: Text -> Bool
-    disagrees declared = case canonicalise declared of
-        Just declaredName -> declaredName /= name
-        Nothing -> True

@@ -377,7 +377,8 @@ npmPublishContract =
 npmPublishReplies :: PublishReplies NpmPublishResponse
 npmPublishReplies =
     PublishReplies
-        { publishRelayed = variableResponse
+        { publishAllowedMethods = "GET, HEAD"
+        , publishRelayed = variableResponse
         , publishError = \status headers message ->
             variableResponse status headers (encodeBody npmErrorCodec (NpmError message))
         }
@@ -409,7 +410,7 @@ buildPublish _method = \case
         Just
             ( RunPipeline
                 (publishError npmPublishReplies status500 [] "internal server error")
-                (servePublish npmPublishReplies name)
+                (servePublish npmPublishReplies (Just name))
             )
     _ -> Nothing
 

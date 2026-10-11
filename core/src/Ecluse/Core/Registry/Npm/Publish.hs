@@ -55,7 +55,7 @@ npmPublishCodec =
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
         , pcVersionListParser = Project.versionListParser
         , pcPublishRequest = npmPublishRequestFor
-        , pcPublishOutcome = classifyPublish
+        , pcPublishOutcome = \code _body -> classifyPublish code
         }
 
 npmPublishRequestFor ::

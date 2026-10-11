@@ -357,7 +357,8 @@ target never receives the edge token. Every holder of the edge token can then pu
 static token permits within the configured first-party scopes, so this is not the preferred
 deployment. The boot refuses a static publication token without `ECLUSE_SERVER__AUTH_TOKEN`
 (`PublishStaticCredentialNeedsEdge`), because an open edge would let any client publish under it.
-Without a static publication token, a closed-edge publish forwards the edge token unchanged.
+Without a static publication token, a closed-edge publish forwards the caller credential unchanged.
+For a Basic credential, the edge checks its password and preserves its username for the target.
 
 `ECLUSE_MOUNTS__NPM__FIRST_PARTY` names the scopes you own, and only a name under one of them may be
 published ([First-party namespaces](@/docs/configuration.md#first-party-namespaces)). The reasoning
@@ -436,6 +437,12 @@ Two failures can take a publish off that path, and they are not alike.
 A publish that reaches Écluse when the mount declares no publication target gets
 `405 Method Not Allowed`. The failure is loud and immediate. Écluse relays a publish only to a
 destination you declared, so a misconfigured client cannot mis-publish through the proxy.
+
+The shared publish handler supports routes whose body supplies the package name. Such a route
+authenticates and reads under the request cap and aggregate byte budget before a namespace
+refusal can return `403`. All declared names must agree after canonicalisation. Multipart
+names require the boundary declared in Content-Type. This preparation does not enable PyPI
+publication. npm keeps its path-name guard before reading the body.
 
 A publish that never reaches Écluse is the quiet one. A client that resolves its publish
 destination from some other part of its configuration sends it straight to that registry, and the

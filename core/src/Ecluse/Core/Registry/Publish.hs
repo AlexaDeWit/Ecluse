@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-write capability: a shared transport, an adapter-provided protocol codec, and the
-married 'MirrorPublish' handle a worker bundle carries. A new ecosystem contributes a codec and
-never a transport.
-
-The transport mints the bearer per call and re-seals every request, so no codec can ship a write
-that follows a redirect.
+{- | Shared mirror transport with adapter-owned request formation and response classification.
+The transport obtains a credential per call and seals each request against redirects.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * What one write declares
@@ -61,7 +57,7 @@ data PublishPlan = PublishPlan
     }
     deriving stock (Eq, Show)
 
-{- | One ecosystem's mirror-write protocol, all pure. The endpoint and bearer arrive as arguments,
+{- | One ecosystem's mirror-write protocol, all pure. The endpoint and credential arrive as arguments,
 so a codec holds no URL, credential, or connection state.
 -}
 data PublishCodec = PublishCodec
@@ -73,10 +69,8 @@ data PublishCodec = PublishCodec
     {- ^ Form the complete publish request for one verified artifact. A plan whose version object
     the codec cannot read refuses as a value.
     -}
-    , pcPublishOutcome :: Int -> Either PublishFault ()
-    {- ^ Classify the status answer. Registries disagree on how an immutable re-publish answers,
-    so the codec counts an idempotent already-present as success.
-    -}
+    , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
+    -- ^ Classify the status and bounded response body, including native duplicate-file replies.
     }
 
 {- | The ecosystem-agnostic half of the mirror write. The composition root builds one per
@@ -140,11 +134,9 @@ publishArtifact transport targetUrl codec name plan artifact bytes = do
         (writeArtifact transport codec . sealRequest)
         (pcPublishRequest codec targetUrl token name plan artifact bytes)
 
--- Read the codec's verdict from the answered status. The 'const' projection drops the
--- target's body, which the write has no use for, and the exchange bounds it either way.
 writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
 writeArtifact transport codec request =
-    boundedExchange (\status _ _ -> status) (ptManager transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
+    boundedExchange (\status _ body -> pcPublishOutcome codec status body) (ptManager transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
         <&> \case
             Left fault -> Left (PublishFetch fault)
-            Right status -> pcPublishOutcome codec status
+            Right outcome -> outcome

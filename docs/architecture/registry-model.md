@@ -82,6 +82,11 @@ trigger, content, and credential from the mirror write.
   declared name that disagrees is a `403` before any relay, under the same `PackageName` equality
   the route uses. An absent name is no claim. The guard reads names only and never decodes the
   base64 `_attachments`.
+  The shared handler also accepts a route with no path name. It authenticates, reserves the
+  aggregate byte budget, and reads under the request cap before deriving one canonical body
+  name. Missing, invalid, or disagreeing names refuse before the first-party guard or relay.
+  Its multipart decoder uses the declared Content-Type boundary and discards file bytes during
+  name extraction. PyPI publication remains disabled until its native relay is connected.
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
   the private upstream, so the operator aggregates the publication target into that read path. A

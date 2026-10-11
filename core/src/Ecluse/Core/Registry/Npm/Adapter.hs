@@ -15,6 +15,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMetadata (..),
     AdapterPublish (..),
+    PublishBody (publishBytes),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
@@ -61,7 +62,7 @@ npmAdapter =
 npmPublish :: AdapterPublish
 npmPublish =
     AdapterPublish
-        { publishRelay = relayPublishDocument
-        , publishDeclaredNames = declaredNames
+        { publishRelay = \origin name -> relayPublishDocument origin name . publishBytes
+        , publishDeclaredNames = pure . declaredNames . toLazy . publishBytes
         , publishCodec = npmPublishCodec
         }

@@ -2,14 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Worker-test fixtures: the shared npm re-evaluation bundle, and a ready-made
-admit-everything policy over it. The worker re-runs current policy against a job's version
-before mirroring it, so any end-to-end worker test must supply per-ecosystem policies.
-'npmPolicyWith' is the one 'WorkerPolicy' wiring they share: npm's real by-URL request
-formation, the SHA-256 admission floor, and an open tarball-host gate, with the clock, byte
-cap, publish capability, resolver, and rules left to the caller.
--}
+-- | Adapter-parameterised worker policies and npm admission fixtures.
 module Ecluse.Test.Worker (
+    policyWith,
     npmPolicyWith,
     admitAllPolicies,
     admitAllPoliciesCapped,
@@ -45,7 +40,18 @@ npmPolicyWith ::
     (PackageName -> Version -> IO VersionEvaluation) ->
     [PreparedRule] ->
     WorkerPolicy
-npmPolicyWith clock artifactMaxBytes publish resolve rules =
+npmPolicyWith = policyWith npmAdapter
+
+-- | Build a worker policy using the supplied adapter's artifact request capability.
+policyWith ::
+    RegistryAdapter ->
+    IO UTCTime ->
+    Int ->
+    MirrorPublish ->
+    (PackageName -> Version -> IO VersionEvaluation) ->
+    [PreparedRule] ->
+    WorkerPolicy
+policyWith adapter clock artifactMaxBytes publish resolve rules =
     WorkerPolicy
         { -- Deny by default, as a mount that declares no namespaces owns none. A case
           -- that drives the privilege overrides this field.
@@ -54,9 +60,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
         , wpRules = rules
         , wpMinIntegrity = defaultMinIntegrity
         , wpArtifactHostHonoured = const True
-        , -- npm's own artifact capability, the record the composition root carries onto the
-          -- bundle, so the fetch path forms requests as production does.
-          wpArtifact = adapterArtifact npmAdapter
+        , wpArtifact = adapterArtifact adapter
         , wpPublish = publish
         , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
         , wpNow = clock

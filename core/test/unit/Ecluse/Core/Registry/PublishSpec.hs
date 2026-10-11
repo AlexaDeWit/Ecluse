@@ -9,7 +9,7 @@ import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types (Header, Status)
 import Network.HTTP.Types.Header (hLocation)
-import Network.HTTP.Types.Status (status200, status302)
+import Network.HTTP.Types.Status (status200, status302, status400)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Core.BuildIdentity (userAgent)
@@ -113,6 +113,21 @@ spec = do
                 outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
                 outcome `shouldSatisfy` isBoundExceededPublish
 
+    describe "bounded response classification" $ do
+        it "passes native rejection bytes to the classifier" $
+            withStub status400 "duplicate file" $ \stub -> do
+                let codec = npmPublishCodec{pcPublishOutcome = \code body -> if code == 400 && body == "duplicate file" then Right () else pcPublishOutcome npmPublishCodec code body}
+                publish <- publishWith codec (stubBaseUrl stub)
+                mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes" `shouldReturn` Right ()
+        it "does not classify an over-cap duplicate response as success" $
+            withStub status400 "duplicate file" $ \stub -> do
+                manager <- Client.newManager Client.defaultManagerSettings
+                let transport = MirrorTransport manager (pure Nothing) defaultLimits{maxMetadataBytes = 1}
+                    codec = npmPublishCodec{pcPublishOutcome = \_ _ -> Right ()}
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) codec
+                outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
+                outcome `shouldSatisfy` isBoundExceededPublish
+
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
             -- The shared single attach point pins redirectCount 0, so a credential-bearing probe
@@ -161,7 +176,7 @@ unsealedCodec =
         , pcVersionListParser = const (pure VersionListObject)
         , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
-        , pcPublishOutcome = const (Right ())
+        , pcPublishOutcome = \_ _ -> Right ()
         }
   where
     unsealed url = maybe (Left (UnparseableUrl url)) Right (Client.parseRequest (toString url))

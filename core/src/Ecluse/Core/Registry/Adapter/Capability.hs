@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
 
     -- * Publish
     AdapterPublish (..),
+    PublishBody (..),
 
     -- * Names
     ProjectName,
@@ -82,16 +83,19 @@ data AdapterArtifact = AdapterArtifact
     -}
     }
 
-{- | The ecosystem's publish capability. The composition root marries its codec to the shared
-publish transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
--}
+-- | Bounded request bytes paired with the caller's unchanged Content-Type header.
+data PublishBody = PublishBody
+    { publishContentType :: Maybe ByteString
+    , publishBytes :: ByteString
+    }
+    deriving stock (Eq, Show)
+
+-- | Native publication operations used by the relay and mirror transport.
 data AdapterPublish = AdapterPublish
-    { publishRelay :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
+    { publishRelay :: OriginClient -> PackageName -> PublishBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
-    , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Every name a publish body claims, @[]@ when none is readable. The anti-shadowing guard
-    refuses one that disagrees with the URL-path name.
-    -}
+    , publishDeclaredNames :: PublishBody -> IO [Text]
+    -- ^ Every claimed name, or @[]@ for unreadable input. Pathless routes require at least one.
     , publishCodec :: PublishCodec
     {- ^ Document assembly, request formation, the probe, and the status semantics. The manager,
     credential mint, and fault classification are the transport's.
