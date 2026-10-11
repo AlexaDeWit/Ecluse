@@ -52,7 +52,7 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
--- | Provisional packed read charge from the earlier qualification in @docs/testing.md@. Requalify after parser changes.
+-- | Charges per 1000 source or output-basis bytes, calibrated with native memory probes. See @docs/testing.md@.
 pypiChargeFactors :: ChargeFactors
 pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3300, cfOutputPermille = 1600}
 
