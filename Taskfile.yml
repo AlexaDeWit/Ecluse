@@ -95,22 +95,16 @@ tasks:
       - cabal test ecluse-smoke --test-show-details=direct
   test-contract-list:
     desc: List a pure catalogue without services (TIER=e2e or integration)
+    env:
+      ECLTEST_CONTRACT_TIER: '{{.TIER | default "e2e"}}'
     cmds:
-      - |
-        case '{{.TIER | default "e2e"}}' in
-          e2e) bash scripts/e2e.sh list ;;
-          integration) bash scripts/test-integration.sh list ;;
-          *) echo 'TIER must be e2e or integration' >&2; exit 2 ;;
-        esac
+      - bash scripts/test-contract.sh list
   test-contract-plan:
     desc: Print a deterministic partition plan (TIER=e2e or integration)
+    env:
+      ECLTEST_CONTRACT_TIER: '{{.TIER | default "e2e"}}'
     cmds:
-      - |
-        case '{{.TIER | default "e2e"}}' in
-          e2e) bash scripts/e2e.sh plan ;;
-          integration) bash scripts/test-integration.sh plan ;;
-          *) echo 'TIER must be e2e or integration' >&2; exit 2 ;;
-        esac
+      - bash scripts/test-contract.sh plan
   test-e2e-prepare:
     desc: Build one image archive and the E2E plan
     cmds:
@@ -146,7 +140,7 @@ tasks:
     cmds:
       - bash scripts/test-containers.sh reap --all
   test-all:
-    desc: Run every test suite
+    desc: Run the unit, integration, and smoke suites
     cmds:
       - task: test
       - task: test-integration

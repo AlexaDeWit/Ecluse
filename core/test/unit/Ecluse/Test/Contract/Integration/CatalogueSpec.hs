@@ -16,9 +16,9 @@ spec = do
     it "validates integration coverage without acquiring its providers" $
         validateCatalogue integrationCatalogue `shouldBe` Right integrationCatalogue
     it "rejects each missing native or canonical case independently" $
-        for_ (catalogueGroups integrationCatalogue) $ \group ->
-            for_ (groupCases group) $ \item -> do
-                let changed = integrationCatalogue{catalogueGroups = map (removeCase group item) (catalogueGroups integrationCatalogue)}
+        for_ (catalogueGroups integrationCatalogue) $ \scenarioGroup ->
+            for_ (groupCases scenarioGroup) $ \item -> do
+                let changed = integrationCatalogue{catalogueGroups = map (removeCase scenarioGroup item) (catalogueGroups integrationCatalogue)}
                 validateCatalogue changed `shouldSatisfy` isLeft
     it "rejects every removed supported profile" $
         for_ (catalogueProfiles integrationCatalogue) $ \profile ->
@@ -31,8 +31,8 @@ spec = do
     it "rejects a newly registered ecosystem without coverage" $
         validateCatalogue integrationCatalogue{catalogueProductionEcosystems = "new-ecosystem" : catalogueProductionEcosystems integrationCatalogue} `shouldSatisfy` isLeft
     it "selects each whole group by its fixed identifier" $
-        for_ (catalogueGroups integrationCatalogue) $ \group ->
-            selectGroups emptySelection{selectionGroup = Just (groupId group)} integrationCatalogue `shouldBe` Right [group]
+        for_ (catalogueGroups integrationCatalogue) $ \scenarioGroup ->
+            selectGroups emptySelection{selectionGroup = Just (groupId scenarioGroup)} integrationCatalogue `shouldBe` Right [scenarioGroup]
     it "rejects unknown and empty intersections before setup" $ do
         selectGroups emptySelection{selectionGroup = Just "absent"} integrationCatalogue `shouldSatisfy` isLeft
         selectGroups emptySelection{selectionGroup = Just "integration/pypi", selectionBackend = Just "ministack"} integrationCatalogue `shouldSatisfy` isLeft
