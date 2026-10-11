@@ -514,8 +514,7 @@ withMirrorRole :: GlobalDataPlane -> [(Text, Text)] -> (String -> IO a) -> IO a
 withMirrorRole gdp env action = do
     run <- roleRun gdp env ["mirror"]
     labelArgs <- dockerLabelArgs "e2e"
-    -- A role that refuses to boot exits at once, and @--rm@ would take its reason with it.
-    withDockerContainer labelArgs run{drAutoRemove = False} action
+    withDockerContainer labelArgs run action
 
 {- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
 @extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.

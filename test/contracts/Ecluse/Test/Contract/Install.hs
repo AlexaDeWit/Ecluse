@@ -6,6 +6,8 @@
 module Ecluse.Test.Contract.Install (
     ClientResult (..),
     InstallDriver (..),
+    RefusalDriver (..),
+    refusesWithoutEffects,
     installsObserved,
     refusesObserved,
     shouldSucceed,
@@ -31,6 +33,21 @@ data InstallDriver observation = InstallDriver
     { installRun :: IO (ClientResult, observation)
     , installExpected :: observation
     }
+
+-- | An attempted install and an independent destination observation after its write window.
+data RefusalDriver evidence = RefusalDriver
+    { refusalInstall :: IO ClientResult
+    , refusalObserve :: IO evidence
+    , refusalSettle :: IO ()
+    }
+
+-- | Refusal must leave the required destination state intact after asynchronous work settles.
+refusesWithoutEffects :: (Eq evidence, Show evidence) => evidence -> RefusalDriver evidence -> Expectation
+refusesWithoutEffects expected driver = do
+    void (refusalInstall driver >>= shouldFail)
+    refusalSettle driver
+    observed <- refusalObserve driver
+    observed `shouldBe` expected
 
 -- | Require client success and the expected native installation result.
 installsObserved :: (Eq observation, Show observation) => InstallDriver observation -> Expectation

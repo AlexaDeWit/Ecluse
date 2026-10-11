@@ -33,6 +33,8 @@ import Ecluse.E2E.Fixtures.Npm (
  )
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.Test.Contract.Install (InstallDriver (..), RefusalDriver (..), installsObserved, refusesWithoutEffects)
+import Ecluse.Test.Contract.Mirror (MirrorTagDriver (..), preservesLatest)
 import Ecluse.Test.Contract.Serving (artifactHeadCase)
 
 -- | Drive the product image with a real npm client and local stores.
@@ -46,14 +48,20 @@ scenarios recorder = do
             it (caseLabel "npm/install/default-denial" "uses the shipped default to block install scripts and never mirrors the package") $ \e2e -> do
                 logs <- proxyContainerLogs e2e
                 logs `shouldSatisfy` T.isInfixOf "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                void $ npmInstall e2e (psName denyPkg) >>= shouldFail
-                mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
-                mirrored `shouldBe` False
+                refusesWithoutEffects
+                    False
+                    RefusalDriver
+                        { refusalInstall = npmInstall e2e (psName denyPkg)
+                        , refusalObserve = verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
+                        , refusalSettle = awaitMirrorWindow
+                        }
 
             it (caseLabel "npm/install/lifecycle-script-control" "runs no package lifecycle script during a harness install (defence in depth)") $ \e2e -> do
-                (installed, scriptRan) <- installWithLifecycleProbe e2e
-                void $ shouldSucceed installed
-                scriptRan `shouldBe` False
+                installsObserved
+                    InstallDriver
+                        { installRun = installWithLifecycleProbe e2e
+                        , installExpected = False
+                        }
 
             it (caseLabel "npm/install/deprecation-relay" "relays a deprecated version's notice to the client, before and after the worker mirrors the version") $ \e2e -> do
                 let name = psName deprecatedPkg
@@ -119,20 +127,20 @@ scenarios recorder = do
                     KeyMap.member "integrity" dist `shouldBe` True
             it (caseLabel "npm/install/latest-preservation" "keeps the upstream latest on the mirror when an older version is mirrored after it") $ \e2e -> do
                 let name = psName latestPkg
-                withNpmProject e2e $ \proj -> do
-                    void $ npmInstallIn proj (name <> "@2.0.0") >>= shouldSucceedThroughProxy e2e
-                    verdaccioHasVersion e2e name "2.0.0" `shouldReturn` True
-                    verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
-                    void $ npmInstallIn proj (name <> "@1.0.0") >>= shouldSucceedThroughProxy e2e
-                    verdaccioHasVersion e2e name "1.0.0" `shouldReturn` True
-                    -- Completion order must not retag: 1.0.0 landing last stays behind 2.0.0.
-                    verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
-                    verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
-                withNpmProject e2e $ \proj -> do
-                    -- The mirror's own tag is asserted on the store above, because the proxy never
-                    -- consults a private document's `latest`, so no install can show it.
-                    void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
-                    installedVersion proj name `shouldReturn` Just "2.0.0"
+                withNpmProject e2e $ \project ->
+                    preservesLatest
+                        "2.0.0"
+                        "1.0.0"
+                        MirrorTagDriver
+                            { tagInstallVersion = \version -> npmInstallIn project (name <> "@" <> version)
+                            , tagInstallLatest = withNpmProject e2e $ \fresh ->
+                                (,) <$> npmInstallIn fresh name <*> installedVersion fresh name
+                            , tagAwaitVersion = \version -> do
+                                void (verdaccioHasVersion e2e name version)
+                                verdaccioVersions e2e name
+                            , tagReadLatest = verdaccioLatest e2e name
+                            , tagReadVersions = verdaccioVersions e2e name
+                            }
         describe "first-party publish -- opt-in posture" $
             it (caseLabel "npm/install/publication-unconfigured" "answers a publish with 405 when no publication target is configured") $ \e2e -> do
                 -- The base topology declares no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET, so PUT is not an allowed

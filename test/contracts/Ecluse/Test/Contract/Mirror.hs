@@ -10,6 +10,8 @@ module Ecluse.Test.Contract.Mirror (
     MirrorDriver (..),
     MirrorFixture (..),
     mirrorContract,
+    MirrorTagDriver (..),
+    preservesLatest,
 ) where
 
 import Data.Set qualified as Set
@@ -103,3 +105,28 @@ mirrorContract prefix fixture = do
     checkInstall observed = do
         obLocalSources observed `shouldBe` []
         void (shouldSucceed (obClient observed))
+
+-- | Client requests and independent tag and version observations for one fixture package.
+data MirrorTagDriver = MirrorTagDriver
+    { tagInstallVersion :: Text -> IO ClientResult
+    , tagInstallLatest :: IO (ClientResult, Maybe Text)
+    , tagAwaitVersion :: Text -> IO [Text]
+    , tagReadLatest :: IO (Maybe Text)
+    , tagReadVersions :: IO [Text]
+    }
+
+-- | An older version completing later must not replace the upstream's latest tag.
+preservesLatest :: Text -> Text -> MirrorTagDriver -> Expectation
+preservesLatest newer older driver = do
+    void (tagInstallVersion driver newer >>= shouldSucceed)
+    firstVersions <- tagAwaitVersion driver newer
+    (newer `elem` firstVersions) `shouldBe` True
+    tagReadLatest driver `shouldReturn` Just newer
+    void (tagInstallVersion driver older >>= shouldSucceed)
+    secondVersions <- tagAwaitVersion driver older
+    (older `elem` secondVersions) `shouldBe` True
+    tagReadLatest driver `shouldReturn` Just newer
+    tagReadVersions driver `shouldReturn` sort [older, newer]
+    (result, installed) <- tagInstallLatest driver
+    void (shouldSucceed result)
+    installed `shouldBe` Just newer

@@ -79,7 +79,7 @@ installFromMirror proxy = do
             { offlineObserved = observed
             , offlinePublicReachable = reachable
             , offlineMirrorPaths = servedByMirror answered
-            , offlinePublicAnswers = map (toText . show) (filter answeredByPublic answered)
+            , offlinePublicAnswers = map show (filter answeredByPublic answered)
             , offlineLockedSources = lockedSources (obTree observed)
             }
   where

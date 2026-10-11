@@ -55,7 +55,7 @@ import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing)
-import Ecluse.Test.Registry.Npm.StoredVersions (storedObjectResponse)
+import Ecluse.Test.Registry.Npm.StoredVersions (storedObjectResponse, storedVersionKeys)
 import Ecluse.Test.Support (expectRightText)
 
 {- | Wait out the window a worker would need to mirror a version, so an absence read after it
@@ -144,7 +144,7 @@ verdaccioNamesUnder e2e raw = do
 404 means the package is absent.
 -}
 verdaccioVersions :: E2E -> Text -> IO [Text]
-verdaccioVersions e2e name = maybe [] (sort . map Key.toText . KeyMap.keys) <$> storedObject "versions" e2e name
+verdaccioVersions = readStored storedVersionKeys
 
 -- | One stored version's object as the store serves it. 'Nothing' for an absent package or version.
 verdaccioVersionObject :: E2E -> Text -> Text -> IO (Maybe Object)
@@ -159,11 +159,14 @@ verdaccioVersionObject e2e name version = do
 {- Read one top-level object field of the stored packument, rejecting an unreadable or malformed
 document. Only HTTP 404 means the package is absent. -}
 storedObject :: Key.Key -> E2E -> Text -> IO (Maybe Object)
-storedObject field e2e name = do
+storedObject field = readStored (storedObjectResponse field)
+
+readStored :: (Int -> ByteString -> Either Text a) -> E2E -> Text -> IO a
+readStored parse e2e name = do
     resp <- fetchPackument e2e name
     let status = statusCode (responseStatus resp)
         body = LBS.toStrict (responseBody resp)
-    expectRightText (first (\err -> name <> ": " <> err) (storedObjectResponse field status body))
+    expectRightText (first (\err -> name <> ": " <> err) (parse status body))
 
 {- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns them.
 It yields what it last read, so a failure names the versions the store actually held.

@@ -23,10 +23,12 @@ module Ecluse.E2E.Harness.Container (
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
+import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import System.Random (randomIO)
-import UnliftIO (bracket, handleAny, onException)
+import UnliftIO (bracket, finally, handleAny, onException, withException)
 
 import Ecluse.Test.Container.Image (ImageRef (PinnedExternal), PinnedImageRef, renderImageRef)
 import Ecluse.Test.Poll (pollUntil)
@@ -42,17 +44,11 @@ data DockerRun = DockerRun
     , drEnv :: [(Text, Text)]
     , drImage :: String
     , drCmd :: [String]
-    , drAutoRemove :: Bool
-    -- A case that reads logs after exit disables auto-removal until the bracket releases them.
     }
-
--- An invalid literal pin fails at harness startup, before pulling any image.
 
 -- | Reject an invalid image pin before acquiring a resource.
 pinnedExternal :: Either Text PinnedImageRef -> IO ImageRef
 pinnedExternal = fmap PinnedExternal . either (fail . toString) pure
-
--- Only a LocallyBuilt image may lack a digest pin.
 
 -- | A container specification with no implicit mounts, aliases or ports.
 dockerRun :: String -> String -> ImageRef -> DockerRun
@@ -67,7 +63,6 @@ dockerRun name net image =
         , drEnv = []
         , drImage = toString (renderImageRef image)
         , drCmd = []
-        , drAutoRemove = False
         }
 
 runDetached :: [String] -> DockerRun -> IO ()
@@ -76,7 +71,7 @@ runDetached labelArgs = commandOk "docker" . runArgs ["-d"] labelArgs
 -- | Render the exact Docker invocation from the resource specification.
 runArgs :: [String] -> [String] -> DockerRun -> [String]
 runArgs extra labelArgs spec =
-    ("run" : ["--rm" | drAutoRemove spec])
+    ["run"]
         <> extra
         <> ["--name", drName spec, "--network", drNetwork spec]
         <> concatMap (\a -> ["--network-alias", a]) (drAliases spec)
@@ -90,12 +85,32 @@ runArgs extra labelArgs spec =
 -- | Bracket startup and teardown, recording logs before removing a failed container.
 withDockerContainer :: [String] -> DockerRun -> (String -> IO a) -> IO a
 withDockerContainer labelArgs spec action =
-    bracket acquire removeContainer $ \name ->
-        action name `onException` reportContainer name
+    bracket acquire release $ \name ->
+        action name `withException` \(err :: SomeException) -> do
+            putTextLn ("E2E action failed: " <> show err)
+            reportContainer name
   where
+    release name = captureContainer name `finally` removeContainer name
     acquire =
         (runDetached labelArgs spec >> pure (drName spec))
             `onException` (reportContainer (drName spec) >> removeContainerIfPresent (drName spec))
+
+captureContainer :: String -> IO ()
+captureContainer name = do
+    root <- fromMaybe "scratchpad/e2e" <$> lookupEnv "ECLTEST_ARTIFACT_DIR"
+    let directory = root </> "reports" </> "containers"
+    createDirectoryIfMissing True directory
+    (status, out, err) <- readProcess (proc "docker" ["logs", name])
+    writeFileText
+        (directory </> name <> ".log")
+        ( "docker logs "
+            <> toText name
+            <> " exited "
+            <> show status
+            <> "\n"
+            <> decodeUtf8 (LBS.toStrict (out <> err))
+        )
+    unless (status == ExitSuccess) (fail ("could not capture logs before removing " <> name))
 
 -- | Emit captured container logs while the resource still exists.
 reportContainer :: String -> IO ()
@@ -111,7 +126,9 @@ removeResourceIfPresent :: String -> String -> IO ()
 removeResourceIfPresent kind name = do
     (status, _, err) <- readProcess (proc "docker" [kind, "inspect", name])
     case status of
-        ExitSuccess -> commandOk "docker" ([kind, "rm"] <> ["-f" | kind == "container"] <> [name])
+        ExitSuccess
+            | kind == "container" -> captureContainer name `finally` removeContainer name
+            | otherwise -> commandOk "docker" [kind, "rm", name]
         _ | "No such" `T.isInfixOf` decodeUtf8 (LBS.toStrict err) -> pass
         _ -> fail ("cannot inspect owned " <> kind <> " " <> name <> ": " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
@@ -162,16 +179,12 @@ freeHostPort =
 uniqueSuffix :: IO String
 uniqueSuffix = show <$> (randomIO :: IO Word64)
 
-{- | Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
-'False' means it never held inside the budget.
--}
+-- | Poll logs at 250 ms intervals, returning False when the attempt budget expires.
 awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
 awaitContainerLog cname matches attempts =
     pollUntil attempts 250000 id (matches <$> containerLogs cname)
 
-{- | A container's combined stdout+stderr so far (@docker logs@). Empty on any docker
-error, such as the container not existing yet, mid image-pull.
--}
+-- | Read combined container output. Missing resources produce empty diagnostic evidence.
 containerLogs :: String -> IO Text
 containerLogs cname =
     handleAny (\_ -> pure "") $ do
