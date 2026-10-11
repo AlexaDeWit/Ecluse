@@ -181,11 +181,11 @@ The single-read 8% margin rounded up to a quarter gives the 3.25 read regression
 All retained envelopes and the 1,024-byte forcing allowance pass in that run and remain unchanged.
 The [earlier packed qualification](#qualified-packed-integration) retains its original 3.2 charge and 2.75 limit as historical evidence.
 
-Retaining canonical PyPI sidecars raises the measured output working set. At `90cd71db7b4c0ab31336c1e086b1f77f8447a485`,
+Retaining canonical PyPI sidecars raises the measured output working set. At checkout `372e02a14222e65128bd6cae284e335ca4e41b46`,
 NumPy's disjoint merge reaches 1.476585 per basis byte, the largest qualifying realistic shape among all 84 listing rows.
 The documented 25% margin rounded up to a tenth gives 1.9. The 8% margin rounded up to a quarter gives a 1.75 regression limit.
 The same run's 48 retained probes include a maximum twice-encoded/source ratio of 1.753574 for requests, within the charge.
-Heavy NumPy's largest output ratio is 1.734852, also within the charge. The source is [Build job 114580453453](https://github.com/AlexaDeWit/Ecluse/actions/runs/38176610435/job/114580453453).
+Heavy NumPy's largest output ratio is 1.734852, also within the charge. The source is [Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296).
 A representation change requires all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
 The historical snapshots below retain their original measurements and limits.
 
