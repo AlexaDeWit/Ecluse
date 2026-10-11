@@ -35,7 +35,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Json (asObject, fieldAt, textAtPath)
+import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -75,8 +75,19 @@ indexSpec = describe "the served Simple index" $ do
     it "omits the PEP 658 sidecar keys, because it serves no .metadata companion" $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
-            servedKeys resp `shouldNotContain` ["core-metadata"]
-            servedKeys resp `shouldNotContain` ["data-dist-info-metadata"]
+            for_ sidecarKeys (`excludesSidecar` resp)
+            let expectedFiles = map (withoutSidecars . fileOn "http://ecluse.test/pypi") ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
+            servedFiles resp `shouldBe` expectedFiles
+
+    for_ sidecarKeys $ \key ->
+        it ("recognises " <> toString key <> " and rejects its retained-response control") $
+            withPyPIProxy publicIndex $ \app -> do
+                resp <- getIndex app
+                let input = resp{simpleBody = encode (publicIndex "http://upstream.test")}
+                    retained = resp{simpleBody = encode (withKeys ["files" .= map (withKeys [(Key.fromText key, object ["sha256" .= sha256Digest])]) (servedFiles resp)] (decodedBody resp))}
+                servedKeys input `shouldContain` [key]
+                servedKeys retained `shouldContain` [key]
+                excludesSidecar key retained `shouldThrow` namedKeyFailure key
 
     it "preserves the digest a client verifies the download against" $
         withPyPIProxy publicIndex $ \app -> do
@@ -245,30 +256,24 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
             hits <- privateHits proxy
             map fst hits `shouldNotContain` [sdistPath]
 
--- | Drive the index read a modern resolver makes.
 getIndex :: Application -> IO SResponse
 getIndex = getPath "/pypi/simple/requests"
 
--- | The mount-relative path of the source distribution every example asks for.
 sdistPath :: ByteString
 sdistPath = "/pypi/simple/requests/requests-2.34.2.tar.gz"
 
--- | Serve a public index and its distribution bytes from a local upstream.
 withPyPIProxy :: (Text -> Value) -> (Application -> IO a) -> IO a
 withPyPIProxy indexFor k = withPyPIProxyOver indexFor publicPypiDeps (k . proxyApp)
 
--- | 'withPyPIProxy' on a mount whose operator configured a help message.
 withHelpfulPyPIProxy :: (Application -> IO a) -> IO a
 withHelpfulPyPIProxy k =
     withPyPIProxyOver publicIndex helpfulDeps (k . proxyApp)
   where
     helpfulDeps port = (\d -> d{pdHelp = Just (mkHelpMessage helpMessage)}) <$> publicPypiDeps port
 
--- | Keep the public upstream unreachable so only private reads can succeed.
 withPrivatePyPIProxy :: (Text -> Value) -> (PyPIProxy -> IO a) -> IO a
 withPrivatePyPIProxy indexFor = withPyPIProxyOver indexFor privatePypiDeps
 
--- | A booted proxy, with every request its upstream took and the credential each carried.
 data PyPIProxy = PyPIProxy
     { proxyApp :: Application
     -- ^ The proxy under test.
@@ -307,16 +312,13 @@ upstreamApp indexFor observe request respond = do
         ["simple", _, _] -> respond (responseLBS status200 [("Content-Type", "application/octet-stream")] artifactBytes)
         _ -> respond (responseLBS status404 [] "")
 
--- | The mount's serve dependencies over the one upstream bound as the public one.
 publicPypiDeps :: Int -> IO PackumentDeps
 publicPypiDeps upstreamPort = pypiDeps Nothing (loopbackRegistryUrl (localhost upstreamPort))
 
--- | A private-only fixture with no reachable public fallback.
 privatePypiDeps :: Int -> IO PackumentDeps
 privatePypiDeps upstreamPort =
     pypiDeps (Just (loopbackRegistryUrl (localhost upstreamPort))) (loopbackRegistryUrl "http://localhost:1")
 
--- | The mount's serve dependencies over the given upstreams, with the age quarantine cleared.
 pypiDeps :: Maybe RegistryUrl -> RegistryUrl -> IO PackumentDeps
 pypiDeps privateBase publicBase = do
     prepared <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
@@ -325,11 +327,9 @@ pypiDeps privateBase publicBase = do
             { pdMountBaseUrl = "http://ecluse.test/pypi"
             }
 
--- | A fixed "now", so the age axis is deterministic.
 servedAt :: UTCTime
 servedAt = UTCTime (fromGregorian 2026 6 20) 0
 
--- | Include both PEP 658 sidecar spellings on two files from one release.
 publicIndex :: Text -> Value
 publicIndex authority =
     object
@@ -338,11 +338,9 @@ publicIndex authority =
         , "files" .= map (fileOn authority) ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
         ]
 
--- | A private index naming its own authority, the shape a self-hosted index publishes.
 privateIndexOnItself :: Text -> Value
 privateIndexOnItself = publicIndex
 
--- | A private index naming a files host neither its own authority nor PyPI's declared one.
 privateIndexOn :: Text -> Text -> Value
 privateIndexOn foreign_ _authority = publicIndex foreign_
 
@@ -355,48 +353,41 @@ fileOn authority filename =
         , "requires-python" .= (">=3.10" :: Text)
         , "upload-time" .= ("2026-01-01T00:00:00Z" :: Text)
         , "core-metadata" .= object ["sha256" .= sha256Digest]
+        , "dist-info-metadata" .= object ["sha256" .= sha256Digest]
         , "data-dist-info-metadata" .= object ["sha256" .= sha256Digest]
         ]
 
--- | The digest the index advertises, which is the one the served bytes hash to.
 sha256Digest :: Text
 sha256Digest = hexSha256Of (LBS.toStrict artifactBytes)
 
--- | The bytes the upstream serves for any distribution file.
 artifactBytes :: LByteString
 artifactBytes = "python distribution bytes"
 
--- | The credential a pip client presents, and the header value it travels in.
 clientCredential :: Header
 clientCredential = ("Authorization", basicCredential)
 
 basicCredential :: ByteString
 basicCredential = "Basic X190b2tlbl9fOnByaXZhdGUtdG9rZW4="
 
--- | The message an operator configured, and the body every refusal then carries.
 helpMessage :: Text
 helpMessage = "ask #platform for access"
 
 helpBytes :: LByteString
 helpBytes = LBS.fromStrict (encodeUtf8 helpMessage)
 
--- | The served index's PEP 700 versions array.
 servedVersions :: SResponse -> [Text]
 servedVersions resp = case fieldAt "versions" (decodedBody resp) of
     Just (Array versions) -> [v | String v <- toList versions]
     _ -> []
 
--- | The locations the served index names, in the order it named them.
 servedUrls :: SResponse -> [Text]
 servedUrls = mapMaybe (textAtPath ["url"]) . servedFiles
 
--- | The digests the served index carries, one per file.
 servedDigests :: SResponse -> [Text]
 servedDigests = mapMaybe digestOf . servedFiles
   where
     digestOf = textAtPath ["hashes", "sha256"]
 
--- | Every key the served file entries carry.
 servedKeys :: SResponse -> [Text]
 servedKeys = concatMap (map Key.toText . KeyMap.keys . asObject) . servedFiles
 
@@ -405,6 +396,17 @@ servedFiles resp = case fieldAt "files" (decodedBody resp) of
     Just (Array files) -> toList files
     _ -> []
 
--- | A response's status code, for an example that names the number rather than the constant.
 statusOf :: SResponse -> Int
 statusOf = statusCode . simpleStatus
+
+sidecarKeys :: [Text]
+sidecarKeys = ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"]
+
+excludesSidecar :: Text -> SResponse -> Expectation
+excludesSidecar key resp = servedKeys resp `shouldNotContain` [key]
+
+withoutSidecars :: Value -> Value
+withoutSidecars = Object . (\fields -> foldr (KeyMap.delete . Key.fromText) fields sidecarKeys) . asObject
+
+namedKeyFailure :: Text -> SomeException -> Bool
+namedKeyFailure key = T.isInfixOf key . toText . displayException
