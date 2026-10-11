@@ -85,8 +85,8 @@ literalSpec = describe "literal parity" $ do
         observed <- successful (directRead 64 True [packument (extended "\"scripts\":{\"build\":false,\"build\":\"ok\"}")])
         map (fst . snd) (observedFacts observed) `shouldBe` [False]
     it "preserves first containers, alias keys and source field order" $ do
-        let body = "{\"time\":{\"alias\":\"2020-01-01T00:00:00Z\"},\"dist-tags\":{\"latest\":\"alias\"},\"name\":\"thing\",\"versions\":{\"alias\":" <> baseRelease <> ",\"alias\":null},\"versions\":{\"other\":null}}"
-        assertParity 64 True [body]
+        let orderedBody = "{\"time\":{\"alias\":\"2020-01-01T00:00:00Z\"},\"dist-tags\":{\"latest\":\"alias\"},\"name\":\"thing\",\"versions\":{\"alias\":" <> baseRelease <> ",\"alias\":null},\"versions\":{\"other\":null}}"
+        assertParity 64 True [orderedBody]
     it "matches depth refusals across each retained level and chunk boundary" $
         for_ [0 .. 10] $
             \depth -> assertParity depth True (byteChunks (packument (extended "\"license\":{\"type\":\"MIT\"},\"scripts\":{\"install\":\"\"}")))

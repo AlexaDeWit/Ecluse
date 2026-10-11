@@ -737,7 +737,7 @@ baseCollectField limits acc = \case
     TimeField key value ->
         Right
             acc
-                { baseProjectedTimes = baseFirstInsert key (decode parsePublishTime force InvalidPublishTime key value) (baseProjectedTimes acc)
+                { baseProjectedTimes = baseFirstInsert key (decodeEntry parsePublishTime force InvalidPublishTime key value) (baseProjectedTimes acc)
                 , baseProjectedBookkeeping =
                     if key == "created" || key == "modified"
                         then baseFirstInsert key value (baseProjectedBookkeeping acc)
@@ -745,9 +745,9 @@ baseCollectField limits acc = \case
                 }
     TagField _ _ | baseProjectedActiveContainer acc /= Just TagsContainer -> Right acc
     TagField key _ | Map.member key (baseProjectedTags acc) -> Right acc
-    TagField key value -> Right acc{baseProjectedTags = baseFirstInsert key (decode parseJSON (mkVersion Npm) InvalidDistTag key value) (baseProjectedTags acc)}
+    TagField key value -> Right acc{baseProjectedTags = baseFirstInsert key (decodeEntry parseJSON (mkVersion Npm) InvalidDistTag key value) (baseProjectedTags acc)}
   where
-    decode parse convert kind key value = case parseEither parse value of
+    decodeEntry parse convert kind key value = case parseEither parse value of
         Left err -> Left $! mkInvalidEntry kind key value (toText err)
         Right typed -> Right $! convert typed
 
@@ -793,7 +793,7 @@ baseKeepsPackedRelease :: BasePackedRead -> Text -> Bool
 baseKeepsPackedRelease (BasePackedRead acc _) = baseKeepsRelease acc
 
 basePackedStep :: Writer st -> Limits -> PackageName -> BasePackedRead -> NpmFieldOf () -> (Either LimitError BasePackedRead -> ST st r) -> ST st r
-basePackedStep writer limits name (BasePackedRead acc served) field next = case field of
+basePackedStep writer limits name (BasePackedRead acc heldReleases) field next = case field of
     VersionField key (Just ())
         | baseKeepsRelease acc key -> do
             sealed <- sealValue writer tarballHole
@@ -804,11 +804,11 @@ basePackedStep writer limits name (BasePackedRead acc served) field next = case 
             let !release = if baseRebases picked then sealed else withoutHole sealed
             next $! do
                 kept <- baseCollectRelease limits acc field key typed
-                pure (BasePackedRead kept ((key, release) : served))
+                pure (BasePackedRead kept ((key, release) : heldReleases))
         | otherwise -> discard writer >> unchanged
     _ -> unchanged
   where
-    unchanged = next $! (`BasePackedRead` served) <$> baseCollectField limits acc field
+    unchanged = next $! (`BasePackedRead` heldReleases) <$> baseCollectField limits acc field
     asRead original = \case
         Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
         other -> other
@@ -817,7 +817,7 @@ baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
 baseTypedMembers :: Pick
 baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
 baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
-baseFinishPacked limits requested authorPointer table (BasePackedRead acc served) = second document <$> baseFinishParts limits requested acc
+baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldReleases) = second document <$> baseFinishParts limits requested acc
   where
     document (BaseNpmParts name time) =
         PackedPackument
@@ -828,5 +828,5 @@ baseFinishPacked limits requested authorPointer table (BasePackedRead acc served
                     , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList time]))
                     ]
             , packumentTable = table
-            , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) served])
+            , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) heldReleases])
             }
