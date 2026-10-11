@@ -8,6 +8,7 @@ import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
+import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -15,7 +16,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SRI),
-    PackageDetails (pkgArtifacts),
+    PackageDetails (pkgArtifacts, pkgPublishedAt),
     PackageName,
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
@@ -39,7 +40,8 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (ppLatest, ppMetadata),
     newMirrorPublish,
  )
-import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Transience (WillResolve, WontResolve))
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
@@ -54,9 +56,10 @@ import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchF
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Worker.Support
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status404)
@@ -211,6 +214,24 @@ spec = do
                     outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
+        for_ [False, True] $ \poisonEvidence ->
+            it ("names a pure rule exception without fetching or publishing, evidence=" <> show poisonEvidence) $ do
+                let thrown = TestContractEscape "pure worker verdict"
+                    resolver name version =
+                        pure (VersionPresent (versionDocOf (sampleDetails name version){pkgPublishedAt = Just (impureThrow thrown)}) Nothing)
+                rules <-
+                    if poisonEvidence
+                        then prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
+                        else pure [constRule "PureBomb" (impureThrow thrown)]
+                let policies = npmPolicies (if poisonEvidence then resolver else presentResolver) rules
+                    name = if poisonEvidence then "AllowIfOlderThan" else "PureBomb"
+                withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                    runWM runtime (processJob job) >>= \case
+                        Retried BeforePublish reason -> reason `shouldSatisfy` T.isInfixOf (name <> ": the rule threw: " <> show thrown)
+                        other -> expectationFailure ("expected a named rule retry, got " <> show other)
+                    plDocuments <$> readIORef logRef `shouldReturn` []
+
         -- Every row drives 'unreachableUrl': skipping the re-evaluation would surface a Retried
         -- from the artifact fetch instead of the verdict the row names.
         for_ reEvaluationVerdicts $ \(label, policies, expected) ->

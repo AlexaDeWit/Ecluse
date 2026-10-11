@@ -11,6 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
+import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
@@ -18,7 +19,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (
     CodeExecSignal (RunsCodeOnInstall),
-    PackageDetails (pkgInstallCode),
+    PackageDetails (pkgInstallCode, pkgPublishedAt),
     PackageInfo (infoVersions),
     PackageName,
     mkPackageName,
@@ -63,6 +64,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule, prRule),
     Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
+    RuleEvidence (evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Deny),
     defaultPrecedence,
@@ -75,6 +77,7 @@ import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
 epoch :: UTCTime
@@ -97,6 +100,23 @@ spec = do
 because the store may hold the only surviving copy. -}
 verdictSpec :: Spec
 verdictSpec = describe "the delete verdict" $ do
+    for_ [False, True] $ \poisonEvidence ->
+        it ("keeps the poisoned version and deletes its neighbours, evidence=" <> show poisonEvidence) $ do
+            let versions = map npmVersion ["1.0.0", "2.0.0", "3.0.0"]
+                poisoned = npmVersion "2.0.0"
+                thrown = TestContractEscape "pure sweep verdict"
+                manifest = sampleManifest leftPadName versions
+                info = manifestInfo manifest
+                evidence = manifest{manifestInfo = info{infoVersions = Map.adjust (\details -> details{pkgPublishedAt = Just (impureThrow thrown)}) "2.0.0" (infoVersions info)}}
+                bomb = denyRule{prepEval = PerVersion (\_ ev -> pure (if evVersion ev == poisoned then impureThrow thrown else Deny Nothing exposure))}
+            age <- prepare inertRuleDeps [PrecededRule 300 AdmissionAndRevocation (AllowIfOlderThan 0)]
+            let rules = if poisonEvidence then age <> [denyRule] else [bomb]
+            store <- storeWith versions (Just (if poisonEvidence then evidence else manifest))
+            rec' <- recordingPorts generation
+            runStep rec' testPacing (mount store rules) (served ["1.0.0", "2.0.0", "3.0.0"]) `shouldReturn` Nothing
+            recResults rec' `shouldReturn` [SweepExamined, SweepExamined, SweepKept, SweepExamined, SweepDeleted, SweepDeleted]
+            held store `shouldReturn` [poisoned]
+
     it "deletes a version a named decisive deny condemns" $ do
         (rec', store) <- sweepOne [denyRule] ["1.0.0"] ["1.0.0"]
         recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]

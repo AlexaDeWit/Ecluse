@@ -24,7 +24,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import UnliftIO.Exception (finally, throwIO)
+import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
@@ -45,6 +45,7 @@ import Ecluse.Test.Rules (
     atDefaultPrecedence,
     atPrecedence,
     blockedBy,
+    constRule,
     evalRule,
     inertRuleDeps,
     isAllow,
@@ -53,7 +54,9 @@ import Ecluse.Test.Rules (
     isDeny,
     isNoDecision,
     isUndecidable,
+    mapPackageRead,
     mapResilience,
+    packageRule,
     sentences,
     servingRuleDeps,
     verdictSentence,
@@ -1075,6 +1078,66 @@ spec = do
                         `shouldBe` [ "scope is not the allow-listed @myorg"
                                    , "published only 1 day ago, minimum age is 7 days"
                                    ]
+
+    describe "verdict exceptions" $ do
+        let versions = [(pkg Nothing 30){evVersion = v} | v <- map (mkVersion Npm) ["1.0.0", "2.0.0", "3.0.0"]]
+            poisoned = mkVersion Npm "2.0.0"
+            thrown = TestContractEscape "pure verdict"
+            refusal name = Undecidable (WillResolve Nothing) (RuleUnable name (RuleThrew (show thrown)))
+            healthy = Admitted "AllowIfOlderThan" (PublishedLongEnough (30 * nominalDay) (7 * nominalDay)) []
+            bombVerdict ev = if evVersion ev == poisoned then impureThrow thrown else NoDecision FixesNoAdvisory
+
+        for_
+            [ ("the whole verdict", impureThrow thrown)
+            , ("an allow reason", Allow (impureThrow thrown))
+            , ("a deny reason", Deny Nothing (impureThrow thrown))
+            , ("an abstention reason", NoDecision (impureThrow thrown))
+            , ("an inability", CannotVet FailNoDecision (impureThrow thrown))
+            , ("an advisory generation", Deny (Just (impureThrow thrown)) FixesNoAdvisory)
+            , ("a later advisory identifier", Allow (Remediates (mkAdvisoryIds ("GHSA-first" :| [impureThrow thrown]))))
+            ]
+            $ \(label, verdict) ->
+                it ("refuses by name when a per-version rule throws in " <> label) $
+                    evalRules ctx [constRule "PureBomb" verdict] (pkg Nothing 0)
+                        `shouldReturn` refusal "PureBomb"
+
+        it "refuses only the poisoned verdict across one listing" $ do
+            let bomb = PreparedRule "PureBomb" 300 (PerVersion (\_ -> pure . bombVerdict))
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion versions `shouldReturn` [healthy, refusal "PureBomb", healthy]
+
+        it "refuses only the poisoned publish time across one listing" $ do
+            rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx rules
+            let evidence = [if evVersion ev == poisoned then ev{evPublishedAt = Known (Just (impureThrow thrown))} else ev | ev <- versions]
+            traverse decideVersion evidence `shouldReturn` [healthy, refusal "AllowIfOlderThan", healthy]
+            evalRules ctx rules (pkg Nothing 30){evPublishedAt = Known (Just (impureThrow thrown))}
+                `shouldReturn` refusal "AllowIfOlderThan"
+
+        it "refuses only the poisoned advisory verdict without poisoning the shared read" $ do
+            reads <- newIORef (0 :: Int)
+            let bomb =
+                    mapPackageRead
+                        (\packageRead -> packageRead{prVerdict = const bombVerdict})
+                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing (modifyIORef' reads (+ 1)) (NoDecision FixesNoAdvisory))
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion versions `shouldReturn` [healthy, refusal "AdvisoryBomb", healthy]
+            readIORef reads `shouldReturn` 1
+
+        it "keeps a first-version advisory fault local when the source observer evaluates it" $ do
+            reports <- newIORef []
+            let reporter = noSourceReporter{reportSource = evaluate >=> (\health -> modifyIORef' reports (health :))}
+                bomb =
+                    mapPackageRead
+                        (\packageRead -> packageRead{prVerdict = const bombVerdict, prReporter = reporter})
+                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing pass (NoDecision FixesNoAdvisory))
+                firstPoisoned = filter ((== poisoned) . evVersion) versions <> filter ((/= poisoned) . evVersion) versions
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion firstPoisoned `shouldReturn` [refusal "AdvisoryBomb", healthy, healthy]
+            readIORef reports `shouldReturn` [SourceUnavailable "AdvisoryBomb" (RuleThrew (show thrown))]
 
     describe "properties" $ do
         it "an empty rule set always denies by default" $
