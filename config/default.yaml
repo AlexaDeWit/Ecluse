@@ -217,7 +217,7 @@ advisories:
 #   # v1, or a layout that hides the limit, set this by hand or the process boots with
 #   # no heap ceiling.
 #   maxHeapBytes: 1073741824
-#   # Concurrent metadata operations, computed from cores independently of memory.
+#   # Concurrent metadata operations: max(8, 20 x capabilities), independent of memory.
 #   # A positive explicit value stays exact, and it also sizes the waiting room at the
 #   # memory gate. A request waits up to 1 s at either gate, then gets 503 with
 #   # Retry-After: 1. Treat these responses as backpressure.

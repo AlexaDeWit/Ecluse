@@ -89,7 +89,7 @@ spec = describe "resolveBootPlan" $ do
             `shouldBe` [ "runtime: private connection pool 256 (computed from file-descriptor limit 1024)"
                        , "runtime: public connection pool 128 (computed from file-descriptor limit 1024)"
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
-                       , "runtime: serve admission 20 (computed from 2 capabilities)"
+                       , "runtime: serve admission 40 (computed from 2 capabilities)"
                        , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
                        , "memory plan: request byte cap 26214400" <> fallbackClause
                        , "memory plan: cache byte bound 268435456" <> fallbackClause
