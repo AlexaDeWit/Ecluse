@@ -33,8 +33,10 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Response (mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
+import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -44,6 +46,7 @@ import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, selfBaseUrl)
 
 spec :: Spec
 spec = do
+    servingContract "pypi" pypiServingDriver
     indexSpec
     availabilitySpec
     conditionalFloorSpec
@@ -158,20 +161,6 @@ mixedIntegrityIndex authority =
 
 artifactSpec :: Spec
 artifactSpec = describe "the served distribution file" $ do
-    it "streams the bytes at the URL the served index named" $
-        withPyPIProxy publicIndex $ \app -> do
-            resp <- getPath sdistPath app
-            simpleStatus resp `shouldBe` status200
-            simpleBody resp `shouldBe` artifactBytes
-
-    it "serves bytes that hash to the sha256 the index advertised for them" $
-        -- The index promises a digest and the relay must not decompress or otherwise alter what
-        -- it streams, or every client's integrity check would fail on a file Écluse served.
-        withPyPIProxy publicIndex $ \app -> do
-            index <- getIndex app
-            file <- getPath sdistPath app
-            servedDigests index `shouldSatisfy` all (== hexSha256Of (LBS.toStrict (simpleBody file)))
-
     it "denies a file naming another project, which is a path-confusion attempt" $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getPath "/pypi/simple/requests/urllib3-2.0.0.tar.gz" app

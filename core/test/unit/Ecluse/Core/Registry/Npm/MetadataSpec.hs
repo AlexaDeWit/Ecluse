@@ -77,6 +77,7 @@ import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Contract.Metadata.Projection (ProjectionDriver (..), metadataProjectionContract)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
 import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
@@ -90,6 +91,7 @@ import Ecluse.Test.Support (expectRight)
 -- | Metadata projection outcomes, including duplicate-key and optional-container parity.
 spec :: Spec
 spec = do
+    metadataProjectionContract "npm" projectionDriver
     projectNpmManifestSpec
     projectNpmVersionSpec
     packedReadSpec
@@ -356,28 +358,6 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
                 raw `shouldSatisfy` isObject
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
-    it "reports an undecodable body" $
-        projectNpmManifest defaultLimits (unscopedNpm "is-odd") "{not json"
-            `shouldBe` Left MetadataUndecodable
-
-    it "reports an absent top-level name as undecodable" $
-        projectNpmManifest defaultLimits (unscopedNpm "is-odd") (BL.toStrict (encode (object ["versions" .= object []])))
-            `shouldBe` Left MetadataUndecodable
-
-    it "reports a self-reported different name as a name mismatch (the anti-shadowing distinction)" $
-        projectNpmManifest defaultLimits (unscopedNpm "is-odd") (manifestBytes "is-even" ["1.0.0"])
-            `shouldBe` Left (MetadataNameMismatch "is-even")
-
-    it "reports a version-count breach as a bound breach" $
-        projectNpmManifest (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0", "2.0.0"])
-            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
-
-    it "reports an artifact-count breach as a bound breach, and passes a document at the ceiling" $ do
-        let body = manifestBytes "is-odd" ["1.0.0", "2.0.0"]
-        projectNpmManifest (defaultLimits{maxArtifactCount = 1}) (unscopedNpm "is-odd") body
-            `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
-        projectNpmManifest (defaultLimits{maxArtifactCount = 2}) (unscopedNpm "is-odd") body `shouldSatisfy` isRight
-
     it "counts only the releases that project toward the artifact ceiling" $ do
         let unprojected = object ["name" .= ("is-odd" :: Text), "version" .= ("2.0.0" :: Text)]
             body = BL.toStrict (encode (object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= versionObject "is-odd" "1.0.0", "2.0.0" .= unprojected]]))
@@ -436,35 +416,15 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
             selectNpmVersionDoc (mkVersion Npm v) (fst npmCached raw) `shouldBe` (vdRaw =<< vrVersion selected)
         selectNpmVersionDoc (mkVersion Npm "9.9.9") (fst npmCached raw) `shouldBe` Nothing
 
-    it "reports a version absent from a sound packument as a forwarded miss (Right Nothing)" $
-        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "9.9.9") (richPackumentBytes "is-odd" ["1.0.0"])
-            `shouldBe` Right Nothing
-
     it "drops a malformed requested-version object as a forwarded miss (Right Nothing), as the full path would" $ do
         let body = BL.toStrict . encode $ object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= object ["name" .= ("is-odd" :: Text)]]]
         selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
             `shouldBe` Right Nothing
 
-    it "reports an undecodable body" $
-        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") "{not json"
-            `shouldBe` Left MetadataUndecodable
-
     it "extracts usable data without requiring trailing-data validity" $ do
         let body = richPackumentBytes "is-odd" ["1.0.0"]
         selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (body <> " trailing")
             `shouldBe` selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
-
-    it "reports an absent top-level name as undecodable" $
-        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (BL.toStrict (encode (object ["versions" .= object []])))
-            `shouldBe` Left MetadataUndecodable
-
-    it "reports a self-reported different name as a name mismatch (the anti-shadowing distinction)" $
-        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-even" ["1.0.0"])
-            `shouldBe` Left (MetadataNameMismatch "is-even")
-
-    it "reports a version-count breach as a bound breach" $
-        selectedDetails (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0", "2.0.0"])
-            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
     it "reports a nesting-depth breach as a bound breach" $
         selectedDetails (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
@@ -831,3 +791,15 @@ baseFinishPacked limits requested authorPointer table (BasePackedRead acc heldRe
             , packumentTable = table
             , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) heldReleases])
             }
+
+projectionDriver :: ProjectionDriver
+projectionDriver =
+    ProjectionDriver
+        { projectFull = \limits -> fmap fst . projectNpmManifest limits (unscopedNpm "is-odd")
+        , projectSelected = \limits version -> selectedDetails limits (unscopedNpm "is-odd") (mkVersion Npm version)
+        , projectionDocument = richPackumentBytes
+        , projectionPackageName = "is-odd"
+        , projectionOtherName = "is-even"
+        , projectionVersions = ["1.0.0", "2.0.0"]
+        , projectionMissingName = BL.toStrict (encode (object ["versions" .= object []]))
+        }

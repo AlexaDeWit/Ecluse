@@ -13,7 +13,9 @@ import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Server.Pipeline.ServingDriver (npmServingDriver)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
@@ -25,6 +27,7 @@ import UnliftIO.Exception (throwIO)
 
 spec :: Spec
 spec = do
+    servingContract "npm" npmServingDriver
     mergeSpec
     availabilitySpec
     cacheSpec
@@ -36,22 +39,6 @@ spec = do
 
 mergeSpec :: Spec
 mergeSpec = describe "multi-upstream merge (not fallback)" $ do
-    it "serves the union of trusted-private and gated-public versions" $ do
-        privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
-        publicUp <-
-            servingUpstream
-                ( encodePackument
-                    ( packument
-                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
-                        "2.0.0"
-                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
-                    )
-                )
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0", "2.0.0"]
-
     it "gates public versions through the rules while trusting private ones" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <-
@@ -86,22 +73,6 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "1.0.0")
 
-    it "filters a hashless public version out of the served listing (integrity-presence policy)" $ do
-        privateUp <- failingUpstream
-        publicUp <-
-            servingUpstream
-                ( encodePackument
-                    ( packument
-                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
-                        "1.0.0"
-                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
-                    )
-                )
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
-
     it "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)" $ do
         privateUp <- failingUpstream
         publicUp <-
@@ -117,15 +88,6 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
-
-    it "drops a hashless trusted-private version from the listing by default (uniform floor)" $ do
-        privateUp <-
-            servingUpstream
-                (encodePackument (privatePackument [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
-        publicUp <- failingUpstream
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 403
 
     it "rejects a public version whose only digest is below the floor (SHA-1 shasum)" $ do
         privateUp <- failingUpstream
@@ -516,28 +478,6 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
 
 packumentHeadSpec :: Spec
 packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no body)" $ do
-    it "answers a 200 HEAD with the GET's status, ETag, and Content-Length but no body" $ do
-        (privateUp, publicUp) <- twoServingUpstreams
-        withProxy privateUp publicUp Nothing $ \app -> do
-            getResp <- getThing Nothing app
-            headResp <- headThing Nothing app
-            status getResp `shouldBe` 200
-            status headResp `shouldBe` 200
-            simpleBody headResp `shouldBe` ""
-            header "ETag" headResp `shouldSatisfy` isJust
-            header "ETag" headResp `shouldBe` header "ETag" getResp
-            header "Content-Length" headResp
-                `shouldBe` Just (show (LBS.length (simpleBody getResp)))
-
-    it "answers a conditional HEAD that matches our ETag with a bodiless 304" $ do
-        (privateUp, publicUp) <- twoServingUpstreams
-        withProxy privateUp publicUp Nothing $ \app -> do
-            firstResp <- getThing Nothing app
-            etag <- etagOf firstResp
-            headResp <- headThingWith [("If-None-Match", etag)] app
-            status headResp `shouldBe` 304
-            simpleBody headResp `shouldBe` ""
-
     it "403s a HEAD identically to the GET when every version is withheld by policy" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
