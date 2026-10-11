@@ -4,6 +4,7 @@
 
 module Ecluse.CompositionSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
@@ -35,8 +36,10 @@ import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
 import Ecluse.Composition.Validate (vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
+    Config (configMounts),
     ConfigError (..),
     FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
+    Mount (mountPolicy),
     PolicyError (UnknownRuleType),
     StoreTag (TagRegistry),
     loadConfig,
@@ -50,7 +53,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
-import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules (PreparedRule (prepName), bootOrder, evalRules, renderBootOrder)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), identityEvidence)
 import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -175,10 +178,11 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> do
-                -- 'PreparedRule' has no 'Show' (it carries an evaluator), so assert on
-                -- the count rather than the rules themselves.
                 let deps = bindingPackumentDeps binding
-                null (pdRules deps) `shouldBe` False
+                map prepName (bootOrder (pdRules deps)) `shouldBe` ["DenyInstallTimeExecution", "AllowIfRemediatesCve", "AllowIfOlderThan"]
+                cfg <- expectConfig staticEnvVars Nothing
+                fmap (renderBootOrder . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                    `shouldBe` Just ["rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)", "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)", "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"]
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "wires a deny limited to admission into each mount's gate, for npm and for PyPI" $ do

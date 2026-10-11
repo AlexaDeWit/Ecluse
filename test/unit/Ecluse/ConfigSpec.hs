@@ -8,9 +8,10 @@ module Ecluse.ConfigSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (addUTCTime, nominalDay)
 import Test.Hspec
 
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, npmMountDoc, pubUrlEnv)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, fixedNow, npmMountDoc, pubUrlEnv)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -18,7 +19,7 @@ import Ecluse.Config (
     Mount (mountPolicy, mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
-    PolicyError (MalformedRule),
+    PolicyError (MalformedRule, SuppressUnknownRule),
     QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
     advisoryAgeLines,
@@ -35,9 +36,12 @@ import Ecluse.Config (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
-import Ecluse.Core.Rules.Types (PrecededRule (prRule, ruleReach), RuleReach (AdmissionAndRevocation, AdmissionOnly), ruleName)
+import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext), Fact (Known), PrecededRule (prRule, ruleReach), RuleEvidence (evPublishedAt), RuleReach (AdmissionAndRevocation, AdmissionOnly), identityEvidence, revocationRules, ruleName)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
+import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
+import Ecluse.Test.Rules (admittedBy, blockedBy, inertRuleDeps, withInstallScripts)
 
 -- | Configuration loading and operator diagnostics.
 spec :: Spec
@@ -46,12 +50,12 @@ spec = do
         it "loads as a valid, self-contained backbone with no operator overlay" $
             loadConfig [] Nothing `shouldSatisfy` isRight
 
-        it "ships exactly the expected baseline rules under their default names" $
+        it "ships exactly the expected shared baseline rules under their default names" $
             case defaultPolicy of
                 RulePolicy rules ->
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
-        it "applies every shipped rule at both phases" $
+        it "applies every shared shipped rule at both phases" $
             map ruleReach (Map.elems (policyRules defaultPolicy))
                 `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation]
 
@@ -61,6 +65,56 @@ spec = do
                 (Right cfg, DeliveryBudget budget) ->
                     qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
                 (Left errs, _) -> expectationFailure ("the embedded defaults failed to load: " <> show errs)
+
+    describe "the shipped npm mount policy" $ do
+        it "activates no mount without an operator declaration" $
+            fmap (Map.keys . configMounts) (loadConfig [] Nothing) `shouldBe` Right []
+
+        for_ [("npm-only", "{\"mounts\":{\"npm\":{\"enabled\":true}}}"), ("both mounts", "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}")] $ \(label, doc) ->
+            it ("denies install scripts on the active npm mount with " <> label) $ do
+                cfg <- configFor doc
+                fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                    `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan", "AllowIfRemediatesCve"]
+                decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> blockedBy decision `shouldBe` Just "DenyInstallTimeExecution")
+                fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                    `shouldBe` Just ["AllowIfOlderThan", "AllowIfRemediatesCve"]
+
+        for_ [("PyPI-only", "{\"mounts\":{\"pypi\":{\"enabled\":true}}}"), ("both mounts", "{\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}")] $ \(label, doc) ->
+            it ("admits an old PyPI release that runs code on install with " <> label) $ do
+                cfg <- configFor doc
+                fmap (map (ruleName . prRule) . mountPolicy) (Map.lookup PyPI (configMounts cfg))
+                    `shouldBe` Just ["AllowIfOlderThan", "AllowIfRemediatesCve"]
+                decideOn cfg PyPI (scriptEvidence PyPI) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+        it "disables the npm default in the document or environment" $
+            for_ [configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}}}", expectConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"deny-scripts\":{\"enabled\":false}}")]) Nothing] $ \load -> do
+                cfg <- load
+                Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+                decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowIfOlderThan")
+
+        it "admits a named npm package with a pin above the deny's precedence" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing@1.0.0\",\"precedence\":301}}}}}"
+            decideOn cfg Npm (scriptEvidence Npm) >>= (\decision -> admittedBy decision `shouldBe` Just "AllowByIdentity")
+
+        it "widens the shipped npm deny from the operator layer" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm []
+            fmap (map (ruleName . prRule) . revocationRules . mountPolicy) (Map.lookup Npm (configMounts cfg))
+                `shouldBe` Just ["DenyInstallTimeExecution", "AllowIfOlderThan", "AllowIfRemediatesCve"]
+
+        it "keeps the shipped mount layer above a shared entry of the same name" $ do
+            cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution"]
+
+        it "refuses disabling the npm-only name in the shared list or the PyPI mount" $ do
+            loadConfig [] (Just "{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}")
+                `shouldBe` Left [PolicyErrors [SuppressUnknownRule "deny-scripts"]]
+            loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}}}")
+                `shouldBe` Left [PolicyErrors [SuppressUnknownRule "deny-scripts"]]
+
+        it "refuses a different type under the shipped npm name" $
+            loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}}}}}")
+                `shouldBe` Left [PolicyErrors [MalformedRule "deny-scripts" "\"type\" \"DenyByIdentity\" does not match the default rule it patches"]]
 
     describe "configuration type error paths" $ do
         forM_
@@ -153,14 +207,14 @@ spec = do
             length (mountPostureLines public) `shouldBe` 1
 
     describe "the phases a mount's rules apply at" $ do
-        it "applies every rule of a configuration that sets no appliesTo at both phases, on every mount" $ do
+        it "keeps shared rules at both phases while the npm default applies only at admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true}}}"
             Map.map (map ruleReach . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.fromList [(Npm, replicate 3 AdmissionAndRevocation), (PyPI, replicate 3 AdmissionAndRevocation)]
+                `shouldBe` Map.fromList [(Npm, [AdmissionOnly, AdmissionAndRevocation, AdmissionAndRevocation]), (PyPI, replicate 3 AdmissionAndRevocation)]
 
-        it "limits a rule to admission on the mount that says so, and on no other" $ do
-            cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\"]}}}}}"
-            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, []), (PyPI, ["DenyInstallTimeExecution"])]
+        it "limits a shared deny to admission only on the mount that says so" $ do
+            cfg <- configFor "{\"rules\":{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"withdrawn\":{\"appliesTo\":[\"admission\"]}}}}}"
+            Map.map limitedRules (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyInstallTimeExecution"]), (PyPI, ["DenyByIdentity"])]
 
         it "widens on one mount a rule the layer below limits to admission" $ do
             cfg <- configFor "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}},\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"deny-scripts\":{\"appliesTo\":[\"admission\",\"revocation\"]}}},\"pypi\":{\"enabled\":true}}}"
@@ -180,7 +234,7 @@ spec = do
                     (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false}}")])
                     (Just "{\"rules\":{\"min-age\":{\"appliesTo\":[\"admission\",\"revocation\"]}},\"mounts\":{\"npm\":{\"enabled\":true}}}")
             Map.map (map (ruleName . prRule) . mountPolicy) (configMounts cfg)
-                `shouldBe` Map.singleton Npm ["AllowIfRemediatesCve"]
+                `shouldBe` Map.singleton Npm ["DenyInstallTimeExecution", "AllowIfRemediatesCve"]
 
         it "refuses an ambiguous setting on a mount's own rules, for npm and for PyPI" $
             for_ ["npm", "pypi"] $ \mount ->
@@ -248,7 +302,7 @@ spec = do
             cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"renamed-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}},\"pypi\":{\"enabled\":true}}}"
             Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
 
-        it "does not require EPSS for the shipped policy" $ do
+        it "does not require EPSS for the resolved defaults" $ do
             cfg <- configFor privateMountDoc
             Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.singleton Npm EpssOptional
 
@@ -329,3 +383,14 @@ verdaccioMountDoc extra =
 -- | The npm mount's resolved mode, when the config serves one.
 modeOf :: Config -> Maybe MountMode
 modeOf cfg = regMode . mountRegistries <$> Map.lookup Npm (configMounts cfg)
+
+scriptEvidence :: Ecosystem -> RuleEvidence
+scriptEvidence eco =
+    withInstallScripts (identityEvidence name version){evPublishedAt = Known (Just (addUTCTime (negate (30 * nominalDay)) fixedNow))}
+  where
+    (name, version) = if eco == PyPI then (unscopedPyPI "thing", pypiVersion "1.0.0") else (thingName, v1_0_0)
+
+decideOn :: Config -> Ecosystem -> RuleEvidence -> IO Decision
+decideOn cfg eco evidence = case Map.lookup eco (configMounts cfg) of
+    Nothing -> fail ("expected an active mount: " <> show eco)
+    Just mount -> prepare inertRuleDeps (mountPolicy mount) >>= \rules -> evalRules (EvalContext fixedNow Nothing) rules evidence

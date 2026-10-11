@@ -447,7 +447,7 @@ for the mirror queue and the advisory store, as containers on a Docker network. 
 client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
-- Écluse blocks a rules-denied package and never mirrors it,
+- the shipped npm install-script deny blocks a package and never mirrors it,
 - the worker mirrors an installed package, and a new project then installs it through a second
   proxy while both public upstreams are down,
 - a dependency graph installed from the mirror alone leaves the tree that the same install left
@@ -455,7 +455,8 @@ client- and mirror-observable outcomes:
 - mirroring an older version after a newer one leaves the mirror's `dist-tags.latest` alone,
 - a tampered artifact fails the integrity gate and never publishes,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
-  served Simple index advertised, so the installed bytes are the advertised ones.
+  served Simple index advertised, so the installed bytes are the advertised ones,
+- the same admitted PyPI release serves its source distribution with the advertised sha256.
 
 The spec modules sit under `test/e2e/Ecluse/E2E/`, with one directory per ecosystem, so a module's
 name states the ecosystem of its cases. The suite's log heads each section with that name, less the
@@ -629,8 +630,8 @@ Each package has four legs:
 |---|---|
 | `full` | Decode, projection, rules, assembly, and serialisation of the whole document, under a one-day minimum age and no advisory database |
 | `singleVersion` | Selective projection of one version, forcing its artifact digests |
-| `fullShippedAdvisories` | `full` under the shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
-| `fullAllAdvisoryRules` | `full` under the shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
+| `fullShippedAdvisories` | `full` under the shared shipped policy (`AllowIfOlderThan` 7 days and `AllowIfRemediatesCve`), with the corpus advisories served |
+| `fullAllAdvisoryRules` | `full` under the shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5), with the corpus advisories served |
 
 The advisory legs use the captured corpus advisories in `bench/corpus/advisories/`, which the
 [advisory rule rows](#advisory-rule-rows) also read. Setup compiles them through
@@ -911,6 +912,11 @@ lists it right after that counterpart, so their allocations per success sit side
 | `pypi/index-cold-all-advisory-rules` | `pypi/index-cold` | The shipped policy with `DenyIfCve` at CVSS 8 and `DenyIfEpss` at 0.5, both failing closed | As `pypi/index-cold-advisories`, with `DenyIfEpss` never denying for the same reason |
 | `pypi/revalidate-not-modified-advisories` | `pypi/revalidate-not-modified` | The shipped policy | Nothing: `boto3` has no advisory, so this measures a present database and an absent package |
 
+The load harness boots the shipped mount policy. npm therefore also carries the admission-only
+`deny-scripts` rule, while PyPI carries only the shared defaults. Two captured npm versions declare
+`postinstall` and the default denies them. Check a scheduled-equivalent npm run against the existing
+success floors when changing this default, keeping every failure visible.
+
 A fail-closed advisory rule answers a version it cannot decide with 503, and the report counts
 that 503 with the admission refusals. When the proxy records such a failure in
 `ecluse.rule.effectful.failures` during the window, the scenario's section flags the count.
@@ -1099,12 +1105,15 @@ Capture byte sizes alone do not establish an expansion ratio. Replacing a captur
 
 ### Advisory rule rows
 
+These in-process rows use the shared shipped policy and omit the npm mount deny. Their figures
+remain comparable across ecosystems.
+
 The `rules with an advisory database (per package)` group shows what an advisory database adds to
 one request's rule phase. It measures the typescript, react, @types/node, and numpy captures, and
 reports time and RTS allocation per request like the other rows. Each iteration prepares the policy,
 decides every release, and builds the filter plan. A row with the fail-closed deny rules fails when
 any version ends undecidable, because an unanswered read would measure an outage instead of a
-decision. Under the shipped policy, an artifact that serves nothing makes the remediation rule
+decision. Under the shared shipped policy, an artifact that serves nothing makes the remediation rule
 abstain, which would pass for a speed-up. So setup also checks that each artifact serves ranges:
 the captured one for react and numpy, and the generated one for its targets and every filler
 package.
@@ -1113,7 +1122,7 @@ package.
 |---|---|---|
 | `shipped policy without a database` | None | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
 | `shipped policy over corpus advisories` | Captured advisories | `AllowIfOlderThan` (7 days) and `AllowIfRemediatesCve` |
-| `all advisory rules over corpus advisories` | Captured advisories | The shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
+| `all advisory rules over corpus advisories` | Captured advisories | The shared shipped policy plus fail-closed `DenyIfCve` (CVSS 8) and `DenyIfEpss` (EPSS 0.5) |
 | `all advisory rules over synthetic advisories` | Generated worst case | The same four rules, over typescript and numpy only |
 
 The captured advisories are the osv.dev records for the corpus packages, unchanged, under

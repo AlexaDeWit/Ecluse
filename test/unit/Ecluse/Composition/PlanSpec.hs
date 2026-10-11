@@ -101,8 +101,9 @@ spec = describe "resolveBootPlan" $ do
                        ]
                 <> mountPostureLines config
                 <> [ "rule boot order for mount npm:"
-                   , "rule 1: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
-                   , "rule 2: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
+                   , "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
+                   , "rule 2: AllowIfRemediatesCve (precedence 150, applies at admission and revocation)"
+                   , "rule 3: AllowIfOlderThan (precedence 100, applies at admission and revocation)"
                    ]
                 <> advisoryAgeLines config
                 <> advisoryEpssLines config
@@ -112,9 +113,8 @@ spec = describe "resolveBootPlan" $ do
     it "states each mount's rule order and the phases each rule applies at, for every role" $ do
         -- The Dredger and the checker print the whole order too, with the rules the Dredger skips.
         let envVars =
-                overrideEnv "ECLUSE_MOUNTS__NPM__RULES" "{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"appliesTo\":[\"admission\"]}}" $
-                    overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"requests\",\"appliesTo\":[\"admission\"]}}" $
-                        overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" codeArtifactEnvVars
+                overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"requests\",\"appliesTo\":[\"admission\"]}}" $
+                    overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" codeArtifactEnvVars
         config <- expectConfig envVars Nothing
         for_ everyBootRole $ \role ->
             fmap (filter (T.isPrefixOf "rule ") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))

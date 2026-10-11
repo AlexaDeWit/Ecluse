@@ -150,12 +150,14 @@ above every allow by default.
 | `AllowScope` | Allow | No | Allow-lists every package under a scope you name |
 | `AllowByIdentity` | Allow | No | Pins a package or a `package@version` by exact name |
 | `DenyByIdentity` | Deny | No | Revokes a package or version |
-| `DenyInstallTimeExecution` | Deny | No | Denies packages that run code at install time |
+| `DenyInstallTimeExecution` | Deny | npm only | `deny-scripts` denies npm install scripts at admission, leaving stored copies in place |
 | `DenyIfCve` | Deny | No | Denies versions with a known vulnerability above a severity you choose |
 | `DenyIfEpss` | Deny | No | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
 `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
-quarantine governs. The off rules opt in by name, and
+quarantine supplies the shared allow. The npm mount also denies install scripts by default.
+Disable `deny-scripts` under `mounts.npm.rules`, or add an `AllowByIdentity` pin with precedence above 300.
+The off rules opt in by name, and
 [Rule policy](@/docs/configuration.md#rule-policy) has their knobs.
 
 Independent of the rules, Écluse serves a public **file** only if it carries a digest that meets

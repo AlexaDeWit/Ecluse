@@ -131,7 +131,7 @@ loadConfig envVars mBytes = do
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
     globalPolicy <- resolveGlobalPolicy overridesAst
-    mounts <- case (publicUrlErrors appConfig, resolveMounts globalPolicy appConfig) of
+    mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
     Right (Config appConfig mounts)
@@ -190,14 +190,18 @@ resolveGlobalPolicy overridesAst = do
         Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
     first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
 
-resolveMounts :: RulePolicy -> AppConfig -> Either [ConfigError] MountMap
-resolveMounts globalPolicy appConfig =
+resolveMounts :: Value -> Value -> RulePolicy -> AppConfig -> Either [ConfigError] MountMap
+resolveMounts defaultAst overridesAst globalPolicy appConfig =
     case partitionEithers (map resolveOne (Map.toAscList (cfgMounts appConfig))) of
         ([], mounts) -> Right (Map.fromList mounts)
         (errs, _) -> Left (concat errs)
   where
     resolveOne (eco, mcfg) = case lefts (declarationErrors eco mcfg) of
-        [] -> (eco,) <$> resolveMode globalPolicy eco mcfg
+        [] -> do
+            shipped <- mountRulePatch defaultAst eco
+            declared <- mountRulePatch overridesAst eco
+            policy <- resolveMountPolicy globalPolicy shipped declared
+            (eco,) <$> resolveMode policy eco mcfg
         tagErrs -> Left tagErrs
 
 {- Every endpoint checked against the tag it was declared under, and the private upstream checked
@@ -216,15 +220,14 @@ readAndPublishTargets mcfg =
 
 -- A declared mirror target makes the mount mirrored, which then needs its private upstream.
 resolveMode :: RulePolicy -> Ecosystem -> MountConfig -> Either [ConfigError] Mount
-resolveMode globalPolicy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
+resolveMode policy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
     (Just mirrorTarget, Just privateUpstream) ->
-        resolveMirrored globalPolicy eco (preTarget privateUpstream) mirrorTarget mcfg
+        resolveMirrored policy eco (preTarget privateUpstream) mirrorTarget mcfg
     (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
-    (Nothing, mPrivate) -> resolveServeOnly globalPolicy eco (preTarget <$> mPrivate) mcfg
+    (Nothing, mPrivate) -> resolveServeOnly policy eco (preTarget <$> mPrivate) mcfg
 
 resolveMirrored :: RulePolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
-resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
-    policy <- resolveMountPolicy globalPolicy mcfg
+resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
     backend <- first (: []) (resolveStoreBackend eco mirrorTarget)
     Right $
         mountOf eco mcfg policy $
@@ -239,13 +242,19 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
                     }
 
 resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe Target -> MountConfig -> Either [ConfigError] Mount
-resolveServeOnly globalPolicy eco mPrivate mcfg = do
-    policy <- resolveMountPolicy globalPolicy mcfg
+resolveServeOnly policy eco mPrivate mcfg =
     Right (mountOf eco mcfg policy (ServeOnly (tgtUrl <$> mPrivate)))
 
-resolveMountPolicy :: RulePolicy -> MountConfig -> Either [ConfigError] RulePolicy
-resolveMountPolicy globalPolicy mcfg =
-    first (\errs -> [PolicyErrors errs]) (resolvePolicy globalPolicy (mntAdditionalRules mcfg))
+mountRulePatch :: Value -> Ecosystem -> Either [ConfigError] RulePatch
+mountRulePatch ast eco =
+    first (pure . ParseError . (prefix <>) . T.pack) $
+        parseRulesPatch (fromMaybe (Object mempty) (lookupPath ["mounts", ecosystemName eco] ast))
+  where
+    prefix = "mounts." <> ecosystemName eco <> ".rules parse error: "
+
+resolveMountPolicy :: RulePolicy -> RulePatch -> RulePatch -> Either [ConfigError] RulePolicy
+resolveMountPolicy shared shipped declared =
+    first (pure . PolicyErrors) (resolvePolicy shared shipped >>= (`resolvePolicy` declared))
 
 mountOf :: Ecosystem -> MountConfig -> RulePolicy -> MountMode -> Mount
 mountOf eco mcfg policy mode =

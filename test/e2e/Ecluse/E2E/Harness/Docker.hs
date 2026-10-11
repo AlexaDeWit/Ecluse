@@ -323,9 +323,8 @@ proxyEnv hostPort queueUrl =
     , -- The SQS endpoint override (AWS-SDK-standard), aimed at the ministack alias.
       ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , -- DenyInstallTimeExecution gives the deny scenario a rule to fire, and min-age drops to
-      -- zero because the shipped week would quarantine every freshly built fixture.
-      ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
+    , -- Fixture publishes clear quarantine. The shipped npm default supplies the install-script deny.
+      ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0}}")
     ]
         <> mirrorTargetEnv
         <> ministackAwsEnv

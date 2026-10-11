@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The configuration vocabulary: the settings records a load resolves to, the refusals their
-URL-valued keys carry, and the errors a refused load reports.
-
-Every type here is shared between the decoders ("Ecluse.Config.Parser", "Ecluse.Config.Aeson") and
-the composition root that reads them, so neither side imports the other. "Ecluse.Config" assembles
-them into a 'Config'.
+{- | Settings and load refusals shared by the decoders and composition root.
+"Ecluse.Config" resolves the settings into a 'Config'.
 -}
 module Ecluse.Config.Types (
     Url,
@@ -78,7 +74,7 @@ import Ecluse.Config.Advisory.Internal (
  )
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
-import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
+import Ecluse.Config.Rule (PolicyError, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (Scope)
@@ -286,7 +282,7 @@ newtype MountIntegrity = MountIntegrity
     }
     deriving stock (Eq, Show)
 
--- | One mount as the document declares it, before "Ecluse.Config" resolves it into a 'Mount'.
+-- | Endpoint and activation settings for one mount before resolution.
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
     {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
@@ -299,13 +295,10 @@ data MountConfig = MountConfig
     , mntPublicationTarget :: Maybe PublicationEndpoint
     , mntFirstParty :: Maybe FirstParty
     , mntIntegrity :: MountIntegrity
-    , mntAdditionalRules :: RulePatch
     }
     deriving stock (Eq, Show)
 
-{- | The resolved application configuration, one sub-record per document group. The document
-schema and this type mirror each other one to one.
--}
+-- | Application settings, before active mounts resolve their layered policies.
 data AppConfig = AppConfig
     { cfgServer :: ServerSettings
     , cfgQueue :: QueueSettings

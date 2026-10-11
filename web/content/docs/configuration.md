@@ -299,13 +299,47 @@ one:
 | Type | On by default | Description | Knobs |
 |---|---|---|---|
 | `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
-| `DenyInstallTimeExecution` | No | Denies a version that runs code at install time. Many legitimate packages do, so it ships off. | None |
+| `DenyInstallTimeExecution` | npm only | `deny-scripts` denies npm install scripts at admission. Stored copies stay. | None |
 | `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides both advisory denies. | `identity` |
 | `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
 | `DenyIfEpss` | No | Denies a version that a synced advisory marks as affected when its EPSS score meets a threshold. Ties with `DenyIfCve`. | `minEpss` (0-1), `onUnavailable` |
 | `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine and without consulting the advisory database. | `scope`, without the leading `@` |
 | `AllowIfRemediatesCve` | Yes | Provided by default with the name `remediation-fast-track`. Admits the exact fixed version a synced advisory names, ahead of the quarantine, if no other advisory still affects it. | None |
 | `AllowIfOlderThan` | Yes | Provided by default with the name `min-age`. Holds each new public version for the quarantine window, so a malicious publish is usually found and yanked before a build can install it. | `ageSeconds` (7 days by default) |
+
+The npm mount adds `deny-scripts` at precedence 300 with `appliesTo: [admission]`.
+The default applies only when you enable the npm mount. It does not enable a mount itself.
+PyPI inherits only the shared defaults, so an admitted release keeps its source distributions and wheels.
+
+Disable this default under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity`
+pin whose explicit `precedence` is above 300:
+
+```yaml
+mounts:
+  npm:
+    rules:
+      deny-scripts:
+        enabled: false
+```
+
+For a pin, keep the deny enabled and set:
+
+```yaml
+mounts:
+  npm:
+    rules:
+      pin-native-build:
+        type: AllowByIdentity
+        identity: native-package@1.0.0
+        precedence: 301
+```
+
+`ECLUSE_MOUNTS__NPM__RULES` carries the same patch as JSON, for example
+`'{"deny-scripts":{"enabled":false}}'`. Disabling `deny-scripts` in the shared `rules` object
+fails the load because that shared list defines no rule by this name.
+Mount rules resolve over the shared policy, then the shipped mount rules, then your mount patch.
+To extend the npm deny to stored copies, set
+`deny-scripts: {appliesTo: [admission, revocation]}` under `mounts.npm.rules`.
 
 The advisory rules carry details the table leaves out:
 
@@ -329,7 +363,7 @@ A `package@version` identity matches the version as Écluse keys it. For PyPI th
 PEP 440 spelling, which drops trailing zeros, so the release published as `1.0.0` is written `1`.
 
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
-`min-age`, suppresses the fast-track, and adds six more by name:
+`min-age`, suppresses the fast-track, and adds named rules:
 
 ```yaml
 rules:
@@ -337,23 +371,24 @@ rules:
     ageSeconds: 1209600
   remediation-fast-track:
     enabled: false
-  deny-scripts:
-    type: DenyInstallTimeExecution
   revoke-bad:
     type: DenyByIdentity
     identity: bad-package
   pin-fix:
     type: AllowByIdentity
     identity: left-pad@1.3.0
-  trust-our-scope:
-    type: AllowScope
-    scope: acme
   deny-known-cves:
     type: DenyIfCve
     minCvss: 8
   deny-exploitable-cves:
     type: DenyIfEpss
     minEpss: 0.5
+mounts:
+  npm:
+    rules:
+      trust-our-scope:
+        type: AllowScope
+        scope: acme
 ```
 
 The precedence values, the patch/add/suppress merge model, and the strict validation are in
@@ -362,8 +397,8 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 
 ### Where a rule applies
 
-A rule applies at two phases unless you limit it. Admission is the gate: a listing, an artifact
-request, and the mirror worker's check before it writes a version to your mirror target.
+A new rule applies at two phases unless you limit it. The shipped npm `deny-scripts` applies only
+at admission. Admission is the gate: a listing, an artifact request, and the mirror worker's check before it writes a version to your mirror target.
 Revocation is the Dredger's check of the versions your stores already hold. The `appliesTo` list
 on a rule names its phases:
 
