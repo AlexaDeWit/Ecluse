@@ -116,7 +116,9 @@ projectedEntryKey = \case
     ReleaseFile file -> artEntryKey (frArtifact file)
     UncoordinatedFile key _ -> key
 
--- | Group files by canonical release, keeping decode errors before filename errors.
+{- | Group files supplied in reverse source order, retaining original artifact and diagnostic order.
+Decode errors precede filename errors.
+-}
 projectSimpleIndex :: PackageName -> [InvalidEntry] -> [ProjectedFile] -> PackageInfo
 projectSimpleIndex name invalid files =
     PackageInfo
@@ -129,13 +131,13 @@ projectSimpleIndex name invalid files =
     (versions, fileDrops) = projectVersions name files
 
 projectVersions :: PackageName -> [ProjectedFile] -> (Map Text PackageDetails, [InvalidEntry])
-projectVersions name = foldr place (Map.empty, [])
+projectVersions name = foldl' place (Map.empty, [])
   where
-    place (ReleaseFile file) (byVersion, dropAcc) =
+    place (!byVersion, !dropAcc) (ReleaseFile file) =
         ( Map.alter (Just . projectDetails name file) (renderVersion (frVersion file)) byVersion
         , dropAcc
         )
-    place (UncoordinatedFile _ failure) (byVersion, dropAcc) = (byVersion, failure : dropAcc)
+    place (!byVersion, !dropAcc) (UncoordinatedFile _ failure) = (byVersion, failure : dropAcc)
 
 -- 'mkInvalidEntry' reduces the location to its authority before logging.
 uncoordinatedDrop :: IndexFile -> InvalidEntry

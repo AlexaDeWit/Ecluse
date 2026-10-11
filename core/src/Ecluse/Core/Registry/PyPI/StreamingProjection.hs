@@ -159,7 +159,7 @@ finishPackage requested acc = do
     unless (projectedShape acc) (Left MetadataUndecodable)
     traverse_ (Left . MetadataBoundExceeded) (projectedBound acc)
     let invalid = reverse (projectedFileDrops acc) <> reverse (projectedVersionDrops acc)
-    pure (projectSimpleIndex reported invalid (map fst (reverse (projectedFiles acc))))
+    pure (projectSimpleIndex reported invalid (map fst (projectedFiles acc)))
 
 -- Restore source order with every key evaluated, so the served list holds no decoded file.
 servedFiles :: [(ProjectedFile, FilePayload)] -> [(EntryKey, Value)]
