@@ -5,54 +5,79 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), decode, eitherDecodeStrict, encode, object, toJSON, (.=))
+import Control.Monad.ST (ST)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), decode, eitherDecodeStrict, encode, object, parseJSON, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.JsonStream.TokenParser (TokenResult)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Hedgehog (MonadTest, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Network.HTTP.Types.Header (hIfNoneMatch)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    PackageDetails,
-    PackageInfo (infoDistTags, infoName, infoVersions),
+    Artifact (artEntryKey, artHashes),
+    Availability (Deprecated),
+    CodeExecSignal (RunsCodeOnInstall),
+    InvalidEntry,
+    InvalidEntryKind (..),
+    PackageDetails (..),
+    PackageInfo (..),
     PackageName,
+    invalidKey,
+    invalidKind,
+    invalidValue,
+    mkInvalidEntry,
     renderPackageName,
  )
+import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource, TrustedSource), mergePackuments)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked)
-import Ecluse.Core.Registry.Json.Intern (InternTable)
-import Ecluse.Core.Registry.Json.Packed (packedEncodedLength, withoutHole)
-import Ecluse.Core.Registry.Json.Walk (Walked (..))
+import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName, internName, tableTexts)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable, packedEncodedLength, withoutHole)
+import Ecluse.Core.Registry.Json.Walk (Steps, Walked (..))
+import Ecluse.Core.Registry.Json.Writer (Pick (..), Writer, decodePicked, decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.Npm.Document (PackedPackument (packumentVersions), tarballUrl)
+import Ecluse.Core.Registry.Metadata.Projection (projectionResult, streamError, validateReportedName)
+import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole, tarballUrl)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Metadata (npmPackumentWalk, projectNpmPacked, projectNpmStream, selectNpmVersionDoc)
-import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), releaseUniqueFields)
-import Ecluse.Core.Registry.ServedDocument (RenderRefused)
+import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
+import Ecluse.Core.Registry.Npm.Reader (PackumentRead (WholePackument), npmWalk, releaseUniqueFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmFieldOf (..), versionListFields)
+import Ecluse.Core.Registry.Npm.Wire (distFields)
+import Ecluse.Core.Registry.ServedDocument (RenderRefused, rebaseArtifactUrl)
+import Ecluse.Core.Registry.WireSupport (checkNameAgreement, parsePublishTime)
 import Ecluse.Core.Security (
     BodyLimit (MetadataBodyLimit),
-    LimitError (TooDeeplyNested, TooManyArtifacts, TooManyVersions),
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
     Limits (maxArtifactCount, maxMetadataBytes, maxNestingDepth, maxVersionCount),
+    checkArtifactCount,
+    checkVersionCountOf,
     defaultLimits,
  )
+import Ecluse.Core.Server.Conditional (Conditional (..), ETag, evaluateETag, renderETag)
+import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
+import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName)
-import Ecluse.Test.Json (isObject, withKeys)
+import Ecluse.Test.Json (fieldAt, isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
@@ -67,10 +92,8 @@ spec = do
     projectNpmManifestSpec
     projectNpmVersionSpec
     packedReadSpec
+    integratedFactsSpec
 
-{- | The packed full read against the tree read: the same typed view and outcome, a document that
-decodes to the tree the tree read holds, and assembled listings that render to the same bytes.
--}
 packedReadSpec :: Spec
 packedReadSpec = describe "packed full read" $ do
     modifyMaxSuccess (const 1000) $ do
@@ -82,6 +105,7 @@ packedReadSpec = describe "packed full read" $ do
                 coverListing (mergedListing [tree])
                 fmap (second (snd npmCached)) tree === fmap (second (snd npmCached)) packed
                 served [tree] === served [packed]
+                fmap snd (packedFullRead chunks) === baseFullRead (readLimits chunks) (packageNameOf chunks) (bodyLimit chunks) chunks
 
         it "renders a listing merged from two sources, each packed over its own table, as the tree reads do" $
             hedgehog $ do
@@ -98,6 +122,7 @@ packedReadSpec = describe "packed full read" $ do
             isRight tree `shouldBe` True
             fmap (second (snd npmCached)) tree `shouldBe` fmap (second (snd npmCached)) packed
             served [tree] `shouldBe` served [packed]
+            fmap snd (packedFullRead [bytes]) `shouldBe` baseFullRead (readLimits [bytes]) (packageNameOf [bytes]) (bodyLimit [bytes]) [bytes]
 
         it ("stores the length a walk of the release measures, with and without its hole, for every release of the capture " <> cpPath package) $ do
             bytes <- readFileBS (cpPath package)
@@ -109,7 +134,7 @@ packedReadSpec = describe "packed full read" $ do
             -- A wrong length is wrong in most releases, and the first few name the fault.
             take 3 wrong `shouldBe` []
 
--- The releases each committed capture holds, which its stored length check reads in full.
+-- Freeze complete capture counts, including releases that policy rejects.
 captureReleases :: Map Text Int
 captureReleases =
     Map.fromList
@@ -124,7 +149,6 @@ captureReleases =
         , ("lodash", 117)
         ]
 
--- Both full reads of the same chunks through the production projection, each as the document it serves.
 bothFullReads :: [ByteString] -> (Either MetadataError (PackageInfo, CachedDoc), Either MetadataError (PackageInfo, CachedDoc))
 bothFullReads chunks =
     ( second (fst npmCached) <$> (first MetadataBoundExceeded (walkJsonChunks (bodyLimit chunks) (npmPackumentWalk limits name WholePackument (testTable releaseUniqueFields)) chunks) >>= projectNpmStream limits name captureRegistry)
@@ -134,7 +158,6 @@ bothFullReads chunks =
     limits = readLimits chunks
     name = packageNameOf chunks
 
--- The packed full read of the chunks through the production projection, and the table its walk ends with.
 packedFullRead :: [ByteString] -> Either MetadataError (InternTable, (PackageInfo, PackedPackument))
 packedFullRead chunks = do
     streamed <- first MetadataBoundExceeded (walkWritingChunks (bodyLimit chunks) (npmFullTestWalk limits name captureRegistry) chunks)
@@ -147,24 +170,20 @@ packedFullRead chunks = do
 bodyLimit :: [ByteString] -> BodyLimit
 bodyLimit = MetadataBodyLimit . sum . map BS.length
 
--- The default limits, with room for the chunks.
 readLimits :: [ByteString] -> Limits
 readLimits chunks = defaultLimits{maxMetadataBytes = max 1 (sum (map BS.length chunks))}
 
 captureRegistry :: Text
 captureRegistry = "https://registry.npmjs.org"
 
--- The capture's own package, or @thing@ for a generated body.
 packageNameOf :: [ByteString] -> PackageName
 packageNameOf chunks = case eitherDecodeStrict (mconcat chunks) of
     Right (Object fields) | Just (String reported) <- KeyMap.lookup "name" fields, Right parsed <- projectName reported -> parsed
     _ -> unscopedNpm "thing"
 
--- The listing served from the sources' reads, as 'mergedListing' renders it.
 served :: [Either MetadataError (PackageInfo, CachedDoc)] -> Maybe (Either RenderRefused LByteString)
 served = fmap snd . mergedListing
 
--- Label a rendered listing by whether it rebased a tarball URL and whether it served one as read.
 coverListing :: (MonadTest m) => Maybe (MergePlan, Either RenderRefused LByteString) -> m ()
 coverListing listing = do
     cover 10 "listing rendered" (isJust listing)
@@ -176,15 +195,153 @@ coverListing listing = do
         Just (Object document) | Just (Object versions) <- KeyMap.lookup "versions" document -> mapMaybe tarballUrl (KeyMap.elems versions)
         _ -> []
 
-{- The listing served from the sources' reads, the first trusted and the rest gated, with the first as
-the base, and its plan, or nothing when a read fails or no version is admitted. -}
+-- The first source is trusted and supplies the base document.
 mergedListing :: [Either MetadataError (PackageInfo, CachedDoc)] -> Maybe (MergePlan, Either RenderRefused LByteString)
-mergedListing results = do
-    sources <- traverse rightToMaybe results
-    (_, base) <- listToMaybe sources
-    let snapshots = [(index, Snapshot (digestOf (show index)) doc, Snapshot (digestOf (show index)) info) | (index, (info, doc)) <- zip [0 ..] sources]
-    plan <- mergePackuments [(if index == 0 then TrustedSource else GatedSource, info) | (index, _, info) <- snapshots]
-    pure (plan, serialiseMergedDocument (assembleMergedDocument "https://proxy.example/npm/" (Map.fromList [(index, doc) | (index, doc, _) <- snapshots]) plan (Just base)))
+mergedListing results = (\(plan, body, _) -> (plan, body)) <$> listingEvidence (zip (map (show :: Int -> ByteString) [0 ..]) results)
+
+listingEvidence :: [(ByteString, Either MetadataError (PackageInfo, CachedDoc))] -> Maybe (MergePlan, Either RenderRefused LByteString, ETag)
+listingEvidence results = do
+    sources <- traverse (traverse rightToMaybe) results
+    (_, (_, base)) <- listToMaybe sources
+    let snapshots = [(index, Snapshot (digestOf bytes) doc, Snapshot (digestOf bytes) info) | (index, (bytes, (info, doc))) <- zip [0 ..] sources]
+        provenance index = if index == 0 then TrustedSource else GatedSource
+        mount = "https://proxy.example/npm/"
+        pieces = [(provenance index, digestOf bytes, [(key, map artEntryKey (toList (pkgArtifacts details))) | (key, details) <- Map.toList (infoVersions info)]) | (index, (bytes, (info, _))) <- zip [0 :: Int ..] sources]
+    plan <- mergePackuments [(provenance index, info) | (index, _, info) <- snapshots]
+    pure (plan, serialiseMergedDocument (assembleMergedDocument mount (Map.fromList [(index, doc) | (index, doc, _) <- snapshots]) plan (Just base)), packumentETag mount [captureRegistry] (unscopedNpm "thing") pieces)
+
+integratedFactsSpec :: Spec
+integratedFactsSpec = describe "production direct facts against the frozen base" $ do
+    it "projects a successful release with key identity, empty hooks, time and integrity" $ do
+        let body = factsBody (policyRelease [("name", String "other-name"), ("version", String "other-version"), ("hasInstallScript", Bool False), ("scripts", object ["install" .= ("" :: Text), "build" .= ("work" :: Text)]), ("deprecated", Bool True), ("dist", object ["tarball" .= ("https://registry.npmjs.org/thing/-/one.tgz" :: Text), "shasum" .= validSha1, "integrity" .= validSha512Sri])])
+        assertIntegrated defaultLimits body
+        (info, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [body]) [body])
+        details <- expectRight (maybeToRight ("expected alias release" :: Text) (Map.lookup "alias" (infoVersions info)))
+        pkgName details `shouldBe` unscopedNpm "thing"
+        pkgVersion details `shouldBe` mkVersion Npm "alias"
+        pkgInstallCode details `shouldBe` RunsCodeOnInstall "declares install script(s): install"
+        pkgAvailability details `shouldBe` Deprecated
+        pkgPublishedAt details `shouldSatisfy` isJust
+        map artEntryKey (toList (pkgArtifacts details)) `shouldBe` [ObjectEntry "alias"]
+        map (length . artHashes) (toList (pkgArtifacts details)) `shouldBe` [2]
+        infoDistTags info `shouldBe` Map.singleton "latest" (mkVersion Npm "alias")
+        infoInvalidEntries info `shouldBe` []
+    for_ integratedReleases $ \(label, release) ->
+        it label $ assertIntegrated defaultLimits (factsBody release)
+
+    it "keeps original authors and sorted diagnostics through invalid fallback" $ do
+        let bad author = policyRelease [("author", author), ("scripts", Bool False)]
+            body = "{\"name\":\"thing\",\"versions\":{\"z\":" <> bad (String "original Alice") <> ",\"a\":" <> bad Null <> ",\"ok\":" <> policyRelease [] <> "},\"dist-tags\":{\"z\":false,\"a\":7},\"time\":{\"ok\":false,\"z\":false}}"
+        assertIntegrated defaultLimits body
+        (info, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [body]) [body])
+        map (\entry -> (invalidKind entry, invalidKey entry)) (infoInvalidEntries info)
+            `shouldBe` [(InvalidVersionManifest, "a"), (InvalidVersionManifest, "z"), (InvalidDistTag, "a"), (InvalidDistTag, "z"), (InvalidPublishTime, "ok")]
+        map (fieldAt "author" . invalidValue) (take 2 (infoInvalidEntries info)) `shouldBe` [Just Null, Just (String "original Alice")]
+        let absent = factsBody (policyRelease [("scripts", Bool False)])
+        (withoutAuthor, _) <- expectRight (directFullRead defaultLimits (unscopedNpm "thing") (bodyLimit [absent]) [absent])
+        map (fieldAt "author" . invalidValue) (infoInvalidEntries withoutAuthor) `shouldBe` [Nothing]
+
+    it "counts duplicate keys before name validation and counts only retained artifacts" $ do
+        let body = "{\"name\":\"different\",\"versions\":{\"alias\":" <> policyRelease [] <> ",\"alias\":null}}"
+            name = unscopedNpm "thing"
+            readWith limits bytes = directFullRead limits name (bodyLimit [bytes]) [bytes]
+        assertIntegrated defaultLimits{maxVersionCount = 1} body
+        readWith defaultLimits{maxVersionCount = 1} body `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+        assertIntegrated defaultLimits{maxArtifactCount = 0} body
+        readWith defaultLimits{maxArtifactCount = 0} body `shouldBe` Left (MetadataNameMismatch "different")
+        let mixed = "{\"name\":\"thing\",\"versions\":{\"bad\":null,\"alias\":" <> policyRelease [] <> "}}"
+        assertIntegrated defaultLimits{maxArtifactCount = 1} mixed
+        readWith defaultLimits{maxArtifactCount = 0} mixed `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 1 0))
+        readWith defaultLimits{maxArtifactCount = 1} mixed `shouldSatisfy` isRight
+
+    it "preserves first versions, containers, timestamps, tags and malformed first fields" $
+        for_ duplicateBodies (assertIntegrated defaultLimits)
+
+    it "preserves depth and late body refusals after successful release packing" $ do
+        let body = factsBody (policyRelease [("scripts", object ["install" .= ("" :: Text)]), ("license", object ["type" .= ("MIT" :: Text)])])
+        for_ [0 .. 8] $ \depth -> assertIntegrated defaultLimits{maxNestingDepth = depth} body
+        let chunks = [body, " trailing source bytes"]
+            bound = bodyLimit [body]
+            readWith walk = walk defaultLimits (unscopedNpm "thing") bound chunks
+        readWith directFullRead `shouldBe` readWith baseFullRead
+        readWith directFullRead `shouldBe` Left (MetadataBoundExceeded (BodyTooLarge bound))
+        for_ ["{\"name\":\"thing\",\"versions\":{\"alias\":" <> policyRelease [] <> "},\"time\":{\"alias\":", body <> " trailing"] $
+            assertIntegrated defaultLimits
+
+    it "preserves mixed packed and tree assembly, supported updates, ETags and conditional decisions" $ do
+        let bodies = [richPackumentBytes "thing" ["1.0.0", "2.0.0"], richPackumentBytes "thing" ["2.0.0", "3.0.0"]]
+            readWith walk body = second (fst npmPacked) <$> walk defaultLimits (unscopedNpm "thing") (bodyLimit [body]) [body]
+        baseSources <- traverse (expectRight . readWith baseFullRead) bodies
+        directSources <- traverse (expectRight . readWith directFullRead) bodies
+        for_ [False, True] $ \firstTree -> for_ [False, True] $ \secondTree -> do
+            let treeIf wanted source = if wanted then second (uncurry (.) npmCached) source else source
+                forms = zipWith treeIf [firstTree, secondTree]
+                updated (info, doc) = (info{infoVersions = Map.map (\details -> details{pkgPublishedAt = Nothing}) (Map.delete "1.0.0" (infoVersions info)), infoDistTags = mempty}, doc)
+                evidence sources = listingEvidence (zip bodies (map Right sources))
+            for_ [id, map updated] $ \update -> do
+                expected@(_, _, tag) <- expectRight (maybeToRight ("expected base listing" :: Text) (evidence (update (forms baseSources))))
+                actual@(_, rendered, actualTag) <- expectRight (maybeToRight ("expected direct listing" :: Text) (evidence (update (forms directSources))))
+                actual `shouldBe` expected
+                rendered `shouldSatisfy` isRight
+                for_ [[], [(hIfNoneMatch, "*")], [(hIfNoneMatch, "\"different\"")], [(hIfNoneMatch, encodeUtf8 (renderETag tag))], [(hIfNoneMatch, "W/" <> encodeUtf8 (renderETag tag))]] $ \headers ->
+                    evaluateETag headers actualTag `shouldBe` evaluateETag headers tag
+                evaluateETag [(hIfNoneMatch, encodeUtf8 (renderETag tag))] actualTag `shouldBe` NotModified tag
+                evaluateETag [] actualTag `shouldBe` Modified tag
+
+assertIntegrated :: Limits -> ByteString -> Expectation
+assertIntegrated limits body = for_ [[body], map BS.singleton (BS.unpack body)] $ \chunks ->
+    directFullRead limits name (bodyLimit chunks) chunks `shouldBe` baseFullRead limits name (bodyLimit chunks) chunks
+  where
+    name = unscopedNpm "thing"
+
+directFullRead :: Limits -> PackageName -> BodyLimit -> [ByteString] -> Either MetadataError (PackageInfo, PackedPackument)
+directFullRead limits name bound chunks = do
+    streamed <- first MetadataBoundExceeded (walkWritingChunks bound (npmFullTestWalk limits name captureRegistry) chunks)
+    projectNpmPacked limits name captureRegistry streamed
+
+baseFullRead :: Limits -> PackageName -> BodyLimit -> [ByteString] -> Either MetadataError (PackageInfo, PackedPackument)
+baseFullRead limits name bound chunks = do
+    streamed <- first MetadataBoundExceeded (walkWritingChunks bound setup chunks)
+    Walked table acc <- first (streamError limits) (streamValue streamed)
+    baseFinishPacked limits name pointer (docTable (tableTexts table)) acc
+  where
+    pointer = "See https://registry.npmjs.org/" <> renderPackageName name
+    setup :: ST st (TokenResult -> ST st (Steps (ST st) (Walked BasePackedRead)))
+    setup = do
+        let Interned authorKey withKey = internName (decodedName "author") (testTable releaseUniqueFields)
+            Interned author seeded = internName (decodedName pointer) withKey
+        writer <- newWriter (Just (authorKey, author))
+        pure (npmWalk writer (maxNestingDepth limits) WholePackument (basePackedStep writer limits name) baseKeepsPackedRelease seeded baseEmptyPackedRead)
+
+policyRelease :: [(Text, Value)] -> ByteString
+policyRelease fields = rawObject (fields <> [("name", String "thing"), ("version", String "wire-version"), ("dist", object ["tarball" .= ("https://registry.npmjs.org/thing/-/one.tgz" :: Text)])])
+
+factsBody :: ByteString -> ByteString
+factsBody release = "{\"name\":\"thing\",\"versions\":{\"alias\":" <> release <> "},\"time\":{\"alias\":\"2020-01-01T00:00:00Z\"},\"dist-tags\":{\"latest\":\"alias\"}}"
+
+integratedReleases :: [(String, ByteString)]
+integratedReleases =
+    [("optional " <> toString field <> " " <> show value, policyRelease [(field, value)]) | field <- ["scripts", "license", "_npmUser", "hasInstallScript", "deprecated", "name", "version"], value <- values]
+        <> [("dist " <> toString field <> " " <> show value, policyRelease [("dist", withKeys [(field, value)] dist)]) | field <- ["tarball", "shasum", "integrity", "unpackedSize"], value <- values <> [Number 1.5, Number 9223372036854775808]]
+        <> [("object " <> toString field <> "." <> toString member <> " " <> show value, policyRelease [(field, object [Key.fromText member .= value])]) | (field, members) <- [("license", ["type", "url"]), ("_npmUser", ["name", "email", "url"])], member <- members, value <- values]
+        <> [("script command " <> show value, policyRelease [("scripts", object ["build" .= value, "install" .= ("" :: Text)])]) | value <- values]
+        <> [("duplicate " <> toString field <> " " <> show first, policyRelease [(field, first), (field, second)]) | field <- ["license", "_npmUser", "hasInstallScript", "scripts", "name", "version", "dist"], (first, second) <- [(Null, Bool False), (Bool False, Null), (object [], Array mempty), (Array mempty, object [])]]
+        <> [("first script " <> show first, BS.dropEnd 1 (policyRelease []) <> ",\"scripts\":" <> rawObject [("build", first), ("build", second), ("install", String "")] <> "}") | (first, second) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
+        <> [("nested duplicate " <> toString field <> "." <> toString member <> " " <> show first, BS.dropEnd 1 (rawObject [("name", String "thing"), ("version", String "wire-version")]) <> "," <> BL.toStrict (encode field) <> ":" <> rawObject ([(member, first), (member, second)] <> required) <> (if field == "dist" then "}" else ",\"dist\":{\"tarball\":\"a.tgz\"}}")) | (field, member, required) <- [("license", "type", []), ("license", "url", []), ("_npmUser", "email", []), ("dist", "tarball", []), ("dist", "integrity", [("tarball", String "a.tgz")])], (first, second) <- [(String "ok", Bool False), (Bool False, String "ok"), (Null, String "ok")]]
+        <> [("tarball hole " <> toString url, policyRelease [("dist", object ["tarball" .= url])]) | url <- ["https://source.example/", "https://source.example/a.tgz ", "relative.tgz", "https://source.example/\233.tgz", "https://source.example/%2F.tgz", ""]]
+        <> [("Unicode commands and legacy licence", policyRelease [("scripts", object ["build" .= ("\233\128578" :: Text), "postinstall" .= ("" :: Text)]), ("license", object ["type" .= ("MIT OR Apache-2.0" :: Text)]), ("_npmUser", object ["name" .= ("\233\128578" :: Text)]), ("hasInstallScript", Bool False)])]
+  where
+    values = [Null, Bool False, Number 7, String "", String "work", Array mempty, object [], object ["nested" .= Bool True]]
+    dist = object ["tarball" .= ("https://registry.npmjs.org/thing/-/one.tgz" :: Text)]
+
+duplicateBodies :: [ByteString]
+duplicateBodies =
+    ["{\"name\":\"thing\",\"versions\":{\"alias\":" <> first <> ",\"alias\":" <> second <> "},\"versions\":{\"other\":" <> policyRelease [] <> "}}" | (first, second) <- [(policyRelease [], "null"), ("null", policyRelease []), (policyRelease [("scripts", Bool False)], policyRelease [])]]
+        <> ["{\"name\":\"thing\",\"versions\":" <> first <> ",\"versions\":" <> second <> "}" | (first, second) <- [("null", versions), ("[]", versions), (versions, "[]"), (versions, "null")]]
+        <> ["{\"name\":\"thing\",\"versions\":" <> versions <> ",\"time\":{\"alias\":false,\"alias\":\"2020-01-01T00:00:00Z\"},\"time\":{},\"dist-tags\":{\"latest\":7,\"latest\":\"alias\"},\"dist-tags\":{\"other\":\"alias\"}}"]
+        <> ["{\"name\":" <> first <> ",\"name\":\"thing\",\"versions\":" <> versions <> "}" | first <- ["null", "false", "\"thing\"", "\"different\""]]
+  where
+    versions = "{\"alias\":" <> policyRelease [] <> "}"
 
 projectNpmManifestSpec :: Spec
 projectNpmManifestSpec = describe "projectNpmManifest" $ do
@@ -243,7 +400,6 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
             Right (info, _raw) -> do
                 let keys = Map.keys (infoVersions info)
                     n = length keys
-                    -- A spread of versions across the packument (first, quartiles, last).
                     sample = mapMaybe (keys !!?) (ordNub [0, n `div` 4, n `div` 2, (3 * n) `div` 4, n - 1])
                 length sample `shouldSatisfy` (> 0)
                 forM_ sample $ \v ->
@@ -283,8 +439,6 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
 
     it "drops a malformed requested-version object as a forwarded miss (Right Nothing), as the full path would" $ do
         let body = BL.toStrict . encode $ object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= object ["name" .= ("is-odd" :: Text)]]]
-        -- The 1.0.0 manifest has no @dist@, so the projection drops it. That is a
-        -- genuine absence both the full and the selective path reach.
         selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
             `shouldBe` Right Nothing
 
@@ -462,7 +616,6 @@ versionObject name v =
         , "dist" .= object ["tarball" .= ("https://example.test/" <> name <> "-" <> v <> ".tgz")]
         ]
 
--- The details half of a selective read, for parity against the whole-document projection.
 selectedDetails :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 selectedDetails limits name version body = readDetails <$> projectNpmVersion limits name version body
 
@@ -524,3 +677,154 @@ compactRichVersion :: Text -> Text -> Value
 compactRichVersion name version = case richVersionObject name version of
     Object fields -> Object (KeyMap.insert "author" (String ("See https://registry.npmjs.org/" <> name)) (KeyMap.delete "maintainers" fields))
     other -> other
+
+-- Base b795016660d171db729bc773a9a8c495e38d3294, StreamingProjection blob 613b23160dbc3f3aa0ff9335bb2ea5b256306bd7.
+type BaseTypedRelease = Either InvalidEntry PackageDetails
+data BaseNpmProjection = BaseNpmProjection
+    { baseProjectedName :: Maybe Value
+    , baseProjectedVersions :: Map Text BaseTypedRelease
+    , baseProjectedTimes :: Map Text (Either InvalidEntry UTCTime)
+    , baseProjectedTags :: Map Text (Either InvalidEntry Version)
+    , baseProjectedBookkeeping :: Map Text Value
+    , baseProjectedCount :: Int
+    , baseProjectedContainers :: Set NpmContainer
+    , baseProjectedActiveContainer :: Maybe NpmContainer
+    , baseProjectedInvalidContainer :: Bool
+    }
+baseEmptyProjection :: BaseNpmProjection
+baseEmptyProjection =
+    BaseNpmProjection
+        { baseProjectedName = Nothing
+        , baseProjectedVersions = mempty
+        , baseProjectedTimes = mempty
+        , baseProjectedTags = mempty
+        , baseProjectedBookkeeping = mempty
+        , baseProjectedCount = 0
+        , baseProjectedContainers = mempty
+        , baseProjectedActiveContainer = Nothing
+        , baseProjectedInvalidContainer = False
+        }
+baseKeepsRelease :: BaseNpmProjection -> Text -> Bool
+baseKeepsRelease acc key = baseProjectedActiveContainer acc == Just VersionsContainer && Map.notMember key (baseProjectedVersions acc)
+baseCollectRelease :: Limits -> BaseNpmProjection -> NpmFieldOf release -> Text -> BaseTypedRelease -> Either LimitError BaseNpmProjection
+baseCollectRelease limits acc field key typed = (\counted -> counted{baseProjectedVersions = Map.insert key typed (baseProjectedVersions counted)}) <$> baseCollectField limits acc field
+baseCollectField :: Limits -> BaseNpmProjection -> NpmFieldOf release -> Either LimitError BaseNpmProjection
+baseCollectField limits acc = \case
+    IgnoredField -> Right acc{baseProjectedActiveContainer = Nothing}
+    BeginContainer container ->
+        Right
+            acc
+                { baseProjectedContainers = Set.insert container (baseProjectedContainers acc)
+                , baseProjectedActiveContainer = if Set.member container (baseProjectedContainers acc) then Nothing else Just container
+                }
+    InvalidContainer container ->
+        Right
+            acc
+                { baseProjectedContainers = Set.insert container (baseProjectedContainers acc)
+                , baseProjectedActiveContainer = Nothing
+                , baseProjectedInvalidContainer = baseProjectedInvalidContainer acc || Set.notMember container (baseProjectedContainers acc)
+                }
+    NameField value -> Right acc{baseProjectedName = baseProjectedName acc <|> Just value}
+    VersionField _ _ | baseProjectedActiveContainer acc /= Just VersionsContainer -> Right acc
+    VersionField _ _ -> do
+        let count = baseProjectedCount acc + 1
+        checkVersionCountOf limits count
+        pure acc{baseProjectedCount = count}
+    TimeField _ _ | baseProjectedActiveContainer acc /= Just TimeContainer -> Right acc
+    TimeField key _ | Map.member key (baseProjectedTimes acc) -> Right acc
+    TimeField key value ->
+        Right
+            acc
+                { baseProjectedTimes = baseFirstInsert key (decode parsePublishTime force InvalidPublishTime key value) (baseProjectedTimes acc)
+                , baseProjectedBookkeeping =
+                    if key == "created" || key == "modified"
+                        then baseFirstInsert key value (baseProjectedBookkeeping acc)
+                        else baseProjectedBookkeeping acc
+                }
+    TagField _ _ | baseProjectedActiveContainer acc /= Just TagsContainer -> Right acc
+    TagField key _ | Map.member key (baseProjectedTags acc) -> Right acc
+    TagField key value -> Right acc{baseProjectedTags = baseFirstInsert key (decode parseJSON (mkVersion Npm) InvalidDistTag key value) (baseProjectedTags acc)}
+  where
+    decode parse convert kind key value = case parseEither parse value of
+        Left err -> Left $! mkInvalidEntry kind key value (toText err)
+        Right typed -> Right $! convert typed
+
+baseFirstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
+baseFirstInsert = Map.insertWith (\_ old -> old)
+baseProjectRelease :: PackageName -> Text -> Value -> Either Text PackageDetails
+baseProjectRelease name key projected = case projectVersionEntryResult name (mkVersion Npm key) Nothing projected of
+    Left err -> Left (toText err)
+    Right details -> Right $! details
+baseInvalidRelease :: Text -> Value -> Text -> BaseTypedRelease
+baseInvalidRelease key whole reason = Left $! mkInvalidEntry InvalidVersionManifest key whole reason
+data BaseNpmParts = BaseNpmParts Value (Map Text Value)
+baseFinishParts :: Limits -> PackageName -> BaseNpmProjection -> Either MetadataError (PackageInfo, BaseNpmParts)
+baseFinishParts limits requested acc = do
+    when (baseProjectedInvalidContainer acc) (Left MetadataUndecodable)
+    reported <- validateReportedName projectName (baseProjectedName acc)
+    _ <- projectionResult (checkNameAgreement requested reported ())
+    first MetadataBoundExceeded (checkArtifactCount limits artifacts)
+    pure (package, BaseNpmParts (fromMaybe Null (baseProjectedName acc)) (baseProjectedBookkeeping acc))
+  where
+    artifacts = Map.foldl' (\seen details -> seen + length (pkgArtifacts details)) 0 (infoVersions package)
+    versions = Map.mapMaybe rightToMaybe (baseProjectedVersions acc)
+    times = Map.mapMaybe rightToMaybe (baseProjectedTimes acc)
+    tags = Map.mapMaybe rightToMaybe (baseProjectedTags acc)
+    stamp key details = details{pkgPublishedAt = Map.lookup key times}
+    drops = lefts . Map.elems
+    package =
+        PackageInfo
+            { infoName = requested
+            , infoVersions = Map.mapWithKey stamp versions
+            , infoDistTags = tags
+            , infoInvalidEntries =
+                strictElements
+                    ( drops (baseProjectedVersions acc)
+                        <> drops (baseProjectedTags acc)
+                        <> drops (Map.restrictKeys (baseProjectedTimes acc) (Map.keysSet versions))
+                    )
+            }
+data BasePackedRead = BasePackedRead BaseNpmProjection [(Text, Packed)]
+baseEmptyPackedRead :: BasePackedRead
+baseEmptyPackedRead = BasePackedRead baseEmptyProjection []
+baseKeepsPackedRelease :: BasePackedRead -> Text -> Bool
+baseKeepsPackedRelease (BasePackedRead acc _) = baseKeepsRelease acc
+
+basePackedStep :: Writer st -> Limits -> PackageName -> BasePackedRead -> NpmFieldOf () -> (Either LimitError BasePackedRead -> ST st r) -> ST st r
+basePackedStep writer limits name (BasePackedRead acc served) field next = case field of
+    VersionField key (Just ())
+        | baseKeepsRelease acc key -> do
+            sealed <- sealValue writer tarballHole
+            picked <- decodePicked writer baseTypedMembers sealed
+            typed <- case baseProjectRelease name key picked of
+                Right details -> pure (Right details)
+                Left reason -> (\whole original -> baseInvalidRelease key (asRead original whole) reason) <$> decodeWhole writer sealed <*> replacedMember writer
+            let !release = if baseRebases picked then sealed else withoutHole sealed
+            next $! do
+                kept <- baseCollectRelease limits acc field key typed
+                pure (BasePackedRead kept ((key, release) : served))
+        | otherwise -> discard writer >> unchanged
+    _ -> unchanged
+  where
+    unchanged = next $! (`BasePackedRead` served) <$> baseCollectField limits acc field
+    asRead original = \case
+        Object fields -> Object (maybe (KeyMap.delete "author") (KeyMap.insert "author") original fields)
+        other -> other
+baseRebases :: Value -> Bool
+baseRebases release = isJust (tarballUrl release >>= rebaseArtifactUrl Just)
+baseTypedMembers :: Pick
+baseTypedMembers = Only [(field, if field == "dist" then Only [(member, Whole) | member <- distFields] else Whole) | field <- versionListFields]
+baseFinishPacked :: Limits -> PackageName -> Text -> DocTable -> BasePackedRead -> Either MetadataError (PackageInfo, PackedPackument)
+baseFinishPacked limits requested authorPointer table (BasePackedRead acc served) = second document <$> baseFinishParts limits requested acc
+  where
+    document (BaseNpmParts name time) =
+        PackedPackument
+            { packumentTop =
+                KeyMap.fromList
+                    [ ("name", name)
+                    , ("author", String authorPointer)
+                    , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList time]))
+                    ]
+            , packumentTable = table
+            , packumentVersions = KeyMap.fromMap (Map.fromDistinctAscList [(Key.fromText key, release) | (key, release) <- sortBy (comparing fst) served])
+            }

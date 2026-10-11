@@ -44,7 +44,6 @@ import Ecluse.Core.Registry.Json.Intern (InternTable, Interned (..), decodedName
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Shape (Trees (..))
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJsonWalk, readJsonWalkST)
-import Ecluse.Core.Registry.Json.Writer (Writer, newWriter)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
@@ -53,6 +52,7 @@ import Ecluse.Core.Registry.Npm.Document (PackedPackument)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.StreamingProjection (PackedRead, TreeRead, emptyPackedRead, emptyTreeRead, finishPacked, finishTree, keepsPackedRelease, keepsTreeRelease, packedStep, treeStep)
+import Ecluse.Core.Registry.Npm.VersionWriter (VersionWriter, newVersionWriter)
 import Ecluse.Core.Registry.ServedDocument (objectField)
 import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorities, maxNestingDepth)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
@@ -70,13 +70,10 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
-{- | npm's charges cover read peaks of 0.958 bytes per source byte and realistic output working sets
-of 1.524 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
--}
+-- | Charges cover read peaks 0.958/source byte and output working sets 1.524/basis byte from one meter step up (@docs/testing.md@).
 npmChargeFactors :: ChargeFactors
 npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
 
--- Walk a packument's chunks into aeson's tree with the production field policy.
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
 
@@ -87,23 +84,20 @@ npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits)
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
 type NpmFullRead = Walked PackedRead
 
--- Walk a whole packument's chunks into its packed form, given the origin's base URL.
 readNpmFull :: Limits -> PackageName -> Text -> DocumentWalk NpmFullRead
 readNpmFull limits name base bound table0 readChunk = do
     (table, writer) <- stToIO (npmFullTable base name table0)
     readJsonWalkST stToIO bound (npmFullWalk writer limits name table) readChunk
 
-{- | A full read's table with the source author pointer every served release holds, and the writer
-that packs each release against it.
--}
-npmFullTable :: Text -> PackageName -> InternTable -> ST st (InternTable, Writer st)
-npmFullTable base name table0 = (seeded,) <$> newWriter (Just (authorKey, pointer))
+-- | Seed the source author pointer and observe policy facts beside the packed writer.
+npmFullTable :: Text -> PackageName -> InternTable -> ST st (InternTable, VersionWriter st)
+npmFullTable base name table0 = (seeded,) <$> newVersionWriter (Just (authorKey, pointer))
   where
     Interned authorKey withKey = internName (decodedName "author") table0
     Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
 
--- | The production full-read walk: each kept release packed by the writer against the caller's table.
-npmFullWalk :: Writer st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
+-- | Pack retained releases and collect direct typed facts over the caller's table.
+npmFullWalk :: VersionWriter st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
 npmFullWalk writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument (packedStep writer limits name) keepsPackedRelease table emptyPackedRead
 {-# INLINE npmFullWalk #-}
 
