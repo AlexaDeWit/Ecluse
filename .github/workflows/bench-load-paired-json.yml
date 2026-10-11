@@ -1,6 +1,8 @@
 name: Paired JSON load experiment
 
 on:
+  push:
+    branches: [measure/json-paired-load]
   workflow_dispatch:
 
 concurrency:
