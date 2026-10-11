@@ -7,6 +7,7 @@ module Ecluse.Core.Server.Pipeline.PublishSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, status201, statusCode)
 import Network.Wai (Application, Request (requestBodyLength, requestHeaders), RequestBodyLength (..), Response, defaultRequest, getRequestBodyChunk, responseLBS, setRequestBodyChunks)
@@ -34,7 +35,7 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Registry.PyPI.Multipart (multipartContentType, multipartField, multipartUpload)
+import Ecluse.Test.Registry.PyPI.Multipart (malformedMultipartParts, multipartBoundary, multipartContentType, multipartField, multipartFile, multipartUpload)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertDepsFor)
 import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
@@ -98,6 +99,27 @@ spec = describe "servePublish" $ do
         response <- send fixture (upload ["requests"]) [("Authorization", "Basic Y2FsbGVyOnRva2Vu")]
         statusCode (simpleStatus response) `shouldBe` 403
         readIORef (fixtureRelays fixture) `shouldReturn` []
+    for_ malformedMultipartParts $ \malformed ->
+        it ("refuses hidden later names after malformed headers: " <> show malformed) $ do
+            fixture <- newFixture Nothing
+            let body = publishBytes (multipartUpload [multipartField "name" "requests", malformed, multipartField "name" "public-project"])
+            response <- send fixture body authenticated
+            statusCode (simpleStatus response) `shouldBe` 403
+            readIORef (fixtureRelays fixture) `shouldReturn` []
+    it "authorises a name field spelled with a valid quoted pair" $ do
+        fixture <- newFixture Nothing
+        let body = publishBytes (multipartUpload [multipartField "na\\me" "requests"])
+        response <- send fixture body authenticated
+        simpleStatus response `shouldBe` status201
+        relays <- readIORef (fixtureRelays fixture)
+        [publishBytes carried | (_, _, carried) <- relays] `shouldBe` [body]
+    it "relays file bytes containing inline markers unchanged" $ do
+        fixture <- newFixture Nothing
+        let body = publishBytes (multipartUpload [multipartField "name" "requests", multipartFile "content" ("inline--" <> multipartBoundary <> "\r\n--" <> multipartBoundary <> "-suffix")])
+        response <- send fixture body authenticated
+        simpleStatus response `shouldBe` status201
+        relays <- readIORef (fixtureRelays fixture)
+        [publishBytes carried | (_, _, carried) <- relays] `shouldBe` [body]
     it "canonicalises repeated names and preserves bytes, Content-Type and the caller pair" $ do
         fixture <- newFixture Nothing
         let body = upload ["Requests", "requests"]

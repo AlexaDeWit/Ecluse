@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Pipeline.Publish (
     servePublish,
 ) where
 
+import Data.List (lookup)
 import Data.Text qualified as T
 
 import Network.HTTP.Types (ResponseHeaders, Status, mkStatus, status401, status403, status405, status413, status500, status502)
