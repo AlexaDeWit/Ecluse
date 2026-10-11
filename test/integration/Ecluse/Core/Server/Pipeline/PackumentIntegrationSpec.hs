@@ -645,7 +645,9 @@ availabilitySpec = describe "admission-only deprecation policy" $
             privateUp <- if stored then servingUpstream metadata else failingUpstream
             queue <- newTestMemoryQueue
             rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfDeprecated), atDefaultPrecedence (AllowIfOlderThan 0)]
-            withProxyEnvQueueDeps queue privateUp publicUp Nothing (\deps -> deps{pdRules = rules}) $ \app _ _ -> do
+            let privateLeg = if stored then id else withPrivateBaseUrl Nothing
+            withProxyEnvQueueDeps queue privateUp publicUp Nothing (\deps -> privateLeg deps{pdRules = rules}) $ \app _ _ -> do
                 response <- getThing Nothing app
                 status response `shouldBe` expected
+                unless stored $ seenAuth privateUp `shouldReturn` []
                 when (expected == 403) $ simpleBody response `shouldSatisfy` (not . T.isInfixOf "obsolete release line" . decodeUtf8 . LBS.toStrict)
