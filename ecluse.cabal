@@ -207,6 +207,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Route
     Ecluse.Core.Registry.Npm.Route.Internal
     Ecluse.Core.Registry.Npm.Serve
+    Ecluse.Core.Registry.Npm.VersionWriter
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
@@ -918,6 +919,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.RequestSpec
     Ecluse.Core.Registry.Npm.RouteSpec
     Ecluse.Core.Registry.Npm.ServeSpec
+    Ecluse.Core.Registry.Npm.VersionWriterSpec
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
     Ecluse.Core.Registry.PublishSpec

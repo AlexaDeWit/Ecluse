@@ -440,6 +440,9 @@ The controls serve different purposes:
 | Cache budget | How much eligible metadata the selected provider retains locally |
 | Runtime heap ceiling | The heap limit applied to the process |
 
+A larger count bound lets more requests share public reads and wait for upstreams.
+Private listings still parse per-request, so more concurrency can increase their memory use and latency.
+
 The default data ceilings leave growth room for large real-world metadata while keeping input work bounded.
 They express policy headroom, not a measured maximum that fits every pod. A larger ingest ceiling
 does not automatically enlarge the cache or reduce CPU concurrency.

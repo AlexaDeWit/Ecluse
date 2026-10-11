@@ -41,12 +41,10 @@ connectionPoolSpec :: Spec
 connectionPoolSpec = do
     describe "resolveServeAdmission" $ do
         it "computes the default from the capability count" $ do
-            fst (resolveServeAdmission Nothing 4) `shouldBe` 40
-            fst (resolveServeAdmission Nothing 16) `shouldBe` 160
-            -- At 10 per capability even a single-capability pod computes above
-            -- the floor of 8. The floor is a backstop should the multiplier drop.
-            fst (resolveServeAdmission Nothing 1) `shouldBe` 10
-            fst (resolveServeAdmission Nothing 2) `shouldBe` 20
+            fst (resolveServeAdmission Nothing 4) `shouldBe` 80
+            fst (resolveServeAdmission Nothing 16) `shouldBe` 320
+            fst (resolveServeAdmission Nothing 1) `shouldBe` 20
+            fst (resolveServeAdmission Nothing 2) `shouldBe` 40
 
         it "lets an explicit config value win over the computation" $
             fst (resolveServeAdmission (Just 24) 4) `shouldBe` 24

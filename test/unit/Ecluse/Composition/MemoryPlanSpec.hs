@@ -59,7 +59,7 @@ spec = describe "resolveMemoryPlan" $ do
     it "keeps CPU admission independent of the heap ceiling" $ do
         for_ [64, 256, 512, 1024, 4096] $ \memoryMiB -> do
             let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (memoryMiB * mib))) NoQueueTenant False
-            mpAdmissionCapacity plan `shouldBe` 40
+            mpAdmissionCapacity plan `shouldBe` 80
 
     it "never reduces metadata admissibility when memory or CPU rises" $ do
         let ceilings = [64, 256, 512, 640, 896, 1024, 1280, 1536, 4096, 16384]
@@ -155,7 +155,7 @@ spec = describe "resolveMemoryPlan" $ do
         it "reaches the irreducible minimum on a tiny pod and boots anyway" $ do
             let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (16 * mib))) NoQueueTenant False
             mpOverrideViolations plan `shouldBe` []
-            mpAdmissionCapacity plan `shouldBe` 40
+            mpAdmissionCapacity plan `shouldBe` 80
             mpCacheAggregateBytes plan `shouldBe` 0
             mpCacheMaxEntries plan `shouldBe` 256
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
@@ -207,7 +207,7 @@ spec = describe "resolveMemoryPlan" $ do
             ceilingClause = " (computed from heap ceiling " <> show gib <> ", derived from the cgroup limit)"
         lines'
             `shouldBe` [ "memory plan: runtime reserve 214748364" <> ceilingClause
-                       , "runtime: serve admission 40 (computed from 4 capabilities)"
+                       , "runtime: serve admission 80 (computed from 4 capabilities)"
                        , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
