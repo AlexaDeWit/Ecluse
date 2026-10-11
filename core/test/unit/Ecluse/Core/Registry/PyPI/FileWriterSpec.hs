@@ -22,10 +22,10 @@ spec = describe "fileWriter" $ do
             agrees ["\"" <> field <> "\":" <> value]
 
     for_
-        [ encodeUtf8 (show (minBound :: Int))
-        , encodeUtf8 (show (maxBound :: Int))
-        , encodeUtf8 (show (toInteger (minBound :: Int) - 1))
-        , encodeUtf8 (show (toInteger (maxBound :: Int) + 1))
+        [ encodeUtf8 (show (minBound :: Int) :: Text)
+        , encodeUtf8 (show (maxBound :: Int) :: Text)
+        , encodeUtf8 (show (toInteger (minBound :: Int) - 1) :: Text)
+        , encodeUtf8 (show (toInteger (maxBound :: Int) + 1) :: Text)
         , "0"
         , "-0"
         , "12.0"
