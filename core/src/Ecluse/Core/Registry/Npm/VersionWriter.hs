@@ -115,7 +115,9 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer False (Array mempty) >>= next)
     openObject writer next = openObject (packedWriter writer) $ \frame -> do
         role <- readMutVar (nextRole writer)
-        writeMutVar (nextRole writer) Ignore
+        case role of
+            Ignore -> pure ()
+            _ -> writeMutVar (nextRole writer) Ignore
         next $! case fieldsFor role of
             Just fields -> VersionFrame frame fields mempty
             Nothing -> IgnoredFrame frame $ case role of
@@ -136,7 +138,12 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
         IgnoredFrame packed _ -> addMember (packedWriter writer) key () packed (const (next frame))
         VersionFrame packed fields seen ->
             addMember (packedWriter writer) key () packed $ \packed' ->
-                next (VersionFrame packed' (addField (memberText key) value fields) (rememberOwn key value seen))
+                case (fields, value) of
+                    (ReleaseFields{}, Unobserved) -> next frame
+                    (DistFields{}, Unobserved) -> next frame
+                    (LicenseFields{}, Unobserved) -> next frame
+                    (PersonFields{}, Unobserved) -> next frame
+                    _ -> next (VersionFrame packed' (addField (memberText key) value fields) (rememberOwn key value seen))
     dropValue writer _ = dropValue (packedWriter writer) ()
     closeObject writer frame next = case frame of
         IgnoredFrame packed value -> closeObject (packedWriter writer) packed (\() -> next value)

@@ -119,6 +119,20 @@ genericSpec = describe "Generic shape parity" $ do
     it "keeps the first generic member when the later duplicate changes container type" $
         for_ genericDuplicates $
             \body -> for_ [Share, Keep] $ \mode -> assertGeneric mode body
+    it "preserves duplicate unknown objects beside each observed object" $ do
+        let ignored = "\"unknown\":{\"scripts\":{\"install\":false}},\"unknown\":{\"name\":false}"
+            body =
+                "{\"name\":\"thing\",\"version\":\"1\",\"dist\":{\"tarball\":\"a.tgz\","
+                    <> ignored
+                    <> "},\"license\":{\"type\":\"MIT\","
+                    <> ignored
+                    <> "},\"_npmUser\":{\"name\":\"reader\","
+                    <> ignored
+                    <> "},\"scripts\":{\"build\":\"ok\"},"
+                    <> ignored
+                    <> "}"
+        for_ [Share, Keep] $ \mode -> assertGeneric mode body
+        for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument body))
     it "resets after sealing or discarding generic arrays and malformed nested objects" $
         for_ [True, False] $ \sealing -> for_ [Share, Keep] $ \mode -> do
             let bodies = ["[]", extended "\"scripts\":{\"build\":{\"hasInstallScript\":true}}", isolatedRelease True, baseRelease]
