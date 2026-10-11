@@ -75,14 +75,19 @@ advisoryDenies = [("CVE", "DenyIfCve", "minCvss" .= (7.0 :: Double)), ("EPSS", "
 quarantineSeconds :: Int
 quarantineSeconds = 604800
 
+pypiSyncMessage :: Text
+pypiSyncMessage = "cve-sync[" <> show PyPI <> "]: advisory database swapped in"
+
 withPolicy :: [Pair] -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()
 withPolicy extra plane action =
     withE2EWith defaultE2EConfig{ecExtraEnv = advisoryStoreEnv <> [("ECLUSE_MOUNTS__PYPI__RULES", policy)]} ready plane
   where
     policy = decodeUtf8 . LBS.toStrict . encode . object $ ["min-age" .= object ["ageSeconds" .= quarantineSeconds]] <> extra
     ready e2e = do
-        synced <- awaitProxyLog e2e (T.isInfixOf "cve-sync[pypi]: advisory database swapped in") 120
-        synced `shouldBe` True
+        synced <- awaitProxyLog e2e (T.isInfixOf pypiSyncMessage) 120
+        unless synced $ do
+            logs <- proxyContainerLogs e2e
+            expectationFailure (toString ("the proxy never synced its PyPI advisory generation. Last proxy log lines:\n" <> logTail logTailLines logs))
         action e2e
 
 assertPipRefused :: E2E -> Text -> Text -> Expectation
