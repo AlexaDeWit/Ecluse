@@ -53,8 +53,8 @@ packedParitySpec = modifyMaxSuccess (const 2000) $
             let limits = defaultLimits{maxNestingDepth = depth, maxVersionCount = versions, maxArtifactCount = artifacts, maxMetadataBytes = BS.length body}
                 bound = MetadataBodyLimit (BS.length body)
                 referenceRead = first MetadataBoundExceeded (parseJsonChunks bound (pypiFields depth FullRead) (collectField limits FullRead) (emptyProjection thing) chunks)
-                expected = (\stream -> (streamBytes stream, second Just (projectPyPIStream limits thing stream))) <$> referenceRead
-                actual = (\stream -> (streamBytes stream, second packedSimpleDocument (projectPyPIPacked limits thing stream))) <$> projectPyPIPackedChunks limits thing chunks
+                expected = (\stream -> (streamBytes stream, second Just <$> projectPyPIStream limits thing stream)) <$> referenceRead
+                actual = (\stream -> (streamBytes stream, second packedSimpleDocument <$> projectPyPIPacked limits thing stream)) <$> projectPyPIPackedChunks limits thing chunks
             actual === expected
 
 -- Selected reads may pass a reference parse error only after a rejecting filename.
