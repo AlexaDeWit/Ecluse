@@ -46,14 +46,14 @@ spec = do
                 compiled <- compileCorpusAdvisories PyPI dir
                 bytes <- readFileBS "bench/corpus/pypi/requests.simple.json"
                 (info, _) <- expectRight (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests") bytes)
-                fix <- maybe (fail "the capture has no 2.33 release") pure (Map.lookup "2.33" (infoVersions info))
+                fixedRelease <- maybe (fail "the capture has no 2.33 release") pure (Map.lookup "2.33" (infoVersions info))
                 affected <- maybe (fail "the capture has no 2.32.5 release") pure (Map.lookup "2.32.5" (infoVersions info))
                 let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
                 withServedArtifact PyPI compiled $ \deps _ -> do
                     enabled <- prepare deps shippedPolicy
-                    admittedBy <$> evalRules ctx enabled (completeEvidence fix) `shouldReturn` Just "AllowIfRemediatesCve"
+                    admittedBy <$> evalRules ctx enabled (completeEvidence fixedRelease) `shouldReturn` Just "AllowIfRemediatesCve"
                     disabled <- prepare deps [atDefaultPrecedence (AllowIfOlderThan 604800)]
-                    evalRules ctx disabled (completeEvidence fix) >>= (`shouldSatisfy` isBlockedByDefault)
+                    evalRules ctx disabled (completeEvidence fixedRelease) >>= (`shouldSatisfy` isBlockedByDefault)
                     denies <- prepare deps (shippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
                     blockedBy <$> evalRules ctx denies (completeEvidence affected) `shouldReturn` Just "DenyIfCve"
 
