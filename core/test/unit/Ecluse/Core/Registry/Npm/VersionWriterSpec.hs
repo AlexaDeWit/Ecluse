@@ -62,6 +62,7 @@ spec = describe "VersionWriter" $ do
     literalSpec
     genericSpec
     typedFieldsSpec
+    relevantScalarsSpec
     growthSpec
     generatedSpec
     assemblySpec
@@ -315,6 +316,53 @@ typedFieldsSpec = describe "typed object field parity" $
                                 else extended ("\"" <> container <> "\":{" <> fields <> "}")
                     for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
                     for_ [Share, Keep] $ \mode -> assertGeneric mode release
+
+-- Literal scalar expectations pin actual base 4008730ad590c81f897f736d1ab29c5731aee7b3.
+relevantScalarsSpec :: Spec
+relevantScalarsSpec = describe "relevant scalar parity" $ do
+    it "preserves advisory integer conversion and the non-integer fallback" $
+        for_ [("17", Just 17), ("-17", Just (-17)), ("00017", Just 17), ("999999999999999999", Just 999999999999999999), ("9223372036854775807", Just 9223372036854775807), ("9223372036854775808", Nothing), ("-9223372036854775808", Just (-9223372036854775808)), ("-9223372036854775809", Nothing), ("17.0", Just 17), ("17.5", Nothing), ("17e0", Just 17), ("17e2", Just 1700), ("1e1000", Nothing), ("null", Nothing), ("false", Nothing), ("\"17\"", Nothing)] $ \(scalar, expected) -> do
+            let release = requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"unpackedSize\":" <> scalar <> "}")
+            for_ [Share, Keep] $ \mode -> do
+                assertGeneric mode release
+                for_ [[release], byteChunks release] $ \chunks -> do
+                    (facts, _, _, _, _) <- genericSuccess (genericDirect mode chunks)
+                    fmap (distUnpackedSize . vmDist) facts `shouldBe` Just expected
+            for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
+    it "preserves rejection of integers in required and optional non-size fields" $ do
+        let releases =
+                [requiredRelease key "17" | key <- ["name", "version", "dist"]]
+                    <> [extended ("\"" <> key <> "\":17") | key <- ["hasInstallScript", "scripts", "license", "_npmUser"]]
+                    <> [requiredRelease "dist" "{\"tarball\":17}"]
+                    <> [requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"" <> key <> "\":17}") | key <- ["shasum", "integrity"]]
+                    <> [extended ("\"" <> container <> "\":{\"" <> key <> "\":17}") | (container, keys) <- [("license", ["type", "url"]), ("_npmUser", ["name", "email", "url"]), ("scripts", ["build", "install"])], key <- keys]
+        for_ releases $ \release -> do
+            for_ [Share, Keep] $ \mode -> do
+                assertGeneric mode release
+                (facts, _, _, _, _) <- genericSuccess (genericDirect mode [release])
+                facts `shouldBe` Nothing
+            for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
+        for_ [Share, Keep] $ \mode -> do
+            let release = extended "\"deprecated\":17,\"hasInstallScript\":false"
+            assertGeneric mode release
+            (facts, _, _, _, _) <- genericSuccess (genericDirect mode (byteChunks release))
+            fmap vmAvailability facts `shouldBe` Just Available
+            fmap vmHasInstallScript facts `shouldBe` Just (Just False)
+    it "preserves the first advisory size and ignored script command" $ do
+        for_ [("17", "false", Just 17), ("false", "17", Nothing), ("17.5", "17", Nothing), ("17", "17.5", Just 17), ("9223372036854775808", "17", Nothing)] $ \(first', later, expected) -> do
+            let release = requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"unpackedSize\":" <> first' <> ",\"unpackedSize\":" <> later <> "}")
+            for_ [Share, Keep] $ \mode -> do
+                assertGeneric mode release
+                (facts, _, _, _, _) <- genericSuccess (genericDirect mode (byteChunks release))
+                fmap (distUnpackedSize . vmDist) facts `shouldBe` Just expected
+            for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
+        for_ [("17", "\"ok\"", False), ("\"ok\"", "17", True)] $ \(first', later, valid) -> do
+            let release = extended ("\"scripts\":{\"build\":" <> first' <> ",\"build\":" <> later <> ",\"install\":\"\"}")
+            for_ [Share, Keep] $ \mode -> do
+                assertGeneric mode release
+                (facts, _, _, _, _) <- genericSuccess (genericDirect mode (byteChunks release))
+                isJust facts `shouldBe` valid
+            for_ [True, False] $ \share -> assertParity 64 share (byteChunks (packument release))
 
 assemblySpec :: Spec
 assemblySpec = it "assembles mixed sources from unchanged blobs and frozen policy facts" $ do

@@ -46,6 +46,7 @@ data VersionWriter st = VersionWriter
 -- | A completed value. Invalid facts require the existing whole-release diagnostic decoder.
 data VersionValue
     = ScalarValue Value
+    | IntegerValue Int
     | DistValue (Maybe Dist)
     | LicenseValue (Maybe License)
     | PersonValue Bool
@@ -105,14 +106,14 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     type Items (VersionWriter st) = Int
     sharedString writer entry next =
         sharedString (packedWriter writer) entry $ \() ->
-            observeScalar writer True (entryString entry) >>= next
+            observeScalar writer True (ScalarValue (entryString entry)) >>= next
     ownString writer name next =
         ownString (packedWriter writer) name $ \() ->
-            observeScalar writer True (String (nameText name)) >>= next
+            observeScalar writer True (ScalarValue (String (nameText name))) >>= next
     integer writer number next =
-        integer (packedWriter writer) number (\() -> observeScalar writer False (Number (fromIntegral number)) >>= next)
-    whole writer value next = whole (packedWriter writer) value (\() -> observeScalar writer False value >>= next)
-    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer False (Array mempty) >>= next)
+        integer (packedWriter writer) number (\() -> observeScalar writer False (IntegerValue number) >>= next)
+    whole writer value next = whole (packedWriter writer) value (\() -> observeScalar writer False (ScalarValue value) >>= next)
+    emptyContainer writer next = emptyContainer (packedWriter writer) (\() -> observeScalar writer False (ScalarValue (Array mempty)) >>= next)
     openObject writer next = openObject (packedWriter writer) $ \frame -> do
         role <- readMutVar (nextRole writer)
         case role of
@@ -167,13 +168,13 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
     {-# INLINE addItem #-}
     {-# INLINE closeArray #-}
 
-observeScalar :: VersionWriter st -> Bool -> Value -> ST st VersionValue
+observeScalar :: VersionWriter st -> Bool -> VersionValue -> ST st VersionValue
 observeScalar writer stringToken value = do
     role <- readMutVar (nextRole writer)
     pure $! case role of
         Command | stringToken -> StringCommand
         Ignore -> Unobserved
-        _ -> ScalarValue value
+        _ -> value
 {-# INLINE observeScalar #-}
 
 rememberOwn :: MemberKey -> VersionValue -> Set Text -> Set Text
@@ -209,7 +210,10 @@ memberRole fields key = case fields of
     ScriptFields _ -> Command
 
 addField :: Text -> VersionValue -> ObservedFields -> ObservedFields
-addField key value = \case
+addField "unpackedSize" (IntegerValue number) (DistFields tarball shasum integrity _) =
+    DistFields tarball shasum integrity (force (Just number))
+addField key (IntegerValue number) fields = addField key (ScalarValue (Number (fromIntegral number))) fields
+addField key value observed = case observed of
     ReleaseFields manifest -> ReleaseFields (addManifest key value manifest)
     fields@(DistFields tarball shasum integrity size) -> case (key, value) of
         ("tarball", ScalarValue scalar) -> DistFields (parseMaybe parseJSON scalar) shasum integrity size
