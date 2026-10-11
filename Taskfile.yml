@@ -162,6 +162,14 @@ tasks:
     desc: Run the throughput and latency load tests
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-load'
+  paired-load-build:
+    desc: Build all fixed binaries for the paired JSON load experiment
+    cmds:
+      - bash scripts/paired-json-load.sh build
+  paired-load-run:
+    desc: Run the three paired JSON load rotations without rebuilding
+    cmds:
+      - bash scripts/paired-json-load.sh run
   perf-acceptance:
     desc: Report allocation and time over live registry documents (informational)
     cmds:

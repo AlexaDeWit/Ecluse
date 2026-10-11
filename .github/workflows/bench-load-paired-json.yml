@@ -1,0 +1,79 @@
+name: Paired JSON load experiment
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: paired-json-load-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CABAL_DIR: ${{ github.workspace }}/.cabal
+  BENCH_LOAD_DURATION_SECONDS: "30"
+  BENCH_LOAD_CONCURRENCY: "100"
+  BENCH_LOAD_UPSTREAM_LATENCY_MS: "5"
+  BENCH_LOAD_PROBE_RTT: "0"
+  BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ""
+  BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST: ""
+  BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST: ""
+  BENCH_LOAD_THRASH_LIMITS_MIB: ""
+  BENCH_LOAD_SCENARIOS: npm/merge-cold,npm/heavy-private,pypi/index-cold,pypi/heavy-private
+  BENCH_LOAD_ISOLATE_OHA: "1"
+  BENCH_LOAD_CGROUP: /sys/fs/cgroup/ecluse-bench-load
+
+jobs:
+  paired-load:
+    name: Paired load (${{ matrix.pod-shape }}, inform-only)
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pod-shape: [unlimited, 2cpu-1gib, 4cpu-1gib, 4cpu-2gib]
+    env:
+      BENCH_LOAD_POD: ${{ matrix.pod-shape }}
+    steps:
+      - name: Checkout measurement harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Build all three fixed implementations
+        run: nix develop .#ci --command task paired-load-build
+
+      - name: Delegate the existing load cgroup
+        run: |
+          set -euo pipefail
+          sudo swapoff -a
+          sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
+          sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
+          echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
+
+      - name: Run all three rotations sequentially
+        run: |
+          set -euo pipefail
+          echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
+          nix develop .#ci --command task paired-load-run
+
+      - name: Upload every report and diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-json-load-${{ runner.arch }}-${{ matrix.pod-shape }}-${{ github.sha }}
+          path: ${{ runner.temp }}/paired-json-load/results/
+          if-no-files-found: warn
