@@ -117,6 +117,7 @@ planFromWith mintPlan limits envVars mDocBytes = do
           where
             errs = cfgErrs
             toBoot (PolicyErrors es) = map PolicyBootError es
+            toBoot (SharedPolicyErrors es) = map PolicyBootError es
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(CodeArtifactHostMismatch _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]

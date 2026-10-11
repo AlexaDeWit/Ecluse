@@ -188,7 +188,12 @@ resolveGlobalPolicy overridesAst = do
     globalRulePatch <- case parseRulesPatch overridesAst of
         Right r -> Right r
         Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
-    first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
+    first sharedPolicyErrors (resolvePolicy defaultPolicy globalRulePatch)
+
+sharedPolicyErrors :: [PolicyError] -> [ConfigError]
+sharedPolicyErrors errors
+    | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
+    | otherwise = [PolicyErrors errors]
 
 resolveMounts :: Value -> Value -> RulePolicy -> AppConfig -> Either [ConfigError] MountMap
 resolveMounts defaultAst overridesAst globalPolicy appConfig =

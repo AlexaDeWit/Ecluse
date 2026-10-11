@@ -74,9 +74,9 @@ import Ecluse.Config.Advisory.Internal (
  )
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
 import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
-import Ecluse.Config.Rule (PolicyError, renderPolicyError)
+import Ecluse.Config.Rule (PolicyError (SuppressUnknownRule), renderPolicyError)
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
@@ -547,6 +547,8 @@ data Config = Config
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
+    | -- | Shared rule errors that include suppression of the shipped npm mount default.
+      SharedPolicyErrors [PolicyError]
     | {- | A mount is active but @server.publicUrl@ is unset. It is not derived from the @Host@
       header: a spoofed header poisons shared-cache entries with an attacker-chosen artifact URL.
       -}
@@ -569,9 +571,11 @@ data ConfigError
       CodeArtifactRepositoryMissing Ecosystem Text Text
     deriving stock (Eq, Show)
 
+-- | Render a load refusal, including the mount remedy for a misplaced shared suppression.
 renderConfigError :: ConfigError -> Text
 renderConfigError (ParseError e) = e
 renderConfigError (PolicyErrors es) = T.unlines (map renderPolicyError es)
+renderConfigError (SharedPolicyErrors es) = T.unlines (map renderSharedPolicyError es)
 renderConfigError PublicUrlRequired =
     "a mount is active but server.publicUrl (ECLUSE_SERVER__PUBLIC_URL) is not set: "
         <> "served tarball URLs are rewritten against the proxy's own externally-reachable base URL, "
@@ -600,6 +604,14 @@ renderConfigError (CodeArtifactRepositoryMissing eco path format) =
         <> " is not a CodeArtifact repository endpoint for this mount: its path must be /"
         <> format
         <> "/{repository}/"
+
+renderSharedPolicyError :: PolicyError -> Text
+renderSharedPolicyError err@(SuppressUnknownRule "deny-scripts") =
+    renderPolicyError err
+        <> ". Disable the shipped npm default with enabled: false under "
+        <> keyRef Npm "rules"
+        <> " instead."
+renderSharedPolicyError err = renderPolicyError err
 
 -- A mount-scoped key in both spellings, the form every refusal above names it in.
 keyRef :: Ecosystem -> Text -> Text

@@ -15,7 +15,7 @@ import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, fixedNow, 
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
-    ConfigError (MountMissingPrivateUpstream, PolicyErrors, PublicUrlRequired),
+    ConfigError (MountMissingPrivateUpstream, PolicyErrors, PublicUrlRequired, SharedPolicyErrors),
     Mount (mountPolicy, mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
@@ -108,9 +108,22 @@ spec = do
 
         it "refuses disabling the npm-only name in the shared list or the PyPI mount" $ do
             loadConfig [] (Just "{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}")
-                `shouldBe` Left [PolicyErrors [SuppressUnknownRule "deny-scripts"]]
+                `shouldBe` Left [SharedPolicyErrors [SuppressUnknownRule "deny-scripts"]]
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}}}")
                 `shouldBe` Left [PolicyErrors [SuppressUnknownRule "deny-scripts"]]
+
+        it "names the npm mount remedy when the shared layer disables its default" $
+            for_ [loadConfig [] (Just "{\"rules\":{\"deny-scripts\":{\"enabled\":false}}}"), loadConfig [("ECLUSE_RULES", "{\"deny-scripts\":{\"enabled\":false}}")] Nothing] $ \result ->
+                first (map renderConfigError) result
+                    `shouldBe` Left ["rule \"deny-scripts\" disables a rule that no default defines. Disable the shipped npm default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) instead.\n"]
+
+        it "keeps generic refusal text for other absent rules beside the npm remedy" $
+            first (map renderConfigError) (loadConfig [] (Just "{\"rules\":{\"absent\":{\"enabled\":false},\"deny-scripts\":{\"enabled\":false}}}"))
+                `shouldBe` Left ["rule \"absent\" disables a rule that no default defines\nrule \"deny-scripts\" disables a rule that no default defines. Disable the shipped npm default with enabled: false under mounts.npm.rules (ECLUSE_MOUNTS__NPM__RULES) instead.\n"]
+
+        it "keeps the generic typed refusal for an unrelated absent shared rule" $
+            loadConfig [] (Just "{\"rules\":{\"absent\":{\"enabled\":false}}}")
+                `shouldBe` Left [PolicyErrors [SuppressUnknownRule "absent"]]
 
         it "refuses a different type under the shipped npm name" $
             loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"rules\":{\"deny-scripts\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\"}}}}}")
