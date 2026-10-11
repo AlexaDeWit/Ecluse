@@ -87,15 +87,23 @@ spec = do
 
     describe "renderNormalised" $ do
         it "names a measured baseline and renders the absolute and percentage split" $ do
-            let rendered = renderNormalised (MeasuredRtt 150 8) [NormalisedRow "merge-cold" (Just 255) Nothing]
+            let rendered = renderNormalised (MeasuredRtt 150 8) [NormalisedRow "merge-cold" (Just 255) Nothing Nothing]
             rendered `shouldSatisfy` T.isInfixOf "measured public RTT 150.0 ms"
             rendered `shouldSatisfy` T.isInfixOf "merge-cold"
             rendered `shouldSatisfy` T.isInfixOf "105.0 ms (41%)"
 
         it "labels the fallback baseline when the live probe was unavailable" $ do
-            let rendered = renderNormalised (InjectedFallback 5) [NormalisedRow "merge-cold" Nothing Nothing]
+            let rendered = renderNormalised (InjectedFallback 5) [NormalisedRow "merge-cold" Nothing Nothing Nothing]
             rendered `shouldSatisfy` T.isInfixOf "injected fallback 5.0 ms"
             rendered `shouldSatisfy` T.isInfixOf "n/a"
+
+        it "retains private-hit totals without a public-baseline subtraction" $ do
+            let rendered = renderNormalised (InjectedFallback 17) [NormalisedRow "private relay" (Just 2.5) (Just 4) (Just "no public leg")]
+            T.lines rendered `shouldSatisfy` elem "| private relay | 2.5 ms | n/a | n/a | 4.0 ms | n/a | n/a | unavailable: no public leg |"
+
+        it "retains the private-hit reason even when no successful latency exists" $ do
+            let rendered = renderNormalised (InjectedFallback 17) [NormalisedRow "private relay" Nothing Nothing (Just "no public leg")]
+            T.lines rendered `shouldSatisfy` elem "| private relay | n/a | n/a | n/a | n/a | n/a | n/a | unavailable: no public leg |"
 
     describe "renderSaturation" $ do
         it "calls out the queuing-bound scenarios in a loud summary line" $ do
@@ -105,8 +113,6 @@ spec = do
             rendered `shouldSatisfy` T.isInfixOf "queuing-bound: merge-cold"
 
         it "surfaces the best-effort deadline-abort count in the table" $ do
-            -- The count is a best-effort signal: oha's error label, nix-pinned. It reaches
-            -- the operator-visible table verbatim, and defaults to a plain 0 when there is none.
             let bound = deriveSaturation 0.5 (SaturationInput "merge-cold" 42 50 (Just 255) (Just 1090))
                 ok = deriveSaturation 0.5 (SaturationInput "worker" 130 0 (Just 153) (Just 160))
             renderSaturation 0.5 [bound] `shouldSatisfy` T.isInfixOf "| 50 |"

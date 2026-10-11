@@ -66,8 +66,9 @@ main =
     getArgs >>= \case
         [] -> runDriver
         [flag] | flag == serveProxyFlag -> runServeProxy
-        [name] -> runChild (toText name)
-        _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name> | --serve-proxy]"
+        [name] -> runChild Loaded (toText name)
+        ["--service-time", name] -> runChild ConcurrencyOne (toText name)
+        _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name> | --service-time <ecosystem>/<scenario-name> | --serve-proxy]"
 
 -- Proxy cgroups a killed run left behind are retired before and after, so none outlives a run.
 runDriver :: IO ()
@@ -130,8 +131,8 @@ fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either
 fixturePasses setup fixture
     | null chosen = pure Nothing
     | otherwise = do
-        loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild self loadOverrides (keyOf s)) chosen
-        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild self c1Overrides (keyOf s)) serviceTime
+        loaded <- traverse (\s -> (keyOf s,) <$> runScenarioChild Loaded self loadOverrides (keyOf s)) chosen
+        c1 <- traverse (\s -> (keyOf s,) <$> runScenarioChild ConcurrencyOne self loadOverrides (keyOf s)) serviceTime
         let section =
                 Section
                     { sectionKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
@@ -163,7 +164,6 @@ fixturePasses setup fixture
     baseline = setupBaselineOf setup eco
     injMs = baselineInjectedMs baseline
     loadOverrides = [latencyOverride injMs, childRts capabilities]
-    c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), childRts capabilities]
     outcomeOf whichPass (key, result) = ((key, whichPass), reportEvidence <$> result)
 
 -- Run one scenario at each memory limit. An OOM kill or a heap overflow is the probe's reading,
@@ -181,7 +181,7 @@ runThrashProbe knobs limitsMib = do
             , childRts capabilities
             , latencyOverride (lkUpstreamLatencyMicros knobs `div` 1_000)
             ]
-    steps <- traverse (\shape -> (renderPodShape shape,) <$> runScenarioChild self (overrides shape) key) shapes
+    steps <- traverse (\shape -> (renderPodShape shape,) <$> runScenarioChild Loaded self (overrides shape) key) shapes
     pure ([renderThrash key steps], ["the GC-thrash probe produced no report at any memory limit" | null (rights (map snd steps))])
 
 -- The parent's argv RTS flags do not reach a child, so each child gets the statistics flag and the
@@ -227,10 +227,11 @@ baselineInjectedMs = \case
     InjectedFallback ms -> round ms
 
 -- A child that fails leaves its reason on the inherited stderr, and the run carries on.
-runScenarioChild :: FilePath -> [(String, String)] -> Text -> IO (Either Text ScenarioReport)
-runScenarioChild self overrides name = do
+runScenarioChild :: Pass -> FilePath -> [(String, String)] -> Text -> IO (Either Text ScenarioReport)
+runScenarioChild whichPass self overrides name = do
     base <- getEnvironment
-    (code, raw) <- readProcessStdout (setEnv (overrideEnv overrides base) (proc self [toString name]))
+    let args = ["--service-time" | whichPass == ConcurrencyOne] <> [toString name]
+    (code, raw) <- readProcessStdout (setEnv (overrideEnv overrides base) (proc self args))
     pure $ case code of
         ExitFailure n -> Left ("the scenario process exited " <> show n <> ". Its reason is in the job log.")
         ExitSuccess -> first (\err -> "the scenario report did not parse: " <> toText err) (eitherDecode raw)
@@ -274,9 +275,9 @@ probePublicRtt knobs = do
 probeEnabled :: IO Bool
 probeEnabled = maybe True ((`notElem` ["0", "false", "no", "off"]) . map toLower) <$> lookupEnv "BENCH_LOAD_PROBE_RTT"
 
-runChild :: Text -> IO ()
-runChild name = do
+runChild :: Pass -> Text -> IO ()
+runChild whichPass name = do
     knobs <- loadKnobsFromEnv
     s <- maybe (benchFail ("unknown scenario: " <> name)) pure (findScenario name)
-    report <- runScenario knobs s{scenarioName = name}
+    report <- runScenario whichPass knobs s{scenarioName = name}
     LBSC.putStrLn (encode report)
