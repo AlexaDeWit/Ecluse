@@ -159,9 +159,9 @@ fixedIdentity segment raw = case segBounds segment of
 
 -- | Rows with this ecosystem's canonical exact fix identity, retaining order and duplicates.
 fixedAt :: PackageAdvisories -> Version -> [AdvisoryRange]
-fixedAt advisories version = Map.findWithDefault [] identity (paFixes advisories)
+fixedAt advisories version = Map.findWithDefault [] probeIdentity (paFixes advisories)
   where
-    identity = maybe (renderVersion version) renderVersionKey (versionKeyIn (paEcosystem advisories) version)
+    probeIdentity = maybe (renderVersion version) renderVersionKey (versionKeyIn (paEcosystem advisories) version)
 
 {- | The rows whose affected interval holds a version of the package, in row order. __Fail-closed:__
 an unprovable comparison counts as __inside__, bar a point the grammar cannot order.
