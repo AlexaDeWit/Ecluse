@@ -14,12 +14,10 @@ import UnliftIO.Exception (throwIO)
 
 -- | A container caller bypassed the task wrapper that owns the daemon lock.
 data ContainerOwnershipMissing = ContainerOwnershipMissing
-    deriving stock (Eq)
+    deriving stock (Eq, Show)
 
-instance Show ContainerOwnershipMissing where
-    show _ = "Container ownership is missing. Use task test-integration or task test-e2e."
-
-instance Exception ContainerOwnershipMissing
+instance Exception ContainerOwnershipMissing where
+    displayException _ = "Container ownership is missing. Use task test-integration or task test-e2e."
 
 -- | Labels identify a worktree, invocation and shard without merging their ownership.
 containerLabels :: Text -> Text -> Text -> Text -> [(Text, Text)]
