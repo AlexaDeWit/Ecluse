@@ -27,6 +27,7 @@ module Ecluse.Core.Cve (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, provenanceQuery)
@@ -116,6 +117,8 @@ data PackageAdvisories = PackageAdvisories
     , paSegments :: [Segment]
     , -- Lazy: only the remediation rule reads it, so a deny rule's filtered copy never builds it.
       paFixes :: ~(Map Text [AdvisoryRange])
+    , -- Missing parsed fixes disable rejection because a parsed probe can render to their raw text.
+      paFixCandidates :: ~(Maybe (Set VersionKey))
     }
 
 -- One advisory row and the bounds matching reads from it.
@@ -148,20 +151,34 @@ fromSegments eco segments =
     PackageAdvisories
         { paEcosystem = eco
         , paSegments = segments
-        , paFixes = Map.fromListWith (flip (<>)) [(fixedIdentity s fixed, [segRange s]) | s <- segments, FixedBefore fixed <- [arUpperBound (segRange s)]]
+        , paFixes = Map.fromListWith (flip (<>)) [(fixedIdentity s fixed, [segRange s]) | (s, fixed) <- fixedSegments]
+        , paFixCandidates = Set.fromList <$> traverse (fixedKey . fst) fixedSegments
         }
+  where
+    fixedSegments = [(s, fixed) | s <- segments, FixedBefore fixed <- [arUpperBound (segRange s)]]
 
 -- Reuse the parsed upper bound. An unorderable fix retains its literal identity.
 fixedIdentity :: Segment -> Text -> Text
-fixedIdentity segment raw = case segBounds segment of
-    Ordered _ (Below key) -> renderVersionKey key
-    _ -> raw
+fixedIdentity segment raw = maybe raw renderVersionKey (fixedKey segment)
+
+fixedKey :: Segment -> Maybe VersionKey
+fixedKey segment = case segBounds segment of
+    Ordered _ (Below key) -> Just key
+    _ -> Nothing
 
 -- | Rows with this ecosystem's canonical exact fix identity, retaining order and duplicates.
 fixedAt :: PackageAdvisories -> Version -> [AdvisoryRange]
-fixedAt advisories version = Map.findWithDefault [] probeIdentity (paFixes advisories)
+fixedAt advisories version
+    | Map.null fixes = []
+    | Just key <- probeKey
+    , Just candidates <- paFixCandidates advisories
+    , Set.notMember key candidates =
+        []
+    | otherwise = Map.findWithDefault [] probeIdentity fixes
   where
-    probeIdentity = maybe (renderVersion version) renderVersionKey (versionKeyIn (paEcosystem advisories) version)
+    fixes = paFixes advisories
+    probeKey = versionKeyIn (paEcosystem advisories) version
+    probeIdentity = maybe (renderVersion version) renderVersionKey probeKey
 
 {- | The rows whose affected interval holds a version of the package, in row order. __Fail-closed:__
 an unprovable comparison counts as __inside__, bar a point the grammar cannot order.

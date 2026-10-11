@@ -355,6 +355,11 @@ spec = do
             scoreAtLeast AbstainMissingScore 0.5 (Just 0.75) `shouldBe` True
 
     describe "fixedAt" $ do
+        it "finds no fixes in an empty index for parsed and raw probes" $
+            for_ [Npm, PyPI, RubyGems] $ \eco ->
+                for_ ["1.0.0", "not-a-version"] $ \raw ->
+                    fixedAt (packageAdvisories eco []) (mkVersion eco raw) `shouldBe` []
+
         it "preserves npm exact fix text, row order and duplicate rows" $
             hedgehog $ do
                 pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
@@ -372,6 +377,7 @@ spec = do
                     rows = [firstRow, secondRow, firstRow]
                     advisories = packageAdvisories eco rows
                 fixedAt advisories (mkVersion eco served) `shouldBe` rows
+                fixedAt advisories (mkVersion eco "1.18") `shouldBe` []
                 fixedAt (keepAdvisories ((== "A") . arCveId) advisories) (mkVersion eco served) `shouldBe` [firstRow, firstRow]
                 affecting advisories (mkVersion eco "1.18") `shouldBe` rows
 
@@ -397,6 +403,18 @@ spec = do
             let advisories = packageAdvisories PyPI [row]
             fixedAt advisories version `shouldBe` [row]
             affecting advisories version `shouldBe` [row]
+
+        it "keeps a parsed probe whose rendered fix identity exceeds the parser length bound" $ do
+            let raw = "1-" <> T.replicate 1019 "1"
+                canonical = "1.post" <> T.replicate 1019 "1"
+                longRow = AdvisoryRange "LONG" Nothing Nothing (FixedBefore canonical) Nothing
+                parsedRow = AdvisoryRange "PARSED" Nothing Nothing (FixedBefore "2") Nothing
+                version = mkVersion PyPI raw
+            versionKey version `shouldSatisfy` isJust
+            for_ [[longRow], [parsedRow, longRow], [longRow, parsedRow]] $ \rows -> do
+                let advisories = packageAdvisories PyPI rows
+                fixedAt advisories version `shouldBe` [longRow]
+                affecting advisories version `shouldBe` rows
 
     describe "affecting" $ do
         it "agrees with the per-row reference, whatever ecosystem built the version" $
