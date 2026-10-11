@@ -44,19 +44,19 @@ jobs:
         with:
           cabal-cache: "true"
           dist-cache: "false"
-      - name: Checkout immutable candidate
+      - name: Checkout original candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.MEASURE_CANDIDATE_SHA }}
           path: candidate
           persist-credentials: false
-      - name: Checkout immutable baseline
+      - name: Checkout original baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.MEASURE_BASELINE_SHA }}
           path: baseline
           persist-credentials: false
-      - name: Build both executables and measure six passes
+      - name: Apply identical observer, build, and measure six passes
         timeout-minutes: 160
         env:
           MEASURE_CABAL_CACHE_HIT: ${{ steps.toolchain.outputs.cabal-cache-hit }}

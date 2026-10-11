@@ -11,8 +11,13 @@ bin="${RUNNER_TEMP:?}/measure-1635-bin"
 summary="${GITHUB_STEP_SUMMARY:?}"
 build_flags=(--enable-optimization=1 -fdev-http-egress)
 order=(pair1-candidate pair1-baseline pair2-baseline pair2-candidate pair3-candidate pair3-baseline)
+raw_reports=(
+  npm/merge-cold-c100.json npm/herd-c100.json npm/warm-under-cold-c100.json npm/ramp-c100.json
+  npm/merge-cold-c1.json pypi/index-cold-c100.json pypi/index-cold-c1.json
+)
+observer_sha="$(sha256sum "$root/bench/load/Main.hs" | cut -d' ' -f1)"
 mkdir -p "$out" "$bin"
-unset GHCRTS
+unset GHCRTS MEASURE_LOAD_RAW_REPORTS_DIR
 
 sha_for() {
   case "$1" in
@@ -24,15 +29,18 @@ sha_for() {
 
 for run in "${order[@]}"; do
   mkdir "$out/$run"
+  mkdir -p "$out/$run/raw/npm" "$out/$run/raw/pypi"
   printf '%s\n' "$(sha_for "${run#*-}")" > "$out/$run/source-sha.txt"
+  printf 'Original HEAD: %s\nObserver Main SHA-256: %s\n' "$(sha_for "${run#*-}")" "$observer_sha" > "$out/$run/compiled-source.txt"
   printf '%s\n' 'not run: setup or an earlier cleanup may fail' > "$out/$run/status.txt"
-  printf '# %s: %s\n\nDiagnostic subset, not held to floors.\n\n' "$run" "$(sha_for "${run#*-}")" > "$out/$run/bench-load-results.md"
+  printf '# %s: original HEAD %s plus observer %s\n\nDiagnostic subset, not held to floors.\n\n' "$run" "$(sha_for "${run#*-}")" "$observer_sha" > "$out/$run/bench-load-results.md"
 done
 {
   printf '%s\n' '# PR 1635 fixed RTT diagnostic' ''
   printf '%s\n' 'Six subset reports. Not held to success floors. The full acceptance criteria still apply.' ''
-  printf '%s\n' 'Exact total allocation is not emitted by the unchanged driver. Allocation/success is rounded.' ''
+  printf '%s\n' 'Each pass preserves seven raw JSON reports, including exact total allocated bytes, ramp steps, and paired loads.' ''
   printf 'Wrapper: %s\nCandidate: %s\nBaseline: %s\n' "$(git -C "$root" rev-parse HEAD)" "$MEASURE_CANDIDATE_SHA" "$MEASURE_BASELINE_SHA"
+  printf 'Compiled sources: each original HEAD plus the identical Main observer, SHA-256 %s\n' "$observer_sha"
   printf 'Build flags: %s\n' "${build_flags[*]}"
   printf 'Run order: %s\n' "${order[*]}"
   printf '%s\n' 'Driver: +RTS -N3 -RTS. Children inherit -T -N3. Proxies receive -T and resolve their own RTS plan.'
@@ -54,6 +62,8 @@ for role in candidate baseline; do
   [[ "$(git -C "$root/$role" rev-parse HEAD)" == "$(sha_for "$role")" ]]
   git -C "$root/$role" diff --exit-code
   git -C "$root/$role" diff --cached --exit-code
+  git -C "$root/$role" status --porcelain=v1 --untracked-files=all > "$out/$role-original-status.txt"
+  [[ ! -s "$out/$role-original-status.txt" ]]
   for file in cabal.project cabal.project.freeze flake.nix flake.lock Taskfile.yml; do
     cmp "$root/$file" "$root/$role/$file"
   done
@@ -61,6 +71,24 @@ done
 for area in bench/load bench/corpus; do
   diff -qr "$root/candidate/$area" "$root/baseline/$area" >> "$out/source-comparison.txt"
   printf '%s unchanged between H and D\n' "$area" >> "$out/source-comparison.txt"
+done
+git -C "$root/candidate" show "$MEASURE_CANDIDATE_SHA:bench/load/Main.hs" > "$out/original-Main.hs"
+for role in candidate baseline; do
+  cmp "$out/original-Main.hs" "$root/$role/bench/load/Main.hs"
+done
+for role in candidate baseline; do
+  cp "$root/bench/load/Main.hs" "$root/$role/bench/load/Main.hs"
+  git -C "$root/$role" status --porcelain=v1 --untracked-files=all > "$out/$role-observer-status.txt"
+  [[ "$(cat "$out/$role-observer-status.txt")" == ' M bench/load/Main.hs' ]]
+  cmp "$root/bench/load/Main.hs" "$root/$role/bench/load/Main.hs"
+  git -C "$root/$role" diff --binary -- bench/load/Main.hs > "$out/$role-observer.patch"
+done
+cmp "$out/candidate-observer.patch" "$out/baseline-observer.patch"
+cp "$out/candidate-observer.patch" "$out/observer.patch"
+cp "$root/bench/load/Main.hs" "$out/observer-Main.hs"
+sha256sum "$out/original-Main.hs" "$out/observer-Main.hs" "$out/observer.patch" | tee -a "$out/manifest.md" >> "$summary"
+for run in "${order[@]}"; do
+  cp "$out/manifest.md" "$out/$run/settings.md"
 done
 if [[ "${MEASURE_CABAL_CACHE_HIT:-}" != true ]]; then
   nix develop .#ci --command task update 2>&1 | tee "$out/index-update.log"
@@ -71,7 +99,7 @@ build_role() {
   mkdir "$out/$role-build"
   (
     cd "$source"
-    printf 'Compiled source: %s\nSource directory: %s\n' "$(git rev-parse HEAD)" "$PWD"
+    printf 'Original HEAD: %s\nObserver Main SHA-256: %s\nSource directory: %s\n' "$(git rev-parse HEAD)" "$observer_sha" "$PWD"
     sha256sum cabal.project cabal.project.freeze ecluse.cabal flake.nix flake.lock
     nix develop .#ci --command ghc --numeric-version
     nix develop .#ci --command cabal --numeric-version
@@ -84,6 +112,9 @@ build_role() {
   cp "$source"/{cabal.project,cabal.project.freeze,ecluse.cabal} "$out/$role-build/"
   printf '%s\n' "$resolved" > "$out/$role-build/resolved-bin.txt"
   sha256sum "$bin/$role-bench-load" > "$out/$role-build/binary.sha256"
+  git -C "$source" status --porcelain=v1 --untracked-files=all > "$out/$role-build/source-status.txt"
+  [[ "$(cat "$out/$role-build/source-status.txt")" == ' M bench/load/Main.hs' ]]
+  cmp "$root/bench/load/Main.hs" "$source/bench/load/Main.hs"
 }
 build_role candidate
 build_role baseline
@@ -141,14 +172,31 @@ for run in "${order[@]}"; do
   (
     cd "$root/$role"
     export GITHUB_STEP_SUMMARY="$out/$run/summary.md"
+    export MEASURE_LOAD_RAW_REPORTS_DIR="$out/$run/raw"
     nix develop .#ci --command "$bin/$role-bench-load" +RTS -N3 -RTS
   ) 2>&1 | tee -a "$report"
   codes=("${PIPESTATUS[@]}")
+  unset MEASURE_LOAD_RAW_REPORTS_DIR
   set -e
   printf 'Harness exit: %s\nCapture exit: %s\n' "${codes[0]}" "${codes[1]}" > "$out/$run/status.txt"
   if [[ "${codes[0]}" != 0 || "${codes[1]}" != 0 ]]; then failed=1; fi
   if ! verify_settings "$report" > "$out/$run/settings-check.txt"; then failed=1; fi
-  cat "$report" "$out/$run/status.txt" "$out/$run/settings-check.txt" >> "$summary"
+  raw_failed=0
+  {
+    for raw_report in "${raw_reports[@]}"; do
+      if [[ -s "$out/$run/raw/$raw_report" ]]; then
+        sha256sum "$out/$run/raw/$raw_report"
+      else
+        printf 'Missing or empty raw report: %s\n' "$raw_report"
+        raw_failed=1
+      fi
+    done
+    raw_count="$(find "$out/$run/raw" -type f -name '*.json' | wc -l)"
+    printf 'Raw JSON reports: %s, expected 7\n' "$raw_count"
+    if [[ "$raw_count" != 7 ]]; then raw_failed=1; fi
+  } > "$out/$run/raw-capture-check.txt"
+  if [[ "$raw_failed" != 0 ]]; then failed=1; fi
+  cat "$report" "$out/$run/status.txt" "$out/$run/settings-check.txt" "$out/$run/raw-capture-check.txt" >> "$summary"
   if ! verify_cleanup > "$out/$run/cleanup.txt"; then
     printf '%s\n' 'Cleanup failed. Remaining passes stay unrun to prevent overlapping proxies.' | tee -a "$out/$run/status.txt" "$summary"
     failed=1

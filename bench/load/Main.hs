@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Run the loaded and concurrency-one passes for each ecosystem fixture under one pod shape, or
-the GC-thrash probe across a series of memory limits. Each scenario runs in a child process that
-prints one JSON report and boots its own proxy process. The driver renders the Markdown artifact,
-then fails the run if any invariant broke.
+{- | Isolate scenarios in children so a failed proxy does not stop later measurements.
+The driver renders every result before applying the verdict.
 -}
 module Main (main) where
 
@@ -38,7 +36,7 @@ import Ecluse.BenchLoad.Floors (
     unheldViolations,
  )
 import Ecluse.BenchLoad.Harness (
-    LoadKnobs (lkUpstreamLatencyMicros),
+    LoadKnobs (lkConcurrency, lkUpstreamLatencyMicros),
     Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (srName),
     UpstreamFixture (fixtureEcosystem, fixtureScenarios),
@@ -78,7 +76,6 @@ runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     thrash <- thrashLimitsFromEnv
     environment <- Map.fromList . map (bimap toText toText) <$> getEnvironment
     (rendered, violations) <- case thrash of
-        -- The probe is never held to the floors, which a scheduled run must be.
         Just limits -> second (unheldViolations (triggerIn environment) (NotHeld (ThrashProbe :| [])) <>) <$> runThrashProbe knobs limits
         Nothing -> runPasses environment knobs shape selected
     -- The probe reads OOM kills and heap overflows as results, so only a broken probe has a verdict.
@@ -88,7 +85,6 @@ runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
     unless (null violations) $
         benchFail ("the load run broke " <> show (length violations) <> " invariant(s). The verdict section lists them.")
 
--- What the passes of every fixture share.
 data Setup = Setup
     { setupKnobs :: LoadKnobs
     , setupShape :: PodShape
@@ -102,7 +98,6 @@ data Setup = Setup
 
 runPasses :: Map Text Text -> LoadKnobs -> PodShape -> Maybe [Text] -> IO ([Text], [Text])
 runPasses environment knobs shape selected = do
-    -- Read before any scenario runs, so floors that do not decode cost no load.
     floors <- either benchFail pure =<< loadFloors
     npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
@@ -125,7 +120,7 @@ runPasses environment knobs shape selected = do
         , runVerdict (triggerIn environment) enforcement (checkedCounts shape) (concatMap snd ran)
         )
 
--- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
+-- Keep each pass's verdict evidence beside the rendered section.
 fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))
 fixturePasses setup fixture
     | null chosen = pure Nothing
@@ -189,7 +184,6 @@ runThrashProbe knobs limitsMib = do
 childRts :: Int -> (String, String)
 childRts capabilities = ("GHCRTS", rtsStatsFlag <> " -N" <> show capabilities)
 
--- The scenario keys in BENCH_LOAD_SCENARIOS, or every scenario when it is unset or blank.
 selectedKeys :: IO (Maybe [Text])
 selectedKeys =
     commaListFromEnv "BENCH_LOAD_SCENARIOS" >>= traverse known
@@ -210,7 +204,6 @@ thrashLimitsFromEnv =
             pure
             (traverse (mfilter (> 0) . readMaybe . toString) parts)
 
--- A comma-separated variable's non-blank items, 'Nothing' when it is unset or holds none.
 commaListFromEnv :: String -> IO (Maybe [Text])
 commaListFromEnv name = do
     raw <- lookupEnv name
@@ -241,7 +234,7 @@ overrideEnv overrides base =
   where
     overriddenKeys = map fst overrides
 
--- Warm the connection before timing registry fetches. Failed or disabled probes use the configured latency.
+-- Warm the connection so the samples exclude its first handshake.
 probePublicRtt :: LoadKnobs -> IO BaselineSource
 probePublicRtt knobs = do
     enabled <- probeEnabled
@@ -279,4 +272,11 @@ runChild name = do
     knobs <- loadKnobsFromEnv
     s <- maybe (benchFail ("unknown scenario: " <> name)) pure (findScenario name)
     report <- runScenario knobs s{scenarioName = name}
-    LBSC.putStrLn (encode report)
+    let raw = encode report
+        concurrency :: String
+        concurrency = show (lkConcurrency knobs)
+        fileName :: FilePath
+        fileName = toString name <> "-c" <> concurrency <> ".json"
+    -- Capture follows proxy shutdown so it cannot charge the measured window.
+    lookupEnv "MEASURE_LOAD_RAW_REPORTS_DIR" >>= traverse_ (\directory -> LBSC.writeFile (directory <> "/" <> fileName) raw)
+    LBSC.putStrLn raw
