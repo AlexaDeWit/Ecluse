@@ -40,6 +40,19 @@ spec = describe "CodeArtifact observation preparation" $ do
         forM_ [minBound .. maxBound] $ \key ->
             it ("refuses an empty " <> toString (smokeInputName key)) $
                 configFailure (Map.insert key " " configuredInputs) `shouldBe` Just (InvalidInput key)
+        forM_ (Map.toList configuredInputs) $ \(key, value) ->
+            it ("refuses whitespace and controls in " <> toString (smokeInputName key)) $
+                forM_ [" ", "\t", "\n", "\r", "\0", "\x7f", "\xa0", "\x2003", "\x200b"] $ \invalid ->
+                    forM_ [invalid <> value, value <> invalid, T.take 1 value <> invalid <> T.drop 1 value] $ \malformed ->
+                        configFailure (Map.insert key malformed configuredInputs) `shouldBe` Just (InvalidInput key)
+        forM_ invalidInputCases $ \(key, values) ->
+            it ("refuses malformed " <> toString (smokeInputName key)) $
+                forM_ values $ \value ->
+                    configFailure (Map.insert key value configuredInputs) `shouldBe` Just (InvalidInput key)
+        forM_ validInputCases $ \(key, values) ->
+            it ("accepts native syntax for " <> toString (smokeInputName key)) $
+                forM_ values $ \value ->
+                    (isJust <$> observationConfig (`Map.lookup` Map.insert key value configuredInputs)) `shouldBe` Right True
         it "allows the owner to be absent" $ do
             config <- expectRight (observationConfig (`Map.lookup` Map.delete OwnerInput configuredInputs))
             (ocOwner <$> config) `shouldBe` Just Nothing
@@ -117,6 +130,22 @@ tokenInputs = Map.fromList [(RegionInput, "us-east-1"), (DomainInput, "domain")]
 
 configuredInputs :: Map SmokeInput Text
 configuredInputs = tokenInputs <> Map.fromList [(OwnerInput, "123456789012"), (RepositoryInput, "repository"), (PackageInput, "Sample_Project")]
+
+invalidInputCases :: [(SmokeInput, [Text])]
+invalidInputCases =
+    [ (RegionInput, ["-us-east-1", "us-east-1-", "US-east-1", "us_east_1", "us.east.1", "us/east/1", T.replicate 64 "a"])
+    , (DomainInput, ["a", T.replicate 51 "a", "Domain", "1domain", "domain-", "do.main", "do_main", "do/main"])
+    , (OwnerInput, [T.replicate 11 "1", T.replicate 13 "1", "12345678901a", "12345678901-", "12345678901\x0661"])
+    , (RepositoryInput, ["a", T.replicate 101 "a", ".repo", "_repo", "-repo", "re/po", "re:po", "r\xe9po"])
+    ]
+
+validInputCases :: [(SmokeInput, [Text])]
+validInputCases =
+    [ (RegionInput, ["us-east-1", "us-gov-east-1", "future-region-99", "a", T.replicate 63 "a"])
+    , (DomainInput, ["aa", "a0", "a-b", "a--b", T.replicate 50 "a"])
+    , (OwnerInput, ["000000000000", "123456789012"])
+    , (RepositoryInput, ["a0", "A.Z_0-", "0_", "a.", "a-", T.replicate 100 "a"])
+    ]
 
 configFailure :: Map SmokeInput Text -> Maybe ObservationError
 configFailure inputs = leftToMaybe (observationConfig (`Map.lookup` inputs))

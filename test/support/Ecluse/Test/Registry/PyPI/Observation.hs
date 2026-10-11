@@ -17,6 +17,7 @@ module Ecluse.Test.Registry.PyPI.Observation (
 ) where
 
 import Data.Aeson (eitherDecodeStrict)
+import Data.Char (isAscii, isAsciiLower, isControl, isDigit, isSpace)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Network.HTTP.Client (Request)
@@ -31,6 +32,7 @@ import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest, simpleIndexUrl)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifUrl), SimpleIndex (..))
 import Ecluse.Core.Security.Authority (dialledAuthorityLabel, hostPortAddressWithDefault)
 import Ecluse.Core.Security.Egress (mkConfiguredRegistryUrl, registryUrlText)
+import Ecluse.Core.Text (isAsciiAlphaNum)
 
 -- | Nonsecret opt-in inputs. AWS identity stays with the standard credential discovery chain.
 data SmokeInput = RegionInput | DomainInput | OwnerInput | RepositoryInput | PackageInput
@@ -62,17 +64,53 @@ observationConfig input
     | otherwise = do
         region <- required RegionInput
         domain <- required DomainInput
-        owner <- traverse (nonemptyInput OwnerInput) (input OwnerInput)
+        owner <- traverse (observationInput OwnerInput) (input OwnerInput)
         repository <- required RepositoryInput
         package <- required PackageInput >>= first (const (InvalidInput PackageInput)) . projectName
         pure (Just (ObservationConfig region domain owner repository package))
   where
-    required key = maybe (Left (InvalidInput key)) (nonemptyInput key) (input key)
+    required key = maybe (Left (InvalidInput key)) (observationInput key) (input key)
 
-nonemptyInput :: SmokeInput -> Text -> Either ObservationError Text
-nonemptyInput key value
-    | T.null (T.strip value) = Left (InvalidInput key)
-    | otherwise = Right value
+observationInput :: SmokeInput -> Text -> Either ObservationError Text
+observationInput key value
+    | T.null value || not (T.all inputCharacter value) = Left (InvalidInput key)
+    | inputSyntax key value = Right value
+    | otherwise = Left (InvalidInput key)
+
+inputCharacter :: Char -> Bool
+inputCharacter char = isAscii char && not (isSpace char || isControl char)
+
+inputSyntax :: SmokeInput -> Text -> Bool
+inputSyntax key value = case key of
+    RegionInput -> T.compareLength value regionMaxLength /= GT && lowerLabel value
+    DomainInput -> nativeNameLength domainMaxLength value && lowerLabel value && maybe False (isAsciiLower . fst) (T.uncons value)
+    OwnerInput -> T.compareLength value ownerLength == EQ && T.all isDigit value
+    RepositoryInput ->
+        nativeNameLength repositoryMaxLength value
+            && maybe False (isAsciiAlphaNum . fst) (T.uncons value)
+            && T.all (\char -> isAsciiAlphaNum char || char `elem` ['.', '_', '-']) value
+    PackageInput -> True
+
+-- Region availability belongs to AWS. This checks only the label used in its endpoint host.
+lowerLabel :: Text -> Bool
+lowerLabel value =
+    T.all (\char -> lowerAlphaNum char || char == '-') value
+        && maybe False (lowerAlphaNum . fst) (T.uncons value)
+        && maybe False (lowerAlphaNum . snd) (T.unsnoc value)
+
+lowerAlphaNum :: Char -> Bool
+lowerAlphaNum char = isAsciiLower char || isDigit char
+
+nativeNameLength :: Int -> Text -> Bool
+nativeNameLength maximumLength value =
+    T.compareLength value codeArtifactNameMinLength /= LT && T.compareLength value maximumLength /= GT
+
+codeArtifactNameMinLength, domainMaxLength, repositoryMaxLength, ownerLength, regionMaxLength :: Int
+codeArtifactNameMinLength = 2
+domainMaxLength = 50
+repositoryMaxLength = 100
+ownerLength = 12
+regionMaxLength = 63
 
 -- | Closed diagnostics exclude decoder messages, URLs, requests and exception details.
 data ObservationError
