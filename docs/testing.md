@@ -233,8 +233,8 @@ The checks compare bytes with each ecosystem's charges:
 - From one step up, the tier fails once a single read's peak or a realistic listing's output
   working set passes a regression limit per ecosystem. The rule for a limit is the smallest quarter
   step at least 8% above the maximum. The read limits, set by that rule from the first table below,
-  remain 1.0 per source byte for npm (react, 0.862704), 0.2 under its charge, and 3.5 for PyPI (boto3,
-  3.196237), 0.5 under its charge. The output limits, set by that rule from the realistic shapes in
+  remain 1.0 per source byte for npm (react, 0.837052), 0.1 under its charge, and 3.5 for PyPI (boto3,
+  3.112123), 0.4 under its charge. The output limits, set by that rule from the realistic shapes in
   the output table below, are 1.75 per basis byte for npm (@aws-sdk/client-s3, 1.524, 14.8% margin), 0.25
   under its charge, and 1.5 for PyPI (boto3, 1.242, 20.7% margin), 0.1 under its charge. One
   example checks that each limit sits below its charge. All four limits remain unchanged because
@@ -246,8 +246,9 @@ The checks compare bytes with each ecosystem's charges:
   document's weight, expanded as a cache expands it, covers them.
 
 The listing figures below come from one native `ubuntu-26.04-arm` Build job of
-[CI run 38082780368](https://github.com/AlexaDeWit/Ecluse/actions/runs/38082780368/job/114308391999).
-It checked out merged `main` at `1a53a01b0480ae61f486a6ec1eda0a27cb646181`, including #1594.
+[CI run 38107103485](https://github.com/AlexaDeWit/Ecluse/actions/runs/38107103485/job/114374944192).
+It checked out PR merge `3f63e1e7912aa0b118ea39044e32c368380f9a58`, whose tree matches
+`689b7a19f4c3c1840a115cc185582075293c050e` and includes `main` at `7f214208`.
 The run used GHC 9.10.3, Cabal `-O1` and one capability per child. It reports 84 unique listings:
 all 12 captures in the single-source shape and all six merge shapes.
 Each figure is heap bytes per source byte: the read's peak and the held entry above the baseline,
@@ -257,25 +258,25 @@ read.
 
 | Ecosystem | Package | Source MiB | Read peak | Entry | Peak above entry | Served body |
 |---|---|--:|--:|--:|--:|--:|
-| npm | typescript | 14.97 | 0.567 | 0.467 | 0.677 | 0.659 |
-| npm | @types/node | 10.63 | 0.390 | 0.305 | 0.191 | 0.175 |
-| npm | react | 6.67 | 0.863 | 0.698 | 0.526 | 0.495 |
-| npm | webpack | 4.96 | 0.493 | 0.327 | 0.725 | 0.712 |
-| npm | @aws-sdk/client-s3 | 3.97 | 0.530 | 0.353 | 0.777 | 0.762 |
-| npm | express | 0.77 | 1.121 | 0.570 | 0.582 | 0.576 |
-| npm | @babel/core | 0.76 | 0.917 | 0.481 | 0.581 | 0.575 |
-| npm | request | 0.29 | 1.547 | 0.620 | 0.927 | 0.529 |
-| npm | lodash | 0.24 | 1.649 | 0.658 | 0.991 | 0.362 |
-| PyPI | numpy | 2.65 | 2.438 | 2.065 | 0.885 | 0.596 |
-| PyPI | boto3 | 2.10 | 3.196 | 2.855 | 1.012 | 0.621 |
-| PyPI | requests | 0.12 | 4.378 | 3.096 | 1.282 | 0.657 |
+| npm | typescript | 14.97 | 0.556 | 0.467 | 0.677 | 0.659 |
+| npm | @types/node | 10.63 | 0.375 | 0.305 | 0.191 | 0.175 |
+| npm | react | 6.67 | 0.837 | 0.698 | 0.526 | 0.495 |
+| npm | webpack | 4.96 | 0.464 | 0.327 | 0.725 | 0.712 |
+| npm | @aws-sdk/client-s3 | 3.97 | 0.487 | 0.353 | 0.777 | 0.762 |
+| npm | express | 0.77 | 0.975 | 0.570 | 0.582 | 0.576 |
+| npm | @babel/core | 0.76 | 0.741 | 0.481 | 0.581 | 0.575 |
+| npm | request | 0.29 | 0.648 | 0.620 | 0.546 | 0.529 |
+| npm | lodash | 0.24 | 0.693 | 0.658 | 0.384 | 0.362 |
+| PyPI | numpy | 2.65 | 2.388 | 2.065 | 0.885 | 0.596 |
+| PyPI | boto3 | 2.10 | 3.112 | 2.855 | 0.998 | 0.621 |
+| PyPI | requests | 0.12 | 3.166 | 3.094 | 0.669 | 0.657 |
 
 The full-read charges use listings with at least one step of sources, merges included.
-npm's realistic maximum is 0.953794 (express, publish order) and its all-shape maximum is 1.071015
-(express, oldest heavy base). The margin figure rounds 1.25 times the first to 1.2, while the
-all-shape figure rounds the second to 1.1, so npm's charge is 1.2.
-PyPI's maximum for both sets is 3.196237 (boto3, single document). Its margin figure is 4.0 and
-its all-shape figure is 3.2, so its charge rises from 3.9 to 4.0.
+npm's realistic maximum is 0.837052 (react, single document) and its all-shape maximum is 0.958492
+(express, oldest heavy base). The margin figure rounds 1.25 times the first to 1.1, while the
+all-shape figure rounds the second to 1.0, so npm's charge falls from 1.2 to 1.1.
+PyPI's maximum for both sets is 3.112123 (boto3, single document). Its margin figure is 3.9 and
+its all-shape figure is 3.2, so its charge falls from 4.0 to 3.9.
 The rules use measured byte counts before rounding, rather than the rounded table cells.
 
 The same run gives these read peaks per source byte. An asterisk marks a listing below one step,
@@ -283,18 +284,18 @@ which the per-byte calibration excludes. The paid-step checks still cover it.
 
 | Ecosystem | Package | Single | Identical | Overlapping | Disjoint | Publish order | Heavy base | Oldest heavy base |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
-| npm | typescript | 0.567 | 0.517 | 0.520 | 0.528 | 0.554 | 0.696 | 0.715 |
-| npm | @types/node | 0.390 | 0.348 | 0.351 | 0.358 | 0.377 | 0.575 | 0.600 |
-| npm | react | 0.863 | 0.780 | 0.783 | 0.788 | 0.853 | 0.894 | 0.893 |
-| npm | webpack | 0.493 | 0.410 | 0.441 | 0.471 | 0.406 | 0.641 | 0.661 |
-| npm | @aws-sdk/client-s3 | 0.530 | 0.442 | 0.474 | 0.501 | 0.500 | 0.663 | 0.660 |
-| npm | express | 1.121* | 0.864 | 0.942 | 1.006* | 0.954 | 1.046 | 1.071 |
-| npm | @babel/core | 0.917* | 0.714 | 0.799 | 0.940* | 0.840* | 0.937 | 0.952 |
-| npm | request | 1.547* | 1.128* | 1.273* | 1.158* | 1.208* | 1.248* | 1.280* |
-| npm | lodash | 1.649* | 1.169* | 1.242* | 1.500* | 1.342* | 1.363* | 1.279* |
-| PyPI | numpy | 2.438 | 2.252 | 2.247 | 2.248 | 2.305 | 1.966 | 1.964 |
-| PyPI | boto3 | 3.196 | 3.026 | 3.036 | 3.048 | 3.132 | 2.489 | 2.490 |
-| PyPI | requests | 4.378* | 3.896* | 3.810* | 3.762* | 3.868* | 3.196* | 3.224* |
+| npm | typescript | 0.556 | 0.512 | 0.512 | 0.517 | 0.545 | 0.690 | 0.707 |
+| npm | @types/node | 0.375 | 0.340 | 0.341 | 0.345 | 0.365 | 0.566 | 0.590 |
+| npm | react | 0.837 | 0.767 | 0.764 | 0.765 | 0.831 | 0.877 | 0.877 |
+| npm | webpack | 0.464 | 0.395 | 0.418 | 0.433 | 0.386 | 0.622 | 0.642 |
+| npm | @aws-sdk/client-s3 | 0.487 | 0.420 | 0.443 | 0.465 | 0.466 | 0.637 | 0.634 |
+| npm | express | 0.975* | 0.772 | 0.795 | 0.786* | 0.824 | 0.934 | 0.958 |
+| npm | @babel/core | 0.741* | 0.627 | 0.687 | 0.717* | 0.683* | 0.828 | 0.839 |
+| npm | request | 0.648* | 0.673* | 0.757* | 0.564* | 0.838* | 0.735* | 0.876* |
+| npm | lodash | 0.693* | 0.706* | 0.682* | 0.667* | 0.666* | 1.000* | 1.050* |
+| PyPI | numpy | 2.388 | 2.222 | 2.213 | 2.224 | 2.271 | 1.927 | 1.930 |
+| PyPI | boto3 | 3.112 | 2.983 | 2.988 | 2.991 | 3.062 | 2.436 | 2.438 |
+| PyPI | requests | 3.166* | 3.364* | 3.239* | 3.263* | 3.546* | 2.685* | 2.674* |
 
 The same run gives each listing's output working set per byte of its basis below.
 The realistic maxima from one step of basis up remain 1.523900 for npm (@aws-sdk/client-s3) and
@@ -309,11 +310,11 @@ The realistic maxima from one step of basis up remain 1.523900 for npm (@aws-sdk
 | npm | @aws-sdk/client-s3 | 1.524 | 1.524 | 1.513 | 1.502 | 1.524 | 1.667 | 1.665 |
 | npm | express | 1.151 | 1.151 | 1.122 | 1.091 | 1.017 | 1.388 | 1.427 |
 | npm | @babel/core | 1.149 | 1.149 | 1.148 | 1.148 | 1.149 | 1.431 | 1.461 |
-| npm | request | 1.058 | 1.058 | 0.945 | 0.854 | 0.821 | 1.201 | 1.223 |
-| npm | lodash | 0.991 | 1.013 | 0.813 | 0.896 | 0.896 | 1.077 | 1.092 |
+| npm | request | 1.058 | 1.058 | 0.943 | 0.854 | 0.821 | 1.201 | 1.223 |
+| npm | lodash | 0.725 | 0.725 | 0.687 | 0.650 | 0.650 | 1.077 | 1.092 |
 | PyPI | numpy | 1.193 | 1.193 | 1.195 | 1.199 | 0.956 | 1.467 | 1.541 |
 | PyPI | boto3 | 1.242 | 1.242 | 1.242 | 1.242 | 1.242 | 1.495 | 1.496 |
-| PyPI | requests | 1.315 | 1.586 | 1.323 | 1.318 | 1.185 | 1.544 | 1.588 |
+| PyPI | requests | 1.315 | 1.315 | 1.323 | 1.318 | 1.185 | 1.544 | 1.588 |
 
 Under the output charges, npm 2.0 and PyPI 1.6 per basis byte, the heavy bases hold at most 0.963
 of their charge from one step of basis up (numpy, oldest heavy base) and 0.992 below it (requests,
@@ -324,9 +325,9 @@ The rules for the charges and the limits take the listings of at least one step,
 From one step up, each listing's peak above the documents it holds stays below twice its served
 body, so twice the served body sets the output working set.
 
-The same run's retained Shared entries peak at 0.696387 for npm (react) and 3.042371 for PyPI
+The same run's retained Shared entries peak at 0.696389 for npm (react) and 3.043151 for PyPI
 (requests). They fit both the independent retained gates of 1.0 and 3.5 and the full-read charges
-of 1.2 and 4.0. Those retained gates do not scale with an admission charge and keep their existing
+of 1.1 and 3.9. Those retained gates do not scale with an admission charge and keep their existing
 calibration. The same 12 Shared measurements also keep twice the encoded size within the unchanged
 output factors of 2.0 and 1.6.
 

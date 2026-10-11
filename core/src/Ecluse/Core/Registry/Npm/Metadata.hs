@@ -70,11 +70,11 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
-{- | npm's charges cover read peaks of 1.071 bytes per source byte and realistic output working sets
+{- | npm's charges cover read peaks of 0.958 bytes per source byte and realistic output working sets
 of 1.524 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 1200, cfOutputPermille = 2000}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
 
 -- Walk a packument's chunks into aeson's tree with the production field policy.
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
