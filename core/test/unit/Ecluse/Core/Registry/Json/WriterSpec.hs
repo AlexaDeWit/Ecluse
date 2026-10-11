@@ -6,7 +6,7 @@
 module Ecluse.Core.Registry.Json.WriterSpec (spec) where
 
 import Control.Monad.ST (ST)
-import Data.Aeson (Value (Object, String), encode)
+import Data.Aeson (Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -18,10 +18,11 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
-import Ecluse.Core.Registry.Json.Packed (docTable, packedBlob, packedBytes, packedEncodedLength, packedValue, valueEnd)
+import Ecluse.Core.Registry.Json.Packed (Packed, docTable, hasHole, packedBlob, packedBytes, packedEncodedLength, packedValue, urlPrefix, valueEnd)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, replacedMember, sealValue)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Test.Json (genValue)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
@@ -102,6 +103,63 @@ spec = describe "Writer" $ do
                                 pure (Finished (first', second'))
         readOutcome (walkWritingChunks bound packed [body])
             `shouldBe` Right (BS.length body, Right (Just (Object (KeyMap.singleton "name" (String "abcdefghij"))), Nothing))
+
+    for_ [False, True] $ \shared -> for_ sealCases $ \(label, path, body, expectedBody, rebasedBody) ->
+        it (label <> if shared then " with shared keys" else " with owned keys") $ do
+            let mode = if shared then Share else Keep
+                bound = MetadataBodyLimit (BS.length body)
+                setup :: ST st (Cursor -> ST st (Steps (ST st) (InternTable, Packed)))
+                setup =
+                    newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
+                        readShape writer (Generic 16) mode (testTable ["url"]) element rest $ \() table _ -> do
+                            form <- sealValue writer path
+                            pure (Finished (table, form))
+            case walkWritingChunks bound setup [body] of
+                Left fault -> expectationFailure (show fault)
+                Right (StreamResult (Left fault) _) -> expectationFailure (show fault)
+                Right (StreamResult (Right (table, form)) _) -> do
+                    let held = docTable (tableTexts table)
+                        expected = decodeStrict expectedBody :: Maybe Value
+                        rebased = decodeStrict (fromMaybe expectedBody rebasedBody) :: Maybe Value
+                    expected `shouldSatisfy` isJust
+                    rebased `shouldSatisfy` isJust
+                    packedValue held form `shouldBe` expected
+                    hasHole form `shouldBe` isJust rebasedBody
+                    Just (packedEncodedLength form) `shouldBe` (BS.length . toStrict . encode <$> expected)
+                    packedEncodedLength form `shouldBe` walkedLength table form
+                    valueEnd (packedBlob form) 0 `shouldBe` packedBytes form
+                    renderAlone held Nothing form `shouldBe` (toStrict . encode <$> expected)
+                    renderAlone held (Just (urlPrefix "https://mirror/")) form `shouldBe` (toStrict . encode <$> rebased)
+
+    it "forces sealed lengths before the writer grows its shared-string arrays for another value" $ do
+        let firstBody = "{\"dist\":{\"tarball\":\"https://files.example/a.tgz\"},\"z\":\"kept\"}"
+            laterValue = Object (KeyMap.fromList [(Key.fromText ("k" <> show n), String ("v" <> show n)) | n <- [0 .. 299 :: Int]])
+            body = firstBody <> " " <> toStrict (encode laterValue) <> " "
+            bound = MetadataBodyLimit (BS.length body)
+            setup :: ST st (Cursor -> ST st (Steps (ST st) (InternTable, Packed, Packed)))
+            setup =
+                newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
+                    readShape writer (Generic 16) Share (testTable ["url"]) element rest $ \() table afterFirst -> do
+                        firstForm <- sealValue writer ["dist", "tarball"]
+                        withElement afterFirst $ \element2 rest2 ->
+                            readShape writer (Generic 16) Share table element2 rest2 $ \() finalTable _ -> do
+                                laterForm <- sealValue writer ["absent"]
+                                pure (Finished (finalTable, firstForm, laterForm))
+        case walkWritingChunks bound setup [body] of
+            Left fault -> expectationFailure (show fault)
+            Right (StreamResult (Left fault) _) -> expectationFailure (show fault)
+            Right (StreamResult (Right (table, firstForm, laterForm)) _) -> do
+                let held = docTable (tableTexts table)
+                    expected = decodeStrict firstBody :: Maybe Value
+                    rebased = decodeStrict "{\"dist\":{\"tarball\":\"https://mirror/a.tgz\"},\"z\":\"kept\"}" :: Maybe Value
+                expected `shouldSatisfy` isJust
+                packedValue held firstForm `shouldBe` expected
+                packedValue held laterForm `shouldBe` Just laterValue
+                Just (packedEncodedLength firstForm) `shouldBe` (BS.length . toStrict . encode <$> expected)
+                packedEncodedLength laterForm `shouldBe` BS.length (toStrict (encode laterValue))
+                renderAlone held (Just (urlPrefix "https://mirror/")) firstForm `shouldBe` (toStrict . encode <$> rebased)
+                hasHole firstForm `shouldBe` True
+                hasHole laterForm `shouldBe` False
   where
     withPointer = \case
         Object fields -> Object (KeyMap.insert "author" (String "See the source") fields)
@@ -109,6 +167,20 @@ spec = describe "Writer" $ do
     ownAuthor = \case
         Object fields -> KeyMap.lookup "author" fields
         _ -> Nothing
+
+sealCases :: [(String, [Text], ByteString, ByteString, Maybe ByteString)]
+sealCases =
+    [ ("keeps an empty-path string hole", [], "\"a.tgz\" ", "\"a.tgz\"", Just "\"https://mirror/a.tgz\"")
+    , ("keeps an empty-path number without a hole", [], "12 ", "12", Nothing)
+    , ("does not follow a member path through a root array", ["url"], "[{\"url\":\"a.tgz\"}]", "[{\"url\":\"a.tgz\"}]", Nothing)
+    , ("does not follow a member path through a nested array", ["dist", "tarball"], "{\"dist\":[{\"tarball\":\"a.tgz\"}],\"z\":[]}", "{\"dist\":[{\"tarball\":\"a.tgz\"}],\"z\":[]}", Nothing)
+    , ("measures all subtrees when the target is absent", ["missing"], "{\"a\":{\"k\":[1,2]},\"z\":\"tail\"}", "{\"a\":{\"k\":[1,2]},\"z\":\"tail\"}", Nothing)
+    , ("does not repair a first non-string target with a duplicate", ["url"], "{\"a\":[1,2],\"url\":null,\"url\":\"a.tgz\",\"z\":\"tail\"}", "{\"a\":[1,2],\"url\":null,\"z\":\"tail\"}", Nothing)
+    , ("does not repair a first non-object ancestor with a duplicate", ["dist", "tarball"], "{\"dist\":false,\"dist\":{\"tarball\":\"a.tgz\"},\"z\":{}}", "{\"dist\":false,\"z\":{}}", Nothing)
+    , ("finds decoded escaped member names", ["dist", "tarball"], "{\"di\\u0073t\":{\"tar\\u0062all\":\"https://files.example/a.tgz\"},\"z\":[]}", "{\"dist\":{\"tarball\":\"https://files.example/a.tgz\"},\"z\":[]}", Just "{\"dist\":{\"tarball\":\"https://mirror/a.tgz\"},\"z\":[]}")
+    , ("matches quoted and backslash member names", ["a\"", "b\\"], "{\"a\\\"\":{\"b\\\\\":\"https://files.example/a.tgz\"},\"z\":[]}", "{\"a\\\"\":{\"b\\\\\":\"https://files.example/a.tgz\"},\"z\":[]}", Just "{\"a\\\"\":{\"b\\\\\":\"https://mirror/a.tgz\"},\"z\":[]}")
+    , ("matches an empty member name", ["", "url"], "{\"\":{\"url\":\"a.tgz\"},\"z\":0}", "{\"\":{\"url\":\"a.tgz\"},\"z\":0}", Just "{\"\":{\"url\":\"https://mirror/a.tgz\"},\"z\":0}")
+    ]
 
 -- A table that holds @author@ and a pointer string, as an npm full read's table does, and both entries.
 authorTable :: InternTable

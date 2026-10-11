@@ -4,11 +4,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UnboxedTuples #-}
 
-{- | The packed form's writer: a 'Build' that writes each value's opcodes into one scratch buffer per
-read as the walk reads it, and copies each finished release or file into a blob of its own. An
-object's members are written in source order, and at the object's end they are copied behind their
-count in key order, the first member under each key kept.
--}
+-- | Pack retained values for shared rendering, preserving first members and key order.
 module Ecluse.Core.Registry.Json.Writer (
     Writer,
     newWriter,
@@ -43,9 +39,7 @@ import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newSc
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
 import Ecluse.Core.Registry.Json.Walk (Steps)
 
-{- | One read's scratch, and what an open object has recorded of each member: its key, where its
-value's bytes lie, and which earlier member under the same table key it hides.
--}
+-- | One read's scratch and member records, shared by every retained value of that read.
 data Writer st = Writer
     { writerScratch :: Scratch st
     , writerSpans :: MutVar st (MutablePrimArray st Int)
@@ -61,9 +55,7 @@ data Writer st = Writer
     , writerReplaced :: MutVar st (Maybe ByteArray)
     }
 
-{- | A writer for one read. Each top-level object also holds the given member, a table key and a
-string, in place of its own under that key. An object read in 'Keep' mode keeps its own instead.
--}
+-- | Create a read's writer, optionally adding a top-level member. Shared originals are replaced and retained for diagnostics. Owned originals win.
 newWriter :: Maybe (Entry, Entry) -> ST st (Writer st)
 newWriter added =
     Writer
@@ -108,9 +100,7 @@ data Frame = Frame !Int !Int
 spanWidth :: Int
 spanWidth = 4
 
-{- | A value the writer holds in its scratch, which a read passes on as a mark only. Each step runs
-out of line, so a read's continuations hold the writer as one pointer.
--}
+-- Build results carry no payload. Out-of-line steps keep one writer pointer in read continuations.
 instance Build (Writer st) (ST st (Steps (ST st) s)) where
     type Built (Writer st) = ()
     type Fields (Writer st) = Frame
@@ -553,9 +543,7 @@ closeItems writer count start = do
         void (writeVarint count buffer (start + 1))
     rewindTo scratch (end + header)
 
-{- | Copy the value the writer holds into a packed value, and empty the scratch for the next one. Its
-hole is the string at the path of member names, when the value holds one there.
--}
+-- | Seal the current value for scratch reuse, with its encoded length and a string hole at the member path.
 sealValue :: Writer st -> [Text] -> ST st Packed
 sealValue writer path = do
     let scratch = writerScratch writer
@@ -568,14 +556,47 @@ sealValue writer path = do
     replaced <- if from >= 0 then Just <$> copyOut scratch from to else pure Nothing
     discard writer
     writeMutVar (writerReplaced writer) replaced
-    hole <- holeAt writer blob path 0
     -- The lengths are read here, before a later claim writes the array again.
     lengths <- readMutVar (writerLengths writer) >>= unsafeFreezePrimArray
-    pure $! case encodedFrom lengths blob 0 of Measured encoded _ -> packed blob hole encoded
+    SealedMeasurement encoded _ hole <- sealedFrom writer lengths blob path 0
+    pure $! packed blob hole encoded
 
--- The bytes a render writes for a value of a sealed blob, and the position after the value. The two
--- return in registers as strict fields, where a pair would allocate for every value.
+-- Force encoded bytes and the end offset before the shared length array can be reused.
 data Measured = Measured !Int !Int
+
+-- Only nodes on the requested path need a hole result. Other subtrees keep the pure measurement.
+data SealedMeasurement = SealedMeasurement !Int !Int !Int
+
+sealedFrom :: Writer st -> PrimArray Int -> ByteArray -> [Text] -> Int -> ST st SealedMeasurement
+sealedFrom writer lengths blob path position = case path of
+    name : rest
+        | code == opObject -> case readVarint blob (position + 1) of
+            (# count, next #) -> search count next (separators count)
+      where
+        search !remaining !at !total
+            | remaining <= 0 = pure $! SealedMeasurement total at (-1)
+            | otherwise = keyAt writer blob at $ \key valueAt tagged ->
+                let keyLength = if even tagged then indexPrimArray lengths (tagged `div` 2) else tagged `div` 2
+                    withKey = total + keyLength + 1
+                 in if key == name
+                        then do
+                            SealedMeasurement len after hole <- sealedFrom writer lengths blob rest valueAt
+                            -- A matching key ends the search even when its nested target provides no string hole.
+                            pure $! case membersFrom lengths blob (remaining - 1) after (withKey + len) of
+                                Measured encoded end -> SealedMeasurement encoded end hole
+                        else case encodedFrom lengths blob valueAt of
+                            Measured len after -> search (remaining - 1) after (withKey + len)
+    _ ->
+        pure $! case encodedFrom lengths blob position of
+            Measured encoded end ->
+                let hole = case path of
+                        []
+                            | code == opShared -> position
+                            | code == opInline, (indexByteArray blob (end - encoded) :: Word8) == 0x22 -> position
+                        _ -> -1
+                 in SealedMeasurement encoded end hole
+  where
+    code = indexByteArray blob position :: Word8
 
 -- Measure the value at a position, from the recorded length of each table string it names.
 encodedFrom :: PrimArray Int -> ByteArray -> Int -> Measured
@@ -620,51 +641,27 @@ discard writer = do
     writePrimArray (writerMarks writer) replacedStart (-1)
     writeMutVar (writerReplaced writer) Nothing
 
-{- | The member the added member replaced in the value sealed last, as read, or nothing when that
-value held none or the writer discarded a value since.
--}
+-- | The added member's original value from the last seal, absent after discard or a value without that member.
 replacedMember :: Writer st -> ST st (Maybe Value)
 replacedMember writer = readMutVar (writerReplaced writer) >>= traverse (\blob -> newPrimVar 0 >>= decodeWith writer blob)
 
--- Where the string at the path of member names starts, or -1.
-holeAt :: Writer st -> ByteArray -> [Text] -> Int -> ST st Int
-holeAt writer blob path position = case path of
-    []
-        | code == opShared -> pure position
-        | code == opInline, stringAt -> pure position
-        | otherwise -> pure (-1)
-    name : rest
-        | code /= opObject -> pure (-1)
-        | otherwise -> case readVarint blob (position + 1) of
-            (# count, next #) -> search count next
-      where
-        search !remaining !at
-            | remaining <= 0 = pure (-1)
-            | otherwise = keyAt writer blob at $ \key valueAt ->
-                if key == name then holeAt writer blob rest valueAt else search (remaining - 1) (valueEnd blob valueAt)
-  where
-    code = indexByteArray blob position :: Word8
-    stringAt = case readVarint blob (position + 1) of (# _, next #) -> (indexByteArray blob next :: Word8) == 0x22
-
--- A member's key text and where its value starts.
-keyAt :: Writer st -> ByteArray -> Int -> (Text -> Int -> ST st a) -> ST st a
+-- The original key tag lets measurement use stored lengths without encoding the key again.
+keyAt :: Writer st -> ByteArray -> Int -> (Text -> Int -> Int -> ST st a) -> ST st a
 keyAt writer blob at next = case readVarint blob at of
     (# tagged, after #)
         | even tagged -> do
             strings <- readMutVar (writerStrings writer)
             string <- readArray strings (tagged `div` 2)
-            next (stringText string) after
+            next (stringText string) after tagged
         | otherwise -> case decodeScalar blob after (tagged `div` 2) of
-            String text -> next text (after + tagged `div` 2)
-            _ -> next "" (after + tagged `div` 2)
+            String text -> next text (after + tagged `div` 2) tagged
+            _ -> next "" (after + tagged `div` 2) tagged
 {-# INLINE keyAt #-}
 
 -- | Which parts of a packed value a decode needs: all of it, or the named members of an object.
 data Pick = Whole | Only [(Text, Pick)]
 
-{- | The parts of a packed value the pick names, as aeson's tree sharing the read's strings. A value
-that is not an object where the pick names members decodes whole.
--}
+-- | Decode picked members through the read's shared strings. Non-object values at member picks decode whole.
 decodePicked :: Writer st -> Pick -> Packed -> ST st Value
 decodePicked writer pick value = newPrimVar 0 >>= decodePart writer pick (packedBlob value)
 
@@ -687,7 +684,7 @@ decodePart writer pick blob at = case pick of
 countPicked :: Writer st -> [(Text, Pick)] -> ByteArray -> Int -> Int -> Int -> ST st Int
 countPicked writer picks blob !remaining !position !found
     | remaining <= 0 = pure found
-    | otherwise = keyAt writer blob position $ \text valueAt ->
+    | otherwise = keyAt writer blob position $ \text valueAt _ ->
         countPicked writer picks blob (remaining - 1) (valueEnd blob valueAt) (if isJust (pickFor text picks) then found + 1 else found)
 
 -- The next picked members, the given number of them, as a balanced map built in key order.
@@ -707,7 +704,7 @@ pickFor text = fmap snd . find ((== text) . fst)
 
 -- The next member the pick names, skipping the others.
 nextPicked :: Writer st -> [(Text, Pick)] -> ByteArray -> PrimVar st Int -> Int -> ST st (Key.Key, Value)
-nextPicked writer picks blob at !position = keyAt writer blob position $ \text valueAt -> case pickFor text picks of
+nextPicked writer picks blob at !position = keyAt writer blob position $ \text valueAt _ -> case pickFor text picks of
     Just pick -> do
         writePrimVar at valueAt
         member <- decodePart writer pick blob at
