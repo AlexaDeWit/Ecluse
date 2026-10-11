@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.PyPI.FileWriter (
 
 import Control.Monad.ST (ST)
 import Data.Aeson (Value (..), parseJSON)
-import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (parseMaybe)
 import Data.Bits ((.&.), (.|.))
 import Data.Map.Strict qualified as Map
@@ -20,8 +19,8 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Entry (EntryKey (SingletonEntry))
-import Ecluse.Core.Registry.Json.Intern (entryString, entryText, nameText)
-import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
+import Ecluse.Core.Registry.Json.Intern (entryString, nameText)
+import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), YankState (FileOffered), yankState)
@@ -82,12 +81,12 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
         next $! case fields of
             FileFields _ facts seen ->
                 let marked = case key of
-                        OwnKey own -> seen .|. fileFieldBit (Key.toText own)
+                        OwnKey _ -> seen .|. fileFieldBit (memberText key)
                         SharedKey _ -> seen
-                 in FileFields frame (reduceMember (keyText key) value facts) marked
+                 in FileFields frame (reduceMember (memberText key) value facts) marked
             HashFields _ hashes valid ->
                 let text = scalarText value
-                 in HashFields frame (Map.insert (keyText key) (fromMaybe "" text) hashes) (valid && isJust text)
+                 in HashFields frame (Map.insert (memberText key) (fromMaybe "" text) hashes) (valid && isJust text)
     dropValue (FileWriter writer _) _ = dropValue writer ()
     closeObject (FileWriter writer depth) fields next = do
         level <- readPrimVar depth
@@ -118,15 +117,10 @@ frameOf = \case
     FileFields frame _ _ -> frame
     HashFields frame _ _ -> frame
 
-keyText :: MemberKey -> Text
-keyText = \case
-    SharedKey entry -> entryText entry
-    OwnKey key -> Key.toText key
-
 seenMember :: MemberKey -> FileFields -> Bool
 seenMember key fields = case (key, fields) of
-    (OwnKey own, FileFields _ _ seen) -> seen .&. fileFieldBit (Key.toText own) /= 0
-    (_, HashFields _ hashes _) -> Map.member (keyText key) hashes
+    (OwnKey _, FileFields _ _ seen) -> seen .&. fileFieldBit (memberText key) /= 0
+    (_, HashFields _ hashes _) -> Map.member (memberText key) hashes
     _ -> False
 
 fileFieldBit :: Text -> Word8
