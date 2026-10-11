@@ -34,11 +34,11 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion, versionKeyIn)
+import Ecluse.Core.Version (Version, VersionKey, parseVersionKey, renderVersion, renderVersionKey, versionKeyIn)
 
 import Database.SQLite.Simple (Connection, SQLError, close)
 
-{- | Query canonical package keys, with npm scopes inline, and raw version strings.
+{- | Query canonical package keys, with npm scopes inline, and canonical advisory versions.
 Display names must not be used as query keys.
 -}
 data CveLookup = CveLookup
@@ -148,14 +148,20 @@ fromSegments eco segments =
     PackageAdvisories
         { paEcosystem = eco
         , paSegments = segments
-        , paFixes = Map.fromListWith (flip (<>)) [(fixed, [segRange s]) | s <- segments, FixedBefore fixed <- [arUpperBound (segRange s)]]
+        , paFixes = Map.fromListWith (flip (<>)) [(fixedIdentity s fixed, [segRange s]) | s <- segments, FixedBefore fixed <- [arUpperBound (segRange s)]]
         }
 
-{- | The rows whose fixed bound is this version's exact text, in row order. A row with a fixed bound
-always decodes to 'FixedBefore', so this is an exact match on the artifact's @fixed_version@.
--}
+-- Reuse the parsed upper bound. An unorderable fix retains its literal identity.
+fixedIdentity :: Segment -> Text -> Text
+fixedIdentity segment raw = case segBounds segment of
+    Ordered _ (Below key) -> renderVersionKey key
+    _ -> raw
+
+-- | Rows with this ecosystem's canonical exact fix identity, retaining order and duplicates.
 fixedAt :: PackageAdvisories -> Version -> [AdvisoryRange]
-fixedAt advisories version = Map.findWithDefault [] (renderVersion version) (paFixes advisories)
+fixedAt advisories version = Map.findWithDefault [] identity (paFixes advisories)
+  where
+    identity = maybe (renderVersion version) renderVersionKey (versionKeyIn (paEcosystem advisories) version)
 
 {- | The rows whose affected interval holds a version of the package, in row order. __Fail-closed:__
 an unprovable comparison counts as __inside__, bar a point the grammar cannot order.

@@ -38,6 +38,27 @@ spec = do
                 builtUnder <- forAll (Gen.element (map fst ecosystemGens))
                 versionKeyIn eco (mkVersion builtUnder raw) === versionKey (mkVersion eco raw)
 
+    describe "canonical advisory identity" $ do
+        for_ ecosystemGens $ \(eco, gen) ->
+            it ("round-trips and renders idempotently for " <> show eco) $
+                hedgehog $ do
+                    raw <- forAll gen
+                    key <- H.evalEither (parseVersionKey eco raw)
+                    let canonical = renderVersionKey key
+                    reparsed <- H.evalEither (parseVersionKey eco canonical)
+                    reparsed === key
+                    renderVersionKey reparsed === canonical
+                    renderVersion (mkVersion eco raw) === raw
+        it "normalises npm advisory v prefixes without widening public parsing" $ do
+            renderVersionKey <$> parseAdvisoryVersionKey Npm "v1.2.0-rc.1+build.07" `shouldBe` Right "1.2.0-rc.1+build.07"
+            parseVersionKey Npm "v1.2.0" `shouldSatisfy` isLeft
+            for_ ["vv1.2.0", "V1.2.0", "v01.2.0", "v1.2", "v1.2.0-01", "v1.2.0+1234567890123456789", "v1.2.0+" <> T.replicate 1018 "a"] $ \raw ->
+                parseAdvisoryVersionKey Npm raw `shouldSatisfy` isLeft
+        for_ [(PyPI, "1.19.0", "1.19"), (RubyGems, "1.19.0", "1.19"), (Npm, "1.19.0", "1.19.0")] $ \(eco, raw, expected) ->
+            it ("renders " <> show eco <> " keys while preserving wire text") $ do
+                renderVersionKey <$> parseAdvisoryVersionKey eco raw `shouldBe` Right expected
+                renderVersion (mkVersion eco raw) `shouldBe` raw
+
     describe "parseVersionKey" $
         for_ parseableEcosystems $ \(eco, valid, invalid, refusalName, gen) ->
             describe (show eco) $ do

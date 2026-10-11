@@ -36,8 +36,8 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (evaluate, finally, try)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Core.Cve (CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), openCveDb)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), affecting, fixedAt, openCveDb, packageAdvisories)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (CompileSources (..), PilotEpssRequired (..), compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
@@ -51,6 +51,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Cve (namesFix)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
@@ -89,7 +90,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
         -- The file-name literal and the meta keys below pin the artifact's wire contract, the forms
         -- a reader depends on, not the constants that produced them.
-        takeFileName dbFile `shouldBe` "npm-osv-schema4.db"
+        takeFileName dbFile `shouldBe` "npm-osv-schema5.db"
         -- EPSS joins through CVE-2024-48913, while the row retains the GHSA id.
         rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9, Just 0.75)]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
@@ -197,7 +198,24 @@ spec = describe "SQLite OSV Compilation" $ do
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
 
-    it "accepts a rebuilt PyPI artifact with canonical names and raw fix versions" $ do
+    for_ [(Npm, "npm", "v1.2.0", "v2.0.0+build.7", "v3.0.0", "1.2.0", "2.0.0+build.7", "3.0.0"), (PyPI, "PyPI", "1.2.0", "2.0.0", "3.0.0", "1.2", "2", "3"), (RubyGems, "RubyGems", "1.2.0", "2.0.0", "3.0.0", "1.2", "2", "3")] $ \(eco, sourceEco, rawLower, rawFix, rawLast, lower, fixed, lastAffected) ->
+        it ("persists every canonical version field and matches compiled " <> show eco <> " fixes") $ do
+            let events = [object ["introduced" .= (rawLower :: Text)], object ["fixed" .= (rawFix :: Text)], object ["introduced" .= (rawLast :: Text)], object ["last_affected" .= (rawLast :: Text)]]
+                record = object ["id" .= ("GHSA-canonical" :: Text), "affected" .= [object ["package" .= object ["name" .= ("pkg" :: Text), "ecosystem" .= (sourceEco :: Text)], "ranges" .= [object ["type" .= ("ECOSYSTEM" :: Text), "events" .= events]], "versions" .= [rawFix]]]]
+            archive <- osvZipOf [("canonical.json", encode record)]
+            withSystemTempDirectory "ecluse-canonical-fields" $ \dir -> do
+                path <- compileOsvZipDbTo eco archive dir
+                stored <- withConnection path (\conn -> query_ conn "SELECT introduced_version, fixed_version, last_affected_version FROM package_vulnerability_ranges ORDER BY rowid" :: IO [(Maybe Text, Maybe Text, Maybe Text)])
+                stored `shouldBe` [(Just lower, Just fixed, Nothing), (Just lastAffected, Nothing, Just lastAffected), (Just fixed, Nothing, Just fixed)]
+                openCveDb eco EpssRequired path >>= \case
+                    Left rejection -> fail ("canonical artifact rejected: " <> show rejection)
+                    Right db -> flip finally (cveDbClose db) $ do
+                        rows <- cveAdvisoriesFor (cveDbLookup db) "pkg"
+                        let advisories = packageAdvisories eco rows
+                        map arCveId (fixedAt advisories (mkVersion eco fixed)) `shouldBe` ["GHSA-canonical"]
+                        affecting advisories (mkVersion eco lower) `shouldSatisfy` (not . null)
+
+    it "accepts a rebuilt PyPI artifact with canonical package and fix versions" $ do
         zipData <-
             osvZipOf
                 [("pypi-advisory.json", "{\"id\":\"GHSA-pypi\",\"affected\":[{\"package\":{\"name\":\"Flask_Thing\",\"ecosystem\":\"PyPI\"},\"ranges\":[{\"type\":\"ECOSYSTEM\",\"events\":[{\"introduced\":\"0\"},{\"fixed\":\"1.0.0\"}]}]}]}")]
@@ -213,7 +231,7 @@ spec = describe "SQLite OSV Compilation" $ do
         close conn
 
         map fromOnly rows `shouldBe` ["flask-thing"]
-        takeFileName dbFile `shouldBe` "pypi-osv-schema4.db"
+        takeFileName dbFile `shouldBe` "pypi-osv-schema5.db"
         Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
         Map.lookup "epss_status" (Map.fromList metaRows) `shouldBe` Just "available"
         openCveDb PyPI EpssRequired dbFile >>= \case
@@ -221,8 +239,8 @@ spec = describe "SQLite OSV Compilation" $ do
             Right db -> flip finally (cveDbClose db) $ do
                 let cve = cveDbLookup db
                 cveCoveredNames cve `shouldReturn` ["flask-thing"]
-                namesFix cve "flask-thing" "1.0.0" `shouldReturn` True
-                namesFix cve "flask-thing" "1.0" `shouldReturn` False
+                namesFix cve "flask-thing" "1" `shouldReturn` True
+                namesFix cve "flask-thing" "1.0.0" `shouldReturn` False
                 cveAdvisoriesFor cve "flask-thing" >>= (`shouldSatisfy` (not . null))
         removeFile dbFile
 

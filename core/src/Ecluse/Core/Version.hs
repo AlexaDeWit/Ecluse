@@ -2,14 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Version identity and ordering.
-
-A 'Version' keeps the raw text verbatim, because version strings are embedded in artifact
-URLs and re-served. Ordering goes through 'compareVersions' on the parsed 'VersionKey',
-which exists only when the raw text parses for its ecosystem, so non-canonical text can
-never reach a comparator. Parsing is per-ecosystem and a 'VersionKey' has no public
-constructor: callers build with 'mkVersion', 'canonicalPep440' or 'parseVersionKey'. See
-@docs\/architecture\/registry-model.md@, "The internal domain model".
+{- | Version identity and ecosystem ordering.
+Wire text remains verbatim. Advisory identity uses 'renderVersionKey'.
+Opaque keys carry parsed versions under bounded ecosystem grammars.
 -}
 module Ecluse.Core.Version (
     -- * Versions
@@ -23,6 +18,8 @@ module Ecluse.Core.Version (
     -- * Canonical ordering keys
     VersionKey,
     parseVersionKey,
+    parseAdvisoryVersionKey,
+    renderVersionKey,
     VersionError (..),
     isStable,
 
@@ -35,11 +32,12 @@ module Ecluse.Core.Version (
 
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
+import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem)
+import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem, renderGem)
 import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, renderPep440)
-import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver)
+import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver, renderSemver)
 import Ecluse.Core.Version.Token (withinVersionLength)
 
 {- | A package version: the raw text as published, plus the parsed ordering key when the text
@@ -105,6 +103,19 @@ parseVersionKey eco raw = case eco of
   where
     note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
 
+-- | Parse an advisory spelling, accepting one npm @v@ prefix within the raw length bound.
+parseAdvisoryVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
+parseAdvisoryVersionKey eco raw
+    | not (withinVersionLength raw) = Left (VersionError ("unparseable version: " <> raw))
+    | otherwise = parseVersionKey eco (if eco == Npm then fromMaybe raw (T.stripPrefix "v" raw) else raw)
+
+-- | Render canonical advisory identity, retaining semver build metadata.
+renderVersionKey :: VersionKey -> Text
+renderVersionKey = \case
+    NpmKey key -> renderSemver key
+    PyPIKey key -> renderPep440 key
+    RubyGemsKey key -> renderGem key
+
 -- 'parseVersionKey' builds each ecosystem's key with its own constructor.
 keyEcosystem :: VersionKey -> Ecosystem
 keyEcosystem = \case
@@ -118,34 +129,14 @@ newtype VersionError = VersionError
     }
     deriving stock (Eq, Show)
 
-{- | Whether a parsed version is a __stable__ (final, non-prerelease) release, under its own
-ecosystem's notion of one.
-
->>> isStable <$> parseVersionKey Npm "1.0.0"
-Right True
->>> isStable <$> parseVersionKey Npm "1.0.0-rc.1"
-Right False
->>> isStable <$> parseVersionKey PyPI "1.0.post1"
-Right True
->>> isStable <$> parseVersionKey PyPI "1.0a1.dev2"
-Right False
->>> isStable <$> parseVersionKey RubyGems "1.0.0.pre"
-Right False
--}
+-- | Whether a version is a final release under its ecosystem's grammar.
 isStable :: VersionKey -> Bool
 isStable = \case
     NpmKey k -> isSemverStable k
     PyPIKey k -> isPep440Stable k
     RubyGemsKey k -> isGemStable k
 
-{- | A PEP 440 version under its one canonical spelling, which a PyPI projection keys by so two
-spellings of one release merge. It is the version 'mkVersion' builds from that spelling.
-
->>> renderVersion <$> canonicalPep440 "1.0.0"
-Just "1"
->>> renderVersion <$> canonicalPep440 "not-a-version"
-Nothing
--}
+-- | Build the canonical PEP 440 spelling used to merge equivalent PyPI releases.
 canonicalPep440 :: Text -> Maybe Version
 -- Inlined so a caller that wraps the version leaves one unevaluated closure, not two.
 {-# INLINE canonicalPep440 #-}

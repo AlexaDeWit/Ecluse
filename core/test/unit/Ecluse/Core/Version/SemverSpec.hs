@@ -17,7 +17,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Version.Semver (SemverKey (..), parseSemver)
+import Ecluse.Core.Version.Semver (SemverKey (..), parseSemver, renderSemver)
 import Ecluse.Core.Version.Token (digitRuns, withinVersionLength)
 import Ecluse.Test.Corpus (corpusPackages, cpPath)
 import Ecluse.Test.Json (keysAt, objectAt)
@@ -25,6 +25,16 @@ import Ecluse.Test.Support (decodeJsonOrFail)
 
 spec :: Spec
 spec = describe "parseSemver" $ do
+    describe "renderSemver" $ do
+        for_ ["1.2.3", "1.2.3-rc.1+build.07", "0.0.0+0001", "3.0.0+build.7"] $ \raw ->
+            it ("preserves all fields of " <> toString raw) $
+                renderSemver <$> parseSemver raw `shouldBe` Just raw
+        it "round-trips every parsed field, including build metadata" $
+            hedgehog $ do
+                raw <- forAll genVersionText
+                case parseSemver raw of
+                    Nothing -> pure ()
+                    Just key -> scanned (renderSemver key) === scanned raw
     generatedSpec
     grammarSpec
     captureSpec

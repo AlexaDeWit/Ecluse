@@ -40,7 +40,7 @@ import Ecluse.Core.Package (canonicalise, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource, withCveLookup)
 import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), Reason (..), Rule (..), RuleVerdict (..), completeEvidence, mkAdvisoryIds, unAdvisoryIds)
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Version (mkVersion, parseAdvisoryVersionKey, renderVersionKey)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), captureTexts, corpusPackages, cpName, pypiCorpusPackages)
 import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), compileAdvisoryInputs, corpusAdvisories)
 import Ecluse.Test.Osv (noScores, osvZipOf)
@@ -180,7 +180,36 @@ spec = describe "one OSV advisory record" $ do
             it (toString ("keys " <> eco <> " package " <> raw <> " as " <> expected)) $ do
                 let adv = OsvAdvisory "GHSA-name" Nothing (Just [OsvAffected (OsvPackage raw eco) Nothing (Just ["1.0", "2.0"])]) Nothing Nothing Nothing Nothing
                 extractFromAdvisory noScores adv
-                    `shouldBe` [ExtractedOsv expected eco "GHSA-name" (Just version) (LastAffected version) Nothing Nothing | version <- ["1.0", "2.0"]]
+                    `shouldBe` [ExtractedOsv expected eco "GHSA-name" (Just version) (LastAffected version) Nothing Nothing | version <- if eco `elem` ["PyPI", "RubyGems"] then ["1", "2"] else ["1.0", "2.0"]]
+
+    describe "extractFromAdvisory (canonical version identity)" $ do
+        for_ [(Npm, "v1.2.0", "v2.0.0+build.7", "1.2.0", "2.0.0+build.7"), (PyPI, "1.2.0", "2.0.0", "1.2", "2"), (RubyGems, "1.2.0", "2.0.0", "1.2", "2")] $ \(eco, introduced, fixed, lower, upper) ->
+            it ("canonicalises every emitted bound and point for " <> show eco) $ do
+                let extract bound = extractFromAdvisory noScores (rangedAdvisory eco (Just introduced) bound [fixed])
+                extract (FixedBefore fixed)
+                    `shouldBe` [ExtractedOsv "pkg" (osvExportDirectory (osvEcosystemFor eco)) "CVE-test" (Just lower) (FixedBefore upper) Nothing Nothing, ExtractedOsv "pkg" (osvExportDirectory (osvEcosystemFor eco)) "CVE-test" (Just upper) (LastAffected upper) Nothing Nothing]
+                map extUpperBound (extract (LastAffected fixed)) `shouldBe` [LastAffected upper]
+        it "keeps introduced zero as a sentinel and enumerated zero as an exact version" $ do
+            let rows = extractFromAdvisory noScores (rangedAdvisory PyPI Nothing (FixedBefore "0.0rc1") ["0"])
+            map extIntroduced rows `shouldBe` [Nothing, Just "0"]
+            map extUpperBound rows `shouldBe` [FixedBefore "0rc1", LastAffected "0"]
+        it "retains malformed bounds and their diagnostics" $ do
+            let rows = extractFromAdvisory noScores (rangedAdvisory Npm (Just "vv1.0.0") (FixedBefore "v1.0") ["bad"])
+            map (unorderableBounds Npm) rows `shouldBe` [["vv1.0.0", "v1.0"], ["bad", "bad"]]
+        it "keeps conservative evidence when a canonical spelling exceeds the parser length bound" $ do
+            let raw = "1-" <> T.replicate 1019 "1"
+                canonical = "1.post" <> T.replicate 1019 "1"
+                rows = extractFromAdvisory noScores (rangedAdvisory PyPI Nothing (FixedBefore raw) [raw])
+            map extUpperBound rows `shouldBe` [FixedBefore canonical, LastAffected canonical]
+            map extIntroduced rows `shouldBe` [Nothing, Just canonical]
+            map (unorderableBounds PyPI) rows `shouldBe` [[canonical], [canonical, canonical]]
+
+        it "preserves every version spelling for unknown ecosystems" $ do
+            let adv = rangedAdvisory PyPI (Just "1.0") (FixedBefore "2.0") ["3.0"]
+                unknown aff = aff{affectedPackage = OsvPackage "pkg" "unknown"}
+                rows = extractFromAdvisory noScores adv{osvAffected = map unknown <$> osvAffected adv}
+            map extIntroduced rows `shouldBe` [Just "1.0", Just "3.0"]
+            map extUpperBound rows `shouldBe` [FixedBefore "2.0", LastAffected "3.0"]
 
     describe "extractFromAdvisory (affected-set shapes)" $ do
         it "records an exact enumerated version as a point segment (no ranges)" $ do
@@ -326,7 +355,7 @@ spec = describe "one OSV advisory record" $ do
             it label $ do
                 let adv = rangedAdvisory eco introduced upper versions
                     points = drop 1 (extractFromAdvisory noScores adv)
-                map extIntroduced points `shouldBe` map Just kept
+                map extIntroduced points `shouldBe` map (Just . canonicalSpelling eco) kept
                 verdicts eco "pkg" (extractFromAdvisory noScores adv) versions
                     `shouldBe` verdicts eco "pkg" (withoutDrop noScores adv) versions
 
@@ -403,6 +432,19 @@ spec = describe "one OSV advisory record" $ do
                 when (eco == Npm) (compiledRows after `shouldBe` compiledRows before)
                 compareForeignRecords eco advs scores inputs
 
+    describe "canonical transition from frozen raw extraction" $
+        it "changes stored PyPI fix spelling while preserving affected membership and supplying remediation" $ do
+            let adv = rangedAdvisory PyPI Nothing (FixedBefore "1.19.0") []
+                before = withoutDrop noScores adv
+                after = extractFromAdvisory noScores adv
+                queries = ["1.18", "1.19", "1.19.0", "bogus"]
+            map extUpperBound before `shouldBe` [FixedBefore "1.19.0"]
+            map extUpperBound after `shouldBe` [FixedBefore "1.19"]
+            verdicts PyPI "pkg" after queries `shouldBe` verdicts PyPI "pkg" before queries
+            case verdicts PyPI "pkg" after ["1.19"] of
+                (Allow (Remediates _) : _) : _ -> pure ()
+                other -> fail ("expected canonical remediation from compiled evidence, got " <> show other)
+
     describe "orderableBounds" $ do
         let row intro upper = ExtractedOsv "pkg" "npm" "GHSA-bounds" intro upper Nothing Nothing
 
@@ -422,6 +464,9 @@ spec = describe "one OSV advisory record" $ do
             -- "1.2" is not semver, and is a legal PEP 440 release.
             orderableBounds Npm (row (Just "1.2") Unbounded) `shouldBe` False
             orderableBounds PyPI (row (Just "1.2") Unbounded) `shouldBe` True
+
+canonicalSpelling :: Ecosystem -> Text -> Text
+canonicalSpelling eco raw = either (const raw) renderVersionKey (parseAdvisoryVersionKey eco raw)
 
 coverCases :: [(String, Ecosystem, Maybe Text, UpperBound, [Text], [Text])]
 coverCases =

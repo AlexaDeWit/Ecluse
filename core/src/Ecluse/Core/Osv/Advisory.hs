@@ -37,7 +37,7 @@ import Ecluse.Core.Osv.Epss (EpssScores, epssForIds)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise)
 import Ecluse.Core.Text (joinUrlPath)
-import Ecluse.Core.Version (mkVersion, parseVersionKey, versionKey)
+import Ecluse.Core.Version (mkVersion, parseAdvisoryVersionKey, parseVersionKey, renderVersionKey, versionKey)
 
 -- | The OSV fields used to select and score active advisory evidence.
 data OsvAdvisory = OsvAdvisory
@@ -199,7 +199,7 @@ extractFromAdvisory scores adv = do
             let otherPkg = affectedPackage other
              in packageEcosystem otherPkg == packageEcosystem pkg
                     && maybe id canonicalise eco (packageName otherPkg) == name
-        ranges = concatMap rangeSegments (filter samePackage (fromMaybe [] (osvAffected adv)))
+        ranges = map (canonicalSegment eco) (concatMap rangeSegments (filter samePackage (fromMaybe [] (osvAffected adv))))
     Segment intro upper <- affectedSegments eco ranges aff
     pure $
         ExtractedOsv
@@ -242,9 +242,20 @@ rangeSegment introduced = Segment (introduced >>= beyondTheBeginning)
   where
     beyondTheBeginning i = if i == "0" then Nothing else Just i
 
+canonicalVersion :: Maybe Ecosystem -> Text -> Text
+canonicalVersion Nothing raw = raw
+canonicalVersion (Just eco) raw = either (const raw) renderVersionKey (parseAdvisoryVersionKey eco raw)
+
+canonicalSegment :: Maybe Ecosystem -> Segment -> Segment
+canonicalSegment eco (Segment introduced upper) = Segment (canonicalVersion eco <$> introduced) $ case upper of
+    FixedBefore fixed -> FixedBefore (canonicalVersion eco fixed)
+    LastAffected lastAffected -> LastAffected (canonicalVersion eco lastAffected)
+    Unbounded -> Unbounded
+
 affectedSegments :: Maybe Ecosystem -> [Segment] -> OsvAffected -> [Segment]
 affectedSegments eco ranges aff =
-    rangeSegments aff <> [Segment (Just v) (LastAffected v) | v <- fromMaybe [] (affectedVersions aff), not (covered v)]
+    map (canonicalSegment eco) (rangeSegments aff)
+        <> [Segment (Just v) (LastAffected v) | raw <- fromMaybe [] (affectedVersions aff), let v = canonicalVersion eco raw, not (covered v)]
   where
     covered = case eco of
         Nothing -> const False

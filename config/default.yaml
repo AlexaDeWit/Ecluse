@@ -424,7 +424,7 @@ mounts:
   # A pypi mount serves reads: the PEP 691 Simple index and the distribution files
   # under it. It publishes nothing, so a publicationTarget or a mirrorTarget on it
   # refuses the boot naming the ecosystem and the key.
-  # With advisories.url set, this mount reads pypi-osv-schema4.db under that prefix.
+  # With advisories.url set, this mount reads pypi-osv-schema5.db under that prefix.
   # Publish it with ecluse pilot compile --ecosystem pypi --out DIR --upload.
   pypi:
     publicUpstream:

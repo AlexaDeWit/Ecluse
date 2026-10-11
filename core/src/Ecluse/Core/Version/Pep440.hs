@@ -17,7 +17,7 @@ import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 
 import Ecluse.Core.Text (isAsciiAlphaNum)
-import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, withinVersionLength)
+import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, renderToken, withinVersionLength)
 
 -- | Canonical key without trailing release zeros (@1.0 == 1.0.0@), with ranks for PEP 440's None-handling.
 data Pep440Key = Pep440Key
@@ -199,11 +199,6 @@ stageLabel = \case
     0 -> "a"
     1 -> "b"
     _ -> "rc"
-
-renderToken :: VToken -> Text
-renderToken = \case
-    VNum n -> show n
-    VStr s -> s
 
 -- | Whether a version has neither a prerelease nor a dev part. Post-releases are stable.
 isPep440Stable :: Pep440Key -> Bool

@@ -33,8 +33,9 @@ spec = do
     describe "osvDbFileName" $ do
         -- The literal pins the published object key. A change here changes the
         -- writer and reader contract, so it must be a deliberate epoch bump.
-        it "names the artifact by ecosystem and schema epoch" $
-            osvDbFileName "npm" `shouldBe` "npm-osv-schema4.db"
+        for_ [("npm", "npm-osv-schema5.db"), ("pypi", "pypi-osv-schema5.db"), ("rubygems", "rubygems-osv-schema5.db")] $ \(eco, publishedKey) ->
+            it ("names the " <> toString eco <> " artifact by schema epoch 5") $
+                osvDbFileName eco `shouldBe` publishedKey
 
     describe "renderMetaKey" $ do
         -- The literals pin the stored keys a consumer reads by name, each distinct from the

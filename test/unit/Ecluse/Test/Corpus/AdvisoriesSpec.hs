@@ -5,8 +5,10 @@
 -- | Pin the corpus captures the compiled corpus advisories cover, the rows the rules read for them, and the shared shipped policy.
 module Ecluse.Test.Corpus.AdvisoriesSpec (spec) where
 
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -15,13 +17,15 @@ import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveL
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
-import Ecluse.Core.Package (PackageInfo (infoVersions), mkPackageName)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), mkPackageName)
+import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailDeny), Rule (AllowIfOlderThan, DenyIfCve), completeEvidence)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
-import Ecluse.Test.Corpus.Advisories (checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, corpusAdvisories, shippedPolicy)
+import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.OsvDb (withServedArtifact)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isBlockedByDefault, servingRuleDeps)
 import Ecluse.Test.Support (expectRight)
@@ -50,12 +54,40 @@ spec = do
                 affected <- maybe (fail "the capture has no 2.32.5 release") pure (Map.lookup "2.32.5" (infoVersions info))
                 let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
                 withServedArtifact PyPI compiled $ \deps _ -> do
-                    enabled <- prepare deps shippedPolicy
-                    admittedBy <$> evalRules ctx enabled (completeEvidence fixedRelease) `shouldReturn` Just "AllowIfRemediatesCve"
-                    disabled <- prepare deps [atDefaultPrecedence (AllowIfOlderThan 604800)]
-                    evalRules ctx disabled (completeEvidence fixedRelease) >>= (`shouldSatisfy` isBlockedByDefault)
-                    denies <- prepare deps (shippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
-                    blockedBy <$> evalRules ctx denies (completeEvidence affected) `shouldReturn` Just "DenyIfCve"
+                    assertCapturedRemediation deps ctx fixedRelease affected
+
+    describe "canonical remediation controls from compiled captures" $ do
+        for_ ["4.17.21", "v4.17.21"] $ \advisoryFix ->
+            it ("admits captured lodash with advisory fix " <> toString advisoryFix) $
+                withSystemTempDirectory "ecluse-lodash-fix-variant" $ \dir -> do
+                    raw <- decodeUtf8 <$> readFileBS "bench/corpus/advisories/npm/GHSA-35jh-r3h4-6jhm.json"
+                    let variant = T.replace "\"fixed\":\"4.17.21\"" ("\"fixed\":\"" <> advisoryFix <> "\"") raw
+                    archive <- osvZipOf [("lodash-fix-spelling-variant.json", LBS.fromStrict (encodeUtf8 variant))]
+                    inputs <- corpusAdvisories Npm
+                    path <- compileAdvisoryInputs Npm dir inputs{aiOsvZip = archive}
+                    bytes <- readFileBS "bench/corpus/npm/lodash.full.json"
+                    (info, _) <- expectRight (projectNpmManifest defaultLimits (mkPackageName Npm Nothing "lodash") bytes)
+                    fixedRelease <- maybe (fail "the lodash capture has no 4.17.21 release") pure (Map.lookup "4.17.21" (infoVersions info))
+                    affected <- maybe (fail "the lodash capture has no 4.17.20 release") pure (Map.lookup "4.17.20" (infoVersions info))
+                    uploaded <- maybe (fail "the captured lodash fix has no publication time") pure (pkgPublishedAt fixedRelease)
+                    let ctx = EvalContext (addUTCTime 3600 uploaded) Nothing
+                    withServedArtifact Npm path $ \deps _ -> do
+                        assertCapturedRemediation deps ctx fixedRelease affected
+
+        it "admits an already canonical 1.19 PyPI fix in named capture variants" $
+            withSystemTempDirectory "ecluse-canonical-pypi-control-variant" $ \dir -> do
+                raw <- decodeUtf8 <$> readFileBS "bench/corpus/advisories/pypi/GHSA-gc5v-m9x4-r6x2.json"
+                archive <- osvZipOf [("requests-canonical-fix-variant.json", LBS.fromStrict (encodeUtf8 (T.replace "\"fixed\":\"2.33.0\"" "\"fixed\":\"1.19\"" raw)))]
+                inputs <- corpusAdvisories PyPI
+                path <- compileAdvisoryInputs PyPI dir inputs{aiOsvZip = archive}
+                capture <- decodeUtf8 <$> readFileBS "bench/corpus/pypi/requests.simple.json"
+                let variant = encodeUtf8 (T.replace "requests-2.32.5" "requests-1.18" (T.replace "requests-2.33.0" "requests-1.19" capture))
+                (info, _) <- expectRight (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests") variant)
+                fixedRelease <- maybe (fail "the named PyPI variant has no 1.19 release") pure (Map.lookup "1.19" (infoVersions info))
+                affected <- maybe (fail "the named PyPI variant has no 1.18 release") pure (Map.lookup "1.18" (infoVersions info))
+                let ctx = EvalContext (UTCTime (fromGregorian 2026 3 25) 58240.382036) Nothing
+                withServedArtifact PyPI path $ \deps _ -> do
+                    assertCapturedRemediation deps ctx fixedRelease affected
 
     describe "checkCapturesServed" $ do
         let react = mkPackageName Npm Nothing "react"
@@ -74,3 +106,12 @@ spec = do
     describe "shippedPolicy" $
         it "is the shared policy config/default.yaml ships" $
             shippedPolicy `shouldMatchList` Map.elems (policyRules defaultPolicy)
+
+assertCapturedRemediation :: RuleDeps -> EvalContext -> PackageDetails -> PackageDetails -> Expectation
+assertCapturedRemediation deps ctx fixedRelease affected = do
+    enabled <- prepare deps shippedPolicy
+    admittedBy <$> evalRules ctx enabled (completeEvidence fixedRelease) `shouldReturn` Just "AllowIfRemediatesCve"
+    disabled <- prepare deps [atDefaultPrecedence (AllowIfOlderThan 604800)]
+    evalRules ctx disabled (completeEvidence fixedRelease) >>= (`shouldSatisfy` isBlockedByDefault)
+    denies <- prepare deps (shippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
+    blockedBy <$> evalRules ctx denies (completeEvidence affected) `shouldReturn` Just "DenyIfCve"

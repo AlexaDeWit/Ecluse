@@ -8,6 +8,7 @@ module Ecluse.Core.CveSpec (spec) where
 import Prelude hiding (universe)
 
 import Data.List (isSuffixOf)
+import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Database.SQLite.Simple (Only (..), Query (Query), close, execute, execute_, open)
 import Hedgehog (Gen, forAll, (===))
@@ -35,10 +36,10 @@ import Ecluse.Core.Cve (
     packageAdvisories,
     scoreAtLeast,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Version (canonicalPep440, mkVersion, versionKey)
 import Ecluse.Test.Cve (fakeCveLookup, namesFix, referenceInside)
 import Ecluse.Test.Osv (
     CorpusVersion (CorpusV1),
@@ -202,10 +203,10 @@ spec = do
                         map arEpss ranges `shouldBe` [Nothing, Nothing]
                         namesFix (cveDbLookup db) "corpus-vuln" "1.2.0" `shouldReturn` True
 
-        it "rejects epoch 3 even when its tables conform to the current shape" $
+        it "rejects epoch 4 even when its tables conform to the current shape" $
             withFixtureOsvDb CorpusV1 $ \path -> do
-                bracket (open path) close $ \conn -> execute_ conn "PRAGMA user_version = 3"
-                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbWrongEpoch 3)
+                bracket (open path) close $ \conn -> execute_ conn "PRAGMA user_version = 4"
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbWrongEpoch 4)
 
         it "rejects an artifact stamped with the wrong schema epoch" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
@@ -353,8 +354,8 @@ spec = do
             scoreAtLeast AbstainMissingScore 0.5 (Just 0.5) `shouldBe` True
             scoreAtLeast AbstainMissingScore 0.5 (Just 0.75) `shouldBe` True
 
-    describe "fixedAt" $
-        it "is every row whose fixed bound is the version's exact text, in row order, duplicates included" $
+    describe "fixedAt" $ do
+        it "preserves npm exact fix text, row order and duplicate rows" $
             hedgehog $ do
                 pool <- forAll (Gen.list (Range.linear 1 6) genVersionText)
                 ranges <- forAll (Gen.list (Range.linear 0 8) (genSegment pool))
@@ -363,6 +364,39 @@ spec = do
                 let expected = [ar | ar <- ranges, arUpperBound ar == FixedBefore version]
                 H.cover 5 "some row names the version as its fix" (not (null expected))
                 fixedAt (packageAdvisories Npm ranges) (mkVersion Npm version) === expected
+
+        it "shares canonical PyPI and Gem fixes while retaining row order and duplicate rows" $ do
+            for_ [(PyPI, "1.19.0", "1.19"), (RubyGems, "1.19.0", "1.19")] $ \(eco, raw, served) -> do
+                let firstRow = AdvisoryRange "A" Nothing Nothing (FixedBefore raw) Nothing
+                    secondRow = AdvisoryRange "B" Nothing Nothing (FixedBefore served) Nothing
+                    rows = [firstRow, secondRow, firstRow]
+                    advisories = packageAdvisories eco rows
+                fixedAt advisories (mkVersion eco served) `shouldBe` rows
+                fixedAt (keepAdvisories ((== "A") . arCveId) advisories) (mkVersion eco served) `shouldBe` [firstRow, firstRow]
+                affecting advisories (mkVersion eco "1.18") `shouldBe` rows
+
+        it "keeps semver build metadata in exact remediation identity" $ do
+            let row = AdvisoryRange "A" Nothing Nothing (FixedBefore "3.0.0+build.7") Nothing
+                advisories = packageAdvisories Npm [row]
+            fixedAt advisories (mkVersion Npm "3.0.0+build.7") `shouldBe` [row]
+            fixedAt advisories (mkVersion Npm "3.0.0") `shouldBe` []
+            affecting advisories (mkVersion Npm "3.0.0") `shouldBe` []
+
+        it "keeps the raw identity of an unparseable fixed bound and conservative affected membership" $ do
+            let row = AdvisoryRange "A" Nothing Nothing (FixedBefore "not-a-version") Nothing
+                advisories = packageAdvisories PyPI [row]
+            fixedAt advisories (mkVersion PyPI "not-a-version") `shouldBe` [row]
+            fixedAt advisories (mkVersion PyPI "1") `shouldBe` []
+            affecting advisories (mkVersion PyPI "1") `shouldBe` [row]
+
+        it "keeps conservative matching when canonical PEP 440 spelling passes the length bound" $ do
+            let raw = "1-" <> T.replicate 1019 "1"
+                row = AdvisoryRange "A" Nothing Nothing (FixedBefore raw) Nothing
+            version <- maybe (fail "expected canonical PEP 440 version") pure (canonicalPep440 raw)
+            versionKey version `shouldBe` Nothing
+            let advisories = packageAdvisories PyPI [row]
+            fixedAt advisories version `shouldBe` [row]
+            affecting advisories version `shouldBe` [row]
 
     describe "affecting" $ do
         it "agrees with the per-row reference, whatever ecosystem built the version" $

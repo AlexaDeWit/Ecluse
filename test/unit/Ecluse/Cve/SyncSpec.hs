@@ -74,8 +74,9 @@ spec = do
                 -- A stale in-progress download and a canonical artifact from a
                 -- previous run: the sweep removes the former and keeps the latter.
                 createDirectoryIfMissing True dataDir
-                writeFileBS (dataDir </> "npm-osv-schema4.db.tmp") "stale partial download"
-                writeFileBS (dataDir </> "npm-osv-schema4.db") "prior artifact"
+                writeFileBS (dataDir </> "npm-osv-schema5.db.tmp") "stale partial download"
+                writeFileBS (dataDir </> "npm-osv-schema5.db") "prior artifact"
+                writeFileBS (dataDir </> "npm-osv-schema4.db") "retired artifact"
                 cfg <-
                     expectAppConfig
                         [ ("ECLUSE_ADVISORIES__URL", "s3://advisories")
@@ -88,12 +89,13 @@ spec = do
                 Map.map (syncEpssRequirement . csEnv) plan `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
-                    syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
+                    syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema5.db"
                     syncStoreRef (csEnv handle) `shouldBe` "s3://advisories"
                     readTVarIO (csReady handle) `shouldReturn` False
                     withSlotGeneration (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
-                doesFileExist (dataDir </> "npm-osv-schema4.db.tmp") `shouldReturn` False
-                doesFileExist (dataDir </> "npm-osv-schema4.db") `shouldReturn` True
+                doesFileExist (dataDir </> "npm-osv-schema5.db.tmp") `shouldReturn` False
+                doesFileExist (dataDir </> "npm-osv-schema5.db") `shouldReturn` True
+                readFileBS (dataDir </> "npm-osv-schema4.db") `shouldReturn` "retired artifact"
 
     describe "sweepStep -- the sweep's best-effort filesystem boundary" $ do
         it "propagates a non-IO exception rather than swallowing it" $ do
@@ -103,7 +105,7 @@ spec = do
         it "swallows an IOError, logs it at Warning against the path, and returns so boot proceeds" $
             withSystemTempDirectory "ecluse-sweep-io" $ \dir -> do
                 logEnv <- jsonLogEnv
-                let missing = dir </> "npm-osv-schema4.db.tmp"
+                let missing = dir </> "npm-osv-schema5.db.tmp"
                 logged <- captureStdout $ do
                     -- Removing a file that is not there raises an 'IOError': the step must
                     -- log it and return, not propagate it.
@@ -111,7 +113,7 @@ spec = do
                     void (closeScribes logEnv)
                 logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
                 logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Cve.Sync\""
-                logged `shouldSatisfy` T.isInfixOf "npm-osv-schema4.db.tmp"
+                logged `shouldSatisfy` T.isInfixOf "npm-osv-schema5.db.tmp"
                 logged `shouldSatisfy` T.isInfixOf "could not sweep"
 
     describe "sweepStaleTemps -- the whole-directory sweep" $

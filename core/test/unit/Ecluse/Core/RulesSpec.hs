@@ -709,6 +709,22 @@ spec = do
                 evalRule (depsWith otherRows) ctx (denyCveAt 0) pd >>= (`shouldSatisfy` isNoDecision)
                 evalRule (depsWith exactFixes) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isAllow)
 
+    describe "canonical remediation refusal controls" $
+        for_ [(PyPI, "1.19.0", "1.19", "1.18"), (Npm, "3.0.0+build.7", "3.0.0+build.7", "2.9.0")] $ \(eco, advisoryFix, servedFix, oldVersion) ->
+            it ("admits an exact " <> show eco <> " fix only while no advisory still affects it") $ do
+                let name = mkPackageName eco Nothing "pkg"
+                    evidence raw = completeEvidence (sampleDetails name (mkVersion eco raw))
+                    fixedRow = ("pkg", AdvisoryRange "FIX" (Just 9) Nothing (FixedBefore advisoryFix) (Just 0.9))
+                    stillAffected = ("pkg", AdvisoryRange "OTHER" (Just 9) Nothing Unbounded (Just 0.9))
+                    fixedDeps = depsWith [fixedRow]
+                    affectedDeps = depsWith [fixedRow, stillAffected]
+                evalRule fixedDeps ctx AllowIfRemediatesCve (evidence servedFix) >>= (`shouldSatisfy` isAllow)
+                evalRule fixedDeps ctx AllowIfRemediatesCve (evidence oldVersion) >>= (`shouldSatisfy` isNoDecision)
+                evalRule affectedDeps ctx AllowIfRemediatesCve (evidence servedFix) >>= (`shouldSatisfy` isNoDecision)
+                for_ [denyCveAt 0, denyEpssAt 0] $ \rule -> do
+                    evalRule fixedDeps ctx rule (evidence oldVersion) >>= (`shouldSatisfy` isDeny)
+                    evalRule affectedDeps ctx rule (evidence servedFix) >>= (`shouldSatisfy` isDeny)
+
     describe "evalRule" $ do
         it "AllowScope allows a matching scope" $
             evalRule inertRuleDeps ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)

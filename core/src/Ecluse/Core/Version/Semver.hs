@@ -14,6 +14,7 @@ identifiers numeric ones rank below alphanumeric ones, the opposite of the rule 
 module Ecluse.Core.Version.Semver (
     SemverKey (..),
     parseSemver,
+    renderSemver,
     isSemverStable,
 ) where
 
@@ -39,12 +40,23 @@ parseSemver raw = do
     -- Evaluated in full, so a retained key holds no thunk over the scan.
     SemverKey . force <$> scanSemver raw
 
+-- | Render every semver field, including build metadata excluded from precedence.
+renderSemver :: SemverKey -> Text
+renderSemver (SemverKey (SemVer major minor patch prerelease build)) =
+    T.intercalate "." (map show [major, minor, patch])
+        <> maybe "" (\(Release chunks) -> "-" <> T.intercalate "." (map renderChunk (toList chunks))) prerelease
+        <> maybe "" ("+" <>) build
+
+renderChunk :: Chunk -> Text
+renderChunk = \case
+    Numeric n -> show n
+    Alphanum t -> t
+
 -- | Whether a semver version is stable: a final release with no prerelease component.
 isSemverStable :: SemverKey -> Bool
 isSemverStable (SemverKey sv) = isNothing (_svPreRel sv)
 
-{- The longest digit run guaranteed to fit the @versions@ library's fixed-width numeric
-components: 18 digits is at most @10^18 - 1 < 2^63@, and a longer run might overflow silently. -}
+-- 18 digits fit the library's fixed-width numeric components on every supported platform.
 maxNumericRun :: Int
 maxNumericRun = 18
 
