@@ -19,9 +19,7 @@ import Data.Text.Read qualified as TR
 import Ecluse.Core.Text (isAsciiAlphaNum)
 import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, numOr0, parseNumSeg, withinVersionLength)
 
-{- | A parsed PEP 440 version as its canonical ordering key. The release carries no trailing
-zeros (@1.0 == 1.0.0@), and the rank fields encode PEP 440's None-handling for the derived 'Ord'.
--}
+-- | Canonical key without trailing release zeros (@1.0 == 1.0.0@), with ranks for PEP 440's None-handling.
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
     , p440Release :: [Integer]
