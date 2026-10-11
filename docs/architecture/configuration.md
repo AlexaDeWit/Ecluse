@@ -162,11 +162,12 @@ for packages that differ from the corpus. The all-shape figure is the smallest t
 the highest peak among all the listings. Those add the heavy bases, merges whose private document
 holds far more text than its version count suggests.
 
-The integrated branch keeps npm's merged full-read charge of 1.1 and a provisional packed PyPI charge of 3.3.
-The read limits remain 1.0 for npm and 3.0 for PyPI. Final native qualification against
-`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` must cover all 84 listing shapes and 48 retained probes.
-The following snapshots retain their original measurements and charge conclusions.
-Neither snapshot qualifies the integrated packed PyPI head.
+Native qualification of packed source `62b458ab54dbdff7a296458ed094be74621ec20b` against actual main
+`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` gives a PyPI full-read charge of 3.2 and read limit of 2.75.
+npm retains its charge of 1.1 and read limit of 1.0. Output charges and independent retained limits stay unchanged.
+The [qualified calibration](../testing.md#qualified-packed-integration) records the exact arithmetic and source context.
+The factor-update candidate still requires fresh review, CI, native measurements and default npm and PyPI loads.
+The following historical snapshots retain their original measurements and charge conclusions.
 
 #### Packed-file qualification before parser integration
 
@@ -258,7 +259,7 @@ or render outgrow what the meter holds for them, so a representation change cann
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
 least 8% above its measured maximum. The current read limits sit 0.1 under npm's charge
-and 0.3 under PyPI's provisional charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
+and 0.45 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
 npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler

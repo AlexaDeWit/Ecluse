@@ -151,7 +151,7 @@ data PeakLimits = PeakLimits
 peakLimits :: Ecosystem -> Maybe PeakLimits
 peakLimits = \case
     Npm -> Just PeakLimits{readPeakLimit = 1000, outputLimit = 1750}
-    PyPI -> Just PeakLimits{readPeakLimit = 3000, outputLimit = 1500}
+    PyPI -> Just PeakLimits{readPeakLimit = 2750, outputLimit = 1500}
     RubyGems -> Nothing
 
 -- PyPI's packed files and typed facts still outgrow their source, so only npm has this bound.

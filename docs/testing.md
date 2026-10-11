@@ -161,10 +161,9 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 ### Listing peaks
 
-The integrated branch retains npm's merged full-read charge of 1.1 and a provisional packed PyPI charge of 3.3.
-PyPI keeps its existing read limit of 3.0 pending final native qualification against
-`efece1f1fca410dc1d214dcc76a99f106e2a0ff7`. Output charges remain 2.0 for npm and 1.6 for PyPI.
-All 84 listing shapes and 48 retained probes, cold reads, renders and default loads remain required.
+The [qualified packed integration](#qualified-packed-integration) sets PyPI's full-read charge to 3.2 and its read limit to 2.75.
+npm keeps its full-read charge of 1.1. Output charges remain 2.0 for npm and 1.6 for PyPI.
+The factor-update candidate still needs all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
 The historical snapshots below retain their original measurements and limits.
 
 `MemoryModelResidencySpec` also measures the most live data a listing holds, which the memory gate's
@@ -234,14 +233,54 @@ The checks compare bytes with each ecosystem's charges:
 - The basis of an identical merge is one document and that of a disjoint merge is both. That of an
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
-- From one step up, the tier applies read regression limits of 1.0 for npm and 3.0 for PyPI.
+- From one step up, the tier applies read regression limits of 1.0 for npm and 2.75 for PyPI.
   The output limits remain 1.75 for npm and 1.5 for PyPI. Every limit remains below its charge.
-  The packed PyPI limits and factor require qualification against the integrated native-parser base.
+  The factor-update candidate requires qualification against the same actual main base as its measurements.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   `entryBelowSource` names the ecosystems this check covers. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
 - A single-source listing's entry frees live bytes when it drops its served document, and the
   document's weight, expanded as a cache expands it, covers them.
+
+#### Qualified packed integration
+
+The native arm64 [Build job 114400618836](https://github.com/AlexaDeWit/Ecluse/actions/runs/38115887129/job/114400618836)
+qualified source `62b458ab54dbdff7a296458ed094be74621ec20b` through synthetic checkout
+`bb77622f04db001a47f55e7be29c48d9c1171b04`. Its literal parents are actual main
+`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` and that packed source.
+The matching [main Build job 114397383334](https://github.com/AlexaDeWit/Ecluse/actions/runs/38113685171/job/114397383334)
+measured literal `efece1f1fca410dc1d214dcc76a99f106e2a0ff7`.
+Both jobs passed 186 examples and reported all 84 listing shapes, 48 retained probes and 12 authenticated captures.
+They used `ubuntu-26.04-arm`, GHC 9.10.3, Cabal `-O1` and one capability per measurement child.
+
+Among sources of at least one 1 MiB meter step, PyPI's realistic and all-shape maxima are both
+`1402444/551511`, or `2.542912108734005`, for boto3's single listing.
+Actual main's corresponding maximum is `1716370/551511`, or `3.112122876968909`.
+The read peak falls by 18.2901% at those measured source identities.
+The exact 25% margin is `1753055/551511`. Rounding it up to a tenth gives 3.2.
+The all-shape maximum rounds up to 2.6, so the existing charge rule requires `3200` permille.
+The independent read regression rule rounds `1.08 * 1402444/551511` up to a quarter, giving `2750` permille.
+
+Applying candidate factors `1100/2000` for npm and `3200/1600` for PyPI to the recorded byte counts
+passes every listing's paid read, combined peak and output working-set checks.
+The checks keep integer ceiling and whole-step rounding, including the minimum 1 MiB entry step.
+Realistic listings also retain the independent output regression limits of 1.75 for npm and 1.5 for PyPI.
+The 48 retained records pass their independent limits and the candidate Shared admission checks.
+PyPI's independent Shared limit remains 3.5. The fixed cache expansion remains 7.5.
+
+The measured retained Shared bytes change as follows:
+
+- requests: 374,624 to 296,072, a 20.9682% reduction.
+- numpy: 5,735,504 to 4,535,168, a 20.9282% reduction.
+- boto3: 6,292,008 to 4,958,112, a 21.1998% reduction.
+
+The corpus `charge` goldens record compact cache units from `weighCachedDoc`, not active full-read admission.
+All 12 existing charge byte lengths and SHA-256 hashes match the qualified document accounting.
+They remain unchanged with the independent 7.5 expansion, as do served bytes, ETags, typed facts and selected-read goldens.
+
+These measurements qualify the stated source identities, not a future factor-update head.
+The final candidate requires fresh independent review, required CI, native measurements and default npm and PyPI loads.
+The timing requirement remains active. This memory qualification makes no HTTP throughput claim.
 
 #### Packed-file qualification before parser integration
 
@@ -368,7 +407,7 @@ All 12 Shared measurements also keep twice the encoded size within the unchanged
 
 This is the merged parser's qualification snapshot before this packed PyPI integration.
 Its measurements and charge conclusions apply to the source identities it names.
-They are not new evidence for the integrated branch or its provisional 3.3 factor.
+They are not new evidence for the factor-update candidate.
 
 The listing figures below come from one native `ubuntu-26.04-arm` Build job of
 [CI run 38107103485](https://github.com/AlexaDeWit/Ecluse/actions/runs/38107103485/job/114374944192).
