@@ -207,10 +207,12 @@ tarballCeilingScenario :: Scenario
 tarballCeilingScenario =
     ( scenario
         "tarball-ceiling"
-        "Measure the private artifact relay at four times the base concurrency and 2 ms upstream latency. The payload knob sets the streamed body size."
-        (\knobs k -> withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl Nothing tarballMix (httpTarget k))
+        "Measure the private artifact relay at four times the base concurrency under load, one connection for service time, and 2 ms upstream latency. The payload knob sets the streamed body size."
+        (\knobs k -> withNpmProxy knobs longCacheTtl Nothing tarballMix (httpTarget k))
     )
         { scenarioConcurrencyScale = 4
+        , scenarioUpstreamLatencyMicros = Just 2_000
+        , scenarioPublicLegUnavailableReason = Just "the private-hit artifact relay has no public leg"
         }
 
 herdScenario :: Scenario

@@ -1018,13 +1018,19 @@ Each ecosystem section also shows:
   evaluates the rules in. A proxy of either pass that logged a different policy is named
 - a cost table that sets each scenario's allocation per success and success p50 beside the same
   figures from the concurrency-one pass, which runs the scenario again on a fresh proxy with the
-  base concurrency set to one. A scenario that scales its own connections keeps that scale. The
+  actual concurrency set to one, regardless of its loaded-pass connection scale. The
   table adds the concurrency-one pass's success floor, the allocation per refusal, each
   allocation with the count it divides by, and the missed and collapsed cache lookups summed over
   the stores. One request can look up more than one store, so these count lookups, not requests.
   A loaded figure far above its concurrency-one figure points at contention, or at work the
   concurrent requests did not share. A scenario outside the concurrency-one pass shows `n/a` for
   those figures
+
+`npm/tarball-ceiling` relays a private-hit artifact with a fixed 2 ms injected delay. Its loaded
+pass uses four times the base connections, and its service pass uses one. The attribution table
+keeps its raw p50 and p99 totals but marks the public-leg split unavailable, with the reason that
+the relay has no public leg. Ordinary scenarios still subtract only the public baseline, with
+private work in Écluse overhead. p50 remains primary, and p99 remains the labelled tail.
 
 A boot that fails because the runtime could not start an OS thread is booted once more, two
 seconds later, into a fresh cgroup, so every reading comes from the boot that succeeded. That

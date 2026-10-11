@@ -11,12 +11,11 @@ module Ecluse.BenchReport.AgainstMain.LoadSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), LoadSummary (..), ScenarioReport (..), defaultLoadKnobs)
-import Ecluse.BenchLoad.Latency (Percentiles (Percentiles))
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), ScenarioReport (..), defaultLoadKnobs)
 import Ecluse.BenchLoad.Report (Section (..), renderLoadSaturation, renderReports, renderThrash)
 import Ecluse.BenchLoad.RtsWindow (RtsWindow (RtsWindow))
 import Ecluse.BenchLoad.Selection (fixtureSection)
-import Ecluse.BenchLoad.Support (slowNetwork)
+import Ecluse.BenchLoad.Support (scenarioReport, slowNetwork)
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (DownloadFailed), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Load (againstMain)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -110,47 +109,13 @@ section ecosystem latencyMicros loaded =
         }
 
 onMainNpm, hereNpm, onMainPyPI, herePyPI :: [ScenarioReport]
-onMainNpm = [scenario "npm/merge-cold" 1000 300 1000 2000, scenario "npm/tarball-hot-path" 16000 0 180 200, ramp "npm/ramp" 800 50 1400 2400]
-hereNpm = [scenario "npm/merge-cold" 1100 250 900 2100, scenario "npm/tarball-hot-path" 24000 0 120 150, ramp "npm/ramp" 800 50 1400 2400]
-onMainPyPI = [scenario "pypi/index-cold" 4000 0 500 1000]
-herePyPI = [scenario "pypi/index-cold" 3800 0 550 1000]
-
--- One scenario's loaded pass: its successes, its refusals, and its success p50 and p99 in milliseconds.
-scenario :: Text -> Int -> Int -> Double -> Double -> ScenarioReport
-scenario name successes refusals p50 p99 =
-    ScenarioReport
-        { srName = name
-        , srDescription = "A scenario."
-        , srShape = "2cpu-1gib"
-        , srLoad = window
-        , srCompanion = Nothing
-        , srSteps = []
-        , srReplayTotals = Nothing
-        , srRtsSource = "the proxy"
-        , srRtsWindow = Nothing
-        , srRtsEnd = Nothing
-        , srRetainedBytes = Nothing
-        , srProxy = Nothing
-        , srEvidence = ""
-        }
-  where
-    window =
-        LoadSummary
-            { lsLabel = "window"
-            , lsConnections = 100
-            , lsElapsedSeconds = 30
-            , lsCompleted = successes + refusals
-            , lsSuccesses = successes
-            , lsRefusals = refusals
-            , lsOtherStatuses = 0
-            , lsTransportFailures = 0
-            , lsDeadlineAborts = 0
-            , lsLatency = Percentiles (Just p50) Nothing (Just p99) Nothing
-            , lsNote = ""
-            }
+onMainNpm = [scenarioReport "npm/merge-cold" 1000 300 1000 2000, scenarioReport "npm/tarball-hot-path" 16000 0 180 200, ramp "npm/ramp" 800 50 1400 2400]
+hereNpm = [scenarioReport "npm/merge-cold" 1100 250 900 2100, scenarioReport "npm/tarball-hot-path" 24000 0 120 150, ramp "npm/ramp" 800 50 1400 2400]
+onMainPyPI = [scenarioReport "pypi/index-cold" 4000 0 500 1000]
+herePyPI = [scenarioReport "pypi/index-cold" 3800 0 550 1000]
 
 -- A ramp, whose figures are those of its last step.
 ramp :: Text -> Int -> Int -> Double -> Double -> ScenarioReport
 ramp name successes refusals p50 p99 = single{srSteps = [srLoad single]}
   where
-    single = scenario name successes refusals p50 p99
+    single = scenarioReport name successes refusals p50 p99

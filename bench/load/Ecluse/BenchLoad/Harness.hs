@@ -30,6 +30,7 @@ module Ecluse.BenchLoad.Harness (
     LoadSummary (..),
     ProxyFigures (..),
     runScenario,
+    scenarioKnobs,
     warmUp,
     windowSuccesses,
     windowAttempts,
@@ -55,7 +56,7 @@ import Ecluse.BenchLoad.Exposition (
     seriesTotal,
     summariseGauge,
  )
-import Ecluse.BenchLoad.Floors (OperatingPoint (..))
+import Ecluse.BenchLoad.Floors (OperatingPoint (..), Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Latency (Percentiles, isSuccessStatus, percentiles)
 import Ecluse.BenchLoad.Oha (OhaReport (..), OhaRun (..), RunLength (ForRequests, ForSeconds), runOha)
 import Ecluse.BenchLoad.PatternReport (ReplayTotals (..))
@@ -183,9 +184,11 @@ data Scenario = Scenario
     -- ^ A stable, argument-safe identifier (the driver passes it to the child process).
     , scenarioDescription :: Text
     , scenarioConcurrencyScale :: Int
-    {- ^ Multiplier on 'lkConcurrency' for this scenario alone. The description must state it,
-    because the operating point prints the shared base.
-    -}
+    -- ^ Loaded-pass multiplier on 'lkConcurrency'. The service pass always uses one connection.
+    , scenarioUpstreamLatencyMicros :: Maybe Int
+    -- ^ A fixture-specific delay. 'Nothing' preserves the shared latency knob.
+    , scenarioPublicLegUnavailableReason :: Maybe Text
+    -- ^ Why the public baseline cannot attribute this scenario's service time.
     , scenarioServiceTime :: Bool
     -- ^ Whether the concurrency-one pass runs it. Replays, bursts, ramps, and paired loads do not.
     , scenarioInProcess :: Bool
@@ -200,6 +203,8 @@ scenario name description boot =
         { scenarioName = name
         , scenarioDescription = description
         , scenarioConcurrencyScale = 1
+        , scenarioUpstreamLatencyMicros = Nothing
+        , scenarioPublicLegUnavailableReason = Nothing
         , scenarioServiceTime = True
         , scenarioInProcess = False
         , scenarioBoot = boot
@@ -297,6 +302,8 @@ data ProxyFigures = ProxyFigures
 data ScenarioReport = ScenarioReport
     { srName :: Text
     , srDescription :: Text
+    , srPublicLegUnavailableReason :: Maybe Text
+    -- ^ A fixture without a public leg keeps raw latency but cannot subtract the public baseline.
     , srShape :: Text
     , srLoad :: LoadSummary
     , srCompanion :: Maybe LoadSummary
@@ -319,12 +326,22 @@ data ScenarioReport = ScenarioReport
     deriving anyclass (FromJSON, ToJSON)
 
 -- | Measure one fixture. Missing RTS counters fail the harness.
-runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
-runScenario knobs s = do
+runScenario :: Pass -> LoadKnobs -> Scenario -> IO ScenarioReport
+runScenario whichPass knobs s = do
     requireRtsStats "the scenario"
     shape <- podShapeFromEnv
-    let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale s)}
+    let scaled = scenarioKnobs whichPass knobs s
     scenarioBoot s scaled (measure scaled s (renderPodShape shape))
+
+-- | Resolve the actual connection count and fixture delay for one pass.
+scenarioKnobs :: Pass -> LoadKnobs -> Scenario -> LoadKnobs
+scenarioKnobs whichPass knobs s =
+    knobs
+        { lkConcurrency = case whichPass of
+            ConcurrencyOne -> 1
+            Loaded -> lkConcurrency knobs * max 1 (scenarioConcurrencyScale s)
+        , lkUpstreamLatencyMicros = fromMaybe (lkUpstreamLatencyMicros knobs) (scenarioUpstreamLatencyMicros s)
+        }
 
 measure :: LoadKnobs -> Scenario -> Text -> Target -> IO ScenarioReport
 measure knobs s shape (Target proxy driver) = do
@@ -349,6 +366,7 @@ measure knobs s shape (Target proxy driver) = do
         ScenarioReport
             { srName = scenarioName s
             , srDescription = scenarioDescription s
+            , srPublicLegUnavailableReason = scenarioPublicLegUnavailableReason s
             , srShape = shape
             , srLoad = doLoad outcome
             , srCompanion = doCompanion outcome

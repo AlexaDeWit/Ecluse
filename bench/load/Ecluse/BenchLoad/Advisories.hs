@@ -54,17 +54,12 @@ allRulesAdvisories ecosystem =
         )
         advisoryDenyRules
 
-{- | The no-database scenario with a name suffix, a description note, and the rules its policy adds.
-Everything else is the counterpart's. An in-process counterpart boots no proxy, so its variant refuses.
--}
+-- The variant preserves its counterpart's settings and refuses in-process work, which boots no proxy.
 advisoryVariant :: Ecosystem -> Text -> Text -> [Pair] -> Scenario -> Scenario
 advisoryVariant ecosystem suffix note rules s =
-    Scenario
+    s
         { scenarioName = name
         , scenarioDescription = scenarioDescription s <> " " <> note
-        , scenarioConcurrencyScale = scenarioConcurrencyScale s
-        , scenarioServiceTime = scenarioServiceTime s
-        , scenarioInProcess = scenarioInProcess s
         , scenarioBoot = \knobs k ->
             if scenarioInProcess s
                 then benchFail (name <> ": an in-process scenario boots no proxy to sync an advisory database")
@@ -100,9 +95,7 @@ withAdvisoryStore ecosystem use =
         publishedAt <- getCurrentTime
         withRoutedStub (advisoryStoreReply ecosystem publishedAt artifact) (use . stubPort)
 
-{- | Answer the ecosystem's artifact key in 'advisoryBucket' as S3 answers a path-style HEAD or
-GET, with an ETag and the publication time, and every other path with 404.
--}
+-- | Answer the artifact's HEAD or GET with its ETag and publication time, and other paths with 404.
 advisoryStoreReply :: Ecosystem -> UTCTime -> LByteString -> Captured -> (Status, [Header], LByteString)
 advisoryStoreReply ecosystem publishedAt artifact request
     | capPath request == artifactPath = (status200, headers, artifact)

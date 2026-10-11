@@ -53,9 +53,7 @@ data Section = Section
     , sectionLoaded :: [ScenarioReport]
     }
 
-{- | One ecosystem's loaded pass: the operating point, the rule policy, the summary tables, and each
-scenario. The concurrency-one reports give the cost table its figures at concurrency one.
--}
+-- | Render loaded outcomes and costs beside the corresponding concurrency-one measurements.
 renderReports :: Section -> Text
 renderReports section =
     T.unlines $
@@ -351,14 +349,14 @@ readingNotes =
     , "- **The in-flight gauge** is `ecluse.serve.admission.in_flight`, sampled each second. Requests that hold admission without finishing show as a flat, nonzero gauge beside zero successes."
     , "- **The rule policy** is what the first scenario's proxy logged at boot: each rule its configuration names, with its type and keys, and the order each mount evaluates the rules in. A proxy of either pass that logged a different policy is named."
     , "- **Allocation per refusal** divides the same window's allocation by its refusals instead of its successes. Each figure charges the whole window to one kind of response, so each is an upper bound on that kind's cost, and a small count makes it large."
-    , "- **Concurrency-one** figures come from the concurrency-one pass, which runs the same scenario on a fresh proxy after the same warm-up, with the base concurrency set to one. A scenario that scales its own connections keeps that scale. Scenarios outside that pass show n/a. A loaded allocation per success far above its concurrency-one figure points at contention, or at work the concurrent requests did not share."
+    , "- **Concurrency-one** figures come from the concurrency-one pass, which runs the same scenario on a fresh proxy after the same warm-up, with exactly one connection regardless of loaded-pass scaling. Scenarios outside that pass show n/a. A loaded allocation per success far above its concurrency-one figure points at contention, or at work the concurrent requests did not share."
     , "- **Missed and collapsed lookups** are the metadata cache's request outcomes in the window, summed over the full, version, and assembled stores. One request can look up more than one store, so the sums count lookups, not requests. Each scenario lists them per store. A collapsed lookup waited for another request's fetch instead of making its own, so few collapsed lookups beside many missed ones show concurrent requests that did not share work."
     ]
 
 -- | Attribute concurrency-one service time against the named upstream baseline.
 renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
 renderServiceTime source reports =
-    renderNormalised source [NormalisedRow (srName r) (pP50Ms (lat r)) (pP99Ms (lat r)) | r <- reports]
+    renderNormalised source [NormalisedRow (srName r) (pP50Ms (lat r)) (pP99Ms (lat r)) (srPublicLegUnavailableReason r) | r <- reports]
   where
     lat = lsLatency . srLoad
 
@@ -375,9 +373,7 @@ renderLoadSaturation c1Reports loadedReports =
             (pP50Ms . lsLatency . srLoad =<< c1)
             (pP50Ms (lsLatency (srLoad loaded)))
 
-{- | The GC-thrash probe: one scenario at each memory limit, highest first. Reclaim per major
-collection is absent: GHC.Stats records no promotion or pre-collection size to derive it from.
--}
+-- | Render the GC-thrash probe by memory limit. GHC.Stats lacks the data for reclaim per major GC.
 renderThrash :: Text -> [(Text, Either Text ScenarioReport)] -> Text
 renderThrash scenarioKey steps =
     T.unlines $

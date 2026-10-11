@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The attribution and saturation arithmetic behind the load report, apart from the live shell
-so the unit suite can test it. At concurrency one a latency splits into the upstream baseline and
-the Écluse overhead ('attribute'). Under load the queuing delay above the concurrency-one service
-time is a capacity signal ('deriveSaturation'). Every latency here is a successful response's.
+{- | Attribute successful service latency only where a public leg exists, and derive saturation
+from loaded latency above concurrency-one service time. Private-hit relays keep raw measurements.
 -}
 module Ecluse.BenchLoad.Normalise (
     -- * The public-leg baseline
@@ -29,15 +27,11 @@ module Ecluse.BenchLoad.Normalise (
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | The upstream wait per request in public round trips: one, because the origin legs run
-concurrently and the public leg is single-flight. Another ecosystem's fixtures must re-check it.
--}
+-- | One public round trip per request, with concurrent origin legs and a single-flight public leg.
 publicLegMultiple :: Double
 publicLegMultiple = 1.0
 
-{- | Where the subtracted upstream baseline came from, a live probe or the configured
-injected latency. Only the label differs. The arithmetic is the same.
--}
+-- | The live probe or injected latency that supplies the public baseline in milliseconds.
 data BaselineSource
     = -- | A live probe: the mean round trip in milliseconds and how many samples it averaged.
       MeasuredRtt Double Int
@@ -45,15 +39,12 @@ data BaselineSource
       InjectedFallback Double
     deriving stock (Eq, Show)
 
--- The baseline round trip in milliseconds, whatever its source.
 baselineMs :: BaselineSource -> Double
 baselineMs = \case
     MeasuredRtt rtt _ -> rtt
     InjectedFallback ms -> ms
 
-{- | One measured latency split into its upstream and Écluse-overhead parts, each
-absolute (milliseconds) and as a fraction of the total in @[0, 1]@.
--}
+-- | A latency split into public upstream and overhead, in milliseconds and fractions in @[0, 1]@.
 data Attribution = Attribution
     { attrTotalMs :: Double
     -- ^ The measured latency.
@@ -68,9 +59,7 @@ data Attribution = Attribution
     }
     deriving stock (Eq, Show)
 
-{- | Split a measured latency into upstream baseline and Écluse overhead. The baseline is
-capped at the total, so a measurement below it yields zero overhead rather than a negative.
--}
+-- | Subtract the public baseline, capped at the total, to leave non-negative Écluse overhead.
 attribute :: Double -> Double -> Attribution
 attribute rttMs totalMs =
     Attribution
@@ -85,13 +74,12 @@ attribute rttMs totalMs =
     overhead = max 0 (totalMs - upstream)
     fraction part = if totalMs <= 0 then 0 else part / totalMs
 
-{- | One scenario's measured p50 and p99 latency, before attribution. A percentile is
-'Nothing' when the run recorded no successful request at it.
--}
+-- | Raw successful p50 and p99 latency, with a reason when public-leg attribution is unavailable.
 data NormalisedRow = NormalisedRow
     { nrName :: Text
     , nrP50Ms :: Maybe Double
     , nrP99Ms :: Maybe Double
+    , nrPublicLegUnavailableReason :: Maybe Text
     }
     deriving stock (Eq, Show)
 
@@ -101,7 +89,7 @@ renderNormalised source rows =
     T.unlines $
         [ "## Service-time attribution: upstream against Écluse overhead (concurrency 1)"
         , ""
-        , "Concurrency-1 pass, so queuing does not contaminate the split: each successful latency is "
+        , "Concurrency-1 pass. For scenarios with a public leg, successful latency is "
             <> "the upstream baseline plus the Écluse overhead. Baseline = "
             <> baselineLabel source
             <> ", "
@@ -109,8 +97,10 @@ renderNormalised source rows =
             <> "Overhead is everything Écluse adds on top of hitting the public registry (the private "
             <> "leg, the merge, the decode, the re-serialise). p50 is primary. p99 is the tail, GC included."
         , ""
-        , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead |"
-        , "| --- | --- | --- | --- | --- | --- | --- |"
+        , "Private-hit relays have no public leg. Their raw totals remain, and public-leg attribution is unavailable."
+        , ""
+        , "| scenario | p50 total | p50 upstream | p50 overhead | p99 total | p99 upstream | p99 overhead | public-leg attribution |"
+        , "| --- | --- | --- | --- | --- | --- | --- | --- |"
         ]
             <> map (renderRow (baselineMs source)) rows
 
@@ -122,11 +112,13 @@ renderRow rttMs row =
             ( nrName row
                 : cellsFor (nrP50Ms row)
                     <> cellsFor (nrP99Ms row)
+                    <> [maybe "available" ("unavailable: " <>) (nrPublicLegUnavailableReason row)]
             )
         <> " |"
   where
     cellsFor :: Maybe Double -> [Text]
     cellsFor Nothing = ["n/a", "n/a", "n/a"]
+    cellsFor (Just totalMs) | isJust (nrPublicLegUnavailableReason row) = [msCell totalMs, "n/a", "n/a"]
     cellsFor (Just totalMs) =
         let a = attribute rttMs totalMs
          in [ msCell (attrTotalMs a)
@@ -135,15 +127,11 @@ renderRow rttMs row =
             ]
     split ms frac = msCell ms <> " (" <> pctCell frac <> ")"
 
-{- | The fraction of the loaded latency above which queuing delay dominates it: past that
-point the client sees mostly waiting in line, neither upstream nor Écluse's own work.
--}
+-- | The loaded-latency fraction above which queuing dominates per-request work.
 queuingDominanceThreshold :: Double
 queuingDominanceThreshold = 0.5
 
-{- | The scalars 'deriveSaturation' works from. Both passes run at the same injected upstream
-latency, so the difference of their successful-response p50s is the queuing delay alone.
--}
+-- | Successful p50s at the same fixture latency, whose difference estimates queuing delay.
 data SaturationInput = SaturationInput
     { siName :: Text
     , siThroughput :: Double
@@ -173,9 +161,7 @@ data Saturation = Saturation
     }
     deriving stock (Eq, Show)
 
-{- | Derive a scenario's saturation view. A missing p50 leaves the delay, the fraction, and
-the dominance undefined: an absent measurement, never a breach and never a slow one.
--}
+-- | Derive saturation. A missing p50 leaves delay and dominance undefined.
 deriveSaturation :: Double -> SaturationInput -> Saturation
 deriveSaturation threshold si =
     Saturation
@@ -195,9 +181,7 @@ deriveSaturation threshold si =
         loaded <- siLoadedP50Ms si
         if loaded > 0 then Just (d / loaded) else Nothing
 
-{- | Render the saturation view as a Markdown section, with a loud summary line when any
-scenario is queuing-bound.
--}
+-- | Render saturation, with a summary when any scenario is queuing-bound.
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =
     T.unlines $
@@ -255,15 +239,12 @@ renderSat s =
         (Just d, Nothing) -> msCell d
         _ -> "n/a"
 
--- A latency in milliseconds to one decimal place.
 msCell :: Double -> Text
 msCell ms = fmt1 ms <> " ms"
 
--- A latency in milliseconds, or "n/a" when absent.
 msMaybe :: Maybe Double -> Text
 msMaybe = maybe "n/a" msCell
 
--- A fraction in [0, 1] rendered as a whole-number percentage.
 pctCell :: Double -> Text
 pctCell frac = fmt0 (frac * 100) <> "%"
 

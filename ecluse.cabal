@@ -1117,10 +1117,12 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Support
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
+    Ecluse.BenchLoad.HarnessSpec
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.ReplaySpec
     Ecluse.BenchLoad.Report
+    Ecluse.BenchLoad.ReportSpec
     Ecluse.BenchLoad.PatternsSpec
     Ecluse.BenchLoad.PatternReportSpec
     Ecluse.BenchLoad.VerdictSpec
