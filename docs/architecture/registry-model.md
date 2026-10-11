@@ -208,6 +208,8 @@ Both private and public selection apply their own parent integrity floor and ori
 The metadata path does not evaluate rules, read advisories or enqueue a mirror.
 Private index reads authorise each caller again, and only the private authority receives that caller's credential.
 A private refusal stops fallback, and first-party names never fall back to public metadata.
+A surviving private version owns its companion requests, including a missing declaration, missing parent or failed companion fetch.
+Public fallback remains available when no private version survives the listing's location and integrity checks.
 Selection releases metadata admission before the bounded relay streams the companion.
 The upstream asserts that the companion matches the archive's Core Metadata. The resolver verifies advertised digests.
 

@@ -21,7 +21,6 @@ module Ecluse.Core.Registry.PyPI.Route.Internal (
 
     -- * The served file URL (rendered from the route that claims it)
     distributionPath,
-    sidecarPath,
 
     -- * The capture values and leaf parsers
     PyPICap (..),
@@ -311,10 +310,6 @@ buildSidecar method = \case
         (version, filename) <- artifactCoordinate name file
         pure (sidecarAction pypiArtifactReplies method name version filename)
     _ -> Nothing
-
--- | Render a companion URL using the route's checked captures.
-sidecarPath :: PackageName -> Text -> Maybe Text
-sidecarPath name file = T.intercalate "/" <$> renderRoute sidecarRoute [PyPIProject name, PyPIFile file]
 
 -- | Positional captures distinguish parsed projects from checked distribution filenames.
 data PyPICap

@@ -110,6 +110,15 @@ rejectedFileSpec = describe "a selected read of a file whose name rejects it" $ 
         it ("fails on " <> what <> " in a file with no name") $
             kept 64 (indexOf [fileOf [fault], fileOf [ownName]]) `shouldBe` Right (Left False)
 
+    for_ ["\"core-metadata\":{\"sha256\":\"\\uQQQQ\"}", "\"core-metadata\":{\"unknown\":\"\\uQQQQ\"}"] $ \fault ->
+        it ("validates a pending companion before a late rejecting filename: " <> decodeUtf8 fault) $
+            kept 64 (indexOf [fileOf [fault, otherName], fileOf [ownName]]) `shouldBe` Right (Left False)
+
+    it "keeps the companion nesting limit before a late rejecting filename" $ do
+        let body = indexOf [fileOf ["\"core-metadata\":{\"sha256\":\"00\"}", otherName], fileOf [ownName]]
+        kept 4 body `shouldBe` Right (Left True)
+        kept 5 body `shouldBe` Right (Right [1])
+
     for_ ["null", "7", "[]", "{}", "\"not a release\"", "\"other-1.2.3.tar.gz\""] $ \name ->
         it ("skips what follows the first name " <> decodeUtf8 name <> ", a later name of the release included") $
             kept 64 (indexOf [fileOf ["\"filename\":" <> name, badEscape, ownName], fileOf [ownName]]) `shouldBe` Right (Right [1])

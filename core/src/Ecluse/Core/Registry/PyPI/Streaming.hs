@@ -47,9 +47,9 @@ fileScalars = ["filename", "url", "requires-python", "size", "upload-time", "yan
 hashNames :: [Text]
 hashNames = [renderHashAlg alg | alg <- Universe.universe, alg /= SRI]
 
--- | One member event of a file object that a selected read inspects.
+-- | Scalar payloads wait until the filename survives. The reader still validates their tokens immediately.
 data SelectedFileEvent
-    = FileScalar Key.Key Value
+    = FileScalar Key.Key ~Value
     | HashesStart
     | HashesEnd
     | HashField Key.Key Value

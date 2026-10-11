@@ -44,8 +44,8 @@ scenarios recorder =
                         seen <- length <$> stubReadsNow plane
                         withPipProject e2e pypiProject pypiVersion digest $ \proj ->
                             void $ pipResolveIn proj pypiProject pypiVersion >>= shouldSucceedThroughProxy e2e
-                        reads <- awaitStubReads plane seen (any companion)
-                        reads `shouldSatisfy` any companion
+                        observedReads <- awaitStubReads plane seen (any companion)
+                        observedReads `shouldSatisfy` any companion
                         pipInstallsWheel e2e advertised
 
             it (caseLabel "pypi/install/yanked-pin" "relays the yank reason when pip installs an exact pin") $ \e2e -> do

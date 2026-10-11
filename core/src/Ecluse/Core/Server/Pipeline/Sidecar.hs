@@ -55,7 +55,8 @@ serveSidecar mode replies name version file request respond = do
         then admittedRead ctx (privateSelection ctx token) (servePrivate ctx)
         else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
-data Selection = Selected HTTP.Request | Refused | Missing OriginMiss
+-- A surviving private version owns a companion absence as well as a fetchable companion.
+data Selection = Selected HTTP.Request | Refused | Missing OriginMiss | CompanionAbsent
 
 admittedRead :: ArtifactRequest response -> Handler Selection -> (Selection -> Handler ResponseReceived) -> Handler ResponseReceived
 admittedRead ctx readSelection =
@@ -71,7 +72,13 @@ privateSelection ctx token = case pdPrivateBaseUrl deps of
         pure $ case result of
             Left _ -> Missing MissUnresolved
             Right (Left err) -> maybe Refused Missing (privateMetadataMiss err)
-            Right (Right readVersion) -> selectRequest ctx TrustedOrigin (pdMinTrustedIntegrity deps) privateHost token readVersion
+            Right (Right readVersion) -> case vrVersion readVersion of
+                Nothing -> Missing MissAbsent
+                Just doc -> case partitionByFloor (pdMinTrustedIntegrity deps) artHashes (pkgArtifacts (vdDetails doc)) of
+                    Left _ -> Missing MissAbsent
+                    Right _ -> case selectRequest ctx TrustedOrigin (pdMinTrustedIntegrity deps) privateHost token readVersion of
+                        Missing _ -> CompanionAbsent
+                        selected -> selected
   where
     deps = arDeps ctx
     privateHost = thgPrivateHostPort (pdTarballHostGate deps)
@@ -119,14 +126,15 @@ sidecarUrl url = path <> ".metadata" <> suffix
 
 servePrivate :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePrivate ctx = \case
+    CompanionAbsent -> answerError ctx versionAbsent
     Refused -> refusePrivate ctx
     Missing miss -> fallback ctx miss
     Selected request -> do
         result <- relay ctx True (srPrivateManager (arRuntime ctx)) acceptPrivate request
         case result of
             UpstreamRelayed (_, received) -> pure received
-            UpstreamRejected status -> fallback ctx (if status == status404 then MissAbsent else MissUnresolved)
-            UpstreamTransportFailure -> fallback ctx MissUnresolved
+            UpstreamRejected status -> answerError ctx (if status == status404 then versionAbsent else upstreamUnavailable)
+            UpstreamTransportFailure -> answerError ctx upstreamUnavailable
   where
     acceptPrivate status = acceptArtifact status || isAuthorisationFailure (statusCode status)
 
@@ -137,6 +145,7 @@ fallback ctx miss
 
 servePublic :: ArtifactRequest response -> Selection -> Handler ResponseReceived
 servePublic ctx = \case
+    CompanionAbsent -> answerError ctx versionAbsent
     Refused -> answerError ctx upstreamUnavailable
     Missing MissAbsent -> answerError ctx versionAbsent
     Missing MissUnresolved -> answerError ctx upstreamUnavailable

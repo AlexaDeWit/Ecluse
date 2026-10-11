@@ -57,6 +57,7 @@ spec = do
     conditionalFloorSpec
     artifactSpec
     sidecarSpec
+    sidecarCollisionSpec
     negotiationSpec
     refusalBodySpec
     privateLegSpec
@@ -288,6 +289,113 @@ sidecarSpec = describe "the metadata companion" $ do
             statusOf response `shouldBe` 404
             hits <- privateHits proxy
             map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
+
+sidecarCollisionSpec :: Spec
+sidecarCollisionSpec = describe "companions keep the winning source" $ do
+    it "serves the private bytes whose digest the winning index advertised" $
+        withCollision (privateCollisionIndex id) id $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [privateMetadataDigest, privateMetadataDigest]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 200
+            hexSha256Of (LBS.toStrict (simpleBody response)) `shouldBe` privateMetadataDigest
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_
+        [ ("absent declaration", KeyMap.delete "core-metadata", True)
+        , ("false declaration", KeyMap.insert "core-metadata" (Bool False), True)
+        , ("empty declaration", KeyMap.insert "core-metadata" (object []), True)
+        , ("weak parent", KeyMap.insert "hashes" (object ["md5" .= ("0123456789abcdef0123456789abcdef" :: Text)]), False)
+        , ("foreign parent", KeyMap.insert "url" (String "http://foreign.invalid/requests-2.34.2.tar.gz"), False)
+        ]
+        $ \(label, change, retainsParent) ->
+            it ("keeps a private sibling authoritative after an " <> label) $
+                withCollision (privateCollisionIndex (changeParent change)) id $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    statusOf index `shouldBe` 200
+                    mapMaybe (fieldAt "size") (servedFiles index) `shouldSatisfy` all (== Number 17)
+                    let parent = find ((== Just "requests-2.34.2.tar.gz") . textAtPath ["filename"]) (servedFiles index)
+                    isJust parent `shouldBe` retainsParent
+                    length (servedFiles index) `shouldBe` if retainsParent then 2 else 1
+                    when retainsParent $ (parent >>= fieldAt "core-metadata") `shouldBe` KeyMap.lookup "core-metadata" (change (KeyMap.singleton "core-metadata" (object ["sha256" .= privateMetadataDigest])))
+                    publicBefore <- privateHits proxy
+                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                    statusOf response `shouldBe` 404
+                    privateHits proxy `shouldReturn` publicBefore
+
+    it "keeps a private version authoritative when it lacks the requested filename" $
+        withCollision (privateCollisionIndex (filter ((/= Just "requests-2.34.2.tar.gz") . textAtPath ["filename"]))) id $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            length (servedFiles index) `shouldBe` 1
+            mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` [Number 17]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 404
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_ [status404, status503] $ \privateStatus ->
+        for_ [methodGet, methodHead] $ \method ->
+            it ("does not replace an advertised private companion after HTTP " <> show (statusCode privateStatus) <> " under " <> decodeUtf8 method) $
+                withCollision (privateCollisionIndex id) (companionResponse privateStatus) $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [privateMetadataDigest, privateMetadataDigest]
+                    publicBefore <- privateHits proxy
+                    response <- requestAt method (sdistPath <> ".metadata") Wai.defaultRequest (proxyApp proxy)
+                    simpleStatus response `shouldBe` privateStatus
+                    privateHits proxy `shouldReturn` publicBefore
+
+    it "does not replace a private companion after a transport failure" $
+        withCollision (privateCollisionIndex id) (onCompanion (\_ respond -> respond (Wai.responseRaw (\_ _ -> pass) (responseLBS status503 [] "")))) $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` [Number 17, Number 17]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 503
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_
+        [ ("weak", map (withKeys ["hashes" .= object ["md5" .= ("0123456789abcdef0123456789abcdef" :: Text)]]))
+        , ("foreign", map (withKeys ["url" .= ("http://foreign.invalid/requests-2.34.2.tar.gz" :: Text)]))
+        , ("absent", const [])
+        ]
+        $ \(label, change) ->
+            it ("serves the public winner when every private entry is " <> label) $
+                withCollision (privateCollisionIndex change) id $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` []
+                    mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [metadataDigest, metadataDigest]
+                    publicBefore <- privateHits proxy
+                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                    simpleBody response `shouldBe` metadataBytes
+                    statusOf response `shouldBe` 200
+                    publicAfter <- privateHits proxy
+                    let newPublicReads = drop (length publicBefore) publicAfter
+                    map fst newPublicReads `shouldContain` [sdistPath <> ".metadata"]
+                    map snd newPublicReads `shouldSatisfy` all isNothing
+
+withCollision :: (Text -> Value) -> (Application -> Application) -> (PyPIProxy -> IO a) -> IO a
+withCollision privateIndex transform use =
+    testWithApplication (pure (transform privateApp)) $ \privatePort ->
+        withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) use
+  where
+    privateApp = onCompanion (\_ respond -> respond (responseLBS status200 [] privateMetadataBytes)) (upstreamApp privateIndex (const pass))
+
+privateCollisionIndex :: ([Value] -> [Value]) -> Text -> Value
+privateCollisionIndex change authority =
+    withKeys ["files" .= change files] (publicIndex authority)
+  where
+    files = map (withKeys ["size" .= (17 :: Int), "core-metadata" .= object ["sha256" .= privateMetadataDigest]] . fileOn authority) ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
+
+changeParent :: (KeyMap.KeyMap Value -> KeyMap.KeyMap Value) -> [Value] -> [Value]
+changeParent change = map $ \file ->
+    if textAtPath ["filename"] file == Just "requests-2.34.2.tar.gz" then Object (change (asObject file)) else file
+
+privateMetadataDigest :: Text
+privateMetadataDigest = hexSha256Of (LBS.toStrict privateMetadataBytes)
+
+privateMetadataBytes :: LByteString
+privateMetadataBytes = "private metadata"
 
 alterDeclarations :: Maybe Value -> Text -> Value
 alterDeclarations declaration authority = withKeys ["files" .= map change (servedFiles response)] (publicIndex authority)

@@ -15,7 +15,6 @@ module Ecluse.Core.Registry.PyPI.Route (
 
     -- * The served file URL (rendered from the route that claims it)
     distributionPath,
-    sidecarPath,
 ) where
 
-import Ecluse.Core.Registry.PyPI.Route.Internal (distributionPath, pypiRouteSpecs, pypiRouter, sidecarPath)
+import Ecluse.Core.Registry.PyPI.Route.Internal (distributionPath, pypiRouteSpecs, pypiRouter)

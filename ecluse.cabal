@@ -229,6 +229,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
+    Ecluse.Core.Registry.PyPI.PendingSidecar
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
@@ -1042,6 +1043,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.FilterSpec
     Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.PyPI.MetadataSpec
+    Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec

@@ -18,7 +18,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Data.Text qualified as T
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
-import Ecluse.Core.Registry.PyPI.Route (distributionPath, sidecarPath)
+import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Route.Internal (
     PyPICap (PyPIFile, PyPIProject),
     artifactCoordinate,
@@ -88,9 +88,6 @@ matchingSpec = describe "which route claims a request" $ do
     for_ ["urllib3-2.0.tar.gz.metadata", "requests-2.0.tar.gz.metadata.metadata"] $ \file ->
         it ("refuses a malformed companion coordinate " <> toString file) $
             claimed methodGet [] ["simple", "requests", file] `shouldBe` Nothing
-
-    it "renders the companion under its distinct route" $
-        sidecarPath requestsName "requests-2.34.2.tar.gz" `shouldBe` Just "simple/requests/requests-2.34.2.tar.gz.metadata"
 
     it "claims nothing for the root index, which lists every project on the upstream" $
         claimed methodGet [] ["simple"] `shouldBe` Nothing
