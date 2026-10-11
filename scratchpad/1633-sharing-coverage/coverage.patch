@@ -37,7 +37,7 @@ index 11bed14a..cb6906d9 100644
 --}
 +-- | SipHash with one to four compression and finalisation rounds over little-endian words.
 diff --git a/core/src/Ecluse/Core/Registry/Json/Shape.hs b/core/src/Ecluse/Core/Registry/Json/Shape.hs
-index e66bee6c..34e13df9 100644
+index e66bee6c..b9d485c6 100644
 --- a/core/src/Ecluse/Core/Registry/Json/Shape.hs
 +++ b/core/src/Ecluse/Core/Registry/Json/Shape.hs
 @@ -6,5 +6 @@
@@ -113,7 +113,7 @@ index e66bee6c..34e13df9 100644
 +            _ -> memberName element rest (member table fields) (observeEvent build "oversized-shape-key-dropped" . loop table fields)
 @@ -298 +322 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
 -            Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
-+            Nothing -> enterObservation build (nameText name) "skipped-member" $ observeSkipped build name "unselected-shape-member" $ withElement rest $ \element afterKey -> skipFrom element afterKey (leaveObservation build (loop table fields))
++            Nothing -> enterObservation build (nameText name) "skipped-member" $ observeSkipped build name "unselected-shape-member" $ withElement rest $ \element afterKey -> skipFrom element afterKey (leaveObservation build . loop table fields)
 @@ -301 +325 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
 -        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
 +        Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table Nothing False
