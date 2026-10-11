@@ -18,18 +18,18 @@ expected=${EXPECTED_REVIEWED_SHA:?missing expected reviewed SHA}
 }
 base=4dd0514b30350cf5c36d07cf7b28179e9001e684
 root=$(git rev-parse --show-toplevel)
-[[ ${CABAL_DIR:-} == "$root/.cabal" && ! -L "$root/.cabal" ]] || {
+[[ ${CABAL_DIR:-} == "$root/.cabal" && ! -L "$root/.cabal" && ! -L "$root/.task" ]] || {
   echo 'unexpected cabal cache location' >&2
   exit 1
 }
 git diff --exit-code HEAD --
 git diff --cached --exit-code --
 while IFS= read -r -d '' path; do
-  [[ $path == .cabal/* ]] || {
+  [[ $path == .cabal/* || $path == .task/* ]] || {
     printf 'unexpected untracked source: %s\n' "$path" >&2
     exit 1
   }
-done < <(git ls-files --others --exclude-standard -z)
+done < <(git ls-files --others -z)
 assets="$root/scratchpad/1633-sharing-coverage"
 allowed=(.github/workflows/bench.yml scratchpad/1633-sharing-coverage/Main.hs scratchpad/1633-sharing-coverage/coverage.patch scratchpad/1633-sharing-coverage/static.yml scripts/measure-1633-sharing-coverage.sh)
 actual_diff=$(git diff --name-only "$base" "$expected" | LC_ALL=C sort)
