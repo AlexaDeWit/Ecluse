@@ -67,8 +67,9 @@ import Data.Universe.Generic (universeGeneric)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (
+    Availability,
     CodeExecSignal,
-    PackageDetails (pkgInstallCode, pkgName, pkgPublishedAt, pkgVersion),
+    PackageDetails (pkgAvailability, pkgInstallCode, pkgName, pkgPublishedAt, pkgVersion),
     PackageName,
     Scope,
  )
@@ -90,12 +91,16 @@ data Rule
       Abstain when the package carries no install-time execution signal.
       -}
       DenyInstallTimeExecution
+    | -- | Refuse versions carrying the registry yank flag.
+      DenyIfYanked
+    | -- | Refuse versions carrying the registry deprecation flag, including obsolete release lines.
+      DenyIfDeprecated
     | {- | A hard deny for a specific package or package@version. Evaluated at top
       precedence (above AllowScope) as a post-mirror revocation mechanism.
       -}
       DenyByIdentity Text
     | {- | Allow an exact package identity, optionally with a version, including fixes the exact fix match cannot recognise.
-      Default precedence overrides advisory denies but yields to install-code and identity denies.
+      Default precedence overrides advisory denies but yields to availability, install-code, and identity denies.
       -}
       AllowByIdentity Text
     | {- | Admit an exact advisory fix without quarantine when no advisory still affects the version.
@@ -146,6 +151,8 @@ data RuleType
     | AllowIfRemediatesCveType
     | DenyIfCveType
     | DenyIfEpssType
+    | DenyIfYankedType
+    | DenyIfDeprecatedType
     | DenyInstallTimeExecutionType
     | DenyByIdentityType
     deriving stock (Eq, Generic, Ord, Show)
@@ -161,6 +168,8 @@ instance WireVocab RuleType where
                , (AllowIfRemediatesCveType, "AllowIfRemediatesCve")
                , (DenyIfCveType, "DenyIfCve")
                , (DenyIfEpssType, "DenyIfEpss")
+               , (DenyIfYankedType, "DenyIfYanked")
+               , (DenyIfDeprecatedType, "DenyIfDeprecated")
                , (DenyInstallTimeExecutionType, "DenyInstallTimeExecution")
                , (DenyByIdentityType, "DenyByIdentity")
                ]
@@ -170,6 +179,8 @@ ruleType :: Rule -> RuleType
 ruleType = \case
     AllowScope{} -> AllowScopeType
     AllowIfOlderThan{} -> AllowIfOlderThanType
+    DenyIfYanked -> DenyIfYankedType
+    DenyIfDeprecated -> DenyIfDeprecatedType
     DenyInstallTimeExecution -> DenyInstallTimeExecutionType
     DenyByIdentity{} -> DenyByIdentityType
     AllowByIdentity{} -> AllowByIdentityType
@@ -191,6 +202,8 @@ readsAdvisories = \case
     DenyIfEpss{} -> True
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
+    DenyIfYanked -> False
+    DenyIfDeprecated -> False
     DenyInstallTimeExecution -> False
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
@@ -205,6 +218,8 @@ deniesOnAdvisories = \case
     AllowIfRemediatesCve -> False
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
+    DenyIfYanked -> False
+    DenyIfDeprecated -> False
     DenyInstallTimeExecution -> False
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
@@ -214,6 +229,8 @@ refuse a version the whole policy admits on the same evidence.
 -}
 ruleDenies :: Rule -> Bool
 ruleDenies = \case
+    DenyIfYanked -> True
+    DenyIfDeprecated -> True
     DenyInstallTimeExecution -> True
     DenyByIdentity{} -> True
     DenyIfCve{} -> True
@@ -257,7 +274,7 @@ revocationRules = filter (reachesRevocation . ruleReach)
         AdmissionOnly -> False
 
 {- | Use the rule type's default when configuration omits precedence. See 'Ecluse.Core.Rules.bootOrder' for tie-breaking.
-Identity allows override both advisory denies, while install-code and identity denies outrank every allow.
+Identity allows override advisory denies. Availability, install-code, and identity denies outrank every default allow.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
@@ -267,6 +284,8 @@ defaultPrecedence = \case
     DenyIfCve{} -> defaultDenyIfCvePrecedence
     DenyIfEpss{} -> defaultDenyIfEpssPrecedence
     AllowByIdentity{} -> defaultAllowByIdentityPrecedence
+    DenyIfYanked -> defaultDenyInstallTimeExecutionPrecedence
+    DenyIfDeprecated -> defaultDenyInstallTimeExecutionPrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
 
@@ -301,7 +320,7 @@ defaultDenyIfEpssPrecedence :: Int
 defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
 {- | An identity pin overrides both advisory denies.
-'DenyInstallTimeExecution' and 'DenyByIdentity' retain higher default precedence.
+Availability, install-code, and identity denies retain higher default precedence.
 -}
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
@@ -338,6 +357,8 @@ data RuleEvidence = RuleEvidence
     -- ^ The version under evaluation.
     , evPublishedAt :: Fact (Maybe UTCTime)
     -- ^ The publish time, absent from some cheap metadata views even when the manifest was read.
+    , evAvailability :: Fact Availability
+    -- ^ The typed registry flag, without upstream notice text.
     , evInstallCode :: Fact CodeExecSignal
     -- ^ Whether installing the version executes code.
     }
@@ -350,6 +371,7 @@ completeEvidence pd =
         { evName = pkgName pd
         , evVersion = pkgVersion pd
         , evPublishedAt = Known (pkgPublishedAt pd)
+        , evAvailability = Known (pkgAvailability pd)
         , evInstallCode = Known (pkgInstallCode pd)
         }
 
@@ -362,6 +384,7 @@ identityEvidence name version =
         { evName = name
         , evVersion = version
         , evPublishedAt = Unread
+        , evAvailability = Unread
         , evInstallCode = Unread
         }
 
@@ -478,6 +501,14 @@ data Reason
       NothingRunsOnInstall
     | -- | 'DenyInstallTimeExecution' abstains: whether installing runs code is not yet determined.
       InstallCodeUndetermined
+    | -- | The version carries the yank flag.
+      VersionYanked
+    | -- | The version carries no yank flag.
+      VersionNotYanked
+    | -- | The version carries the deprecation flag.
+      VersionDeprecated
+    | -- | The version carries no deprecation flag.
+      VersionNotDeprecated
     | -- | 'DenyByIdentity' denies: the identity the operator revoked.
       IdentityRevoked Text
     | -- | 'DenyByIdentity' abstains: the version is not the identity it revokes.
@@ -530,6 +561,8 @@ data Inability
       PublishTimeUnread
     | -- | Nothing read the install-time execution signal the rule decides on.
       InstallSignalUnread
+    | -- | Nothing read the availability flag.
+      AvailabilityUnread
     | -- | No advisory database is loaded.
       NoDatabaseLoaded
     | -- | The serving advisory push is older than its maximum.

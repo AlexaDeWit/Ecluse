@@ -10,13 +10,17 @@ import Data.Aeson (object, (.=))
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (overPrivateBaseUrl, withMirrorPlan, withPrivateBaseUrl)
 import Ecluse.Test.Wai
 import Network.HTTP.Types (methodGet, methodHead, status200, status401, status403, status404, status503, statusCode)
@@ -29,6 +33,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
     tarballSpec
+    availabilitySpec
     privateAuthorisationSpec
     divergentPrivateSpec
 
@@ -514,3 +519,19 @@ headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)
             simpleBody resp `shouldBe` ""
             seenArtifactMethods publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
+
+availabilitySpec :: Spec
+availabilitySpec = describe "deprecated public artifacts" $
+    for_ [("obsolete release line", 403), ("", 200)] $ \(notice, expected) ->
+        it ("applies the typed deprecation flag before fetching, notice=" <> toString notice) $ do
+            privateUp <- privateArtifactMiss
+            let metadata base = packument [("1.0.0", withKeys ["deprecated" .= notice] (selfHostedVersion base "1.0.0"))] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+            publicUp <- artifactUpstreamServing (encodePackument . metadata) publicTarballBytes
+            queue <- newTestMemoryQueue
+            rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence DenyIfDeprecated), atDefaultPrecedence (AllowIfOlderThan 0)]
+            withProxyEnvQueueDeps queue privateUp publicUp Nothing (\deps -> deps{pdRules = rules}) $ \app env _ -> do
+                response <- getTarball "1.0.0" Nothing app
+                status response `shouldBe` expected
+                when (expected == 403) $ do
+                    seenAuth publicUp `shouldReturn` [Nothing]
+                    drainJobs env `shouldReturn` []

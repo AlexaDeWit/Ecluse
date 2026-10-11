@@ -159,10 +159,10 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
 DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
-DenyInstallTimeExecution (300) < DenyByIdentity (400)
+DenyIfDeprecated = DenyIfYanked = DenyInstallTimeExecution (300) < DenyByIdentity (400)
 ```
 
-`DenyInstallTimeExecution` and `DenyByIdentity` default strictly above every allow. The two
+`DenyIfYanked`, `DenyIfDeprecated`, `DenyInstallTimeExecution`, and `DenyByIdentity` default strictly above every allow. The two
 advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
 exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
 escape hatch. Both still sit above the quarantine, the remediation lane, and a scope

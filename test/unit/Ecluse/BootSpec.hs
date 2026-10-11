@@ -29,7 +29,7 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyInstallTimeExecutionType))
+import Ecluse.Core.Rules.Types (RuleType (AllowScopeType, DenyIfDeprecatedType, DenyIfYankedType, DenyInstallTimeExecutionType))
 import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
 import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
 import Ecluse.Dredger (dredgerServerConfig)
@@ -75,17 +75,26 @@ spec :: Spec
 spec = do
     describe "blocked rules at both entry points" $ do
         let bothMounts = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" publicGateEnv
-        for_ [("DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), ("AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one.")] $ \(name, parameters, ty, reason) ->
+        for_ [(PyPI, "DenyInstallTimeExecution", "", DenyInstallTimeExecutionType, "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."), (PyPI, "AllowScope", ",\"scope\":\"acme\"", AllowScopeType, "A PyPI project name has no scope, so this rule can never match one."), (Npm, "DenyIfYanked", "", DenyIfYankedType, "npm reports no yank flag. Removed releases disappear from its metadata."), (PyPI, "DenyIfDeprecated", "", DenyIfDeprecatedType, "The PyPI adapter supplies no deprecation flag.")] $ \(eco, name, parameters, ty, reason) ->
             it ("refuses " <> name <> " with the same block line") $ do
                 let rules = "{\"custom\":{\"type\":\"" <> name <> "\"" <> parameters <> "}}"
                     env = overrideEnv "ECLUSE_RULES" rules bothMounts
-                    expected = renderBootError (RuleBlockedOnMount PyPI ty reason)
+                    expected = renderBootError (RuleBlockedOnMount eco ty reason)
                 (bootOutcome, bootReport) <- bootRefusal ["proxy"] env
                 (checkOutcome, checkReport) <- checkConfigRefusal env
                 bootOutcome `shouldBe` Left (ExitFailure 2)
                 checkOutcome `shouldBe` refusedCheck
                 bootReport `shouldBe` [expected]
                 checkReport `shouldBe` [expected, "configuration: refused"]
+        it "boots and checks each availability rule on its supported mount" $ do
+            let env =
+                    overrideEnv
+                        "ECLUSE_MOUNTS__NPM__RULES"
+                        "{\"deprecated\":{\"type\":\"DenyIfDeprecated\",\"appliesTo\":[\"admission\"]}}"
+                        (overrideEnv "ECLUSE_MOUNTS__PYPI__RULES" "{\"yanked\":{\"type\":\"DenyIfYanked\",\"appliesTo\":[\"admission\"]}}" bothMounts)
+            checkConfig env `shouldReturn` Left ExitSuccess
+            serves ["proxy"] env
+
         it "boots and checks both mounts after the same-key PyPI suppression" $ do
             let env =
                     overrideEnv

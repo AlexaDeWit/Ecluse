@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Queued mirror admission, publishing, and retry outcomes.
 module Ecluse.Core.Worker.JobSpec (spec) where
 
 import Data.Aeson (Value (String), object, (.=))
@@ -14,9 +15,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
+    Availability (Deprecated, Yanked),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SRI),
-    PackageDetails (pkgArtifacts, pkgPublishedAt),
+    PackageDetails (pkgArtifacts, pkgAvailability, pkgPublishedAt),
     PackageName,
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
@@ -41,7 +43,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan), Transience (WillResolve, WontResolve))
+import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
@@ -56,7 +58,7 @@ import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchF
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
+import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -255,6 +257,17 @@ spec = do
                         other -> expectationFailure ("expected the deny to drop the job, got " <> show other)
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
+
+        for_ [(Npm, Deprecated, DenyIfDeprecated, jobWith), (PyPI, Yanked, DenyIfYanked, pypiJobWith)] $ \(eco, flag, rule, jobAt) ->
+            it ("drops a queued version refused by admission-only " <> toString (ruleName rule)) $ do
+                rules <- prepare inertRuleDeps [admissionOnly (atDefaultPrecedence rule), atDefaultPrecedence (AllowIfOlderThan 0)]
+                let resolver name version = pure (VersionPresent (versionDocOf (sampleDetails name version){pkgAvailability = flag}) Nothing)
+                withRuntimePolicies (Map.singleton eco (npmPolicy resolver rules)) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobAt unreachableUrl)
+                    runWM runtime (processJob job) >>= \case
+                        Dropped reason -> reason `shouldSatisfy` T.isInfixOf ("blocked by " <> ruleName rule)
+                        other -> expectationFailure ("expected availability refusal, got " <> show other)
+                    plDocuments <$> readIORef logRef `shouldReturn` []
 
         it "hands the publish step the version object current metadata carried at admission, never the enqueue-time one" $
             withUpstream $ \url ->

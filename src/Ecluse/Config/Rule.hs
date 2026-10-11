@@ -181,6 +181,8 @@ ruleTypeParameters = \case
     "AllowIfRemediatesCve" -> []
     "DenyIfCve" -> ["minCvss", "onUnavailable"]
     "DenyIfEpss" -> ["minEpss", "onUnavailable"]
+    "DenyIfYanked" -> []
+    "DenyIfDeprecated" -> []
     "DenyInstallTimeExecution" -> []
     _ -> []
 
@@ -213,6 +215,8 @@ buildRule name ty entry = case ty of
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
     "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
     "DenyIfEpss" -> DenyIfEpss <$> buildDenyIfEpssParams name entry
+    "DenyIfYanked" -> Right DenyIfYanked
+    "DenyIfDeprecated" -> Right DenyIfDeprecated
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
@@ -254,6 +258,8 @@ patchRuleValue name entry rule =
                 DenyIfEpssParams
                     <$> maybe (Right (dieMinEpss params)) (validateMinEpss name) (entryMinEpss entry)
                     <*> maybe (Right (dieOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
+        DenyIfYanked -> Right DenyIfYanked
+        DenyIfDeprecated -> Right DenyIfDeprecated
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 -- A publish-age threshold: a non-negative number of seconds.

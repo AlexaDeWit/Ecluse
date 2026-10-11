@@ -67,6 +67,10 @@ renderReason = \case
     RunsOnInstall how -> "runs code on install: " <> how
     NothingRunsOnInstall -> "no install-time code execution"
     InstallCodeUndetermined -> "install-time code execution not yet determined"
+    VersionYanked -> "version is yanked"
+    VersionNotYanked -> "version is not yanked"
+    VersionDeprecated -> "version is deprecated"
+    VersionNotDeprecated -> "version is not deprecated"
     IdentityRevoked ident -> "identity " <> ident <> " is revoked by operator"
     IdentityNotRevoked ident -> "identity is not the revoked " <> ident
     IdentityAllowListed ident -> "identity " <> ident <> " is allow-listed by operator"
@@ -89,6 +93,7 @@ renderInability :: Inability -> Text
 renderInability = \case
     PublishTimeUnread -> "the publish time is not available"
     InstallSignalUnread -> "the install-time execution signal is not available"
+    AvailabilityUnread -> "the availability flag is not available"
     NoDatabaseLoaded -> "no advisory database loaded"
     -- The age, the maximum it passed, and when the push landed, so an operator can tell an
     -- update outage from a maximum set too short.

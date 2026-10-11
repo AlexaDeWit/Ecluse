@@ -25,8 +25,9 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (
+    Availability (Available, Deprecated, Yanked),
     CodeExecSignal (CodeExecUnknown, NoCodeOnInstall, RunsCodeOnInstall),
-    PackageDetails (pkgInstallCode, pkgPublishedAt),
+    PackageDetails (pkgAvailability, pkgInstallCode, pkgPublishedAt),
     mkScope,
     pkgEcosystem,
  )
@@ -42,7 +43,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (PrecededRule, prRule, rulePrecedence, ruleReach),
     Reason (AffectedBy, FixesButStillAffected, Remediates),
     Rule (..),
-    RuleEvidence (evInstallCode, evName, evPublishedAt, evVersion),
+    RuleEvidence (evAvailability, evInstallCode, evName, evPublishedAt, evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     completeEvidence,
     defaultPrecedence,
@@ -84,6 +85,8 @@ vocabularySpec = describe "RuleType" $ do
             , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", AllowIfRemediatesCve)
             , (Types.DenyIfCveType, "DenyIfCve", DenyIfCve (DenyIfCveParams 8 FailDeny))
             , (Types.DenyIfEpssType, "DenyIfEpss", DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
+            , (Types.DenyIfYankedType, "DenyIfYanked", DenyIfYanked)
+            , (Types.DenyIfDeprecatedType, "DenyIfDeprecated", DenyIfDeprecated)
             , (Types.DenyInstallTimeExecutionType, "DenyInstallTimeExecution", DenyInstallTimeExecution)
             , (Types.DenyByIdentityType, "DenyByIdentity", DenyByIdentity "thing")
             ]
@@ -106,12 +109,14 @@ completeSpec = describe "completeEvidence" $ do
         let details =
                 (sampleDetails (unscopedNpm "left-pad") v1_0_0)
                     { pkgPublishedAt = Just published
+                    , pkgAvailability = Deprecated
                     , pkgInstallCode = RunsCodeOnInstall "postinstall hook"
                     }
             evidence = completeEvidence details
         evName evidence `shouldBe` unscopedNpm "left-pad"
         evVersion evidence `shouldBe` v1_0_0
         evPublishedAt evidence `shouldBe` Known (Just published)
+        evAvailability evidence `shouldBe` Known Deprecated
         evInstallCode evidence `shouldBe` Known (RunsCodeOnInstall "postinstall hook")
 
     it "keeps an absent publish time as a reading, not as an absent reading" $
@@ -128,6 +133,7 @@ identitySpec = describe "identityEvidence" $ do
     it "carries no reading of any fact a manifest would supply" $ do
         let evidence = identityEvidence (unscopedNpm "left-pad") v1_0_0
         evPublishedAt evidence `shouldBe` Unread
+        evAvailability evidence `shouldBe` Unread
         evInstallCode evidence `shouldBe` Unread
 
 -- A rule reads these two cases differently: it abstains on the first and refuses on the second,
@@ -189,7 +195,7 @@ revocationSpec = describe "revocationRules" $ do
                 H.cover 3 "a deny limited to admission blocks at the gate, and the Dredger keeps the version" (blocks gate && not (blocks dredger))
                 H.cover 4 "a deny at both phases blocks for the Dredger" (blocks dredger)
                 H.cover 10 "an allow admits at the gate" (isApproved gate)
-                H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread)
+                H.cover 15 "the evidence is identity alone, as an unread manifest leaves it" (evPublishedAt evidence == Unread && evInstallCode evidence == Unread && evAvailability evidence == Unread)
                 H.cover 20 "the version is a PyPI release" (pkgEcosystem (evName evidence) == PyPI)
                 H.cover 2 "the gate cannot decide and the Dredger blocks" (isUndecidable gate && blocks dredger)
                 H.cover 30 "two rules tie on precedence" (length (ordNub (map rulePrecedence policy)) < length policy)
@@ -246,6 +252,8 @@ genRule =
         , pure (AllowIfOlderThan (7 * nominalDay))
         , AllowByIdentity <$> genIdentity
         , pure AllowIfRemediatesCve
+        , pure DenyIfYanked
+        , pure DenyIfDeprecated
         , pure DenyInstallTimeExecution
         , DenyByIdentity <$> genIdentity
         , DenyIfCve <$> (DenyIfCveParams <$> Gen.element [0, 7, 10] <*> genAlignment)
@@ -262,6 +270,8 @@ generated rule = case rule of
     AllowIfOlderThan{} -> rule
     AllowByIdentity{} -> rule
     AllowIfRemediatesCve -> rule
+    DenyIfYanked -> rule
+    DenyIfDeprecated -> rule
     DenyInstallTimeExecution -> rule
     DenyByIdentity{} -> rule
     DenyIfCve{} -> rule
@@ -272,8 +282,8 @@ genEvidence :: Gen RuleEvidence
 genEvidence = do
     name <- Gen.element [unscopedNpm "thing", scopedNpm "acme" "thing", unscopedPyPI "thing"]
     version <- mkVersion (pkgEcosystem name) <$> Gen.element ["1.0.0", "2.0.0"]
-    (publishedAt, installCode) <- Gen.frequency [(1, pure (Unread, Unread)), (3, (,) <$> genPublishedAt <*> genInstallCode)]
-    pure (identityEvidence name version){evPublishedAt = publishedAt, evInstallCode = installCode}
+    (publishedAt, installCode, availability) <- Gen.frequency [(1, pure (Unread, Unread, Unread)), (3, (,,) <$> genPublishedAt <*> genInstallCode <*> Gen.element [Unread, Known Available, Known Deprecated, Known Yanked])]
+    pure (identityEvidence name version){evPublishedAt = publishedAt, evInstallCode = installCode, evAvailability = availability}
   where
     genPublishedAt = Gen.element [Unread, Known Nothing, Known (Just (daysAgo 30)), Known (Just (daysAgo 1))]
     genInstallCode = Gen.element [Unread, Known NoCodeOnInstall, Known (RunsCodeOnInstall "postinstall hook"), Known CodeExecUnknown]

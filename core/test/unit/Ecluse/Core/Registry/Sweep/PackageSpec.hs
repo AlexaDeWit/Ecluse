@@ -18,8 +18,9 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (
+    Availability (Deprecated, Yanked),
     CodeExecSignal (RunsCodeOnInstall),
-    PackageDetails (pkgInstallCode, pkgPublishedAt),
+    PackageDetails (pkgAvailability, pkgInstallCode, pkgPublishedAt),
     PackageInfo (infoVersions),
     PackageName,
     mkPackageName,
@@ -63,7 +64,7 @@ import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule, prRule),
-    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyIfDeprecated, DenyIfYanked, DenyInstallTimeExecution),
     RuleEvidence (evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Deny),
@@ -632,6 +633,17 @@ revocationSpec = describe "the rules that apply at revocation" $ do
             (rec', left) <- revocationStep inertRuleDeps [limitedToAdmission DenyInstallTimeExecution] name version (Just (runningCodeOnInstall (sampleManifest name [version])))
             recResults rec' `shouldReturn` [SweepExamined, SweepKept]
             left `shouldBe` [version]
+
+    for_ [(leftPadName, npmVersion "1.0.0", Deprecated, DenyIfDeprecated), (requestsProject, mkVersion PyPI "2.31", Yanked, DenyIfYanked)] $ \(name, version, flag, rule) ->
+        for_ [AdmissionOnly, AdmissionAndRevocation] $ \reach ->
+            it ("reads flagged stored metadata under " <> show rule <> " at " <> show reach) $ do
+                let base = sampleManifest name [version]
+                    info = manifestInfo base
+                    flagged = base{manifestInfo = info{infoVersions = Map.map (\details -> details{pkgAvailability = flag}) (infoVersions info)}}
+                    policy = [PrecededRule (defaultPrecedence rule) reach rule]
+                (rec', left) <- revocationStep inertRuleDeps policy name version (Just flagged)
+                recResults rec' `shouldReturn` [SweepExamined, if reach == AdmissionOnly then SweepKept else SweepDeleted]
+                left `shouldBe` [version | reach == AdmissionOnly]
 
     -- One advisory affects each fixture below 2.0.0.
     for_ [("npm", leftPadName, npmVersion "1.0.0"), ("PyPI", requestsProject, mkVersion PyPI "1.5")] $ \(eco, name, affected) -> do

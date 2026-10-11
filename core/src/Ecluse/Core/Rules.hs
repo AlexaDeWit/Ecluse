@@ -135,6 +135,8 @@ verdictSource = \case
         Known (RunsCodeOnInstall how) -> Deny Nothing (RunsOnInstall how)
         Known NoCodeOnInstall -> NoDecision NothingRunsOnInstall
         Known CodeExecUnknown -> NoDecision InstallCodeUndetermined
+    DenyIfYanked -> availabilityVerdict Yanked VersionYanked VersionNotYanked
+    DenyIfDeprecated -> availabilityVerdict Deprecated VersionDeprecated VersionNotDeprecated
     DenyByIdentity ident -> FromEvidence $ \_ ev ->
         if matchesIdentity ident ev
             then Deny Nothing (IdentityRevoked ident)
@@ -155,6 +157,13 @@ verdictSource = \case
     DenyIfEpss params -> FromAdvisories (AdvisoryAlignment FailDeny (dieOnUnavailable params)) $ \case
         Nothing -> const (CannotVet (dieOnUnavailable params) NoDatabaseLoaded)
         Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
+
+availabilityVerdict :: Availability -> Reason -> Reason -> VerdictSource
+availabilityVerdict flag denied absent = FromEvidence $ \_ ev -> case evAvailability ev of
+    Unread -> CannotVet FailDeny AvailabilityUnread
+    Known actual
+        | actual == flag -> Deny Nothing denied
+        | otherwise -> NoDecision absent
 
 -- The quarantine gives the registry time to yank a malicious publish.
 ageVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
