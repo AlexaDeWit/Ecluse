@@ -225,6 +225,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Adapter
     Ecluse.Core.Registry.PyPI.Credential
     Ecluse.Core.Registry.PyPI.Document
+    Ecluse.Core.Registry.PyPI.FileWriter
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
@@ -925,6 +926,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
     Ecluse.Core.Registry.PyPI.DocumentSpec
+    Ecluse.Core.Registry.PyPI.FileWriterSpec
     Ecluse.Core.Registry.PyPI.FilterSpec
     Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.PyPI.MetadataSpec
@@ -933,6 +935,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.RouteSpec
     Ecluse.Core.Registry.PyPI.ReaderSpec
     Ecluse.Core.Registry.PyPI.StreamingSpec
+    Ecluse.Core.Registry.PyPI.StreamingProjectionSpec
     Ecluse.Core.Registry.PyPI.WireSpec
     Ecluse.Core.Registry.RequestSpec
     Ecluse.Core.Registry.ServedDocumentSpec
@@ -1045,6 +1048,7 @@ test-suite ecluse-core-unit
     , katip             ^>=0.8.8
     , ram               ^>=0.22
     , network           ^>=3.2
+    , primitive         ^>=0.9
     , retry             ^>=0.9
     , exceptions        ^>=0.10
     , scientific        ^>=0.3

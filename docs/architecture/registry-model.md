@@ -495,13 +495,18 @@ The key accumulator stops at about 64 KiB and the number accumulator at about
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
 read, in a table keyed by SipHash-1-3 under a key drawn for that read. When the read ends, it seals
-the table's strings into the document's `DocTable` and drops the table. An npm full read keeps each
-served release packed against that `DocTable`, as the bytes a listing copies when it renders.
-Its ecosystem-specific builder observes typed policy facts beside the generic packed writer.
-Successful releases use those facts without decoding a release object. Invalid facts use the
-existing diagnostic decoder, including the source's original author. Explicit tree reads keep
-the whole-release decoder. Script validation covers every command, while typed facts retain
-only the presence of the three install hooks. The packed release preserves every retained command.
+the table's strings into the document's `DocTable` and drops the table. Full reads keep npm releases
+and PyPI files packed against that table. Listings copy packed bytes through the render plan.
+An npm builder observes typed policy facts beside the generic packed writer. Successful releases
+use those facts without decoding a release object. Invalid facts use the existing diagnostic
+decoder, including the source's original author. Explicit tree reads keep the whole-release
+decoder. Script validation covers every command, while typed facts retain only the presence of the
+three install hooks. The packed release preserves every retained command.
+PyPI reduces scalar and digest members into typed file facts while the writer packs them.
+Successful files need no whole-file tree decode. Invalid files decode only for the existing
+diagnostic payload. Both ecosystems retain typed URLs and digests. PyPI files stay in source order
+across each winning snapshot. Selected PyPI reads keep their tree reducer and early filename
+rejection.
 Parser continuations advance before the next chunk, so successful reads do not retain a complete
 source buffer.
 These bounds do not make required output constant in size. Process peak, native allocation and

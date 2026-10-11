@@ -35,9 +35,7 @@ import Data.Vector qualified as V
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name, PreparedName, decodedName, entryKeeps, entryString, entryText, internName, internPreparedName, nameBytes, nameText, plainName, prepareName)
 import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement, withScanned)
 
-{- | What to retain of one value. Each budget is the structural depth left, and a value read with
-none left is skipped and fails the read.
--}
+-- | What to retain of a value. Each budget is the structural depth left. A value with none left is skipped and fails the read.
 data Shape
     = -- | A scalar as read, or an empty array for a container.
       Scalar !Int
@@ -96,16 +94,14 @@ data Mode = Share | Keep
 -- | A member's key: the table's entry, or a key with its own copy.
 data MemberKey = SharedKey !Entry | OwnKey !Key.Key
 
--- | The key's text.
+-- | A member key's decoded text, from its shared entry or owned key.
 memberText :: MemberKey -> Text
 memberText = \case
     SharedKey entry -> entryText entry
     OwnKey key -> Key.toText key
 {-# INLINE memberText #-}
 
-{- | What a read builds, one value at a time, each step handing its result to a continuation. An
-object's members arrive in source order, and a repeated key's value is read and then dropped.
--}
+-- | A value builder whose steps pass their result to a continuation. Object members arrive in source order. The reader reads and drops repeated values.
 class (Walk r) => Build b r where
     -- | A finished value.
     type Built b

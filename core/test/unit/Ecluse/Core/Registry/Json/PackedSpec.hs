@@ -8,13 +8,17 @@ reader and writer.
 -}
 module Ecluse.Core.Registry.Json.PackedSpec (spec) where
 
+import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (..), encode)
 import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
+import Data.Primitive.ByteArray (MutableByteArray, newByteArray, setByteArray, unsafeFreezeByteArray)
 import Data.Scientific (Scientific, scientific)
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hedgehog (Gen, PropertyT, annotateShow, cover, diff, failure, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -23,7 +27,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (tableTexts)
-import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole)
+import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, Piece (..), Pieces (..), RenderPlan (..), docTable, encodeString, encodedLength, hasHole, opShared, packed, packedEncodedLength, packedResident, packedValue, plain, planResident, planValue, renderPlan, tableResident, urlPrefix, withoutHole, writeEncoded, writeEncodedSized)
 import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
@@ -40,6 +44,44 @@ spec = modifyMaxSuccess (const 2000) $ do
                 text <- forAll genHostileText
                 encodeString text === toStrict (encodingToLazyByteString (Encoding.text text))
                 encodedLength text === BS.length (encodeString text)
+
+    describe "writeEncodedSized" $ do
+        it "matches aeson for sliced UTF-8 at a nonzero output offset, preserving surrounding bytes" $
+            hedgehog $ do
+                text <- forAll genHostileText
+                let sliced = T.drop 1 (T.dropEnd 1 ("\x1f600" <> text <> "\\"))
+                    expected = toStrict (encodingToLazyByteString (Encoding.text text))
+                    len = BS.length expected
+                    expectedBuffer = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
+                writtenString len (writeEncodedSized sliced len) === (len + 3, expectedBuffer)
+                writtenString len (writeEncoded sliced) === (len + 3, expectedBuffer)
+
+        it "preserves the pinned writer's bytes for plain text, UTF-8, every control and escapes" $
+            forM_ legacyStrings $ \(text, expected) -> do
+                let len = BS.length expected
+                    expectedBuffer = BS.replicate 3 0xa5 <> expected <> BS.replicate 3 0xa5
+                encodedLength text `shouldBe` len
+                writtenString len (writeEncodedSized text len) `shouldBe` (len + 3, expectedBuffer)
+                writtenString len (writeEncoded text) `shouldBe` (len + 3, expectedBuffer)
+
+    describe "docTable" $ do
+        it "renders each sliced string between adjacent offsets with unequal encoded lengths" $ do
+            let table = docTable (fromList [T.drop 1 (T.dropEnd 1 ("\x1f600" <> text <> "\\")) | (text, _) <- legacyStrings])
+            forM_ (zip [0 ..] legacyStrings) $ \(index, (text, expected)) -> do
+                let blob = SBS.unShortByteString (SBS.toShort (BS.pack [opShared, index]))
+                    value = packed blob (-1) (BS.length expected)
+                renderAlone table Nothing value `shouldBe` Just expected
+                packedValue table value `shouldBe` Just (String text)
+
+        it "preserves string bytes when the production reader splits UTF-8 and escapes across chunks" $ do
+            let body = "[" <> BS.intercalate "," (map snd legacyStrings) <> "]"
+            forM_ [1, 2, 3, 7, 64] $ \width -> do
+                let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt width rest)) body
+                case packBytes (Generic limit) [] chunks of
+                    Right (StreamResult (Right (table, value)) _) -> do
+                        renderAlone table Nothing value `shouldBe` Just body
+                        packedValue table value `shouldBe` Just (Array (V.fromList (map (String . fst) legacyStrings)))
+                    _ -> expectationFailure "did not pack chunked strings"
 
     describe "renderPlan, one value" $ do
         it "renders a hostile value as aeson encodes the tree its read builds, and decodes to that value" $
@@ -70,6 +112,8 @@ spec = modifyMaxSuccess (const 2000) $ do
                     value = at path (String url) others
                     expected = toStrict (encode (at path (String (prefix <> urlFilenameComponent url)) others))
                 (table, form) <- packedOf (packValue (Generic limit) path value)
+                hasHole form === True
+                hasHole (withoutHole form) === False
                 renderAlone table (Just (urlPrefix prefix)) form === Just expected
                 renderAlone table Nothing form === Just (toStrict (encode value))
                 renderAlone table (Just (urlPrefix prefix)) (withoutHole form) === Just (toStrict (encode value))
@@ -79,6 +123,7 @@ spec = modifyMaxSuccess (const 2000) $ do
                 member <- forAll (Gen.element [Null, Number 7, Bool True, Object (KeyMap.singleton "url" "x"), Array (V.singleton "x")])
                 let value = Object (KeyMap.fromList [("url", member), ("name", "y")])
                 (table, form) <- packedOf (packValue (Generic limit) ["url"] value)
+                hasHole form === False
                 renderAlone table (Just (urlPrefix "https://mirror/")) form === Just (toStrict (encode value))
 
         it "refuses a value that names a string its table lacks, rather than render or decode it short" $
@@ -169,6 +214,29 @@ spec = modifyMaxSuccess (const 2000) $ do
                         renderAlone table Nothing form `shouldBe` Just (toStrict (encode (treeValue [number <> " "])))
                         fmap (toStrict . encode) (packedValue table form) `shouldBe` renderAlone table Nothing form
                     _ -> expectationFailure ("did not pack " <> decodeUtf8 number)
+
+-- Frozen string bytes of the writer at 978f32cc169e7eafc400385f1f60bb9157b6fdda, independent of its replacement.
+legacyStrings :: [(Text, ByteString)]
+legacyStrings =
+    [ ("", "\"\"")
+    , ("abc/def", "\"abc/def\"")
+    , ("\xe9\x6c34\x1f600", BS.pack [34, 195, 169, 230, 176, 180, 240, 159, 152, 128, 34])
+    , ("\"\\/\n\r\t\b\f", "\"\\\"\\\\/\\n\\r\\t\\u0008\\u000c\"")
+    ,
+        ( toText ['\0' .. '\x1f']
+        , "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\u0008\\t\\n\\u000b\\u000c\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
+        )
+    , (T.replicate 80 "a", "\"" <> BS.replicate 80 0x61 <> "\"")
+    , (T.replicate 80 "a" <> "\n", "\"" <> BS.replicate 80 0x61 <> "\\n\"")
+    ]
+
+writtenString :: Int -> (forall st. MutableByteArray st -> Int -> ST st Int) -> (Int, ByteString)
+writtenString len write = runST $ do
+    target <- newByteArray (len + 6)
+    setByteArray target 0 (len + 6) (0xa5 :: Word8)
+    end <- write target 3
+    bytes <- unsafeFreezeByteArray target
+    pure (end, SBS.fromShort (SBS.ShortByteString bytes))
 
 -- The structural budget every property reads with.
 limit :: Int
