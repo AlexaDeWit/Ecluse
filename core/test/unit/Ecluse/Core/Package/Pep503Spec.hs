@@ -6,11 +6,11 @@
 module Ecluse.Core.Package.Pep503Spec (spec) where
 
 import Data.Text qualified as T
-import Hedgehog (forAll, withTests, (===))
+import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec (Spec, describe, it, shouldBe)
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Package.Pep503 (normalisePyPI)
 import Ecluse.Core.Text (textStorageBytes)
@@ -71,9 +71,9 @@ spec = do
             for_ [T.replicate 100000 "a", T.replicate 20000 "acme-" <> "tools", T.replicate 20000 "Acme-_." <> "Tools", T.replicate 100000 "._-", T.replicate 20000 "\x130-\x212a._", T.replicate 20000 "a\0! "] $ \spelling ->
                 normalisePyPI spelling `shouldBe` frozenNormalisePyPI spelling
 
-        it "matches complete base results on arbitrary Unicode and mixed separators" $
-            hedgehog $
-                withTests 1000 $ do
+        modifyMaxSuccess (const 1000) $
+            it "matches complete base results on arbitrary Unicode and mixed separators" $
+                hedgehog $ do
                     spelling <- forAll (Gen.text (Range.linear 0 512) (Gen.choice [Gen.ascii, Gen.unicodeAll, Gen.element ("-_.aA\0" :: String)]))
                     normalisePyPI spelling === frozenNormalisePyPI spelling
 
