@@ -13,7 +13,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 import TestContainers (Container, containerAddress)
 
 import Amazonka qualified as AWS
@@ -23,15 +23,19 @@ import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.AdvisoryStore (AdvisoryStoreUrl, advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
+import Ecluse.Core.Cve (CveDbRejected (CveDbWrongEpoch))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Schema (EpssRequirement (..))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvSchemaEpoch)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
+import Ecluse.Runtime.Test.Advisory (advisoryDriver)
+import Ecluse.Test.Contract.Advisory (AdvisoryFixture (..), advisoryContract)
+import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 import Lens.Micro ((^.))
@@ -40,6 +44,43 @@ spec :: Spec
 spec = do
     describe "S3 Export Integration" $ do
         aroundAll withMinistack $ do
+            aroundWith
+                ( \use container ->
+                    withSystemTempDirectory "ecluse-advisory-contract" $ \dir -> do
+                        Store{stEndpoint = endpoint, stAws = aws, stStore = store} <-
+                            createdBucket container "s3://advisory-contract"
+                        let bucket = advisoryStoreBucket store
+                            key = "contract.db"
+                            goodPath = dir <> "/good.db"
+                            badPath = dir <> "/bad.db"
+                        mkMinimalValidDb goodPath "pkg-a"
+                        mkDbWithWrongEpoch badPath
+                        bytes <- readFileBS goodPath
+                        logEnv <- initLogEnv "ecluse-test" (Environment "test")
+                        slot <- newCveSlot
+                        source <- newS3CveSource (Just endpoint)
+                        let env =
+                                SyncEnv
+                                    { syncFetch = s3CveFetchFor source bucket key (512 * 1024 * 1024)
+                                    , syncEcosystem = Npm
+                                    , syncEpssRequirement = EpssOptional
+                                    , syncDbPath = dir <> "/live.db"
+                                    , syncSlot = slot
+                                    , syncStoreRef = "s3://" <> bucket
+                                    }
+                            publish fixture = do
+                                let path = case fixture of
+                                        AcceptedArtifact -> goodPath
+                                        RefusedArtifact -> badPath
+                                runKatipContextT logEnv () mempty (runResourceT (exportToS3 Nothing (Just endpoint) bucket key path))
+                                response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))
+                                case response ^. S3L.headObjectResponse_eTag of
+                                    Just (S3.ETag tag) -> pure (DbEtag (decodeUtf8 tag))
+                                    Nothing -> fail "the published artifact has no ETag"
+                        advisoryDriver bytes publish (pure env) >>= use
+                )
+                $ advisoryContract "advisory/s3" (CveDbWrongEpoch (osvSchemaEpoch + 1))
+
             it "uploads OSV databases to S3" $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     Store{stEndpoint = endpoint, stAws = base, stStore = store} <-

@@ -1,0 +1,74 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Queue laws separate payload preservation from optional delivery guarantees.
+module Ecluse.Test.Contract.Queue (
+    QueueDriver (..),
+    queueContract,
+    queuePayloadLaw,
+    ephemeralQueueContract,
+    leasedQueueContract,
+) where
+
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Test.Hspec
+
+import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue (..), QueueMessage (..))
+import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Support (expectRightIO)
+
+-- | Each example needs a fresh empty queue and a bounded delivery observation.
+data QueueDriver = QueueDriver
+    { queueHandle :: MirrorQueue
+    , awaitDelivery :: IO [QueueMessage]
+    }
+
+-- | Every backend preserves the payload and accepts acknowledgement of its delivery.
+queueContract :: Text -> SpecWith QueueDriver
+queueContract group =
+    describe "queue contract" $
+        it (caseLabel (group <> "/payload") "preserves every payload field through delivery") queuePayloadLaw
+
+-- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
+queuePayloadLaw :: QueueDriver -> Expectation
+queuePayloadLaw driver = do
+    expectRightIO (enqueue (queueHandle driver) sampleJob)
+    messages <- awaitDelivery driver
+    map msgJob messages `shouldBe` [sampleJob]
+    map (jobPackage . msgJob) messages `shouldBe` [jobPackage sampleJob]
+    map (jobVersion . msgJob) messages `shouldBe` [jobVersion sampleJob]
+    map (jobArtifactUrl . msgJob) messages `shouldBe` [jobArtifactUrl sampleJob]
+    map (jobArtifactFilename . msgJob) messages `shouldBe` [jobArtifactFilename sampleJob]
+    map (jobTraceContext . msgJob) messages `shouldBe` [jobTraceContext sampleJob]
+    traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) messages
+    expectRightIO (receive (queueHandle driver)) `shouldReturn` []
+
+-- | A destructive receive provides neither redelivery nor an increasing delivery count.
+ephemeralQueueContract :: Text -> SpecWith QueueDriver
+ephemeralQueueContract group = describe "ephemeral delivery contract" $ do
+    it (caseLabel (group <> "/destructive-receive") "removes the job on receipt without requiring an acknowledgement") $ \driver -> do
+        expectRightIO (enqueue (queueHandle driver) sampleJob)
+        messages <- awaitDelivery driver
+        map msgJob messages `shouldBe` [sampleJob]
+        map msgReceiveCount messages `shouldBe` [1]
+        expectRightIO (receive (queueHandle driver)) `shouldReturn` []
+    it (caseLabel (group <> "/terminal-drop") "drops a terminal delivery without redelivery") $ \driver -> do
+        expectRightIO (enqueue (queueHandle driver) sampleJob)
+        messages <- awaitDelivery driver
+        map msgJob messages `shouldBe` [sampleJob]
+        traverse_ (expectRightIO . deadLetter (queueHandle driver) . msgReceipt) messages
+        expectRightIO (receive (queueHandle driver)) `shouldReturn` []
+
+-- | The driver uses a short lease and waits long enough to observe its expiry.
+leasedQueueContract :: Text -> SpecWith QueueDriver
+leasedQueueContract group = describe "leased delivery contract" $
+    it (caseLabel (group <> "/redelivery") "redelivers an unacknowledged payload with an increasing delivery count") $ \driver -> do
+        expectRightIO (enqueue (queueHandle driver) sampleJob)
+        firstDelivery <- awaitDelivery driver
+        map msgJob firstDelivery `shouldBe` [sampleJob]
+        map msgReceiveCount firstDelivery `shouldBe` [1]
+        secondDelivery <- awaitDelivery driver
+        map msgJob secondDelivery `shouldBe` [sampleJob]
+        map msgReceiveCount secondDelivery `shouldBe` [2]
+        traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) secondDelivery

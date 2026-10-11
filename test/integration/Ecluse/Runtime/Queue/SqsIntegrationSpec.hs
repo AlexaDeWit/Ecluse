@@ -2,8 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | SQS delivery contracts against the queue emulator.
 module Ecluse.Runtime.Queue.SqsIntegrationSpec (spec) where
 
+import Data.Unique (hashUnique, newUnique)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
@@ -36,6 +38,7 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     defaultSqsConfig,
     newSqsQueue,
  )
+import Ecluse.Test.Contract.Queue (QueueDriver (..), leasedQueueContract, queueContract)
 import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
 import Ecluse.Test.Support (expectRightIO)
 
@@ -46,27 +49,15 @@ spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "mirror queue (ministack)" $ do
-            it "round-trips a job: enqueue, receive, ack, then no redelivery" $ \container -> do
-                queue <- freshQueue container "mirror-roundtrip" defaultQueueOptions
-                expectRightIO (enqueue queue sampleJob)
-                [message] <- receiveUntil queue
-                msgJob message `shouldBe` sampleJob
-                expectRightIO (ack queue (msgReceipt message))
-                -- After the ack the job is gone: a poll past the (short) visibility
-                -- window yields nothing.
-                afterAck <- expectRightIO (receive queue)
-                map msgJob afterAck `shouldBe` []
-
-            it "redelivers a job that was received but never acked" $ \container -> do
-                -- A one-second visibility timeout so the un-acked job becomes
-                -- visible again within the test's patience.
-                queue <- freshQueue container "mirror-redeliver" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                expectRightIO (enqueue queue sampleJob)
-                _firstDelivery <- receiveUntil queue
-                -- Deliberately do not ack: retry-is-don't-ack means the job must
-                -- reappear once its visibility window lapses.
-                redelivered <- receiveUntil queue
-                map msgJob redelivered `shouldBe` [sampleJob]
+            beforeWith
+                ( \container -> do
+                    unique <- hashUnique <$> newUnique
+                    queue <- freshQueue container ("mirror-contract-" <> show unique) defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+                    pure QueueDriver{queueHandle = queue, awaitDelivery = receiveUntil queue}
+                )
+                $ do
+                    queueContract "queue/sqs"
+                    leasedQueueContract "queue/sqs"
 
             it "extendVisibility holds an un-acked job past its original window" $ \container -> do
                 -- Extend the in-flight message well past its 1s visibility timeout. No
@@ -96,25 +87,14 @@ spec =
                 outcomes `shouldBe` [Just ()]
 
             it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
-                -- deadLetter must NOT DeleteMessage, which would silently discard the terminal
-                -- fault. It returns the message with the terminal backoff, so the message rides
-                -- the operator's redrive policy. Reappearance proves nothing deleted it.
+                -- Terminal faults must return through redrive, never DeleteMessage.
+                -- Reappearance proves that terminal handling retained the payload.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
                 expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 expectRightIO (deadLetter queue (msgReceipt message))
                 redelivered <- receiveUntil queue
                 map msgJob redelivered `shouldBe` [sampleJob]
-
-            it "carries a real ApproximateReceiveCount, rising on each redelivery (issue #935)" $ \container -> do
-                -- SQS omits this attribute unless the request asks for it. A missing
-                -- parameter would read as a first delivery forever, so the budget never fires.
-                queue <- freshQueue container "mirror-receive-count" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                expectRightIO (enqueue queue sampleJob)
-                [first'] <- receiveUntil queue
-                msgReceiveCount first' `shouldBe` 1
-                [second'] <- receiveUntil queue
-                msgReceiveCount second' `shouldBe` 2
 
             it "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)" $ \container -> do
                 -- A plain CreateQueue leaves nothing to capture a poison message, so

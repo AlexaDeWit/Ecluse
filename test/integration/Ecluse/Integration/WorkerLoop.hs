@@ -27,7 +27,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Status, status404)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
-import UnliftIO (race_, timeout)
+import UnliftIO (timeout)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (Hash)
@@ -41,16 +41,13 @@ import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
-import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Wai (localhost)
 import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped, mirrorPoliciesUnder)
 
-{- | Run the supervised worker against the queue until @done@ holds, then cancel it with
-'race_'. A hard timeout bounds the run, so a failing test cannot hang.
--}
+-- | Run until progress, failing on timeout or early exit, then cancel the worker.
 runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
-runLoopUntil policies env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker policies env) (waitFor done)
+runLoopUntil policies env = runUntil loopHardTimeout 200_000 (runWorker policies env)
 
 {- | Run the supervised worker for a fixed wall-clock window, then cancel it. For a case
 asserting a negative, where no positive condition exists to wait on.
@@ -66,11 +63,6 @@ publishedAtLeast logRef n = (>= n) . length <$> readIORef logRef
 -- @-fhpc@), so the ceiling fires only on a genuine hang.
 loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
-
--- ~40s of 200ms ticks sits just under 'loopHardTimeout', so the ceiling reports the hang
--- rather than this poller conceding first.
-waitFor :: IO Bool -> IO ()
-waitFor done = void (pollUntil 200 200_000 id done)
 
 {- | A WAI mirror-target stub answering each publish @PUT@ with @replyStatus@ and recording its
 path. The inventory @GET@ answers @404@, so no job takes the presence short-circuit.

@@ -10,12 +10,13 @@ applies the case's own, which is what makes a case order-independent.
 -}
 module Ecluse.Test.Env (
     withEnvVars,
+    withEnvOverrides,
     ambientAwsEntries,
     withAmbientAws,
 ) where
 
 import System.Environment (setEnv, unsetEnv)
-import UnliftIO.Exception (bracket_)
+import UnliftIO.Exception (bracket, bracket_)
 
 {- | Run one case with the named keys cleared, then its own entries alone, and cleared again on
 exit. The caller names every key any case in its module sets, not just the ones it sets here.
@@ -25,6 +26,20 @@ withEnvVars keys entries = bracket_ enter (traverse_ unsetEnv keys)
   where
     enter = traverse_ unsetEnv keys >> traverse_ (uncurry setEnv) entries
 
+-- | Restore all touched keys after success, failure, or cancellation. Callers must run serially.
+withEnvOverrides :: [(String, String)] -> IO a -> IO a
+withEnvOverrides entries action = bracket save restore (const (apply >> action))
+  where
+    save =
+        traverse
+            ( \key -> do
+                value <- lookupEnv key
+                pure (key, value)
+            )
+            (ordNub (map fst entries))
+    restore = traverse_ (\(key, value) -> maybe (unsetEnv key) (setEnv key) value)
+    apply = traverse_ (uncurry setEnv) entries
+
 -- | An AWS identity the credential discovery finds, for a case that must reach a resolved one.
 ambientAwsEntries :: [(String, String)]
 ambientAwsEntries =
@@ -33,6 +48,6 @@ ambientAwsEntries =
     , ("AWS_REGION", "us-east-1")
     ]
 
--- | Run the case under 'ambientAwsEntries' alone.
+-- | Scope dummy AWS credentials to the action, restoring the caller's values on exit.
 withAmbientAws :: IO a -> IO a
-withAmbientAws = withEnvVars (map fst ambientAwsEntries) ambientAwsEntries
+withAmbientAws = withEnvOverrides ambientAwsEntries

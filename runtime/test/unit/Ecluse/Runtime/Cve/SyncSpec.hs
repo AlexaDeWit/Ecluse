@@ -22,7 +22,7 @@ import Network.HTTP.Types.Status (status404)
 import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import Test.Hspec (Expectation, Spec, anyException, around, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
@@ -58,7 +58,9 @@ import Ecluse.Runtime.Cve.Sync.Internal (
     runCveSync,
     syncStep,
  )
+import Ecluse.Runtime.Test.Advisory (advisoryDriver)
 import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
+import Ecluse.Test.Contract.Advisory (AdvisoryFixture (..), advisoryContract)
 import Ecluse.Test.Cve (fakeCveLookup, namesFix)
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
@@ -587,18 +589,23 @@ spec = do
                                 withSlotGeneration slot (traverse (\(_, cve, _) -> namesFix cve "corpus-vuln" "1.2.0")) `shouldReturn` Just True
                             Nothing -> doesFileExist (syncDbPath rejected) `shouldReturn` False
 
-        it "a refused artifact is discarded and the last-good generation keeps serving" $
-            withSyncEnv $ \_ slot envWith -> do
-                let goodEnv = envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))
-                void (syncStep goodEnv Nothing)
-                let badEnv = envWith (fetchServing (Just "e2") mkDbWithWrongEpoch)
-                syncStep badEnv (Just (DbEtag "e1")) >>= \case
-                    SyncRejected etag rejection -> do
-                        etag `shouldBe` DbEtag "e2"
-                        rejection `shouldBe` CveDbWrongEpoch (osvSchemaEpoch + 1)
-                    other -> expectationFailure ("expected SyncRejected, got " <> show other)
-                probesFor slot "pkg-a" `shouldReturn` Just True
-                doesFileExist (syncDbPath badEnv <> ".tmp") `shouldReturn` False
+        around
+            ( \use -> withSyncEnv $ \dir _ envWith -> do
+                let goodPath = dir </> "accepted.db"
+                    badPath = dir </> "refused.db"
+                mkMinimalValidDb goodPath "pkg-a"
+                mkDbWithWrongEpoch badPath
+                bytes <- readFileBS goodPath
+                selected <- newIORef (fetchServing (Just "e1") (copyFile goodPath))
+                let publish fixture = do
+                        let (etag, path) = case fixture of
+                                AcceptedArtifact -> ("e1", goodPath)
+                                RefusedArtifact -> ("e2", badPath)
+                        writeIORef selected (fetchServing (Just etag) (copyFile path))
+                        pure (DbEtag etag)
+                advisoryDriver bytes publish (envWith <$> readIORef selected) >>= use
+            )
+            $ advisoryContract "advisory/local" (CveDbWrongEpoch (osvSchemaEpoch + 1))
 
         it "a download that faults mid-stream is a SyncFetchFaulted outcome and the partial temp file is discarded" $
             withSyncEnv $ \_ _ envWith -> do

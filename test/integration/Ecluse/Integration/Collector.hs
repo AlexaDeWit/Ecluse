@@ -22,15 +22,14 @@ module Ecluse.Integration.Collector (
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
-import System.Environment (setEnv, unsetEnv)
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
 import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
-import UnliftIO (bracket)
 
 import Ecluse.Test.Container.Image (PinnedImageRef, collectorImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
+import Ecluse.Test.Env (withEnvOverrides)
 import Ecluse.Test.Poll (pollUntil)
 
 -- | A running OTLP Collector: the endpoint to export to, and its accumulated log lines.
@@ -70,7 +69,7 @@ awaitCollectorLine collector needle attempts =
 then put every key it touched back. @signal@ names the exporter under test and its schedule knob.
 -}
 withSdkEnv :: Text -> [(String, String)] -> IO a -> IO a
-withSdkEnv endpoint signal act = bracket saveKeys restoreKeys (const (apply >> act))
+withSdkEnv endpoint signal = withEnvOverrides settings
   where
     -- Every exporter is pinned, not only the one under test, so an ambient value cannot
     -- enable a signal a spec asserts is silent.
@@ -84,15 +83,6 @@ withSdkEnv endpoint signal act = bracket saveKeys restoreKeys (const (apply >> a
         , ("OTEL_LOGS_EXPORTER", "none")
         ]
             <> signal
-
-    saveKeys :: IO [(String, Maybe String)]
-    saveKeys = traverse (\k -> (k,) <$> lookupEnv k) (ordNub (map fst settings))
-
-    restoreKeys :: [(String, Maybe String)] -> IO ()
-    restoreKeys = traverse_ (\(k, mv) -> maybe (unsetEnv k) (setEnv k) mv)
-
-    apply :: IO ()
-    apply = traverse_ (uncurry setEnv) settings
 
 -- The OTLP HTTP receiver port the Collector serves on.
 collectorPort :: TC.Port

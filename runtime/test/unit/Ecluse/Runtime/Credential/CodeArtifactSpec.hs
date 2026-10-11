@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | CodeArtifact mint parsing through an HTTP stub and the shared token contract.
 module Ecluse.Runtime.Credential.CodeArtifactSpec (spec) where
 
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -13,23 +14,21 @@ import Test.Hspec
 import Amazonka qualified as AWS
 import Amazonka.Auth (fromKeys)
 
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret)
+import Ecluse.Core.Credential (AuthToken (..), mkSecret)
 import Ecluse.Runtime.Credential.CodeArtifact.Internal (CodeArtifactConfig (..), providerForEnv)
+import Ecluse.Test.Contract.Credential (credentialContract)
 import Ecluse.Test.Credential (noCredentialReporters)
 
-{- | Component test for the CodeArtifact credential leaf with no live AWS. An in-process HTTP
-stub answers @GetAuthorizationToken@, driving the real request build, SigV4 signing, response
-parse, and token plus expiry extraction. The mint is a control-plane AWS API call, not the npm
-protocol, so an npm-registry emulator cannot stand in.
--}
+-- | The stub covers mint request mapping and token parsing without a live account.
 spec :: Spec
-spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
-    it "mints the token and expiry the endpoint returns, without live AWS" $
-        testWithApplication (pure stubApp) $ \port -> do
-            env <- stubEnv port
-            token <- providerForEnv noCredentialReporters env config >>= currentToken
-            unSecret (authSecret token) `shouldBe` "the-canned-token"
-            authExpiresAt token `shouldBe` Just (posixSecondsToUTCTime 2000000000)
+spec =
+    describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)"
+        $ around
+            ( \use ->
+                testWithApplication (pure stubApp) $
+                    stubEnv >=> (\env -> providerForEnv noCredentialReporters env config >>= use)
+            )
+        $ credentialContract "credential/codeartifact-stub" AuthToken{authSecret = mkSecret "the-canned-token", authExpiresAt = Just (posixSecondsToUTCTime 2000000000)}
   where
     config :: CodeArtifactConfig
     config =
