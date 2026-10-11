@@ -43,10 +43,10 @@ data FileValue
     | -- | A decoded file, or a failure whose diagnostic needs the packed payload.
       FileValue (Maybe IndexFile)
 
--- Root keys share one shape mode. The writer tracks shared keys, while Keep mode needs a mask for the eight supported fields.
+-- Keep mode needs a mask for file fields. Failed digests still reserve their keys so duplicates cannot repair them.
 data FileFields
     = FileFields Frame FileFacts {-# UNPACK #-} !Word8
-    | HashFields Frame (Map Text (Maybe Text))
+    | HashFields Frame (Map Text Text) Bool
 
 data FileFacts = FileFacts
     { ffFilename :: Maybe Text
@@ -75,7 +75,7 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
     openObject (FileWriter writer depth) next = do
         level <- readPrimVar depth
         writePrimVar depth (level + 1)
-        openObject writer (\frame -> next (if level == 0 then FileFields frame emptyFacts 0 else HashFields frame mempty))
+        openObject writer (\frame -> next (if level == 0 then FileFields frame emptyFacts 0 else HashFields frame mempty True))
     beginMember (FileWriter writer _) key fields next = beginMember writer key (frameOf fields) $ \repeated ->
         next (repeated || seenMember key fields)
     addMember (FileWriter writer _) key value fields next = addMember writer key () (frameOf fields) $ \frame ->
@@ -85,7 +85,9 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
                         OwnKey own -> seen .|. fileFieldBit (Key.toText own)
                         SharedKey _ -> seen
                  in FileFields frame (reduceMember (keyText key) value facts) marked
-            HashFields _ hashes -> HashFields frame (Map.insert (keyText key) (scalarText value) hashes)
+            HashFields _ hashes valid ->
+                let text = scalarText value
+                 in HashFields frame (Map.insert (keyText key) (fromMaybe "" text) hashes) (valid && isJust text)
     dropValue (FileWriter writer _) _ = dropValue writer ()
     closeObject (FileWriter writer depth) fields next = do
         level <- readPrimVar depth
@@ -93,7 +95,7 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
         closeObject writer (frameOf fields) $ \() ->
             next $! case fields of
                 FileFields _ facts _ -> FileValue (finishFacts facts)
-                HashFields _ hashes -> HashValue (sequenceA hashes)
+                HashFields _ hashes valid -> HashValue (if valid then Just hashes else Nothing)
     openArray (FileWriter writer _) = openArray writer
     addItem (FileWriter writer _) _ = addItem writer ()
     closeArray (FileWriter writer _) count start next = closeArray writer count start (\() -> next (ScalarValue (Array mempty)))
@@ -114,7 +116,7 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
 frameOf :: FileFields -> Frame
 frameOf = \case
     FileFields frame _ _ -> frame
-    HashFields frame _ -> frame
+    HashFields frame _ _ -> frame
 
 keyText :: MemberKey -> Text
 keyText = \case
@@ -124,7 +126,7 @@ keyText = \case
 seenMember :: MemberKey -> FileFields -> Bool
 seenMember key fields = case (key, fields) of
     (OwnKey own, FileFields _ _ seen) -> seen .&. fileFieldBit (Key.toText own) /= 0
-    (_, HashFields _ hashes) -> Map.member (keyText key) hashes
+    (_, HashFields _ hashes _) -> Map.member (keyText key) hashes
     _ -> False
 
 fileFieldBit :: Text -> Word8
