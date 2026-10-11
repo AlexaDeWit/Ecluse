@@ -11,7 +11,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
 import Ecluse.E2E.Harness
 import Ecluse.Test.Package (hexSha256Of)
 
@@ -25,8 +25,26 @@ scenarios =
         describe "pypi surface -- a real pip install" $ do
             it "installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
-                length advertised `shouldBe` 4
+                length advertised `shouldBe` 5
                 pipInstallsWheel e2e advertised
+
+            it "relays the yank reason when pip installs an exact pin" $ \e2e -> do
+                advertised <- advertisedFiles e2e pypiProject
+                case lookup pypiYankedWheelFile advertised of
+                    Just digest ->
+                        withPipProject e2e pypiProject pypiYankedVersion digest $ \proj -> do
+                            void $ pipInstallIn proj >>= shouldSucceedThroughProxy e2e >>= shouldWarn ("Reason for being yanked: " <> pypiYankReason)
+                            pipInstalled proj pypiYankedDistInfo `shouldReturn` True
+                    Nothing -> expectationFailure "the served index advertised no digest for the yanked wheel"
+
+            it "rejects the yank warning assertion for a release without the member" $ \e2e -> do
+                advertised <- advertisedFiles e2e pypiProject
+                case lookup pypiWheelFile advertised of
+                    Just digest ->
+                        withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
+                            installed <- pipInstallIn proj >>= shouldSucceedThroughProxy e2e
+                            shouldWarn ("Reason for being yanked: " <> pypiYankReason) installed `shouldThrow` anyException
+                    Nothing -> expectationFailure "the served index advertised no digest for the control wheel"
 
             it "serves the source distribution beside the wheel under the shipped policy" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject

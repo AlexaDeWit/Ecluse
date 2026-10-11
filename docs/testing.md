@@ -619,6 +619,9 @@ client- and mirror-observable outcomes:
   when public served it,
 - mirroring an older version after a newer one leaves the mirror's `dist-tags.latest` alone,
 - a tampered artifact fails the integrity gate and never publishes,
+- `npm` prints a deprecated version's notice when it installs that version, before and after the
+  worker mirrors it,
+- `pip` reports a yanked release and the reason for the yank when an exact pin installs it,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
   served Simple index advertised, so the installed bytes are the advertised ones,
 - the same admitted PyPI release serves its source distribution with the advertised sha256.

@@ -17,6 +17,8 @@ module Ecluse.E2E.Fixtures.Npm (
     mirrorOmittedAuthorFields,
     mirrorRegistryFields,
     mirrorRegistryDistFields,
+    deprecatedPkg,
+    deprecationNotice,
     latestPkg,
     dredgerPkg,
     dredgerKeepPkg,
@@ -124,7 +126,7 @@ mirrorAuthorFields =
     , "engines" .= object ["node" .= (">=18" :: Text)]
     , "license" .= ("MIT" :: Text)
     , "scripts" .= object ["test" .= ("node -e \"\"" :: Text)]
-    , "deprecated" .= ("superseded by a later release" :: Text)
+    , "deprecated" .= deprecationNotice
     ]
 
 -- | Authored data deliberately omitted from the supported metadata representation.
@@ -145,6 +147,14 @@ mirrorRegistryDistFields =
     [ "signatures" .= [object ["keyid" .= ("SHA256:fixture" :: Text), "sig" .= ("MEUCIQ" :: Text)]]
     , "attestations" .= object ["url" .= (stubUrl NpmPublic <> "-/npm/v1/attestations/e2e-mirror@1.0.0")]
     ]
+
+-- | A package whose one version is deprecated, reserved for the case that reads the notice.
+deprecatedPkg :: PkgSpec
+deprecatedPkg = (defaultPkgSpec "e2e-deprecated"){psVersionFields = ["deprecated" .= deprecationNotice]}
+
+-- | The message the deprecated fixture versions carry, which npm repeats on install.
+deprecationNotice :: Text
+deprecationNotice = "superseded by a later release"
 
 {- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
 must not retag the store.
@@ -290,6 +300,7 @@ fixturePackages =
     [ allowPkg
     , denyPkg
     , mirrorPkg
+    , deprecatedPkg
     , latestPkg
     , tamperPkg
     , headPkg

@@ -14,7 +14,10 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
+    allowPkg,
     denyPkg,
+    deprecatedPkg,
+    deprecationNotice,
     headPkg,
     latestPkg,
     mirrorAuthorFields,
@@ -47,6 +50,26 @@ scenarios = do
                 (installed, scriptRan) <- installWithLifecycleProbe e2e
                 void $ shouldSucceed installed
                 scriptRan `shouldBe` False
+
+            it "relays a deprecated version's notice to the client, before and after the worker mirrors the version" $ \e2e -> do
+                let name = psName deprecatedPkg
+                    ver = psVersion deprecatedPkg
+                    installsWithNotice = withNpmProject e2e $ \proj -> do
+                        void $
+                            npmInstallIn proj name
+                                >>= shouldSucceedThroughProxy e2e
+                                >>= shouldWarn ("npm warn deprecated " <> name <> "@" <> ver <> ": " <> deprecationNotice)
+                        installedVersion proj name `shouldReturn` Just ver
+                -- Only this case installs the package, so public alone holds it for the first read.
+                verdaccioHasVersionNow e2e name ver `shouldReturn` False
+                installsWithNotice
+                verdaccioHasVersion e2e name ver `shouldReturn` True
+                installsWithNotice
+
+            it "rejects the deprecation warning assertion for a version without the member" $ \e2e ->
+                withNpmProject e2e $ \proj -> do
+                    installed <- npmInstallIn proj (psName allowPkg) >>= shouldSucceedThroughProxy e2e
+                    shouldWarn ("npm warn deprecated " <> psName allowPkg <> "@" <> psVersion allowPkg <> ": " <> deprecationNotice) installed `shouldThrow` anyException
 
         describe "server↔worker -- the integrity gate" $
             it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do

@@ -10,6 +10,10 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiWheelFile,
     pypiSdistFile,
     pypiDistInfo,
+    pypiYankedVersion,
+    pypiYankedWheelFile,
+    pypiYankedDistInfo,
+    pypiYankReason,
     pypiWheelFor,
     pypiDistInfoFor,
     buildPyPIFixtures,
@@ -37,7 +41,7 @@ pypiUpstreamUrl = stubUrl PyPIPublic
 pypiProject :: Text
 pypiProject = "e2e-sample"
 
--- | The single release the fixture index names.
+-- | The ordinary release selected by a version range.
 pypiVersion :: Text
 pypiVersion = "1.0.0"
 
@@ -53,18 +57,37 @@ pypiSdistFile = pypiProject <> "-" <> pypiVersion <> ".tar.gz"
 pypiDistInfo :: Text
 pypiDistInfo = pypiDistInfoFor pypiProject pypiVersion
 
+-- | The exact-pin release whose wheel carries a yank reason.
+pypiYankedVersion :: Text
+pypiYankedVersion = "0.9.0"
+
+-- | The filename pip installs for the yanked release.
+pypiYankedWheelFile :: Text
+pypiYankedWheelFile = pypiWheelFor pypiProject pypiYankedVersion
+
+-- | The installed metadata directory for the yanked release.
+pypiYankedDistInfo :: Text
+pypiYankedDistInfo = pypiDistInfoFor pypiProject pypiYankedVersion
+
+-- | The index's reason for the yank, repeated by pip on install.
+pypiYankReason :: Text
+pypiYankReason = "published by mistake"
+
 -- | Write ordinary-install artifacts, compatibility controls, and old/recent advisory releases.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
     let projectDir = root </> "simple" </> toString pypiProject
         wheelPath = projectDir </> toString pypiWheelFile
         sdistPath = projectDir </> toString pypiSdistFile
+        yankedPath = projectDir </> toString pypiYankedWheelFile
     createDirectoryIfMissing True projectDir
     buildWheel (root </> ".work-wheel") wheelPath
     buildSdist (root </> ".work-sdist") sdistPath
+    buildWheelFor pypiProject pypiYankedVersion (metadataFileFor pypiProject pypiYankedVersion) (root </> ".work-yanked-wheel") yankedPath
     bytes <- BS.readFile wheelPath
     sourceBytes <- BS.readFile sdistPath
-    writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes) (hexSha256Of sourceBytes)))
+    yankedBytes <- BS.readFile yankedPath
+    writeFileLBS (projectDir </> indexFile) (Aeson.encode (simpleIndex (hexSha256Of bytes) (hexSha256Of sourceBytes) (hexSha256Of yankedBytes)))
     now <- renderIso8601Utc <$> getCurrentTime
     for_ ["flask", "e2e-raw-fix"] $ \project -> buildAdvisoryWheels root project now
 
@@ -135,21 +158,24 @@ recordFileFor project version =
         , pypiDistInfoFor project version <> "/RECORD,,"
         ]
 
-simpleIndex :: Text -> Text -> Value
-simpleIndex digest sourceDigest =
+simpleIndex :: Text -> Text -> Text -> Value
+simpleIndex digest sourceDigest yankedDigest =
     object
         [ "name" .= pypiProject
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
-        , "versions" .= [pypiVersion]
-        , "files" .= [sdistEntry sourceDigest, wheelEntry digest, excludedWheel "2" "requires-python" (String ">=99") digest, excludedWheel "3" "yanked" (Bool True) digest]
+        , "versions" .= [pypiVersion, pypiYankedVersion]
+        , "files" .= [sdistEntry sourceDigest, wheelEntry digest, excludedWheel "2" "requires-python" (String ">=99") digest, excludedWheel "3" "yanked" (Bool True) digest, yankedWheelEntry yankedDigest]
         ]
 
-wheelEntry :: Text -> Value
-wheelEntry = wheelEntryFor pypiProject pypiVersion "2020-01-01T00:00:00Z"
+yankedWheelEntry :: Text -> Value
+yankedWheelEntry digest = Object (KeyMap.insert "yanked" (String pypiYankReason) (wheelEntryFor pypiProject pypiYankedVersion "2020-01-01T00:00:00Z" digest))
 
-wheelEntryFor :: Text -> Text -> Text -> Text -> Value
+wheelEntry :: Text -> Value
+wheelEntry = Object . wheelEntryFor pypiProject pypiVersion "2020-01-01T00:00:00Z"
+
+wheelEntryFor :: Text -> Text -> Text -> Text -> Aeson.Object
 wheelEntryFor project version uploaded digest =
-    object
+    KeyMap.fromList
         [ "filename" .= filename
         , "url" .= (pypiUpstreamUrl <> "simple/" <> project <> "/" <> filename)
         , "hashes" .= object ["sha256" .= digest]
@@ -171,10 +197,10 @@ sdistEntry digest =
 
 -- These files are absent, so an installer that loses compatibility or yank fields cannot succeed.
 excludedWheel :: Text -> Aeson.Key -> Value -> Text -> Value
-excludedWheel build key value digest = case wheelEntry digest of
-    Object fields -> Object (KeyMap.insert key value (KeyMap.insert "filename" (String filename) (KeyMap.insert "url" (String url) fields)))
-    other -> other
+excludedWheel build key value digest =
+    Object (KeyMap.insert key value (KeyMap.insert "filename" (String filename) (KeyMap.insert "url" (String url) fields)))
   where
+    fields = wheelEntryFor pypiProject pypiVersion "2020-01-01T00:00:00Z" digest
     filename = escapedProject <> "-" <> pypiVersion <> "-" <> build <> "-py3-none-any.whl"
     url = pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> filename
 
