@@ -12,7 +12,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -308,7 +308,7 @@ baseFullRead limits name bound chunks = do
     baseFinishPacked limits name pointer (docTable (tableTexts table)) acc
   where
     pointer = "See https://registry.npmjs.org/" <> renderPackageName name
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) (Walked BasePackedRead)))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked BasePackedRead)))
     setup = do
         let Interned authorKey withKey = internName (decodedName "author") (testTable releaseUniqueFields)
             Interned author seeded = internName (decodedName pointer) withKey

@@ -16,7 +16,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -136,7 +136,7 @@ type GenericOutcome = Either LimitError (Int, Either Bool GenericHeld)
 genericDirect :: Mode -> [ByteString] -> GenericOutcome
 genericDirect mode chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) GenericHeld))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) GenericHeld))
     setup = do
         writer <- newVersionWriter Nothing
         pure $ \tokens -> withElement tokens $ \element rest ->
@@ -150,7 +150,7 @@ genericDirect mode chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (s
 genericBase :: Mode -> [ByteString] -> GenericOutcome
 genericBase mode chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) GenericHeld))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) GenericHeld))
     setup = do
         writer <- newWriter Nothing
         pure $ \tokens -> withElement tokens $ \element rest ->
@@ -200,7 +200,7 @@ genericSuccess result = do
 genericSequence :: Bool -> Mode -> Int -> [ByteString] -> Either LimitError (Int, Either Bool [Maybe VersionManifest])
 genericSequence sealing mode count chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) [Maybe VersionManifest]))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) [Maybe VersionManifest]))
     setup = do
         writer <- newVersionWriter Nothing
         let loop remaining table facts tokens
@@ -214,7 +214,7 @@ genericSequence sealing mode count chunks = readOutcome (walkWritingChunks (Meta
 genericBaseSequence :: Bool -> Mode -> Int -> [ByteString] -> Either LimitError (Int, Either Bool [Maybe VersionManifest])
 genericBaseSequence sealing mode count chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) [Maybe VersionManifest]))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) [Maybe VersionManifest]))
     setup = do
         writer <- newWriter Nothing
         let loop remaining table facts tokens
@@ -314,7 +314,7 @@ assemblySpec = it "assembles mixed sources from unchanged blobs and frozen polic
 authorSpec :: Spec
 authorSpec = it "preserves the source author for fallback diagnostics while packing its replacement" $ do
     let body = extended "\"author\":{\"name\":\"owner\"}"
-        setup :: ST st (TokenResult -> ST st (Steps (ST st) (Bool, Value, Maybe Value)))
+        setup :: ST st (Cursor -> ST st (Steps (ST st) (Bool, Value, Maybe Value)))
         setup = do
             let (table, key, pointer) = authorEntries
             writer <- newVersionWriter (Just (key, pointer))
@@ -360,7 +360,7 @@ directBound = directBoundSkipping Nothing
 directBoundSkipping :: Maybe Text -> Int -> Int -> Bool -> [ByteString] -> Outcome
 directBoundSkipping skipped bound depth share chunks = finished (walkWritingChunks (MetadataBodyLimit bound) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) (Walked Observation)))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked Observation)))
     setup = do
         writer <- newVersionWriter Nothing
         let step observed field next = case field of
@@ -380,7 +380,7 @@ baseRead depth share chunks = baseBound (sum (map BS.length chunks)) depth share
 baseBound :: Int -> Int -> Bool -> [ByteString] -> Outcome
 baseBound bound depth share chunks = finished (walkWritingChunks (MetadataBodyLimit bound) setup chunks)
   where
-    setup :: ST st (TokenResult -> ST st (Steps (ST st) (Walked Observation)))
+    setup :: ST st (Cursor -> ST st (Steps (ST st) (Walked Observation)))
     setup = do
         writer <- newWriter Nothing
         let step observed field next = case field of

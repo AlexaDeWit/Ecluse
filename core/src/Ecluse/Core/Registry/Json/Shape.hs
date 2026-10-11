@@ -18,7 +18,6 @@ module Ecluse.Core.Registry.Json.Shape (
     listedMember,
     Mode (..),
     MemberKey (..),
-    memberText,
     Build (..),
     Trees (..),
     readShape,
@@ -96,7 +95,7 @@ data Mode = Share | Keep
 -- | A member's key: the table's entry, or a key with its own copy.
 data MemberKey = SharedKey !Entry | OwnKey !Key.Key
 
--- | The key's text.
+-- The key's text.
 memberText :: MemberKey -> Text
 memberText = \case
     SharedKey entry -> entryText entry
