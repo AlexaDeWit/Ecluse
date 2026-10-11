@@ -441,8 +441,9 @@ destination you declared, so a misconfigured client cannot mis-publish through t
 The shared publish handler supports routes whose body supplies the package name. Such a route
 authenticates and reads under the request cap and aggregate byte budget before a namespace
 refusal can return `403`. All declared names must agree after canonicalisation. Multipart
-names require the boundary declared in Content-Type. This preparation does not enable PyPI
-publication. npm keeps its path-name guard before reading the body.
+decoding is prepared in test support and moves into production with the native relay in #1093.
+PyPI publication remains disabled, and #1133 remains open. npm keeps its path-name guard before
+reading the body.
 
 A publish that never reaches Écluse is the quiet one. A client that resolves its publish
 destination from some other part of its configuration sends it straight to that registry, and the

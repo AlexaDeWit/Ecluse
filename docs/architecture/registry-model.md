@@ -85,10 +85,11 @@ trigger, content, and credential from the mirror write.
   The shared handler also accepts a route with no path name. It authenticates, reserves the
   aggregate byte budget, and reads under the request cap before deriving one canonical body
   name. Missing, invalid, or disagreeing names refuse before the first-party guard or relay.
-  Its multipart decoder recognises delimiter lines under the declared Content-Type boundary
-  and examines every part. Blank headers, duplicate identity parameters, and incomplete parts
-  refuse the whole request. It retains no file payload. PyPI publication remains disabled
-  until its native relay is connected.
+  The prepared multipart decoder lives in test support, where pathless handler specs exercise
+  it. It recognises delimiter lines, accepts MIME transport padding, and ignores preamble and
+  epilogue bytes outside actual parts. Blank headers, duplicate identity parameters, and
+  incomplete parts refuse the whole request. #1093 moves the decoder into production with
+  the native relay. PyPI publication remains disabled, and #1133 remains open.
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
   the private upstream, so the operator aggregates the publication target into that read path. A

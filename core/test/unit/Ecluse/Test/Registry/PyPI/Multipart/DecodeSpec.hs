@@ -3,14 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Multipart identity extraction uses only the declared boundary and retains every name claim.
-module Ecluse.Core.Registry.PyPI.MultipartSpec (spec) where
+module Ecluse.Test.Registry.PyPI.Multipart.DecodeSpec (spec) where
 
 import Data.ByteString qualified as BS
 import Test.Hspec
 
 import Ecluse.Core.Registry.Adapter.Capability (PublishBody (..))
-import Ecluse.Core.Registry.PyPI.Multipart (declaredNames)
-import Ecluse.Test.Registry.PyPI.Multipart (malformedMultipartParts, multipartBoundary, multipartField, multipartFile, multipartUpload)
+import Ecluse.Test.Registry.PyPI.Multipart (compatibleMultipartBodies, malformedMultipartEnvelopes, malformedMultipartParts, multipartBoundary, multipartField, multipartFile, multipartUpload)
+import Ecluse.Test.Registry.PyPI.Multipart.Decode (declaredNames)
 
 -- | Pin the public contract through deterministic inputs.
 spec :: Spec
@@ -30,8 +30,19 @@ spec = describe "declaredNames" $ do
             declaredNames ((multipartUpload [multipartField "name" "acme-widget"]){publishContentType = header}) `shouldReturn` []
     it "refuses a missing closing delimiter" $
         declaredNames ((multipartUpload []){publishBytes = multipartField "name" "acme-widget"}) `shouldReturn` []
-    it "refuses data after the closing delimiter" $
-        declaredNames ((multipartUpload []){publishBytes = publishBytes (multipartUpload [multipartField "name" "acme-widget"]) <> multipartField "name" "public-package"}) `shouldReturn` []
+    it "ignores epilogue bytes that resemble another part" $
+        declaredNames ((multipartUpload []){publishBytes = publishBytes (multipartUpload [multipartField "name" "acme-widget"]) <> multipartField "name" "public-package"}) `shouldReturn` ["acme-widget"]
+    for_ compatibleMultipartBodies $ \body ->
+        it ("accepts the valid MIME envelope: " <> show body) $
+            declaredNames body `shouldReturn` ["requests", "requests"]
+    for_ malformedMultipartEnvelopes $ \body ->
+        it ("refuses malformed boundary framing: " <> show body) $
+            declaredNames body `shouldReturn` []
+    it "does not recover names from an epilogue with no actual parts" $
+        declaredNames ((multipartUpload []){publishBytes = publishBytes (multipartUpload []) <> multipartField "name" "requests"}) `shouldReturn` []
+    it "refuses a truncated closing delimiter after padding" $
+        declaredNames ((multipartUpload []){publishBytes = multipartField "name" "requests" <> "--upload-boundary-- \t\r"}) `shouldReturn` []
+
     it "preserves an inline marker inside a field" $
         declaredNames (multipartUpload [multipartField "name" "acme--upload-boundarywidget"]) `shouldReturn` ["acme--upload-boundarywidget"]
     it "preserves inline markers and longer delimiter-like lines in file bytes" $

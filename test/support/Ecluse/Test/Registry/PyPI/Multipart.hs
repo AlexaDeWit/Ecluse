@@ -8,6 +8,8 @@ module Ecluse.Test.Registry.PyPI.Multipart (
     multipartField,
     multipartFile,
     malformedMultipartParts,
+    compatibleMultipartBodies,
+    malformedMultipartEnvelopes,
     multipartContentType,
     multipartBoundary,
 ) where
@@ -52,3 +54,34 @@ malformedMultipartParts =
     ]
   where
     part headers = "--" <> multipartBoundary <> "\r\n" <> headers <> "\r\n\r\npublic-project\r\n"
+
+-- | Legal MIME envelopes containing exactly two name parts, despite name-like text outside their delimiters.
+compatibleMultipartBodies :: [PublishBody]
+compatibleMultipartBodies =
+    [ envelope "upload boundary" "\"upload boundary\"" "" "" ""
+    , envelope "upload boundary" "\"upload\\ boundary\"" "" "" ""
+    , envelope multipartBoundary multipartBoundary " \t" "" ""
+    , envelope multipartBoundary multipartBoundary "" preamble ""
+    , envelope multipartBoundary multipartBoundary "" "" epilogue
+    , envelope "upload boundary" "\"upload boundary\"" " \t" preamble epilogue
+    ]
+  where
+    preamble = "Content-Disposition: form-data; name=\"name\"\r\n\r\npublic-project\r\n"
+    epilogue = multipartField "name" "public-project"
+
+-- | Invalid declared boundaries and delimiter padding, each paired with matching wire bytes.
+malformedMultipartEnvelopes :: [PublishBody]
+malformedMultipartEnvelopes =
+    [ envelope "upload boundary " "\"upload boundary \"" "" "" ""
+    , envelope "upload\tboundary" "\"upload\tboundary\"" "" "" ""
+    , envelope "upload boundary" "upload boundary" "" "" ""
+    , envelope multipartBoundary multipartBoundary "\v" "" ""
+    ]
+
+envelope :: ByteString -> ByteString -> ByteString -> ByteString -> ByteString -> PublishBody
+envelope boundary parameter padding before after =
+    PublishBody
+        (Just ("multipart/form-data; boundary=" <> parameter))
+        (before <> part <> part <> "--" <> boundary <> "--" <> padding <> "\r\n" <> after)
+  where
+    part = "--" <> boundary <> padding <> "\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nrequests\r\n"

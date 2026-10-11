@@ -23,7 +23,6 @@ import Ecluse.Core.Registry.Npm.Adapter (npmPublish)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken))
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
-import Ecluse.Core.Registry.PyPI.Multipart qualified as Multipart
 import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
 import Ecluse.Core.Security (Limits (maxPublishRequestBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -35,7 +34,8 @@ import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (requestsName)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Registry.PyPI.Multipart (malformedMultipartParts, multipartBoundary, multipartContentType, multipartField, multipartFile, multipartUpload)
+import Ecluse.Test.Registry.PyPI.Multipart (compatibleMultipartBodies, malformedMultipartEnvelopes, malformedMultipartParts, multipartBoundary, multipartContentType, multipartField, multipartFile, multipartUpload)
+import Ecluse.Test.Registry.PyPI.Multipart.Decode qualified as Multipart
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (inertDepsFor)
 import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
@@ -120,6 +120,33 @@ spec = describe "servePublish" $ do
         simpleStatus response `shouldBe` status201
         relays <- readIORef (fixtureRelays fixture)
         [publishBytes carried | (_, _, carried) <- relays] `shouldBe` [body]
+    for_ compatibleMultipartBodies $ \body ->
+        it ("relays valid MIME framing unchanged: " <> show body) $ do
+            fixture <- newFixture Nothing
+            let headers = [("Authorization", "Basic Y2FsbGVyOnRva2Vu")] <> maybe [] (\value -> [("Content-Type", value)]) (publishContentType body)
+            response <- send fixture (publishBytes body) headers
+            simpleStatus response `shouldBe` status201
+            relays <- readIORef (fixtureRelays fixture)
+            [carried | (_, _, carried) <- relays] `shouldBe` [body]
+    it "does not authorise names found only in the epilogue" $ do
+        fixture <- newFixture Nothing
+        let bytes = publishBytes (multipartUpload []) <> multipartField "name" "requests"
+        response <- send fixture bytes authenticated
+        statusCode (simpleStatus response) `shouldBe` 403
+        readIORef (fixtureRelays fixture) `shouldReturn` []
+    it "guards the actual part even when outside text claims an allowed name" $ do
+        fixture <- newFixture Nothing
+        let bytes = "Content-Disposition: form-data; name=\"name\"\r\n\r\nrequests\r\n" <> upload ["public-project"] <> multipartField "name" "requests"
+        response <- send fixture bytes authenticated
+        statusCode (simpleStatus response) `shouldBe` 403
+        readIORef (fixtureRelays fixture) `shouldReturn` []
+    for_ malformedMultipartEnvelopes $ \body ->
+        it ("refuses malformed boundary framing before relay: " <> show body) $ do
+            fixture <- newFixture Nothing
+            let headers = [("Authorization", "Basic Y2FsbGVyOnRva2Vu")] <> maybe [] (\value -> [("Content-Type", value)]) (publishContentType body)
+            response <- send fixture (publishBytes body) headers
+            statusCode (simpleStatus response) `shouldBe` 403
+            readIORef (fixtureRelays fixture) `shouldReturn` []
     it "canonicalises repeated names and preserves bytes, Content-Type and the caller pair" $ do
         fixture <- newFixture Nothing
         let body = upload ["Requests", "requests"]

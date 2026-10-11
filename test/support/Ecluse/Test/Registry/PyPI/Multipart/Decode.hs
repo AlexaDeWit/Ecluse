@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Extract every upload identity from bounded multipart bytes without copying file contents.
-module Ecluse.Core.Registry.PyPI.Multipart (declaredNames) where
+module Ecluse.Test.Registry.PyPI.Multipart.Decode (declaredNames) where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.Adapter.Capability (PublishBody (..))
 declaredNames :: PublishBody -> IO [Text]
 declaredNames body = pure . fromMaybe [] $ do
     boundary <- publishContentType body >>= declaredBoundary
-    firstPart <- BS.stripPrefix ("--" <> boundary <> "\r\n") (publishBytes body)
+    firstPart <- openingPart boundary (publishBytes body)
     readParts ("\r\n--" <> boundary) [] firstPart
 
 declaredBoundary :: ByteString -> Maybe ByteString
@@ -25,7 +25,9 @@ declaredBoundary header = do
     (mediaType, attributes) <- parameters header
     guard (mediaType == "multipart/form-data")
     boundary <- uniqueValue "boundary" attributes
-    guard (not (BS.null boundary) && BS.length boundary <= maxBoundaryBytes)
+    guard (BS.length boundary <= maxBoundaryBytes)
+    (_, finalByte) <- BS.unsnoc boundary
+    guard (finalByte /= 32)
     guard (BS.all boundaryCharacter boundary)
     pure boundary
 
@@ -39,7 +41,17 @@ maxHeaderParameters :: Int
 maxHeaderParameters = 32
 
 boundaryCharacter :: Word8 -> Bool
-boundaryCharacter c = alphaNumeric c || c `BS.elem` "'()+_,-./:=?"
+boundaryCharacter c = c == 32 || alphaNumeric c || c `BS.elem` "'()+_,-./:=?"
+
+data PartBoundary = MoreParts ByteString | EndParts
+
+openingPart :: ByteString -> ByteString -> Maybe ByteString
+openingPart boundary bytes = do
+    let marker = "--" <> boundary
+        opening = (BS.stripPrefix marker bytes >>= boundaryLine) <|> (snd <$> splitPart ("\r\n" <> marker) bytes)
+    case opening of
+        Just (MoreParts firstPart) -> Just firstPart
+        _ -> Nothing
 
 -- wai-extra can stop at blank headers and treats inline markers as delimiters. Traverse complete parts here.
 readParts :: ByteString -> [Text] -> ByteString -> Maybe [Text]
@@ -47,21 +59,32 @@ readParts delimiter names remaining = do
     (part, next) <- splitPart delimiter remaining
     claim <- partName part
     let names' = maybe names (: names) claim
-    maybe (pure (reverse names')) (readParts delimiter names') next
+    case next of
+        MoreParts rest -> readParts delimiter names' rest
+        EndParts -> pure (reverse names')
 
-splitPart :: ByteString -> ByteString -> Maybe (ByteString, Maybe ByteString)
+splitPart :: ByteString -> ByteString -> Maybe (ByteString, PartBoundary)
 splitPart delimiter bytes = scan 0 bytes
   where
     scan offset remaining = do
         let (before, marker) = BS.breakSubstring delimiter remaining
             at = offset + BS.length before
         after <- BS.stripPrefix delimiter marker
-        case after of
-            "--" -> pure (BS.take at bytes, Nothing)
-            "--\r\n" -> pure (BS.take at bytes, Nothing)
-            _ | Just next <- BS.stripPrefix "\r\n" after -> pure (BS.take at bytes, Just next)
-            _ | "--\r\n" `BS.isPrefixOf` after -> Nothing
-            _ -> scan (at + BS.length delimiter) after
+        case boundaryLine after of
+            Just next -> pure (BS.take at bytes, next)
+            Nothing -> scan (at + BS.length delimiter) after
+
+-- RFC 2046 permits SP/TAB transport padding and ignores bytes outside the first and closing delimiter lines.
+boundaryLine :: ByteString -> Maybe PartBoundary
+boundaryLine bytes = case BS.stripPrefix "--" bytes of
+    Just padded -> do
+        let rest = BS.dropWhile transportPadding padded
+        guard (BS.null rest || "\r\n" `BS.isPrefixOf` rest)
+        pure EndParts
+    Nothing -> MoreParts <$> BS.stripPrefix "\r\n" (BS.dropWhile transportPadding bytes)
+
+transportPadding :: Word8 -> Bool
+transportPadding byte = byte == 32 || byte == 9
 
 partName :: ByteString -> Maybe (Maybe Text)
 partName part = do
