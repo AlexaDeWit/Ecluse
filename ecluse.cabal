@@ -1451,6 +1451,7 @@ test-suite ecluse-smoke
   hs-source-dirs:     test/smoke
   other-modules:
     Ecluse.Core.Registry.NpmSmokeSpec
+    Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Security.HostSmokeSpec
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
