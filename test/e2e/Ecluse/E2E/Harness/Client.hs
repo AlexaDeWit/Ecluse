@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Driving a package-manager client in end-to-end scenarios.
-The npm and pip harnesses share the throwaway project directory, the process capture, and
-the two outcome assertions.
--}
+-- | Isolated package-manager clients and assertions for end-to-end scenarios.
 module Ecluse.E2E.Harness.Client (
     withClientDir,
     runClient,
@@ -13,6 +10,7 @@ module Ecluse.E2E.Harness.Client (
     -- * Assertions
     shouldSucceed,
     shouldFail,
+    shouldWarn,
     clientReport,
 ) where
 
@@ -64,9 +62,14 @@ shouldFail res = liftIO $ case crExit res of
     ExitSuccess -> expectationFailure (toString (clientReport res "incorrectly succeeded")) >> pure res
     _ -> pure res
 
-{- | What the client ran, what its exit code meant, and everything it printed. A caller with
-more evidence than the client's own output appends its sections to this.
--}
+-- | Fail the assertion with the client's output unless one line of its stderr is exactly this one.
+shouldWarn :: (MonadIO m) => Text -> ClientResult -> m ClientResult
+shouldWarn line res = liftIO $ do
+    unless (line `elem` lines (crStderr res)) $
+        expectationFailure (toString (clientReport res ("wrote no stderr line " <> show line)))
+    pure res
+
+-- | The command, outcome, and captured output for a failed client assertion.
 clientReport :: ClientResult -> Text -> Text
 clientReport res outcome =
     crCommand res
