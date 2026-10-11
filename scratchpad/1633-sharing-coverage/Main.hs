@@ -3,12 +3,9 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 
 -- | Bounded source reads for sharing coverage, with unchanged output witnesses.
 module Main (main) where
-
-import Relude
 
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.ByteString qualified as BS
