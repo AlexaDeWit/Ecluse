@@ -101,9 +101,9 @@ pypiNotFound = RouteAction unsupportedContract (AnswerRefusal (declaredRefusal "
 -- | PyPI's routes, in matching order.
 pypiRoutes :: [Route PyPICap]
 pypiRoutes =
-    [ sidecarRoute
-    , artifactRoute
+    [ artifactRoute
     , simpleIndexRoute
+    , sidecarRoute
     , uploadRoute
     ]
 
