@@ -2,13 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Hash contracts against the digest decoder, captured metadata, and the frozen algorithm parser.
 module Ecluse.Core.Package.HashSpec (spec) where
 
 import Prelude hiding (universe)
 
 import Crypto.Number.Serialize (i2ospOf)
 import Data.ByteString qualified as BS
-import Data.Char (toLower, toUpper)
+import Data.Char (isSpace, toLower, toUpper)
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
@@ -196,9 +197,67 @@ spec = do
         it "rejects the sri wrapper, which names no algorithm of its own" $
             parseHashAlg "sri" `shouldSatisfy` isLeft
 
+        describe "parseHashAlg against the actual-base parser" $ do
+            it "preserves every alias and ASCII case combination" $
+                for_ algorithmNames $ \name ->
+                    for_ (traverse (\c -> ordNub [toLower c, toUpper c]) (toString name)) $ \mixed -> do
+                        let raw = toText mixed
+                        parseHashAlg raw `shouldBe` baseParseHashAlg raw
+
+            it "preserves every Unicode whitespace character around every alias" $
+                for_ (filter isSpace [minBound .. maxBound]) $ \c ->
+                    for_ algorithmNames $ \name -> do
+                        let raw = T.cons c (T.snoc name c)
+                        parseHashAlg raw `shouldBe` baseParseHashAlg raw
+
+            it "preserves Unicode case conversion and exact raw rejection messages" $
+                for_ ["bla\x212a\&e2b", "\x0130SHA256", "\x200bsha256", "sha256\x200b", "\xa0SRI\x3000", " SHA--256\n", "", "sha3-256", "md-5", "blake-2b", "sha256-AAAA", "sha256\0"] $ \raw ->
+                    parseHashAlg raw `shouldBe` baseParseHashAlg raw
+
+            modifyMaxSuccess (const 1000) $ do
+                it "preserves aliases with mixed case and surrounding whitespace" $
+                    hedgehog $ do
+                        name <- forAll (Gen.element algorithmNames)
+                        mixed <- forAll (toText <$> traverse (\c -> Gen.element [toLower c, toUpper c]) (toString name))
+                        before <- forAll genSpace
+                        after <- forAll genSpace
+                        let raw = before <> mixed <> after
+                        parseHashAlg raw === baseParseHashAlg raw
+
+                it "preserves arbitrary Unicode input, including raw error text" $
+                    hedgehog $ do
+                        raw <- forAll (Gen.text (Range.linear 0 150) Gen.unicode)
+                        parseHashAlg raw === baseParseHashAlg raw
+
+                it "preserves malformed names with an internal dash or whitespace" $
+                    hedgehog $ do
+                        name <- forAll (Gen.element algorithmNames)
+                        inserted <- forAll (Gen.choice [pure "-", pure "--", genSpace])
+                        raw <- forAll (insertWithin name inserted)
+                        parseHashAlg raw === baseParseHashAlg raw
+
         it "resolves a sha384 SRI prefix to SHA384 (was Nothing before it was modelled)" $
             sriAlgorithm "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
                 `shouldBe` Just SHA384
+
+algorithmNames :: [Text]
+algorithmNames = ["md5", "sha1", "sha-1", "sha256", "sha-256", "sha384", "sha-384", "sha512", "sha-512", "blake2b"]
+
+-- Frozen from 7f214208ea93a54584f0687bef6870d68f7ac8a8:core/src/Ecluse/Core/Package/Hash.hs.
+-- Keep the original normalisation and dispatch independent of production helpers.
+baseParseHashAlg :: Text -> Either Text HashAlg
+baseParseHashAlg raw = case T.toLower (T.strip raw) of
+    "md5" -> Right MD5
+    "sha1" -> Right SHA1
+    "sha-1" -> Right SHA1
+    "sha256" -> Right SHA256
+    "sha-256" -> Right SHA256
+    "sha384" -> Right SHA384
+    "sha-384" -> Right SHA384
+    "sha512" -> Right SHA512
+    "sha-512" -> Right SHA512
+    "blake2b" -> Right Blake2b
+    _ -> Left ("unknown integrity algorithm: " <> raw)
 
 decoderSpec :: Spec
 decoderSpec = describe "mkHash agrees with the digest decoder" $ do
@@ -239,7 +298,6 @@ decoderSpec = describe "mkHash agrees with the digest decoder" $ do
     for_ corpusPackages (agreesOnCapture 2 npmDigests)
     for_ pypiCorpusPackages (agreesOnCapture 1 pypiDigests)
 
--- 'mkHash' with the decoder as its test: 'canonicalHashValue' is 'Just' exactly when 'decodeHash' yields bytes.
 viaDecoder :: HashAlg -> Text -> Either Text Hash
 viaDecoder alg value
     | isJust (canonicalHashValue candidate) = Right candidate
@@ -247,24 +305,19 @@ viaDecoder alg value
   where
     candidate = (Package.unsafeHash SHA1 Package.validSha1){hashAlg = alg, hashValue = value}
 
--- The first few inputs 'mkHash' and the decoder judge differently. A capture can hold thousands, and one names the fault.
 firstDifferences :: [(HashAlg, Text)] -> [(HashAlg, Text)]
 firstDifferences = take 5 . filter (\(alg, value) -> mkHash alg value /= viaDecoder alg value)
 
--- Each digest is read as every algorithm, whole and as the components 'mkSriHashes' splits it into.
 agreesOnCapture :: Int -> J.Parser [Text] -> CorpusPackage -> Spec
 agreesOnCapture fewest digestsOf package =
     it ("over every digest of the capture " <> cpPath package) $ do
         entries <- captureTexts fewest digestsOf package
         firstDifferences [(alg, reading) | digest <- concat entries, reading <- ordNub (digest : words digest), alg <- universe] `shouldBe` []
 
--- One list for each release of an npm packument (@dist.shasum@, @dist.integrity@) and for each file of a
--- PEP 691 index (every @hashes@ value). An entry with no digest gives the empty list.
 npmDigests, pypiDigests :: J.Parser [Text]
 npmDigests = "versions" J..: J.objectValues (many ("dist" J..: (("shasum" J..: J.string) <> ("integrity" J..: J.string))))
 pypiDigests = "files" J..: J.arrayOf (many ("hashes" J..: J.objectValues J.string))
 
--- One spelling of a digest: the algorithm 'mkHash' is given, the SRI prefix if it has one, and the digest's length in bytes.
 data Spelling = Spelling {spellingAlg :: HashAlg, spellingPrefix :: Maybe Text, spellingBytes :: Int}
 
 spellings :: [Spelling]
@@ -278,13 +331,12 @@ sriSpellings = [Spelling SRI (Just prefix) size | (prefix, size) <- [("sha256-",
 spellingName :: Spelling -> String
 spellingName spelling = show (spellingAlg spelling) <> maybe " hex" ((" " <>) . toString) (spellingPrefix spelling)
 
--- Every character the decoder takes as a digit, base64 in the order of the values it encodes.
+-- Base64 digits must follow their encoded value order for spare-bit mutations.
 digitsOf :: Spelling -> [Char]
 digitsOf spelling
     | isJust (spellingPrefix spelling) = ['A' .. 'Z'] <> ['a' .. 'z'] <> ['0' .. '9'] <> "+/"
     | otherwise = ['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F']
 
--- A well-formed digest in parts: the SRI prefix (empty for hex), the digits, and the base64 padding.
 data Wire = Wire {wirePrefix :: Text, wireDigits :: Text, wirePadding :: Text}
     deriving stock (Show)
 
@@ -299,7 +351,6 @@ encodeAs spelling bytes = case spellingPrefix spelling of
 genWire :: Spelling -> Gen Wire
 genWire spelling = encodeAs spelling <$> genBytes (spellingBytes spelling)
 
--- A digest of all-zero bytes, for a reader that needs one well-formed digest of the spelling.
 plainWire :: Spelling -> Wire
 plainWire spelling = encodeAs spelling (BS.replicate (spellingBytes spelling) 0)
 
@@ -307,7 +358,6 @@ plainWire spelling = encodeAs spelling (BS.replicate (spellingBytes spelling) 0)
 genBytes :: Int -> Gen ByteString
 genBytes size = fromMaybe BS.empty . i2ospOf size <$> Gen.integral (Range.constant 0 (256 ^ size - 1))
 
--- A class of input: its coverage label, the decoder's verdict where the class fixes one, and its generator.
 data Case = Case LabelName (Maybe Bool) (Wire -> Gen Text)
 
 accepted, refused, undecided :: LabelName -> (Wire -> Gen Text) -> Case
@@ -407,7 +457,6 @@ replaceDigit genChar digits = do
     c <- genChar
     pure (T.take at digits <> one c <> T.drop (at + 1) digits)
 
--- One non-ASCII character in place of as many digits as its UTF-8 encoding has bytes.
 fillBytes :: Text -> Gen Text
 fillBytes digits = do
     c <- genNonAscii
