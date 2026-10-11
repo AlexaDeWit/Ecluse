@@ -35,9 +35,7 @@ data Generation = Generation
     , genInstalledAt :: Double
     }
 
-{- | Where the serving artifact came from. The publication time is the store's, not the
-artifact's, so republishing the same bytes can advance it.
--}
+-- | The store's publication metadata. Republishing identical bytes can advance the timestamp.
 data AdvisorySource = AdvisorySource
     { asProvenance :: AdvisoryProvenance
     , asPushedAt :: Maybe UTCTime
@@ -52,9 +50,9 @@ newtype CveSlot = CveSlot {slotCell :: TVar (Maybe Generation)}
 newCveSlot :: IO CveSlot
 newCveSlot = CveSlot <$> newTVarIO Nothing
 
--- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
-withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
-withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g))))
+-- | Borrow a generation's lookup, ETag and publication metadata until the action returns or is cancelled.
+withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup, AdvisorySource) -> IO a) -> IO a
+withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g), genSource g)))
   where
     acquire = atomically $ do
         mGen <- readTVar (slotCell slot)
@@ -68,15 +66,11 @@ withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEta
             pure (retired && remaining == 0)
         when shouldClose (closeGeneration g)
 
-{- | The active generation's artifact 'DbEtag', or 'Nothing' before the first sync. The
-read does not pin the generation, so it never delays a 'swapIn'.
--}
+-- | Read the active ETag without pinning, or 'Nothing' before the first sync.
 currentAdvisoryEtag :: CveSlot -> IO (Maybe DbEtag)
 currentAdvisoryEtag slot = fmap genEtag <$> readTVarIO (slotCell slot)
 
-{- | What the serving artifact came from, or 'Nothing' before the first sync. A failed poll
-never reaches 'swapIn', so a warm process keeps the last value it read.
--}
+-- | Read the active publication metadata, retained across failed polls, or 'Nothing' before the first sync.
 currentAdvisorySource :: CveSlot -> IO (Maybe AdvisorySource)
 currentAdvisorySource slot = fmap genSource <$> readTVarIO (slotCell slot)
 
@@ -88,15 +82,11 @@ observeAdvisoryPublication slot etag pushedAt = atomically $ do
         when (genEtag g == etag && pushedAt > asPushedAt (genSource g)) $
             writeTVar (slotCell slot) (Just g{genSource = (genSource g){asPushedAt = pushedAt}})
 
-{- | When the serving generation went live, or 'Nothing' while no swap has landed. Only 'swapIn'
-moves it, so it measures what the slot serves, not the liveness of what fills it.
--}
+-- | Read when 'swapIn' installed the active generation, separately from its publication time.
 generationInstalledAt :: CveSlot -> IO (Maybe Double)
 generationInstalledAt slot = fmap genInstalledAt <$> readTVarIO (slotCell slot)
 
-{- | Install a newly verified generation, drain the displaced one's readers, then close it.
-The slot owns @newDb@ from entry, so no caller cleanup may close it.
--}
+-- | Take ownership of the verified database, install it, then close the displaced database after its readers drain.
 swapIn :: CveSlot -> DbEtag -> Maybe UTCTime -> CveDb -> IO ()
 swapIn slot etag pushedAt newDb = mask_ $ do
     readers <- newTVarIO (0 :: Int)

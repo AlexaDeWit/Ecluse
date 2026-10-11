@@ -38,7 +38,7 @@ import Ecluse.Core.Osv.Epss (EpssScores, epssForIds, mkEpssScores, parseEpssLine
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise, mkPackageName)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
-import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource)
+import Ecluse.Core.Rules (AdvisoryRows, VerdictSource (..), readAdvisories, verdictSource, withCveLookup)
 import Ecluse.Core.Rules.Types (AdvisoryScore (..), DenyIfCveParams (..), DenyIfEpssParams (..), EvalContext (..), FailureAlignment (..), Inability (..), Reason (..), Rule (..), RuleVerdict (..), completeEvidence, mkAdvisoryIds, unAdvisoryIds)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), captureTexts, corpusPackages, cpName, pypiCorpusPackages)
@@ -647,8 +647,8 @@ compareArtifacts eco beforePath afterPath queries =
                     afterLookup = cveDbLookup afterDb
                     package = mkPackageName eco Nothing name
                     deps = servingRuleDeps (DbEtag "differential")
-                before <- readAdvisories (deps beforeLookup) package
-                after <- readAdvisories (deps afterLookup) package
+                before <- withCveLookup (deps beforeLookup) (readAdvisories package)
+                after <- withCveLookup (deps afterLookup) (readAdvisories package)
                 verdictsFor eco name after versions `shouldBe` verdictsFor eco name before versions
                 beforeRows <- cveAdvisoriesFor beforeLookup name
                 afterRows <- cveAdvisoriesFor afterLookup name

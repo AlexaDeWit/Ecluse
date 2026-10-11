@@ -27,8 +27,8 @@ import Ecluse.Core.Package (
     mkScope,
     pkgEcosystem,
  )
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase, rdAdvisoryFreshness), evalRules, prepare)
-import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryUndated))
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), evalRules, prepare)
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated))
 import Ecluse.Core.Rules.Types (
     AdvisoryScore (Cvss),
     Decision,
@@ -53,7 +53,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Rules.Support (ctx, now)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, scopedNpm, unscopedNpm, unscopedPyPI, v1_0_0)
-import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps)
+import Ecluse.Test.Rules (admissionOnly, atPrecedence, blockedBy, evalRule, inertRuleDeps, isAllow, isApproved, isUndecidable, servingRuleDeps, staticAdvisoryDatabase, withAdvisoryFreshness)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 published :: UTCTime
@@ -98,8 +98,8 @@ identitySpec = describe "identityEvidence" $ do
         evPublishedAt evidence `shouldBe` Unread
         evInstallCode evidence `shouldBe` Unread
 
-{- A rule reads these two cases differently: it abstains on the first and refuses on the second,
-so nothing may collapse them. -}
+-- A rule reads these two cases differently: it abstains on the first and refuses on the second,
+-- so nothing may collapse them.
 distinctionSpec :: Spec
 distinctionSpec = describe "a determined absence against an unread fact" $
     it "gives the two builders different entries for the same package" $ do
@@ -175,9 +175,9 @@ data AdvisoryState
 depsIn :: AdvisoryState -> RuleDeps
 depsIn = \case
     NoDatabase -> inertRuleDeps
-    Unloaded -> inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> use Nothing)}
+    Unloaded -> inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> use Nothing)}
     Serving -> serving
-    ServingUndated -> serving{rdAdvisoryFreshness = pure AdvisoryUndated}
+    ServingUndated -> withAdvisoryFreshness (pure AdvisoryUndated) serving
   where
     -- One advisory affects @thing@ below 2.0.0 and names 2.0.0 as its fix.
     serving =
@@ -198,9 +198,7 @@ genPolicy = Gen.frequency [(2, anyRules), (1, (<>) <$> shadowedDeny <*> anyRules
     genNamingDeny = Gen.frequency [(2, pure (DenyByIdentity "thing")), (1, genDeny)]
     shadowedDeny = (\above below -> [PrecededRule 9 AdmissionOnly above, PrecededRule 8 AdmissionAndRevocation below]) <$> genDeny <*> genNamingDeny
 
-{- | A rule as configuration resolves one: a deny at either reach, and an allow at both phases.
-Colliding precedences put an allow above, below, and beside each deny.
--}
+-- | A configured rule with legal reach and precedence ties against other rules.
 genPreceded :: Gen PrecededRule
 genPreceded = do
     rule <- genRule
@@ -260,8 +258,8 @@ deferredReasons =
     , ("the advisories still affecting a fix", FixesButStillAffected (mkAdvisoryIds ("GHSA-a" :| [])) (mkAdvisoryIds ("GHSA-b" :| [impureThrow laterAdvisory])))
     ]
 
-{- A rule finds the later advisories by matching ranges lazily. Left unevaluated, that matching
-would run where the reason is rendered, outside the handler that evaluated the verdict. -}
+-- A rule finds the later advisories by matching ranges lazily. Left unevaluated, that matching
+-- would run where the reason is rendered, outside the handler that evaluated the verdict.
 advisoryIdsSpec :: Spec
 advisoryIdsSpec = describe "mkAdvisoryIds" $ do
     it "keeps the identifiers in the order given" $

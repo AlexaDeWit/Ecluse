@@ -44,7 +44,7 @@ import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), RuleDeps (..), SourceReporter, noSourceReporter)
+import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase, NoAdvisoryDatabase), AdvisoryGeneration (..), RuleDeps (..), SourceReporter, noSourceReporter)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh),
     AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
@@ -74,13 +74,11 @@ import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge, registerAdvisorySourceAge)
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
-{- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
-ecosystem's advisory database. One the plan carries no handle for has none configured, and reports nowhere.
--}
+-- | Bind each ecosystem's rules to its own advisory slot and observers. Missing handles configure no database.
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> (Ecosystem -> OutageReport -> IO ()) -> Ecosystem -> RuleDeps
 cveRuleDepsFor plan reporter reportOutage eco =
     RuleDeps
-        { rdAdvisoryDatabase = maybe NoAdvisoryDatabase slotDatabase handle
+        { rdAdvisoryDatabase = maybe NoAdvisoryDatabase advisoryDatabaseOf handle
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) handle
         , rdBreakerReporter = reporter
         , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) handle
@@ -88,40 +86,42 @@ cveRuleDepsFor plan reporter reportOutage eco =
         }
   where
     handle = Map.lookup eco plan
-    slotDatabase h = AdvisoryDatabase (withSlotGeneration (syncSlot (csEnv h)))
 
--- One handle's reporter, over the outage state every mount of the ecosystem shares.
+advisoryDatabaseOf :: CveSyncHandle -> AdvisoryDatabase
+advisoryDatabaseOf handle = AdvisoryDatabase $ \use ->
+    withSlotGeneration (syncSlot (csEnv handle)) $ \generation ->
+        use
+            AdvisoryGeneration
+                { agFreshness = assessPublicationOf handle ((\(_, _, source) -> source) <$> generation)
+                , agLookup = \readLookup -> readLookup ((\(etag, lookup, _) -> (etag, lookup)) <$> generation)
+                }
+
 sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter
 sourceReporterOf emit handle = sourceReporter outageReportPeriod (csClock handle) (tvarOutageStore (csOutage handle)) emit
 
-{- | How often a continuing outage reminds the operator: the unloaded-database report's own gap, so
-an outage costs the log one line per interval on either path.
--}
+-- | The reminder interval for continuing outages, shared with unloaded-database reports.
 outageReportPeriod :: NominalDiffTime
 outageReportPeriod = fromIntegral absentReportInterval / 1_000_000
 
-{- | How old one mount's serving artifact's push is. An ecosystem the plan carries no handle for
-has no advisory stack at all, so nothing ages and the absent-database path decides instead.
--}
+-- | Assess the live slot's publication age. Ecosystems without an advisory stack have nothing to age.
 advisoryFreshnessFor :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO AdvisoryFreshness
 advisoryFreshnessFor plan eco = maybe (pure AdvisoryFresh) advisoryFreshnessOf (Map.lookup eco plan)
 
-{- | One handle's reading: the slot's publication time against this mount's maximum, on the
-handle's own clock. A failed poll never swaps, so a warm process keeps the last time it read.
--}
+-- | Assess the live slot's store timestamp against this handle's clock and maximum age.
 advisoryFreshnessOf :: CveSyncHandle -> IO AdvisoryFreshness
-advisoryFreshnessOf handle = do
-    now <- csClock handle
-    assessAdvisoryAge (csMaxAge handle) now . publicationOf <$> currentAdvisorySource (syncSlot (csEnv handle))
+advisoryFreshnessOf handle = currentAdvisorySource (syncSlot (csEnv handle)) >>= assessPublicationOf handle
 
-{- Nothing serving, a dated push, or a generation the store gave no publication time for. The
-third is unverified evidence rather than an absent database, so it is kept distinct here. -}
+assessPublicationOf :: CveSyncHandle -> Maybe AdvisorySource -> IO AdvisoryFreshness
+assessPublicationOf handle source = do
+    now <- csClock handle
+    pure (assessAdvisoryAge (csMaxAge handle) now (publicationOf source))
+
+-- Nothing serving, a dated push, or a generation the store gave no publication time for. The
+-- third is unverified evidence rather than an absent database, so it is kept distinct here.
 publicationOf :: Maybe AdvisorySource -> AdvisoryPublication
 publicationOf = maybe NoGeneration (maybe UndatedGeneration PublishedAt . asPushedAt)
 
-{- | Report one ecosystem's push age when it passes half its maximum, once per crossing. The latch
-re-arms when a fresh push brings the age back under, so a long outage does not repeat every poll.
--}
+-- | Report crossing half the maximum age once. A fresh push re-arms the report.
 reportPushAge :: LogEnv -> Ecosystem -> CveSyncHandle -> IO ()
 reportPushAge logEnv eco handle = do
     freshness <- advisoryFreshnessOf handle
@@ -146,13 +146,10 @@ logPushAge logEnv eco observed =
         ErrorS
         "the advisory push age has passed half its maximum; past the maximum, CVE-based denial refuses"
 
--- The publication time the serving artifact carries, or nothing before the first sync.
 advisoryPushTime :: CveSyncHandle -> IO (Maybe UTCTime)
 advisoryPushTime handle = (asPushedAt =<<) <$> currentAdvisorySource (syncSlot (csEnv handle))
 
-{- | Log one ecosystem's advisory-source outage reports: the start and each reminder at ERROR, the
-level an operator pages on, and the recovery at INFO. A fault's detail rides along and reaches no client.
--}
+-- | Log outage starts and reminders at ERROR, and recovery at INFO. Fault details reach no client.
 katipOutageReporter :: LogEnv -> Ecosystem -> OutageReport -> IO ()
 katipOutageReporter logEnv eco = \case
     OutageBegan rule cause ->
@@ -165,9 +162,7 @@ katipOutageReporter logEnv eco = \case
     payload = moduleField "Ecluse.Core.Rules" <> sl "ecosystem" (ecosystemName eco)
     renderCauses = T.intercalate "; " . map (\(rule, cause) -> rule <> ": " <> cause) . Map.toList
 
-{- | The readiness verdict over the sync plan. Only a mount whose rules deny on the database waits
-for its first sync, and one ecosystem's missing artifact leaves the others routable.
--}
+-- | Wait for the first sync only on mounts with advisory denies. Other ecosystems remain routable.
 cveSyncReadiness :: Map.Map Ecosystem CveSyncHandle -> IO Readiness
 cveSyncReadiness plan = mountReadiness <$> traverse mountStateOf plan
 
@@ -175,9 +170,7 @@ cveSyncReadiness plan = mountReadiness <$> traverse mountStateOf plan
 mountStateOf :: CveSyncHandle -> IO MountReadiness
 mountStateOf handle = mountStateFor (csDatabase handle) <$> readTVarIO (csReady handle)
 
-{- | The sync tasks' timing: the shipped boot burst over the configured poll interval. The microsecond
-conversion cannot wrap: the config decoder bounds the interval to @[1, maxBound div 1_000_000]@ seconds.
--}
+-- | Use the boot retry burst and configured poll interval. Configuration bounds the microsecond conversion.
 cveSyncScheduleFor :: AppConfig -> SyncSchedule
 cveSyncScheduleFor env =
     SyncSchedule
@@ -186,9 +179,7 @@ cveSyncScheduleFor env =
         , schedAbsentReport = absentReportInterval
         }
 
-{- | One supervised sync task per configured ecosystem, each flipping its own one-way readiness
-flag once its first sync lands. Every role that evaluates rules runs these.
--}
+-- | Run one supervised sync task per ecosystem, marking first-sync readiness once for every evaluating role.
 cveSyncTasks :: LogEnv -> Metrics -> Telemetry -> SyncSchedule -> Map.Map Ecosystem CveSyncHandle -> [IO ()]
 cveSyncTasks logEnv metrics telemetry schedule plan =
     [ void . runKatipContextT logEnv (mempty :: SimpleLogPayload) "cve-sync" $
@@ -239,9 +230,7 @@ data AdvisoryNeed = AdvisoryNeed
     , anDatabase :: DatabaseRequirement
     }
 
-{- | Build the advisory-sync plan, one 'CveSyncHandle' per vetted mount ecosystem, or nothing with
-no store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
--}
+-- | Build one sync handle per vetted ecosystem. No store yields no handles, and unsupported mounts stay unready.
 planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [AdvisoryNeed] -> IO (Map.Map Ecosystem CveSyncHandle)
 planCveSync logEnv s3Endpoint appCfg needs = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
@@ -292,9 +281,7 @@ syncEnvFor appCfg cveSource store need slot =
     eco = anEcosystem need
     fileName = osvDbFileName (ecosystemName eco)
 
-{- | Sweep the in-progress downloads an interrupted run left behind, which an @emptyDir@ keeps
-across a container restart. The sweep is best effort, per 'sweepStep'.
--}
+-- | Remove stale downloads retained across container restarts, with best-effort errors handled by 'sweepStep'.
 sweepStaleTemps :: LogEnv -> FilePath -> IO ()
 sweepStaleTemps logEnv dataDir =
     sweepStep logEnv dataDir $ do
@@ -307,9 +294,7 @@ removeStaleTemp :: LogEnv -> FilePath -> FilePath -> IO ()
 removeStaleTemp logEnv dataDir entry =
     let path = dataDir </> entry in sweepStep logEnv path (removeFile path)
 
-{- | Run one best-effort step of the stale-temp sweep. It logs and swallows an 'IOError', so a
-read-only or mispermissioned data dir does not stop the boot, and any other exception propagates.
--}
+-- | Log and swallow an 'IOError' from one sweep step. Other exceptions propagate.
 sweepStep :: LogEnv -> FilePath -> IO () -> IO ()
 sweepStep logEnv path step = step `catchIOError` logSweepFailure logEnv path
 

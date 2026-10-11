@@ -17,20 +17,21 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Async (withAsync)
+import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Exception (bracket, throwIO)
 import UnliftIO.STM (checkSTM)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (CveDbRejected (CveDbEpssNotEstablished))
-import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDbRejected (CveDbEpssNotEstablished))
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
+import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, prepResilience, prepare, withCveLookup)
+import Ecluse.Core.Rules (PackageRead (prRead), RuleDeps (rdAdvisoryFreshness), evalRules, newEvaluator, prepResilience, prepare, withCveLookup)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
@@ -52,7 +53,9 @@ import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
+import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
+import Ecluse.Test.Rules (isUndecidable, mapPackageRead)
 
 import Ecluse.Core.Rules.Types qualified as Rules
 
@@ -87,7 +90,6 @@ spec = do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
                     syncStoreRef (csEnv handle) `shouldBe` "s3://advisories"
-                    -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
                     withSlotGeneration (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema4.db.tmp") `shouldReturn` False
@@ -142,6 +144,8 @@ spec = do
             prepare (deps PyPI) advisoryPolicy >>= (`shouldBe` [False, False]) . map (isJust . prepResilience)
             prepare (deps Npm) advisoryPolicy >>= (`shouldBe` [True, True]) . map (isJust . prepResilience)
 
+    pinnedPublicationSpec
+
     describe "cveRuleDepsFor -- bounded outage reporting for the rules" $ do
         it "reports an absent database once as an outage, not once per evaluation, and its recovery" $ do
             clock <- newIORef alarmNow
@@ -150,19 +154,16 @@ spec = do
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter (\eco r -> modifyIORef' captured ((eco, r) :))
             rules <- prepare (deps Npm) skipPolicy
             decisions <- replicateM 20 (evalRules evalCtx rules oldVersion)
-            -- Every admission carries the evidence, and the outage reports once.
             forM_ decisions $ \case
                 Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
                 other -> expectationFailure ("expected the quarantine allow, got " <> show other)
             reverse <$> readIORef captured `shouldReturn` [(Npm, OutageBegan "DenyIfCve" "no advisory database loaded")]
-            -- Past the reminder gap the outage reports again, still once.
             writeIORef clock (addUTCTime outageReportPeriod alarmNow)
             replicateM_ 5 (evalRules evalCtx rules oldVersion)
             reverse <$> readIORef captured
                 `shouldReturn` [ (Npm, OutageBegan "DenyIfCve" "no advisory database loaded")
                                , (Npm, OutageContinues alarmNow (Map.singleton "DenyIfCve" "no advisory database loaded"))
                                ]
-            -- A synced database ends it: one recovery, and clean admissions after.
             install handle (agoDays 1)
             evalRules evalCtx rules oldVersion >>= \case
                 Admitted _ _ skipped -> skipped `shouldBe` []
@@ -368,6 +369,58 @@ landed handle = atomically (writeTVar (csReady handle) True)
 needFor :: Ecosystem -> EpssRequirement -> DatabaseRequirement -> AdvisoryNeed
 needFor eco epss database =
     AdvisoryNeed{anEcosystem = eco, anMaxAge = sixDayLimit, anEpss = epss, anDatabase = database}
+
+pinnedPublicationSpec :: Spec
+pinnedPublicationSpec = describe "cveRuleDepsFor -- publication age and rows share a generation" $
+    for_ [("fresh to undated", True, Just (agoDays 1), Nothing), ("fresh to expired", True, Just (agoDays 1), Just (agoDays 9)), ("expired to fresh", True, Just (agoDays 9), Just (agoDays 1)), ("absent to expired", False, Nothing, Just (agoDays 9)), ("absent to undated", False, Nothing, Nothing)] $ \(label, loaded, initialStamp, replacementStamp) ->
+        it label $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            let slot = syncSlot (csEnv handle)
+                affected = [("acme", AdvisoryRange "OLD" (Just 9.0) (Just "0") Unbounded Nothing)]
+                deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport Npm
+            when loaded (swapIn slot (DbEtag "initial") initialStamp (fakeCveDb affected))
+            rules <- prepare deps skipPolicy
+            ageRead <- newEmptyMVar
+            queryRelease <- newEmptyMVar
+            readings <- newIORef (0 :: Int)
+            let pause packageRead =
+                    packageRead
+                        { prRead = \package use ->
+                            prRead packageRead package $ \freshness rows -> do
+                                modifyIORef' readings (+ 1)
+                                putMVar ageRead ()
+                                takeMVar queryRelease
+                                use freshness rows
+                        }
+            evaluator <- newEvaluator evalCtx (map (mapPackageRead pause) rules)
+            withAsync (replicateM 2 (evaluator oldVersion)) $ \pinned -> do
+                timeout 1_000_000 (takeMVar ageRead) `shouldReturn` Just ()
+                withAsync (swapIn slot (DbEtag "replacement") replacementStamp (fakeCveDb [])) $ \swapper -> do
+                    awaitUntil 1_000_000 1_000 ((== Just (DbEtag "replacement")) <$> currentAdvisoryEtag slot) `shouldReturn` True
+                    putMVar queryRelease ()
+                    decisions <- wait pinned
+                    wait swapper
+                    readIORef readings `shouldReturn` 1
+                    traverse_ (expectPinnedPublication loaded initialStamp) decisions
+            next <- evalRules evalCtx rules oldVersion
+            expectReplacementPublication replacementStamp next
+
+expectPinnedPublication :: Bool -> Maybe UTCTime -> Decision -> Expectation
+expectPinnedPublication loaded stamp decision
+    | not loaded = case decision of
+        Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" NoDatabaseLoaded]
+        other -> expectationFailure ("expected the absent-generation admission, got " <> show other)
+    | stamp == Just (agoDays 1) = case decision of
+        Rules.Blocked "DenyIfCve" etag _ -> etag `shouldBe` Just (DbEtag "initial")
+        other -> expectationFailure ("expected the initial-generation denial, got " <> show other)
+    | otherwise = decision `shouldSatisfy` isUndecidable
+
+expectReplacementPublication :: Maybe UTCTime -> Decision -> Expectation
+expectReplacementPublication stamp decision
+    | stamp == Just (agoDays 1) = case decision of
+        Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` []
+        other -> expectationFailure ("expected the fresh-generation admission, got " <> show other)
+    | otherwise = decision `shouldSatisfy` isUndecidable
 
 -- A fresh plan handle whose transport refuses unless the test replaces it.
 stubSyncHandle :: IO CveSyncHandle

@@ -52,7 +52,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepStore (ssExecute, ssObserve),
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness), RuleEval (PerVersion), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps, RuleEval (PerVersion), prepare)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
@@ -76,7 +76,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
 import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
-import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps, withAdvisoryFreshness)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
@@ -96,8 +96,8 @@ spec = do
     generationCapSpec
     revocationSpec
 
-{- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
-because the store may hold the only surviving copy. -}
+-- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
+-- because the store may hold the only surviving copy.
 verdictSpec :: Spec
 verdictSpec = describe "the delete verdict" $ do
     for_ [False, True] $ \poisonEvidence ->
@@ -157,8 +157,8 @@ verdictSpec = describe "the delete verdict" $ do
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` []
 
-{- A read that produced no manifest decides on the identity the listing carries. The shared bounded
-fetch discards the response status, so a 404 and a 5xx arrive here alike. -}
+-- A read that produced no manifest decides on the identity the listing carries. The shared bounded
+-- fetch discards the response status, so a 404 and a 5xx arrive here alike.
 identityOnlySpec :: Spec
 identityOnlySpec = describe "a manifest the store did not serve" $ do
     it "deletes a version the operator revoked by identity, so the next request 404s" $ do
@@ -253,13 +253,13 @@ beltSpec = describe "the first-party belt" $
         unshielded <- recordingPorts generation
         runStep unshielded testPacing (mount tracked rules) (served ["1.0.0"]) `shouldReturn` Nothing
         recResults unshielded `shouldReturn` [SweepExamined, SweepDeleted]
-        {- The belt reads nothing at all. Without it the package's metadata is read to decide the
-        version, and again to reassess it against current evidence before the delete leaves. -}
+        -- The belt reads nothing at all. Without it the package's metadata is read to decide the
+        -- version, and again to reassess it against current evidence before the delete leaves.
         readIORef manifestReads `shouldReturn` 2
         held store `shouldReturn` []
 
-{- A refused or unreached delete leaves the version in the store, so it counts as kept and reports
-the backend's own code for an operator to follow up. -}
+-- A refused or unreached delete leaves the version in the store, so it counts as kept and reports
+-- the backend's own code for an operator to follow up.
 outcomeSpec :: Spec
 outcomeSpec = describe "what the backend reported" $ do
     it "counts a refused delete as kept, with the backend's code on an error line" $ do
@@ -347,8 +347,8 @@ capSpec = describe "the per-cycle deletion cap" $ do
         (rec', _) <- sweepOne [denyRule] ["1.0.0"] ["1.0.0"]
         recErrors rec' `shouldReturn` []
 
-{- A dry run holds the store's observing calls and an execution that counts, so this module cannot
-delete because nothing it is given can. The cap only logs. -}
+-- A dry run holds the store's observing calls and an execution that counts, so this module cannot
+-- delete because nothing it is given can. The cap only logs.
 dryRunSpec :: Spec
 dryRunSpec = describe "a dry run" $ do
     it "counts what it would delete under its own arm and deletes nothing" $ do
@@ -377,8 +377,8 @@ dryRunSpec = describe "a dry run" $ do
         filter (T.isInfixOf "deletion cap") info
             `shouldSatisfy` \lines' -> length lines' == 1 && all (T.isInfixOf "handed over 2 versions") lines'
 
-{- One package's step under a preview's report, over a mount holding the store's observing calls
-alone. Nothing here asks which run it is in: the execution it was handed is what differs. -}
+-- One package's step under a preview's report, over a mount holding the store's observing calls
+-- alone. Nothing here asks which run it is in: the execution it was handed is what differs.
 previewOne :: SweepPacing -> [Text] -> IO (RecordedSweep, FakeStore)
 previewOne pacing stored = do
     store <- storeWith (map npmVersion stored) (Just (sampleManifest leftPadName (map npmVersion stored)))
@@ -417,9 +417,8 @@ stepEvidence rec' mount' stored = do
 runStep :: RecordedSweep -> SweepPacing -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 runStep rec' pacing mount' stored = newSweepState >>= \counters -> stepUnder rec' pacing counters mount' stored
 
-{- One package's step at the mount's own store, under the execution the boot handed it. The
-dispatch is the one a cycle makes: a preview counts its selections and a real run hands them over.
--}
+-- One package's step at the mount's own store, under the execution the boot handed it. The
+-- dispatch is the one a cycle makes: a preview counts its selections and a real run hands them over.
 stepUnder :: RecordedSweep -> SweepPacing -> SweepState -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 stepUnder rec' pacing counters mount' stored = case ssExecute (smStore mount') of
     SweepRemoves _ -> sweepPackageGroup pacing ports counters mount' leftPadName [(smStore mount', stored)]
@@ -437,8 +436,8 @@ storeWith stored manifest =
             { fakeManifests = maybe Map.empty (Map.singleton leftPadName) manifest
             }
 
-{- A store whose delete reports the given outcome and changes nothing, so the refusal and the
-unreached arms are both drivable without a fault that would stop the whole cycle. -}
+-- A store whose delete reports the given outcome and changes nothing, so the refusal and the
+-- unreached arms are both drivable without a fault that would stop the whole cycle.
 refusingStore :: VersionOutcome -> IO FakeStore
 refusingStore = refusingStore' (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
 
@@ -461,8 +460,8 @@ served = servedVersions . map npmVersion
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
 
-{- An expired advisory push is not authority to delete. The rule refuses rather than denying, and
-a push that expires after the verdict is read again before the batch leaves. -}
+-- An expired advisory push is not authority to delete. The rule refuses rather than denying, and
+-- a push that expires after the verdict is read again before the batch leaves.
 expirySpec :: Spec
 expirySpec = describe "an expired advisory push" $ do
     it "keeps a version an affecting advisory would have condemned" $ do
@@ -525,7 +524,7 @@ advisoryDeps = advisoryDepsFor ["left-pad"]
 -- 'advisoryDeps' with the same advisory against each named package.
 advisoryDepsFor :: [Text] -> IO AdvisoryFreshness -> RuleDeps
 advisoryDepsFor names freshness =
-    (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [(name, affectingRange) | name <- names])){rdAdvisoryFreshness = freshness}
+    withAdvisoryFreshness freshness (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [(name, affectingRange) | name <- names]))
 
 affectingRange :: AdvisoryRange
 affectingRange = AdvisoryRange "GHSA-affect-0001" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing
@@ -609,8 +608,8 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
         length deletions `shouldBe` 1
         deletions `shouldSatisfy` all (\line -> T.isInfixOf "2.0.0" line && T.isInfixOf "advisory generation none" line)
 
-{- The composition root hands the sweep the rules of a mount that apply at revocation. These cases
-hold what that selection changes for a stored version. -}
+-- The composition root hands the sweep the rules of a mount that apply at revocation. These cases
+-- hold what that selection changes for a stored version.
 revocationSpec :: Spec
 revocationSpec = describe "the rules that apply at revocation" $ do
     for_ [("npm", leftPadName, npmVersion "1.0.0", "left-pad@1.0.0"), ("PyPI", requestsProject, mkVersion PyPI "2.31", "requests@2.31")] $ \(eco, name, version, revoked) -> do
@@ -667,8 +666,8 @@ runningCodeOnInstall manifest =
   where
     info = manifestInfo manifest
 
-{- One stored version's step under the rules of a policy that apply at revocation, in the mount's
-own ecosystem. It yields what the sweep recorded and the versions the store still holds. -}
+-- One stored version's step under the rules of a policy that apply at revocation, in the mount's
+-- own ecosystem. It yields what the sweep recorded and the versions the store still holds.
 revocationStep :: RuleDeps -> [PrecededRule] -> PackageName -> Version -> Maybe Manifest -> IO (RecordedSweep, [Version])
 revocationStep deps policy name version manifest = do
     store <- newFakeStore (seededStoreConfig [(name, [version])]){fakeManifests = maybe Map.empty (Map.singleton name) manifest}

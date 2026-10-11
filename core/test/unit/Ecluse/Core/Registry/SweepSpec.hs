@@ -67,7 +67,8 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepShape (SweepCandidates, SweepEverything),
     deletingCache,
  )
-import Ecluse.Core.Rules (AdvisoryDatabase (AdvisoryDatabase), RuleDeps (rdAdvisoryDatabase), prepare)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryDatabase), prepare)
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
@@ -80,7 +81,7 @@ import Ecluse.Test.Maintenance (
     withBucket,
  )
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
-import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps, servingRuleDeps, staticAdvisoryDatabase)
 import Ecluse.Test.Sweep (
     RecordedSweep (..),
     previewMount,
@@ -152,8 +153,8 @@ permissionSpec = describe "consent and classification" $ do
         replicateM_ 2 (void (sweepCycle testPacing (recPorts rec') [mount]))
         readIORef reads' `shouldReturn` 8
 
-{- A preview holds the store's observing calls and an execution that counts, so it reaches no
-delete and no marker. The two standing permissions become findings rather than halts. -}
+-- A preview holds the store's observing calls and an execution that counts, so it reaches no
+-- delete and no marker. The two standing permissions become findings rather than halts.
 previewSpec :: Spec
 previewSpec = describe "a preview cycle" $ do
     it "enumerates and counts without the consent marker, reporting it unmet" $ do
@@ -264,8 +265,8 @@ unreadableConsent store =
             { obVerifyConsent = pure (Left (protocolFault "the store did not answer the consent read"))
             }
 
-{- A cycle over the store's observing calls alone, under a generation the rules can read, so a
-complete preview is one whose only open question is the permission it reported. -}
+-- A cycle over the store's observing calls alone, under a generation the rules can read, so a
+-- complete preview is one whose only open question is the permission it reported.
 previewCycle :: SweepPacing -> FakeStore -> IO (RecordedSweep, CycleOutcome)
 previewCycle pacing store = do
     rec' <- recordingPortsUnder previewingReport generation
@@ -282,8 +283,8 @@ previewMountFor store =
 loadedDeps :: RuleDeps
 loadedDeps = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [])
 
-{- One retry after the wait the fault itself advises. A fault that survives it halts the cycle,
-and the next cycle re-attempts, so an outage reports once per interval and clears on its own. -}
+-- One retry after the wait the fault itself advises. A fault that survives it halts the cycle,
+-- and the next cycle re-attempts, so an outage reports once per interval and clears on its own.
 retrySpec :: Spec
 retrySpec = describe "withStoreRetry" $ do
     it "answers straight through when the call succeeds" $
@@ -337,8 +338,8 @@ retrySpec = describe "withStoreRetry" $ do
         outcome <- withStoreRetry testPacing (recPorts rec') (testMount (fakeMaintenance store) [] []) call
         assert' rec' outcome
 
-{- The default shape carries only the names an advisory or an identity deny can have changed,
-so the store's listing bounds the cycle and the candidate set bounds the metadata reads. -}
+-- The default shape carries only the names an advisory or an identity deny can have changed,
+-- so the store's listing bounds the cycle and the candidate set bounds the metadata reads.
 candidateCycleSpec :: Spec
 candidateCycleSpec = describe "the candidate cycle" $ do
     it "decides only the names the candidate set carries" $ do
@@ -385,8 +386,8 @@ candidateCycleSpec = describe "the candidate cycle" $ do
         errors <- recErrors rec'
         errors `shouldSatisfy` any (T.isInfixOf "mirror sweep cycle halted")
 
-{- The opt-in shape carries every name instead, which is what covers a rule-configuration change,
-and it records each completed bucket so a restart re-does at most one. -}
+-- The opt-in shape carries every name instead, which is what covers a rule-configuration change,
+-- and it records each completed bucket so a restart re-does at most one.
 fullWalkSpec :: Spec
 fullWalkSpec = describe "the full walk" $ do
     it "decides every name in the store, candidate or not" $ do
@@ -430,8 +431,8 @@ fullWalkSpec = describe "the full walk" $ do
     -- Both seeded names lead with l, so one bucket holds them and the other is walked empty.
     bucketedBy chars = seededConfig{fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet chars}}
 
-{- The handle over a cursor that records what the walk wrote to it, so a case reads the buckets in
-the order they completed rather than only the one left behind. -}
+-- The handle over a cursor that records what the walk wrote to it, so a case reads the buckets in
+-- the order they completed rather than only the one left behind.
 recordingCursor :: StoreMaintenance -> IO (IO [NamePrefix], StoreMaintenance)
 recordingCursor handle = do
     written <- newIORef []
@@ -439,8 +440,8 @@ recordingCursor handle = do
             cursor{writeCursor = \prefix -> modifyIORef' written (prefix :) >> writeCursor cursor prefix}
     pure (reverse <$> readIORef written, handle{storeCursor = recorded <$> storeCursor handle})
 
-{- The cycle measures what it asked of each store, and paces the next one to land inside the target
-window. A window the measurement cannot reach warns and leaves the sweep at its ceiling. -}
+-- The cycle measures what it asked of each store, and paces the next one to land inside the target
+-- window. A window the measurement cannot reach warns and leaves the sweep at its ceiling.
 budgetSpec :: Spec
 budgetSpec = describe "the cycle request budget" $ do
     it "counts what the cycle asked of the store it swept" $ do
@@ -484,8 +485,8 @@ budgetSpec = describe "the cycle request budget" $ do
         warned <- filter (T.isInfixOf "target cycle window") <$> recWarnings rec'
         warned `shouldSatisfy` any (T.isInfixOf "runs on at that ceiling")
 
-{- One cycle over a store whose capacity the operator declared, with every request it makes passing
-through the meter the ports read back. -}
+-- One cycle over a store whose capacity the operator declared, with every request it makes passing
+-- through the meter the ports read back.
 meteredCycle :: SweepPacing -> IO (RecordedSweep, CycleOutcome)
 meteredCycle pacing = do
     store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
@@ -494,8 +495,8 @@ meteredCycle pacing = do
     outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] []]
     pure (rec', outcome)
 
-{- A retryable transport fault on the store's own metadata read. A single-attempt maintenance
-manager no longer repairs one below the sweep, so it reaches the store-fault policy as a value. -}
+-- A retryable transport fault on the store's own metadata read. A single-attempt maintenance
+-- manager no longer repairs one below the sweep, so it reaches the store-fault policy as a value.
 unansweredRead :: StoreFault
 unansweredRead =
     StoreFault
@@ -646,8 +647,8 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     outcome <- sweepCycle pacing ports [testMount handle [denyRule] (map DenyByIdentity candidates)]
     outcomeHalt outcome `shouldBe` Nothing
     tallyDeleted (outcomeTally outcome) `shouldBe` length expected
-    {- One examination per name, at the pause count it was reached under. Equal neighbours collapse
-    (the reassessment re-reads), so a repeat across a pause boundary still stands on its own. -}
+    -- One examination per name, at the pause count it was reached under. Equal neighbours collapse
+    -- (the reassessment re-reads), so a repeat across a pause boundary still stands on its own.
     examined <- mapMaybe listToMaybe . group . reverse <$> readIORef observed
     examined `shouldBe` map (first unscopedNpm) expected
     recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
@@ -721,8 +722,8 @@ runCycleWith store configured = do
 withStore :: FakeStore -> (StoreMaintenance -> StoreMaintenance) -> StoreMaintenance
 withStore store f = f (fakeMaintenance store)
 
-{- A cycle over a store that serves no metadata, carrying the identity deny that identity alone
-condemns. The transform is where one guard is withdrawn, so each guard is read on its own. -}
+-- A cycle over a store that serves no metadata, carrying the identity deny that identity alone
+-- condemns. The transform is where one guard is withdrawn, so each guard is read on its own.
 unreadableCycle :: (StoreMaintenance -> StoreMaintenance) -> IO (CycleOutcome, [Version])
 unreadableCycle f = do
     store <- newFakeStore seededConfig{fakeManifests = Map.empty}
@@ -753,7 +754,7 @@ generationSpec = describe "deletion evidence generation" $
             store <- seededStore
             active <- newIORef (DbEtag "generation-A", fakeCveLookup [("left-pad", advisory "OLD" (Just 0.01))])
             let replacement = (DbEtag "generation-B", fakeCveLookup [("left-pad", advisory "NEW-ONLY" (Just 0.95))])
-                deps = inertRuleDeps{rdAdvisoryDatabase = AdvisoryDatabase (\use -> readIORef active >>= use . Just)}
+                deps = inertRuleDeps{rdAdvisoryDatabase = staticAdvisoryDatabase (pure AdvisoryFresh) (\use -> readIORef active >>= use . Just)}
                 configured = [DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
                 original = fakeMaintenance store
                 changing = original{readStoreManifest = \name -> writeIORef active replacement *> readStoreManifest original name}
