@@ -36,6 +36,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: 'true'
+          dist-cache: 'false'
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
