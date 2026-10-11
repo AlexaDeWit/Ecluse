@@ -198,7 +198,7 @@ index 16caf51f..4dde3b89 100644
 +        _ -> memberName element rest (\key after -> visit acc key after loop) (dropped . loop acc)
 +{-# INLINE eachMemberWith #-}
 diff --git a/core/src/Ecluse/Core/Registry/Json/Writer.hs b/core/src/Ecluse/Core/Registry/Json/Writer.hs
-index ba95ec4e..a3fef858 100644
+index ba95ec4e..c2c6d406 100644
 --- a/core/src/Ecluse/Core/Registry/Json/Writer.hs
 +++ b/core/src/Ecluse/Core/Registry/Json/Writer.hs
 @@ -10,0 +11,7 @@ module Ecluse.Core.Registry.Json.Writer (
@@ -295,12 +295,12 @@ index ba95ec4e..a3fef858 100644
 +            Share -> "share"
 +            Keep -> "keep"
 +        text = maybe (nameText name) entryText entry
-+        group = (role, policy)
-+        known = Map.findWithDefault mempty group seen
++        observationGroup = (role, policy)
++        known = Map.findWithDefault mempty observationGroup seen
 +        input = foldName (const "plain") (const "decoded") name
 +        lookupResult = maybe "none" (\found -> if entryIndex found < tableCount table then "hit" else "miss") entry
 +        row = [role, policy, input, lookupResult, if prepared then "prepared" else "ordinary", show (BS.length (encodeUtf8 text)), show (encodedLength text), show (T.length text), if Set.member text known then "repeated" else "unique"]
-+    writeMutVar (writerObservations writer) (counts, Map.insert group (Set.insert text known) seen)
++    writeMutVar (writerObservations writer) (counts, Map.insert observationGroup (Set.insert text known) seen)
 +    recordObservation writer domain row "name-choice"
 +
 +recordSkipped :: Writer st -> Name -> Text -> ST st ()
@@ -631,7 +631,7 @@ index c128a6f1..335ceaca 100644
 -    pypiFullWalk build (maxNestingDepth limits) (pureStep (collectField limits FullRead)) keepsFile (packedFileStep writer limits) table (emptyProjection name)
 +    pypiFullWalk build (maxNestingDepth limits) (\acc field next -> observeProjectionField writer acc field >> pureStep (collectField limits FullRead) acc field next) keepsFile (packedFileStep writer limits) table (emptyProjection name)
 diff --git a/core/src/Ecluse/Core/Registry/PyPI/Reader.hs b/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
-index 3e28419e..50e556eb 100644
+index 3e28419e..2dd26c36 100644
 --- a/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
 +++ b/core/src/Ecluse/Core/Registry/PyPI/Reader.hs
 @@ -18,2 +18,2 @@ import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
@@ -680,7 +680,7 @@ index 3e28419e..50e556eb 100644
 +            _ -> observeSkipped build name "unknown-top-member" $ withElement after $ \element afterKey -> skipFrom element afterKey (continue walked)
 @@ -71,0 +73,2 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
 +        recorded = observeReaderName build True Keep name table Nothing
-+        continue state afterValue = leaveObservation build (continuation state afterValue)
++        continue walkedState afterValue = leaveObservation build (continuation walkedState afterValue)
 @@ -73 +76 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
 -            readShape Trees shape Keep table element afterKey $ \value _ afterValue ->
 +            readTreeShape build shape Keep table element afterKey $ \value _ afterValue ->
