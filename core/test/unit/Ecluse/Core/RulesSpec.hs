@@ -98,10 +98,10 @@ shouldDecide evaluated (verdict, sentence) = do
 -- GHC can append a runtime backtrace after the exception's own diagnostic line.
 shouldHaveExceptionCause :: Text -> Text -> Expectation
 shouldHaveExceptionCause actual expected = do
-    let (cause, context) = T.breakOn "\n" actual
+    let (cause, diagnosticContext) = T.breakOn "\n" actual
     cause `shouldBe` expected
-    unless (T.null context) $
-        context `shouldSatisfy` T.isPrefixOf "\nHasCallStack backtrace:\n"
+    unless (T.null diagnosticContext) $
+        diagnosticContext `shouldSatisfy` T.isPrefixOf "\nHasCallStack backtrace:\n"
 
 shouldMatchDecision :: Decision -> Decision -> Expectation
 shouldMatchDecision actual expected = case (actual, expected) of
