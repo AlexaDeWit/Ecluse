@@ -294,8 +294,6 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-    outputs:
-      partitions: ${{ steps.plan.outputs.partitions }}
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       ECLTEST_ARTIFACT_DIR: scratchpad/e2e
@@ -320,10 +318,6 @@ jobs:
       - name: Prepare image and catalogue
         run: nix develop .#ci --command task test-e2e-prepare
 
-      - name: Read planned partitions
-        id: plan
-        run: bash scripts/e2e-matrix.sh scratchpad/e2e/plan.json
-
       - name: Upload immutable plan and identity
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -342,7 +336,7 @@ jobs:
           if-no-files-found: error
 
   e2e-shards:
-    name: End-to-end tests (${{ matrix.shard }})
+    name: End-to-end tests (${{ matrix.component }})
     needs: [changes, e2e-prepare]
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
@@ -350,7 +344,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.e2e-prepare.outputs.partitions) }}
+        component: [npm-serving, npm-writes, pypi, shared-system]
     permissions:
       contents: read
     env:
@@ -397,15 +391,15 @@ jobs:
       - name: Verify and load exact image
         run: nix develop .#ci --command task test-e2e-load
 
-      - name: Run planned shard
+      - name: Run fixed component
         env:
-          SHARD: ${{ matrix.shard }}
-        run: nix develop .#ci --command task test-e2e-run "SHARD=$SHARD"
+          COMPONENT: ${{ matrix.component }}
+        run: nix develop .#ci --command task "test-e2e-$COMPONENT"
 
       - name: Record shard outcome
         if: always()
         env:
-          ECLTEST_SHARD: ${{ matrix.shard }}
+          ECLTEST_COMPONENT: ${{ matrix.component }}
           ECLTEST_JOB_STATUS: ${{ job.status }}
         run: bash scripts/e2e.sh diagnostics
 
@@ -413,7 +407,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-report-${{ matrix.shard }}
+          name: e2e-report-${{ matrix.component }}
           path: scratchpad/e2e/reports/
           if-no-files-found: error
 

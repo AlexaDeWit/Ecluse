@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare immutable inputs, load an image, run a selection, or audit shard reports.
+# Prepare immutable inputs, run fixed suites, and audit their reports.
 set -euo pipefail
 
 root="${ECLTEST_ARTIFACT_DIR:-}"
@@ -27,8 +27,8 @@ architecture() {
 }
 
 runner() {
-  cabal build ecluse-e2e >&2 || return
-  cabal list-bin ecluse-e2e
+  cabal build "$1" >&2 || return
+  cabal list-bin "$1"
 }
 
 identity() {
@@ -59,8 +59,8 @@ prepare() {
   [ ! -e "$root/plan.json" ] && [ ! -e "$root/identity.json" ] && [ ! -e "$root/docker-image.tar" ] \
     || fail "prepared inputs already exist, choose a new ECLTEST_ARTIFACT_DIR"
   mkdir "$root/.preparation" || fail "preparation already attempted, choose a new ECLTEST_ARTIFACT_DIR"
-  binary="$(runner)"
-  "$binary" --catalogue-plan > "$root/plan.json"
+  binary="$(runner ecluse-e2e-manifest)"
+  "$binary" > "$root/plan.json"
   archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
   cp "$archive" "$root/docker-image.tar"
   config="$(tar -xOf "$archive" manifest.json | jq -er 'if length == 1 then .[0].Config else error("expected one image") end')"
@@ -82,33 +82,25 @@ load_image() {
   printf '%s\n' "$tag" > "$root/image-ref"
 }
 
-run_selection() {
-  local binary shard="${ECLTEST_SHARD:-all}"
+run_component() {
+  local binary component="$1"
   identity
   export ECLTEST_E2E_IMAGE
   ECLTEST_E2E_IMAGE="$(cat "$root/image-ref")"
   [ "$(docker image inspect --format '{{.Id}}' "$ECLTEST_E2E_IMAGE")" = "$ECLTEST_IMAGE_ID" ] || fail "loaded image identity mismatch"
-  binary="$(runner)"
-  mkdir -p "$root/reports"
-  if [ "$shard" = all ]; then
-    exec "$binary" --report "${ECLTEST_REPORT_PATH:?}" "$@"
-  else
-    exec "$binary" --shard "$shard" --report "${ECLTEST_REPORT_PATH:?}" "$@"
-  fi
+  binary="$(runner "$component")"
+  exec "$binary"
 }
 
 run_attempt() {
-  local shard="${ECLTEST_SHARD:-all}" attempt status flag previous
+  local shard="$1" component="$2" attempt status previous
   local -a superseded
+  shift 2
+  export ECLTEST_SHARD="$shard"
   [[ "$shard" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid shard name"
   mkdir -p "$root/reports/attempts"
   attempt="$(mktemp -d "$root/reports/attempts/$shard.XXXXXXXXXX")"
-  if [ "$shard" = all ]; then
-    shopt -s nullglob
-    superseded=("$root"/reports/*.json)
-  else
-    superseded=("$root/reports/$shard.json" "$root/reports/all.json")
-  fi
+  superseded=("$root/reports/$shard.json" "$root/reports/all.json")
   for previous in "${superseded[@]}"; do
     if [ -e "$previous" ]; then
       mv "$previous" "$attempt/previous-$(basename "$previous")"
@@ -119,11 +111,9 @@ run_attempt() {
   set +e
   (
     set -e
-    for flag in "$@"; do
-      case "$flag" in --report|--report=*) fail "the wrapper owns the report path" ;; esac
-    done
+    [ "$#" -eq 0 ] || fail "fixed suites accept no arguments"
     identity
-    bash "$here/test-containers.sh" run bash "$here/e2e.sh" owned-run "$@"
+    bash "$here/test-containers.sh" run bash "$here/e2e.sh" owned-run "$component"
   ) 2>&1 | tee "$attempt/run.log" "$root/reports/$shard.log"
   status=$?
   set -e
@@ -144,28 +134,28 @@ audit() {
   shopt -s nullglob
   reports=("$root"/reports/*.json)
   [ "${#reports[@]}" -gt 0 ] || { echo 'e2e: no shard reports' >&2; return 1; }
-  binary="$(runner)"
-  if [ "${#reports[@]}" -eq 1 ] && [ "${reports[0]}" = "$root/reports/all.json" ]; then
-    "$binary" --audit-full "$root/plan.json" "${reports[0]}"
-  else
-    "$binary" --audit "$root/plan.json" "${reports[@]}"
-  fi
+  binary="$(runner ecluse-e2e-audit)"
+  "$binary" "$root/plan.json" "${reports[@]}"
 }
 
 diagnostics() {
   mkdir -p "$root/reports"
-  printf 'source=%s\nrun=%s\nshard=%s\njob-status=%s\n' \
+  printf 'source=%s\nrun=%s\ncomponent=%s\njob-status=%s\n' \
     "${ECLTEST_SOURCE:-unknown}" "${ECLTEST_RUN_ID:-unknown}" \
-    "${ECLTEST_SHARD:-all}" "${ECLTEST_JOB_STATUS:-unknown}" \
-    > "$root/reports/${ECLTEST_SHARD:-all}-job.log"
+    "${ECLTEST_COMPONENT:-unknown}" "${ECLTEST_JOB_STATUS:-unknown}" \
+    > "$root/reports/${ECLTEST_COMPONENT:-unknown}-job.log"
 }
 
 case "${1:-}" in
   prepare) lock_artifacts; prepare ;;
   load) lock_artifacts; load_image ;;
-  run) shift; lock_artifacts; run_attempt "$@" ;;
+  npm-serving) lock_artifacts; run_attempt npm-serving ecluse-e2e-npm-serving "${@:2}" ;;
+  npm-writes) lock_artifacts; run_attempt npm-writes ecluse-e2e-npm-writes "${@:2}" ;;
+  pypi) lock_artifacts; run_attempt pypi ecluse-e2e-pypi "${@:2}" ;;
+  shared-system) lock_artifacts; run_attempt shared-system ecluse-e2e-shared-system "${@:2}" ;;
   full)
     shift
+    [ "$#" -eq 0 ] || fail "full execution accepts no arguments"
     if [ -z "$root" ]; then
       mkdir -p scratchpad/e2e
       root="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
@@ -174,16 +164,22 @@ case "${1:-}" in
     lock_artifacts
     prepare
     load_image
-    run_attempt "$@"
+    run_attempt npm-serving ecluse-e2e-npm-serving
+    run_attempt npm-writes ecluse-e2e-npm-writes
+    run_attempt pypi ecluse-e2e-pypi
+    run_attempt shared-system ecluse-e2e-shared-system
+    audit
     ;;
   owned-run)
     shift
     [ "${ECLTEST_CONTAINER_LOCK:-}" = held ] || fail "missing container lifetime"
-    run_selection "$@"
+    case "${1:-}" in
+      ecluse-e2e-npm-serving|ecluse-e2e-npm-writes|ecluse-e2e-pypi|ecluse-e2e-shared-system) ;;
+      *) fail "unknown fixed component" ;;
+    esac
+    run_component "$1"
     ;;
   audit) lock_artifacts; audit ;;
   diagnostics) lock_artifacts; diagnostics ;;
-  list) binary="$(runner)"; "$binary" --catalogue-list ;;
-  plan) binary="$(runner)"; "$binary" --catalogue-plan ;;
-  *) echo "usage: $0 {prepare|load|run [SELECTION...]|full|audit|list|plan}" >&2; exit 2 ;;
+  *) echo "usage: $0 {prepare|load|npm-serving|npm-writes|pypi|shared-system|full|audit|diagnostics}" >&2; exit 2 ;;
 esac

@@ -21,24 +21,23 @@ cat > "$work/bin/cabal" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
   build) exit "${TEST_BUILD_FAIL:-0}" ;;
-  list-bin) printf '%s/bin/runner\n' "$TEST_WORK" ;;
+  list-bin) printf '%s/bin/%s\n' "$TEST_WORK" "$2" ;;
   *) exit 2 ;;
 esac
 STUB
 cat > "$work/bin/runner" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-case "$1" in
-  --catalogue-plan) echo '{"schemaVersion":1,"partitions":["npm-serving","npm-writes","pypi","shared-system"]}' ;;
-  --audit|--audit-full)
-    test "$#" = 3
-    jq -e '.passed == true' "$3" >/dev/null
+case "$(basename "$0")" in
+  ecluse-e2e-manifest) echo '{"schemaVersion":1,"partitions":["npm-serving","npm-writes","pypi","shared-system"]}' ;;
+  ecluse-e2e-audit)
+    shift
+    for report in "$@"; do jq -e '.passed == true' "$report" >/dev/null; done
     ;;
-  --shard)
-    test "$2" = pypi
-    test "$3" = --report
+  ecluse-e2e-*)
+    test "$#" = 0
     test "$ECLTEST_CONTAINER_LOCK" = held
-    echo '{"passed":true}' > "$4"
+    echo '{"passed":true}' > "$ECLTEST_REPORT_PATH"
     if [ "${TEST_BLOCK_RUN:-}" = 1 ]; then
       touch "$TEST_WORK/running"
       while [ ! -f "$TEST_WORK/release-run" ]; do sleep 0.01; done
@@ -49,6 +48,9 @@ case "$1" in
   *) exit 2 ;;
 esac
 STUB
+for component in manifest audit npm-serving npm-writes pypi shared-system; do
+  cp "$work/bin/runner" "$work/bin/ecluse-e2e-$component"
+done
 cat > "$work/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -76,35 +78,38 @@ export TEST_IMAGE_ID
 TEST_IMAGE_ID="$(jq -r .image "$ECLTEST_ARTIFACT_DIR/identity.json")"
 bash "$script" load
 [ "$(cat "$ECLTEST_ARTIFACT_DIR/image-ref")" = ecluse:test ]
-ECLTEST_SHARD=pypi bash "$script" run
+bash "$script" pypi
 [ -f "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 grep -q 'runner evidence' "$ECLTEST_ARTIFACT_DIR/reports/pypi.log"
 bash "$script" audit
-reject env ECLTEST_SHARD=pypi TEST_DOCKER_STATUS=23 bash "$script" run
+reject env TEST_DOCKER_STATUS=23 bash "$script" pypi
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 reject bash "$script" audit
-ECLTEST_SHARD=pypi bash "$script" run
+bash "$script" pypi
 mv "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" "$ECLTEST_ARTIFACT_DIR/reports/all.json"
-bash "$script" audit
-reject env ECLTEST_SHARD=pypi TEST_DOCKER_STATUS=23 bash "$script" run
+reject env TEST_DOCKER_STATUS=23 bash "$script" pypi
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/all.json" ]
 reject bash "$script" audit
 find "$ECLTEST_ARTIFACT_DIR/reports/attempts" -name 'previous-*.json' | grep -q .
-ECLTEST_SHARD=pypi bash "$script" run
-reject env ECLTEST_SHARD=pypi TEST_BUILD_FAIL=1 bash "$script" run
+bash "$script" pypi
+reject env TEST_BUILD_FAIL=1 bash "$script" pypi
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 reject bash "$script" audit
-ECLTEST_SHARD=pypi bash "$script" run
+bash "$script" pypi
 status=0
-ECLTEST_SHARD=pypi TEST_RUN_STATUS=7 bash "$script" run || status=$?
+TEST_RUN_STATUS=7 bash "$script" pypi || status=$?
 [ "$status" = 7 ]
+[ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+reject bash "$script" audit
+bash "$script" pypi
+reject bash "$script" pypi --group forbidden
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 reject bash "$script" audit
 reject env ECLTEST_SOURCE=other bash "$script" load
 reject env ECLTEST_RUN_ID=other bash "$script" load
 reject env TEST_IMAGE_ID=sha256:wrong bash "$script" load
-reject env TEST_BUILD_FAIL=1 bash "$script" plan
+reject env ECLTEST_ARTIFACT_DIR="$work/build-failure" TEST_BUILD_FAIL=1 bash "$script" prepare
 reject env -u ECLTEST_ARTIFACT_DIR bash "$script" prepare
 
 wait_for() {
@@ -115,7 +120,7 @@ wait_for() {
   done
   return 1
 }
-ECLTEST_SHARD=pypi TEST_BLOCK_RUN=1 bash "$script" run > "$work/blocked-run.log" 2>&1 &
+TEST_BLOCK_RUN=1 bash "$script" pypi > "$work/blocked-run.log" 2>&1 &
 run_pid=$!
 wait_for "$work/running"
 before="$(sha256sum "$ECLTEST_ARTIFACT_DIR/plan.json" "$ECLTEST_ARTIFACT_DIR/identity.json")"
@@ -144,7 +149,7 @@ wait "$second_prepare" || second_status=$?
 [ "$(grep -Fxc "$work/shared-preparation" "$work/preparations")" -eq 1 ]
 
 for number in 1 2; do
-  env -u ECLTEST_ARTIFACT_DIR ECLTEST_SHARD=pypi bash "$script" full > "$work/full-$number.log" 2>&1 &
+  env -u ECLTEST_ARTIFACT_DIR bash "$script" full > "$work/full-$number.log" 2>&1 &
   full_pids[number]=$!
 done
 for number in 1 2; do
@@ -153,7 +158,9 @@ for number in 1 2; do
 done
 [ "${full_roots[0]}" != "${full_roots[1]}" ]
 for directory in "${full_roots[@]}"; do
-  [ -s "$directory/reports/pypi.json" ]
+  for component in npm-serving npm-writes pypi shared-system; do
+    [ -s "$directory/reports/$component.json" ]
+  done
   ECLTEST_ARTIFACT_DIR="$directory" bash "$script" audit
 done
 
@@ -163,13 +170,4 @@ reject bash "$script" load
 cp "$work/plan.json" "$ECLTEST_ARTIFACT_DIR/plan.json"
 printf 'corrupt' >> "$ECLTEST_ARTIFACT_DIR/docker-image.tar"
 reject bash "$script" load
-env -u GITHUB_OUTPUT bash "$here/e2e-matrix.sh" "$work/plan.json" > "$work/matrix"
-GITHUB_OUTPUT="$work/github-output" bash "$here/e2e-matrix.sh" "$work/plan.json" > "$work/github-stdout"
-[ ! -s "$work/github-stdout" ]
-cmp "$work/matrix" "$work/github-output"
-grep -q 'partitions=\["npm-serving","npm-writes","pypi","shared-system"\]' "$work/matrix"
-for bad in '{"partitions":[]}' '{"partitions":["pypi","pypi"]}' '{"partitions":["../escape"]}' '{}'; do
-  printf '%s\n' "$bad" > "$work/bad.json"
-  reject env -u GITHUB_OUTPUT bash "$here/e2e-matrix.sh" "$work/bad.json"
-done
 printf 'ok - immutable inputs, current-attempt evidence, overlap and execution identities\n'
