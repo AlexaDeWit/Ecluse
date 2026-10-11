@@ -94,8 +94,8 @@ case "${1:-all}" in
     cp "$CABAL_DIR/config" "$out/cabal.config"
     awk '/^[[:space:]]*optimization:/ {if ($2 != "1" && $2 != "True") exit 1}' "$out/cabal.config"
 
-    common='/ecosystem: pypi/ && /cold production reads [(]per package[)]/ && /default cap 134217728 bytes: success/ && /full document/'
-    selection="$common && (/requests [(]medium[)]/ || /numpy [(]large[)]/)"
+    common='/ecosystem: pypi/ && /cold production reads (per package)/ && /default cap 134217728 bytes: success/ && /full document/'
+    selection="$common && (/requests (medium)/ || /numpy (large)/)"
     list_options="--list-tests --pattern=\"$selection\" +RTS -N1 -T -RTS"
     phase=listing
     task --dry bench-profile BENCH_PROFILE_DIR="$builddir" BENCH_PROFILE_OPTS="$list_options" > "$out/profile-commands.txt" 2>&1
@@ -115,7 +115,7 @@ case "${1:-all}" in
     for package in requests numpy; do
       phase="$package"
       mkdir -p "$out/$package"
-      options="--pattern=\"$common && /$package [(]/\" --csv $out/$package/bench-results.csv --time-mode cpu --stdev 0.0001 --timeout 30s +RTS -N1 -T -RTS"
+      options="--pattern=\"$common && /$package (/\" --csv $out/$package/bench-results.csv --time-mode cpu --stdev 0.0001 --timeout 30s +RTS -N1 -T -RTS"
       task --dry bench-profile BENCH_PROFILE_DIR="$builddir" BENCH_PROFILE_OPTS="$options" >> "$out/profile-commands.txt" 2>&1
       capture "$package" 5m task --silent bench-profile BENCH_PROFILE_DIR="$builddir" BENCH_PROFILE_OPTS="$options"
       retain_profile "$out/$package"
