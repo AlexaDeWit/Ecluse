@@ -99,7 +99,7 @@ unitObligation identifier contract profile =
 projectionCases :: Text -> [Text]
 projectionCases ecosystem =
     map
-        ("core.metadata.projection." <> ecosystem <> "." <>)
+        (("core.metadata.projection." <> ecosystem <> ".") <>)
         ["malformed", "missing-name", "name-mismatch", "version-bound", "artifact-bound", "missing-version", "selected-parity"]
 
 fetchCases :: [Text]
