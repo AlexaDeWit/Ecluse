@@ -5,16 +5,13 @@
 -- | Discovery checks requirements before any provider can acquire resources.
 module Ecluse.Test.Contract.Catalogue (
     validateCatalogue,
-    selectGroups,
     caseLabel,
     labelCaseId,
     duplicates,
 ) where
 
 import Data.Char (isAsciiLower, isDigit)
-import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 
 import Ecluse.Test.Contract.Types
@@ -131,24 +128,3 @@ obligationProblems profiles groups obligation = case obligationSupport obligatio
         , item <- groupCases scenarioGroup
         , obligationId obligation `elem` caseRequirements item
         ]
-
--- | Unknown filters and empty intersections fail before setup.
-selectGroups :: Selection -> Catalogue -> Either [Text] [Group]
-selectGroups selection catalogue = do
-    valid <- validateCatalogue catalogue
-    let groups = catalogueGroups valid
-        profiles = Map.fromList [(profileId profile, profile) | profile <- catalogueProfiles valid]
-        selected = List.sortOn groupId $ filter (matches profiles) groups
-    if null selected then Left ["selection matches no groups: " <> show selection] else Right selected
-  where
-    matches profiles scenarioGroup =
-        maybe True (== groupId scenarioGroup) (selectionGroup selection)
-            && maybe True (== groupPartition scenarioGroup) (selectionPartition selection)
-            && maybe True (== groupTier scenarioGroup) (selectionTier selection)
-            && maybe False (profileMatches selection) (Map.lookup (groupProfileId scenarioGroup) profiles)
-
-profileMatches :: Selection -> Profile -> Bool
-profileMatches selection profile =
-    maybe True (`elem` profileEcosystems profile) (selectionEcosystem selection)
-        && maybe True (`elem` profileBackends profile) (selectionBackend selection)
-        && maybe True (`Set.member` Set.fromList (profileCapabilities profile)) (selectionCapability selection)

@@ -828,7 +828,7 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Maintenance
     Ecluse.Test.Contract.Measurement
     Ecluse.Test.Contract.Metadata.Projection
-    Ecluse.Test.Contract.Options
+    Ecluse.Test.Contract.Manifest
     Ecluse.Test.Contract.Phase
     Ecluse.Test.Contract.Queue
     Ecluse.Test.Contract.RegistrySmoke
@@ -912,7 +912,6 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.BindingSpec
     Ecluse.Test.Contract.CatalogueSpec
     Ecluse.Test.Contract.Fixtures
-    Ecluse.Test.Contract.OptionsSpec
     Ecluse.Test.Contract.PhaseSpec
     Ecluse.Test.Contract.ResultSpec
     Ecluse.Test.Contract.RegistrySmokeSpec
@@ -1581,16 +1580,18 @@ test-suite ecluse-smoke
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
 
--- E2E runs the real OCI image with real clients in whole lifecycle groups.
--- Pure listing needs no services. Execution fails when required prerequisites are absent.
-test-suite ecluse-e2e
+-- Four fixed suites share the real-image providers and concrete contract declarations.
+library ecluse-e2e-test-support
   import:             shared
-  type:               exitcode-stdio-1.0
-  main-is:            Spec.hs
   hs-source-dirs:     test/e2e
-  other-modules:
+  exposed-modules:
     Ecluse.E2E.Catalogue
     Ecluse.E2E.Requirements
+    Ecluse.E2E.Fixtures.Contracts
+    Ecluse.E2E.Suites.NpmServing
+    Ecluse.E2E.Suites.NpmWrites
+    Ecluse.E2E.Suites.PyPI
+    Ecluse.E2E.Suites.SharedSystem
     Ecluse.E2E.Fixtures.Advisories
     Ecluse.E2E.Fixtures.Npm
     Ecluse.E2E.Fixtures.PyPI
@@ -1636,6 +1637,74 @@ test-suite ecluse-e2e
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
     , universe-base  ^>=1.1
+
+test-suite ecluse-e2e-npm-serving
+  import:          shared
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-npm-serving
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-npm-writes
+  import:          shared
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-npm-writes
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-pypi
+  import:          shared
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-pypi
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-shared-system
+  import:          shared
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-shared-system
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+executable ecluse-e2e-manifest
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/e2e-manifest
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-e2e-test-support
+
+executable ecluse-integration-manifest
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/integration-manifest
+  build-depends:
+    , ecluse:ecluse-test-contracts
+
+executable ecluse-e2e-audit
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/e2e-audit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-integration-audit
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/integration-audit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , text           ^>=2.1
 
 -- Benchmarks: the work-per-request micro-benches over the pure ecluse-core hot paths,
 -- plus the synthetic-corpus generator's correctness tests and the complexity

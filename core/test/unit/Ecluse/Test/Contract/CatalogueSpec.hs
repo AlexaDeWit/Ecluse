@@ -24,15 +24,6 @@ spec = do
             validateCatalogue altered `shouldBe` Right altered
         it "rejects a concrete case for a planned operation" $
             validateCatalogue catalogue{catalogueObligations = [obligation{obligationSupport = Planned "delivery-issue"}]} `shouldSatisfy` isLeft
-    describe "selectGroups" $ do
-        it "selects whole lifecycle groups by stable ID" $
-            selectGroups emptySelection{selectionGroup = Just "example/read"} catalogue `shouldBe` Right [scenarioGroup]
-        it "intersects ecosystem, backend, capability and partition filters" $
-            selectGroups emptySelection{selectionEcosystem = Just "example", selectionBackend = Just "http", selectionCapability = Just "read", selectionPartition = Just "primary"} catalogue `shouldBe` Right [scenarioGroup]
-        it "rejects unknown IDs without evaluating any provider" $
-            selectGroups emptySelection{selectionGroup = Just "absent"} catalogue `shouldSatisfy` isLeft
-        it "rejects empty filter intersections" $
-            selectGroups emptySelection{selectionBackend = Just "absent"} catalogue `shouldSatisfy` isLeft
     describe "case identity" $ do
         it "preserves the ID while human text changes" $
             labelCaseId (caseLabel "example/read" "A renamed explanation") `shouldBe` Just "example/read"

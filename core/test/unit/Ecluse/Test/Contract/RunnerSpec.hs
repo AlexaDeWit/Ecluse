@@ -9,14 +9,13 @@ import Control.Concurrent (threadDelay)
 import Control.Exception qualified as Exception
 import Data.Aeson (eitherDecodeStrict')
 import Data.ByteString qualified as BS
-import Data.Map.Strict qualified as Map
+import System.Exit (ExitCode (ExitFailure))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 
 import Ecluse.Test.Contract.Catalogue
 import Ecluse.Test.Contract.Fixtures
-import Ecluse.Test.Contract.Options
 import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Runner
 import Ecluse.Test.Contract.Types
@@ -55,7 +54,7 @@ spec = describe "executeGroups" $ do
         actual <- execute (afterAll_ (Exception.throwIO CleanupFailure) $ it label (pure () :: Expectation)) (const $ pure Nothing)
         map grStatus (reportGroups actual) `shouldBe` [Failed]
     it "bounds setup and records timeout rather than passing omitted cases" $ do
-        actual <- executeGroups executionIdentity options{runTimeoutSeconds = Just 1} [scenarioGroup] (Map.singleton (groupId scenarioGroup) $ const $ it label (pure () :: Expectation)) (const $ threadDelay 2000000 >> pure Nothing)
+        actual <- executeGroups executionIdentity options{runTimeoutSeconds = Just 1} "primary" [DeclaredGroup scenarioGroup $ const $ it label (pure () :: Expectation)] (const $ threadDelay 2000000 >> pure Nothing)
         map grStatus (reportGroups actual) `shouldBe` [TimedOut]
         map crStatus (reportCases actual) `shouldBe` [TimedOut]
     it "persists cancellation evidence before rethrowing the asynchronous exception" $
@@ -63,7 +62,7 @@ spec = describe "executeGroups" $ do
             let path = directory </> "cancelled.json"
             outcome <-
                 Exception.try @Exception.AsyncException $
-                    executeGroups executionIdentity options{runReportPath = Just path} [scenarioGroup] Map.empty (const $ Exception.throwIO Exception.ThreadKilled)
+                    executeGroups executionIdentity options{runReportPath = Just path} "primary" [DeclaredGroup scenarioGroup $ const $ it label (pure () :: Expectation)] (const $ Exception.throwIO Exception.ThreadKilled)
             outcome `shouldSatisfy` isLeft
             decoded <- eitherDecodeStrict' <$> BS.readFile path
             case decoded of
@@ -72,14 +71,40 @@ spec = describe "executeGroups" $ do
     it "runs independent groups alone and in reverse order without changing their case set" $ do
         let otherItem = Case "example/read/other" ["read/identity"]
             otherGroup = scenarioGroup{groupId = "example/other", groupCases = [otherItem]}
-            actions = Map.fromList [(groupId scenarioGroup, const $ it label (pure () :: Expectation)), (groupId otherGroup, const $ it (caseLabel (caseId otherItem) "other") (pure () :: Expectation))]
-        forM_ [[otherGroup], [otherGroup, scenarioGroup], [scenarioGroup, otherGroup]] $ \selected -> do
-            actual <- executeGroups executionIdentity options selected actions (const $ pure Nothing)
-            auditSelection selected (reportGroups actual) (reportCases actual) `shouldBe` []
+            firstDeclaration = DeclaredGroup scenarioGroup $ const $ it label (pure () :: Expectation)
+            other = DeclaredGroup otherGroup $ const $ it (caseLabel (caseId otherItem) "other") (pure () :: Expectation)
+        forM_ [[other], [other, firstDeclaration], [firstDeclaration, other]] $ \declarations -> do
+            actual <- executeGroups executionIdentity options "primary" declarations (const $ pure Nothing)
+            auditSelection (map declaredGroup declarations) (reportGroups actual) (reportCases actual) `shouldBe` []
+            map grGroupId (reportGroups actual) `shouldBe` map (groupId . declaredGroup) declarations
+    it "validates concrete registration without acquiring the fixture" $ do
+        acquired <- newIORef False
+        let declaration =
+                DeclaredGroup scenarioGroup $
+                    const $
+                        beforeAll_ (writeIORef acquired True) $
+                            it label (pure () :: Expectation)
+        validateDeclaredGroups catalogue "primary" [declaration]
+        readIORef acquired `shouldReturn` False
+    it "rejects missing and duplicate concrete declarations" $ do
+        let declaration = DeclaredGroup scenarioGroup $ const $ it label (pure () :: Expectation)
+        forM_ [[], [declaration, declaration]] $ \declarations ->
+            validateDeclaredGroups catalogue "primary" declarations `shouldThrow` (== ExitFailure 1)
+    it "rejects wrong suite ownership before resource acquisition" $ do
+        let declaration = DeclaredGroup scenarioGroup $ const $ it label (pure () :: Expectation)
+        validateDeclaredGroups catalogue "absent" [declaration] `shouldThrow` (== ExitFailure 1)
+    it "rejects missing, duplicate, unknown, and unlabelled Hspec examples" $ do
+        forM_
+            [ pure ()
+            , replicateM_ 2 $ it label (pure () :: Expectation)
+            , it "[unknown] example" (pure () :: Expectation)
+            , it "native example" (pure () :: Expectation)
+            ]
+            $ \body -> validateDeclaredGroups catalogue "primary" [DeclaredGroup scenarioGroup $ const body] `shouldThrow` (== ExitFailure 1)
   where
     label = caseLabel (caseId item) "identity"
-    options = RunOptions emptySelection Nothing 1 Nothing False
-    execute body = executeGroups executionIdentity options [scenarioGroup] (Map.singleton (groupId scenarioGroup) $ const body)
+    options = RunSettings Nothing 1 Nothing
+    execute body = executeGroups executionIdentity options "primary" [DeclaredGroup scenarioGroup $ const body]
 
 data CleanupFailure = CleanupFailure deriving stock (Show)
 instance Exception CleanupFailure

@@ -32,3 +32,6 @@ spec = describe "labelledCaseIds" $ do
             labelledCaseIds (it label (pure () :: Expectation)) `shouldReturn` ["malformed:" <> toText label]
     it "preserves unknown valid labels for obligation rejection" $
         labelledCaseIds (it (caseLabel "unknown/identity" "identity") (pure () :: Expectation)) `shouldReturn` ["unknown/identity"]
+    it "keeps every fixed-suite example in the registration check" $ do
+        allCaseIds (it "native oracle" (pure () :: Expectation)) `shouldReturn` ["unregistered:native oracle"]
+        allCaseIds (it (caseLabel "read/identity" "identity") (pure () :: Expectation)) `shouldReturn` ["read/identity"]

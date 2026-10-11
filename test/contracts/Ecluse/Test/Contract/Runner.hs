@@ -2,15 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Hspec execution with pure discovery and complete machine-readable evidence.
-module Ecluse.Test.Contract.Runner (GroupAction, contractMain, executeGroups) where
+-- | Execute the concrete contract calls declared by a fixed suite entrypoint.
+module Ecluse.Test.Contract.Runner (
+    GroupAction,
+    DeclaredGroup (..),
+    RunSettings (..),
+    contractMain,
+    validateDeclaredGroups,
+    executeGroups,
+) where
 
 import Control.Exception qualified as Exception
-import Crypto.Hash (Digest, SHA256, hash)
-import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
-import Data.Map.Strict qualified as Map
+import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import System.Directory (createDirectoryIfMissing, renameFile)
@@ -22,8 +26,9 @@ import Test.Hspec.Core.Format qualified as Format
 import Test.Hspec.Core.Formatters.V2 qualified as Formatters
 import Test.Hspec.Core.Runner qualified as Hspec
 
+import Ecluse.Test.Contract.Binding (allCaseIds)
 import Ecluse.Test.Contract.Catalogue
-import Ecluse.Test.Contract.Options
+import Ecluse.Test.Contract.Manifest
 import Ecluse.Test.Contract.Phase
 import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Types
@@ -31,39 +36,74 @@ import Ecluse.Test.Contract.Types
 -- | A group receives its own lifecycle clock before Hspec constructs its hooks.
 type GroupAction = PhaseRecorder -> Spec
 
--- | The prerequisite callback runs only after pure validation and whole-group selection.
-contractMain :: Catalogue -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO ()
-contractMain catalogue actions prerequisites = do
-    command <- getArgs >>= either failRunner pure . parseCommand
+-- | A concrete contract call carries its metadata beside the actual Hspec action.
+data DeclaredGroup = DeclaredGroup
+    { declaredGroup :: Group
+    , declaredAction :: GroupAction
+    }
+
+-- | Operational controls never choose contracts or providers.
+data RunSettings = RunSettings
+    { runReportPath :: Maybe FilePath
+    , runSeed :: Integer
+    , runTimeoutSeconds :: Maybe Int
+    }
+    deriving stock (Eq, Show)
+
+-- | Validate the fixed list before checking prerequisites or acquiring resources.
+contractMain :: Catalogue -> Text -> [DeclaredGroup] -> (Group -> IO (Maybe Text)) -> IO ()
+contractMain catalogue suite declarations prerequisites = do
+    arguments <- getArgs
+    unless (null arguments) $ failRunner "fixed contract suites accept no arguments"
+    validateDeclaredGroups catalogue suite declarations
     plan <- either (failRunner . T.unlines) pure $ makePlan catalogue
-    let expectedActions = map groupId $ catalogueGroups catalogue
-        missingActions = filter (`Map.notMember` actions) expectedActions
-        unknownActions = filter (`notElem` expectedActions) (Map.keys actions)
-    unless (null missingActions && null unknownActions) $ failRunner $ "spec registration mismatch: " <> show (missingActions, unknownActions)
-    case command of
-        ListCatalogue -> BS.putStr $ jsonLine catalogue
-        PrintPlan -> BS.putStr $ jsonLine plan
-        SelectCatalogue selection -> either (failRunner . T.unlines) (BS.putStr . jsonLine) $ selectGroups selection catalogue
-        Audit path reportPaths -> auditFiles plan path reportPaths
-        AuditFull path reportPath -> auditFullFile plan path reportPath
-        Execute options -> do
-            groups <- either (failRunner . T.unlines) pure $ selectGroups (runSelection options) catalogue
-            executionIdentity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
-            report <- executeGroups executionIdentity options groups actions prerequisites
-            let faults = auditSelection groups (reportGroups report) (reportCases report)
-            unless (null faults) $ do
-                forM_ (reportGroups report) $ \result ->
-                    when (grStatus result /= Passed) $ mapM_ putTextLn (grDiagnostics result)
-                when (isNothing $ runReportPath options) $ BS.putStr $ jsonLine report
-                failRunner $ T.unlines faults
+    settings <- readSettings
+    executionIdentity <- readIdentity False (usesProductImage plan) $ digest (jsonLine plan)
+    report <- executeGroups executionIdentity settings suite declarations prerequisites
+    let faults = auditSelection (map declaredGroup declarations) (reportGroups report) (reportCases report)
+    unless (null faults) $ do
+        forM_ (reportGroups report) $ \result ->
+            when (grStatus result /= Passed) $ mapM_ putTextLn (grDiagnostics result)
+        when (isNothing $ runReportPath settings) $ BS.putStr $ jsonLine report
+        failRunner $ T.unlines faults
+
+-- | Inspect every registered example without running acquisition hooks or assertions.
+validateDeclaredGroups :: Catalogue -> Text -> [DeclaredGroup] -> IO ()
+validateDeclaredGroups catalogue suite declarations = do
+    valid <- either (failRunner . T.unlines) pure $ validateCatalogue catalogue
+    let expected = filter ((== suite) . groupPartition) $ catalogueGroups valid
+        actual = map declaredGroup declarations
+    unless (not (null expected) && List.sortOn groupId actual == List.sortOn groupId expected) $
+        failRunner $
+            "fixed suite declaration mismatch: " <> suite
+    forM_ declarations $ \declaration -> do
+        let metadata = declaredGroup declaration
+        recorder <- newPhaseRecorder
+        registered <- allCaseIds (declaredAction declaration recorder)
+        unless (List.sort registered == List.sort (map caseId $ groupCases metadata)) $
+            failRunner $
+                "Hspec registration mismatch: " <> groupId metadata <> ": " <> show registered
+
+readSettings :: IO RunSettings
+readSettings = do
+    path <- lookupEnv "ECLTEST_REPORT_PATH"
+    when (path == Just "") $ failRunner "ECLTEST_REPORT_PATH must not be empty"
+    seed <- lookupEnv "ECLTEST_SEED" >>= maybe (pure 1) (parseNumber "ECLTEST_SEED")
+    seconds <- lookupEnv "ECLTEST_TIMEOUT" >>= traverse (parseNumber "ECLTEST_TIMEOUT")
+    forM_ seconds $ \value ->
+        unless (value > 0 && value <= maxBound `div` 1000000) $
+            failRunner "ECLTEST_TIMEOUT requires positive whole seconds within the timer range"
+    pure $ RunSettings path seed seconds
+  where
+    parseNumber name value = maybe (failRunner $ name <> " requires an integer") pure $ readMaybe value
 
 -- | Each completed group is persisted before the next acquisition begins.
-executeGroups :: ExecutionIdentity -> RunOptions -> [Group] -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> IO Report
-executeGroups executionIdentity options groups actions prerequisites = Exception.mask $ \restore -> do
-    reportRef <- newIORef $ Report 1 executionIdentity shard (runRepeat options) [] [] (runSeed options) groups
+executeGroups :: ExecutionIdentity -> RunSettings -> Text -> [DeclaredGroup] -> (Group -> IO (Maybe Text)) -> IO Report
+executeGroups executionIdentity options suite declarations prerequisites = Exception.mask $ \restore -> do
+    reportRef <- newIORef $ Report 1 executionIdentity suite False [] [] (runSeed options) (map declaredGroup declarations)
     persist options =<< readIORef reportRef
-    forM_ groups $ \scenarioGroup -> do
-        (groupResult, caseResults, interrupted) <- restore $ executeGroup options actions prerequisites scenarioGroup
+    forM_ declarations $ \declaration -> do
+        (groupResult, caseResults, interrupted) <- restore $ executeGroup options prerequisites declaration
         modifyIORef' reportRef $ \report ->
             report
                 { reportGroups = reportGroups report <> [groupResult]
@@ -72,11 +112,9 @@ executeGroups executionIdentity options groups actions prerequisites = Exception
         persist options =<< readIORef reportRef
         forM_ interrupted Exception.throwIO
     readIORef reportRef
-  where
-    shard = fromMaybe "all" $ selectionPartition $ runSelection options
 
-executeGroup :: RunOptions -> Map Text GroupAction -> (Group -> IO (Maybe Text)) -> Group -> IO (GroupResult, [CaseResult], Maybe SomeException)
-executeGroup options actions prerequisites scenarioGroup = Exception.mask $ \restore -> do
+executeGroup :: RunSettings -> (Group -> IO (Maybe Text)) -> DeclaredGroup -> IO (GroupResult, [CaseResult], Maybe SomeException)
+executeGroup options prerequisites (DeclaredGroup scenarioGroup action) = Exception.mask $ \restore -> do
     start <- getCurrentTime
     results <- newIORef []
     recorder <- newPhaseRecorder
@@ -84,9 +122,7 @@ executeGroup options actions prerequisites scenarioGroup = Exception.mask $ \res
         unavailable <- prerequisites scenarioGroup
         case unavailable of
             Just reason -> pure $ Left reason
-            Nothing -> case Map.lookup (groupId scenarioGroup) actions of
-                Nothing -> pure $ Left "group has no registered specification"
-                Just spec -> Right <$> runSpec options scenarioGroup results (spec recorder)
+            Nothing -> Right <$> runSpec options scenarioGroup results (action recorder)
     end <- getCurrentTime
     observed <- reverse <$> readIORef results
     timings <- readPhaseTimings recorder
@@ -97,11 +133,11 @@ executeGroup options actions prerequisites scenarioGroup = Exception.mask $ \res
             | item <- groupCases scenarioGroup
             , caseId item `notElem` map crCaseId observed
             ]
-        rerun = executable <> " --group " <> groupId scenarioGroup <> " --seed " <> show (runSeed options)
+        rerun = "ECLTEST_SEED=" <> show (runSeed options) <> " " <> executable
         groupResult = GroupResult (groupId scenarioGroup) status (realToFrac $ diffUTCTime end start) (diagnostics <> ["Rerun: " <> rerun]) timings
     pure (groupResult, observed <> missing, interrupted)
 
-bounded :: RunOptions -> IO a -> IO (Maybe a)
+bounded :: RunSettings -> IO a -> IO (Maybe a)
 bounded options action = case runTimeoutSeconds options of
     Nothing -> Just <$> action
     Just seconds -> timeout (seconds * 1000000) action
@@ -119,7 +155,7 @@ missingStatus :: Status -> Status
 missingStatus Passed = Failed
 missingStatus status = status
 
-runSpec :: RunOptions -> Group -> IORef [CaseResult] -> Spec -> IO Bool
+runSpec :: RunSettings -> Group -> IORef [CaseResult] -> Spec -> IO Bool
 runSpec options scenarioGroup results spec = do
     let configuration =
             Hspec.defaultConfig
@@ -153,65 +189,8 @@ captureResult scenarioGroup results = \case
         modifyIORef' results (CaseResult identifier (groupId scenarioGroup) status duration (information <> diagnostics) :)
     _ -> pure ()
 
-persist :: RunOptions -> Report -> IO ()
+persist :: RunSettings -> Report -> IO ()
 persist options report = forM_ (runReportPath options) $ \path -> do
     createDirectoryIfMissing True $ takeDirectory path
     BS.writeFile (path <> ".tmp") (jsonLine report)
     renameFile (path <> ".tmp") path
-
-auditFiles :: Plan -> FilePath -> [FilePath] -> IO ()
-auditFiles compiled path reportPaths = do
-    (plan, expected) <- loadAuditPlan compiled path
-    reports <- traverse (BS.readFile >=> decodeFileBytes) reportPaths
-    let faults = auditReports expected plan reports
-    unless (null faults) $ failRunner $ T.unlines faults
-    putTextLn "Every required group and case passed with matching execution identities."
-
-auditFullFile :: Plan -> FilePath -> FilePath -> IO ()
-auditFullFile compiled path reportPath = do
-    (plan, expected) <- loadAuditPlan compiled path
-    report <- BS.readFile reportPath >>= decodeFileBytes
-    let faults = auditFullReport expected plan report
-    unless (null faults) $ failRunner $ T.unlines faults
-    putTextLn "The full suite passed every required group and case with matching execution identities."
-
-loadAuditPlan :: Plan -> FilePath -> IO (Plan, ExecutionIdentity)
-loadAuditPlan compiled path = do
-    bytes <- BS.readFile path
-    plan <- decodeFileBytes bytes
-    unless (plan == compiled) $ failRunner "downloaded plan differs from the compiled catalogue"
-    expected <- readIdentity True (usesProductImage plan) $ digest bytes
-    pure (plan, expected)
-
-readIdentity :: Bool -> Bool -> Text -> IO ExecutionIdentity
-readIdentity forceRequired imageRequired planDigest = do
-    explicit <- (== Just "1") <$> lookupEnv "ECLTEST_REQUIRED"
-    ci <- (== Just "true") <$> lookupEnv "CI"
-    let required = forceRequired || explicit || ci
-    let field name fallback =
-            lookupEnv name >>= \case
-                Just value | not (null value) -> pure $ toText value
-                _ | required -> failRunner $ "missing required execution identity: " <> toText name
-                _ -> pure fallback
-    source <- field "ECLTEST_SOURCE" "local"
-    image <- if imageRequired then field "ECLTEST_IMAGE_ID" "local" else pure "not-applicable"
-    architecture <- field "ECLTEST_ARCHITECTURE" "local"
-    runId <- field "ECLTEST_RUN_ID" "local"
-    declaredDigest <- field "ECLTEST_PLAN_DIGEST" planDigest
-    unless (declaredDigest == planDigest) $ failRunner "plan digest differs from the selected catalogue"
-    pure $ ExecutionIdentity source image architecture planDigest runId
-
-jsonLine :: (ToJSON a) => a -> ByteString
-jsonLine value = BL.toStrict (encode value) <> "\n"
-
-digest :: ByteString -> Text
-digest bytes = show (hash bytes :: Digest SHA256)
-
-decodeFileBytes :: (FromJSON a) => ByteString -> IO a
-decodeFileBytes = either (failRunner . toText) pure . eitherDecodeStrict'
-
-failRunner :: Text -> IO a
-failRunner message = putTextLn message >> exitFailure
-
-usesProductImage :: Plan -> Bool
-usesProductImage = any ((== E2E) . groupTier) . catalogueGroups . planCatalogue

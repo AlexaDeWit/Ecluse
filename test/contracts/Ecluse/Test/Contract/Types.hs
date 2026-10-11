@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Pure declarations shared by contract discovery, selection, and execution audits.
+-- | Pure metadata for fixed suites and execution audits.
 module Ecluse.Test.Contract.Types (
     Tier (..),
     Support (..),
@@ -12,8 +12,6 @@ module Ecluse.Test.Contract.Types (
     Case (..),
     Group (..),
     Catalogue (..),
-    Selection (..),
-    emptySelection,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -83,18 +81,3 @@ data Catalogue = Catalogue
     }
     deriving stock (Eq, Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
-
--- | Filters intersect and never split a lifecycle group.
-data Selection = Selection
-    { selectionGroup :: Maybe Text
-    , selectionPartition :: Maybe Text
-    , selectionEcosystem :: Maybe Text
-    , selectionBackend :: Maybe Text
-    , selectionCapability :: Maybe Text
-    , selectionTier :: Maybe Tier
-    }
-    deriving stock (Eq, Show)
-
--- | Select every declared group.
-emptySelection :: Selection
-emptySelection = Selection Nothing Nothing Nothing Nothing Nothing Nothing
