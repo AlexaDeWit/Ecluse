@@ -54,9 +54,9 @@ newPhaseRecorderWithClock clock = do
 
 -- | Read accumulated exclusive timings after resource cleanup.
 readPhaseTimings :: PhaseRecorder -> IO PhaseTimings
-readPhaseTimings recorder@(PhaseRecorder _ state) = do
+readPhaseTimings recorder@(PhaseRecorder _ clockRef) = do
     changePhase recorder id
-    ClockState _ _ durations <- readIORef state
+    ClockState _ _ durations <- readIORef clockRef
     pure durations
 
 -- | Wrap a bracketed provider, including acquisition and cleanup failures.
@@ -76,9 +76,9 @@ replacePhase phase = \case
     _ : rest -> phase : rest
 
 changePhase :: PhaseRecorder -> ([Phase] -> [Phase]) -> IO ()
-changePhase (PhaseRecorder clock state) update = do
+changePhase (PhaseRecorder clock clockRef) update = do
     now <- clock
-    atomicModifyIORef' state $ \(ClockState previous phases durations) ->
+    atomicModifyIORef' clockRef $ \(ClockState previous phases durations) ->
         let elapsed = fromIntegral (now - min now previous) / 1000000000
             charged = case phases of
                 Setup : _ -> durations{phaseSetupSeconds = phaseSetupSeconds durations + elapsed}

@@ -70,7 +70,7 @@ validateCatalogue catalogue = if null problems then Right catalogue else Left pr
             <> concatMap (obligationProblems profileMap groups) obligations
 
 repeated :: Text -> [Text] -> [Text]
-repeated kind identifiers = map ("duplicate " <> kind <> " ID: " <>) (duplicates identifiers)
+repeated kind identifiers = map (("duplicate " <> kind <> " ID: ") <>) (duplicates identifiers)
 
 validId :: Text -> Bool
 validId value = not (T.null value) && T.all allowed value
