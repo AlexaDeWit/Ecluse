@@ -48,7 +48,10 @@ patternScenarios ecosystem packages privateApp publicApp urlFor =
     cell patternKind defaultCap =
         ( scenario
             (patternName patternKind <> if defaultCap then "-default-body-cap" else "")
-            "Finite captured-name replay from empty stores. TTL 60 seconds. Hot-set is an upper-bound control. Other families carry no workload preference."
+            ( patternDescription patternKind
+                <> " Each client sends sequential requests over captured package names. Every scenario starts with a fresh proxy and empty stores. Cache TTL is 60 seconds."
+                <> if defaultCap then " The production response body cap applies, so oversized metadata receives a refusal." else ""
+            )
             (boot patternKind defaultCap)
         )
             { scenarioServiceTime = False

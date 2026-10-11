@@ -794,6 +794,7 @@ Hosted runners have four processors, so a four-core shape shares them with `oha`
 
 Each scenario reports:
 
+- its name and traffic description in the summary table and before its detailed metrics
 - successes in the window (the primary figure) beside the [success floor](#success-floors) they
   are held to, refusals (`429` and `503`), other statuses, transport failures, and the p50 and p99
   of successful responses only
