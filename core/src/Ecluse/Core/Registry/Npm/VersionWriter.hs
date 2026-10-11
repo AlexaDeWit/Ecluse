@@ -22,16 +22,15 @@ module Ecluse.Core.Registry.Npm.VersionWriter (
 
 import Control.Monad.ST (ST)
 import Data.Aeson (FromJSON (parseJSON), Value (..))
-import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (Availability (Available))
-import Ecluse.Core.Registry.Json.Intern (Entry, entryString, entryText, nameText)
+import Ecluse.Core.Registry.Json.Intern (Entry, entryString, nameText)
 import Ecluse.Core.Registry.Json.Packed (Packed)
-import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
+import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer, discard, newWriter, sealValue)
 import Ecluse.Core.Registry.Npm.Project (installHooks)
@@ -175,12 +174,6 @@ rememberOwn key value seen = case (key, value) of
     (OwnKey _, Unobserved) -> seen
     (OwnKey _, _) -> Set.insert (memberText key) seen
     (SharedKey _, _) -> seen
-
-memberText :: MemberKey -> Text
-memberText = \case
-    SharedKey entry -> entryText entry
-    OwnKey key -> Key.toText key
-{-# INLINE memberText #-}
 
 fieldsFor :: Role -> Maybe ObservedFields
 fieldsFor = \case
