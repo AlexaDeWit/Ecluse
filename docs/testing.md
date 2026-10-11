@@ -1230,19 +1230,6 @@ upstream json-stream's token behaviour. These checks cover its public interface 
   suite, or alone with
   `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`. Both readers use the
   Haskell lexer, so these properties check the walk rather than independently checking tokenisation.
-- **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the historical C lexer beside
-  upstream's at the fork's base commit under libFuzzer, AddressSanitizer and
-  UndefinedBehaviorSanitizer. It fails on any difference in return code, lexer state or result
-  records, with the input cut into pieces at random. Run it with `task fuzz-json-lexer`, ten minutes
-  by default, or pass libFuzzer options after `--`. clang and libFuzzer come from the flake's pinned
-  nixpkgs, and the corpus grows under `dist-fuzz/json-lexer/`. It does not run in CI or exercise the
-  production Haskell lexer. The retained C sources are reference code and are not linked into Écluse.
-
-Both reference C lexers overflow a signed `long` in `handle_number` on an integer of 19 digits or more, before
-they discard the value and parse the digits again. Nixpkgs' hardening makes the overflow wrap, so the
-harness builds with `-fno-wrapv` to let UndefinedBehaviorSanitizer see it, and
-`test/fuzz/json-lexer/ubsan.supp` names those two functions so fuzzing continues past it. The seed
-`nineteen-digit-integer` reaches it. `FUZZ_KNOWN=report task fuzz-json-lexer` reports it instead.
 
 ## One pattern for every ecosystem
 

@@ -17,9 +17,6 @@ The supported modules are `Data.JsonStream.Parser` and `Data.JsonStream.Lexer`. 
 decoding internals, and compatibility adapters remain private. The registry driver owns body and
 input-piece limits. Tokens and cursors can retain input slices until their callers release them.
 
-The historical [C lexer reference](../test/fuzz/json-lexer/reference/) is test-only and is not linked
-into the application. Recorded C traces and independent decoder results check inherited behaviour.
-
-`task json-stream-diff` compares the maintained source and historical C reference with the recorded
-upstream commit. Differences produce exit status 1. `task json-reference-check` verifies only the
-frozen C reference. Source formatting, lint, Stan and SPDX checks include the maintained library.
+[Frozen scanner traces and decoder outcomes](../core/test/unit/fixtures/json-stream/README.md)
+check inherited behaviour through the maintained Haskell interfaces. Their provenance identifies
+the historical source revisions. Source formatting, lint, Stan and SPDX checks include this library.

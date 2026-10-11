@@ -56,8 +56,8 @@ version, so advance it with `task bump-index-state` only when cabal reports a pi
 unknown. One source pin is held in two places. amazonka's are `amazonkaRev` in `flake.nix` and
 its `source-repository-package` tag in `cabal.project`, and the `amazonka-lockstep` flake check
 keeps them equal. The maintained json-stream fork lives under `json-stream/` and builds as a private Cabal library.
-Its README records its origin. `task json-stream-diff` compares it with that upstream commit.
-Only the historical C test reference remains pinned, through `task json-reference-check`.
+Its README records the upstream origin and licence. Frozen compatibility fixtures record the
+historical implementations used to establish the parser contract.
 
 Move the pins deliberately: run `nix flake update` (or merge Renovate's weekly `flake.lock` refresh),
 then `task freeze`, and commit both together. When the weekly Renovate PR moves Haskell versions,

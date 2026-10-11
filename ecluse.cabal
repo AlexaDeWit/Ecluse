@@ -39,9 +39,6 @@ extra-source-files:
   json-stream/LICENSE
   json-stream/README.md
   json-stream/upstream.freeze
-  test/fuzz/json-lexer/reference/lexer.h
-  test/fuzz/json-lexer/reference/lexer.c
-  test/fuzz/json-lexer/reference.sha256
 
 source-repository head
   type:     git

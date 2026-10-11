@@ -365,22 +365,6 @@ tasks:
       # that fourmolu joined to the header. git grep exits 1 when all files carry the tag.
       # Preserve the maintained fork's BSD headers.
       - '{ git grep -z -L "SPDX-License-Identifier:" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
-  json-reference-check:
-    desc: Check the historical C lexer paths, modes and SHA-256 digests
-    cmds:
-      - bash scripts/json-stream-reference.sh check
-  json-reference-pin:
-    desc: Re-pin the historical C lexer after an intended reference change
-    cmds:
-      - bash scripts/json-stream-reference.sh pin
-  json-stream-diff:
-    desc: Diff the maintained fork and C reference against upstream (differences exit 1)
-    cmds:
-      - bash scripts/json-stream-reference.sh diff
-  fuzz-json-lexer:
-    desc: Fuzz the historical C lexer against upstream's (pass libFuzzer options after --)
-    cmds:
-      - bash scripts/fuzz-json-lexer.sh {{.CLI_ARGS | default "-max_total_time=600"}}
   test-scripts:
     desc: Run the shell-script unit tests
     sources:
@@ -443,7 +427,6 @@ tasks:
     desc: Run all static analysis checks concurrently
     deps:
       - format-check
-      - json-reference-check
       - lint
       - sast
       - lint-workflows
