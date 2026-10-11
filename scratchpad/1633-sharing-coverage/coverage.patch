@@ -198,7 +198,7 @@ index 16caf51f..4dde3b89 100644
 +        _ -> memberName element rest (\key after -> visit acc key after loop) (dropped . loop acc)
 +{-# INLINE eachMemberWith #-}
 diff --git a/core/src/Ecluse/Core/Registry/Json/Writer.hs b/core/src/Ecluse/Core/Registry/Json/Writer.hs
-index ba95ec4e..543fae74 100644
+index ba95ec4e..a3fef858 100644
 --- a/core/src/Ecluse/Core/Registry/Json/Writer.hs
 +++ b/core/src/Ecluse/Core/Registry/Json/Writer.hs
 @@ -10,0 +11,7 @@ module Ecluse.Core.Registry.Json.Writer (
@@ -220,7 +220,7 @@ index ba95ec4e..543fae74 100644
 +import GHC.Exts (RealWorld)
 @@ -36 +46 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 -import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName)
-+import Ecluse.Core.Registry.Json.Intern (Entry, Name, entryIndex, entryString, entryText, foldName, nameText, tableCount, tableTexts)
++import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Name, entryIndex, entryString, entryText, foldName, nameText, tableCount, tableTexts)
 @@ -39 +49 @@ import Ecluse.Core.Registry.Json.Scratch (Scratch, copyOut, decimalLength, newSc
 -import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..))
 +import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), Mode (..), Trees (..), readShape)
