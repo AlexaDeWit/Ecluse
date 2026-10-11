@@ -32,6 +32,7 @@ import Ecluse.Core.Package (
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
+    canonicalise,
     hashAlg,
     hashValue,
     mkHash,
@@ -56,7 +57,7 @@ import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), YankSta
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Strict (strictElements)
-import Ecluse.Core.Version (Version, mkVersion, renderVersion, selectLatest)
+import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion, selectLatest)
 import Ecluse.Core.Version.Token (withinVersionLength)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, pypiCorpusPackages)
 import Ecluse.Test.Json (encodeStrict, fieldAt)
@@ -73,6 +74,7 @@ spec = do
     projectNameSpec
     canonicalNameSpec
     coordinateSpec
+    wheelComponentSpec
     memoSpec
     captureSpec
     allocationSpec
@@ -176,6 +178,67 @@ coordinateSpec = describe "fileCoordinate" $ do
     it "refuses a wheel with too few tag parts to be one" $
         fileCoordinate requestsName "requests-2.34.2-py3.whl" `shouldBe` Nothing
 
+wheelComponentSpec :: Spec
+wheelComponentSpec = describe "filename components against base 3384fa96" $ do
+    it "preserves five and six components with empty builds and tags" $
+        for_ ["requests-1.0---.whl", "requests-1.0----.whl", "requests-1.0--py3-none-any.whl"] $ \file -> do
+            baseFileCoordinate requestsName file `shouldBe` Just (coordinate "1" Wheel)
+            fileCoordinate requestsName file `shouldBe` baseFileCoordinate requestsName file
+
+    it "keeps a hyphenated version suffix in the build position" $ do
+        let file = "requests-1.0-1-py3-none-any.whl"
+        baseFileCoordinate requestsName file `shouldBe` Just (coordinate "1" Wheel)
+        fileCoordinate requestsName file `shouldBe` baseFileCoordinate requestsName file
+
+    it "preserves component, suffix, Unicode and project spelling boundaries" $
+        for_ wheelBoundaryFiles $ \file ->
+            for_ wheelBoundaryProjects $ \name ->
+                fileCoordinate name file `shouldBe` baseFileCoordinate name file
+
+    it "preserves the raw version bound and hostile filename results" $
+        for_ wheelHostileFiles $ \file ->
+            fileCoordinate requestsName file `shouldBe` baseFileCoordinate requestsName file
+
+    it "matches both memo readers against the frozen parser" $
+        for_ wheelBoundaryProjects $ \name ->
+            for_ memoReads $ \(_, readName) ->
+                snd (readThrough readName (filenameMemo name) wheelBoundaryFiles)
+                    `shouldBe` map (baseFileCoordinate name) wheelBoundaryFiles
+
+    describe "properties" $
+        it "preserves filenames from the existing version and filename generators" $
+            hedgehog $ do
+                file <- forAll genFilename
+                fileCoordinate azureStorageBlob file === baseFileCoordinate azureStorageBlob file
+
+wheelBoundaryProjects :: [PackageName]
+wheelBoundaryProjects = [requestsName, azureStorageBlob, unscopedPyPI "", unscopedPyPI "r\233quests"]
+
+wheelBoundaryFiles :: [Text]
+wheelBoundaryFiles =
+    [ T.intercalate "-" (project : version : tags) <> suffix
+    | project <- ["requests", "Requests", "__Requests..", "azure_storage_blob", "Azure.Storage.Blob", "azure-storage-blob", "", "r\233quests"]
+    , version <- ["1", "1.0", "1.0RC1", "v1.0", "2!1.0", "1.0+Local.7", "1.0-1", "1.0.post1", "1.0dev", "", "nightly", "1..0", "\1633"]
+    , tags <- [[], ["py3"], ["py3", "none"], ["py3", "none", "any"], ["1", "py3", "none", "any"], ["1", "2", "py3", "none", "any"], ["", "", ""], ["", "", "", ""], ["", "py3", "none", "any"], ["py3", "", "any"], ["py3", "none", ""], ["\955", "\9731", "any"], ["-", "none", "any"]]
+    , suffix <- [".whl", ".WHL", ".whl.zip", ".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz", ".egg", ""]
+    ]
+
+wheelHostileFiles :: [Text]
+wheelHostileFiles =
+    [ "requests-" <> T.replicate size "1" <> suffix
+    | size <- [1023, 1024, 1025]
+    , suffix <- ["---.whl", "----.whl", "-py3-none-any.whl", ".tar.gz"]
+    ]
+        <> [ file
+           | size <- [1000, 2000, 4000, 8000]
+           , file <-
+                [ "requests-1" <> T.replicate size "-" <> ".whl"
+                , "requests-1-py3-none-" <> T.replicate size "\9731" <> ".whl"
+                , T.replicate size "_" <> "requests-1---.whl"
+                , separatorHeavySdist "requests" size "wheel-components"
+                ]
+           ]
+
 memoSpec :: Spec
 memoSpec = describe "filenameMemo" $
     for_ memoReads $ \(readerName, readName) -> describe readerName $ do
@@ -224,17 +287,14 @@ captureSpec = describe "on the PyPI captures" $
             take 5 (mismatched held) `shouldBe` []
             take 5 [name | (name, found) <- zip names held, found /= fileCoordinate (cpPackage package) name] `shouldBe` []
 
--- The file names each capture lists, and how many of them name a release of its project.
 captureNames :: Map Text (Int, Int)
 captureNames = Map.fromList [("boto3", (4242, 4242)), ("numpy", (4232, 4198)), ("requests", (244, 243))]
 
 type MemoRead = FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)
 
--- A full read holds every version text, and a selected read only the latest.
 memoReads :: [(String, MemoRead)]
 memoReads = [("readCoordinate", readCoordinate), ("readLatestCoordinate", readLatestCoordinate)]
 
--- The coordinates whose version is not the one 'mkVersion' builds from their canonical key.
 mismatched :: [Maybe FileCoordinate] -> [(Version, Version)]
 mismatched held = [(version, rebuilt) | Just found <- held, let version = fcVersion found, let rebuilt = mkVersion PyPI (fcVersionKey found), version /= rebuilt]
 
@@ -258,7 +318,6 @@ genNamedFile = do
     suffix <- Gen.frequency [(4, pure "-py3-none-any.whl"), (2, pure "-1-py3-none-any.whl"), (3, pure ".tar.gz"), (2, pure ".zip"), (1, pure ".egg")]
     pure (version, project <> "-" <> version <> suffix)
 
--- A version in spellings PEP 440 normalises: a prefix, an epoch, zeros, each label and separator.
 genSpelling :: Gen Text
 genSpelling = do
     prefix <- Gen.element ["", "", "", "v", "V"]
@@ -424,6 +483,28 @@ differentialSpec = describe "release projection against the base implementation"
             selected <- expectRight (projectPyPIVersion defaultLimits requestsName (mkVersion PyPI "2.34.2") body)
             selected `shouldBe` Map.lookup "2.34.2" (infoVersions expected)
 
+    it "preserves filename quirks and invalid-entry order through both streaming reads" $ do
+        let files =
+                [ simpleFile "requests-1.0---.whl"
+                , Null
+                , simpleFile "requests-1.0-1-py3-none-any.whl"
+                , simpleFile "requests-1.0-----py3-none-any.whl"
+                , simpleFile "Requests-1.0--py3-none-any.whl"
+                , simpleFile "requests-2.0-\955-\9731-any.whl"
+                , simpleFile "__Requests---2.0.tar.gz"
+                , simpleFile "requests-2.0-py3-none-any.WHL"
+                , simpleFile "requests-2.0-py3-none-any.whl.zip"
+                ]
+            value = indexOf files
+            body = encodeStrict value
+        expected <- shouldProject requestsName value
+        referenceSimpleIndexFromValue requestsName value `shouldBe` Right (Projected expected)
+        (full, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+        full `shouldBe` expected
+        for_ (Map.elems (infoVersions expected)) $ \details -> do
+            selected <- expectRight (projectPyPIVersion defaultLimits requestsName (pkgVersion details) body)
+            selected `shouldBe` Just details
+
     for_ pypiCorpusPackages $ \package ->
         it ("preserves the full projection and selected releases of " <> toString (cpName package)) $ do
             body <- readFileBS (cpPath package)
@@ -493,11 +574,70 @@ boundaryIndexes =
                     ]
                ]
 
+-- Frozen coordinate parser from 3384fa96dd2bf732fdbf051e02edf58df125e0bb, including sdist fallback.
+baseFileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
+baseFileCoordinate name file = do
+    (version, kind) <- baseFilenameParts (baseFileProject name) file
+    (`FileCoordinate` kind) <$> canonicalPep440 version
+
+data BaseFileProject = BaseFileProject
+    { baseFpCanonical :: Text
+    , baseFpChunks :: [Text]
+    }
+
+baseFileProject :: PackageName -> BaseFileProject
+baseFileProject name = BaseFileProject canonical (T.splitOn "-" canonical)
+  where
+    canonical = baseCanonicalName name
+
+baseFilenameParts :: BaseFileProject -> Text -> Maybe (Text, DistributionKind)
+baseFilenameParts project file = baseWheelParts project file <|> baseSdistParts project file
+
+baseWheelParts :: BaseFileProject -> Text -> Maybe (Text, DistributionKind)
+baseWheelParts project file = do
+    stem <- T.stripSuffix ".whl" file
+    parts <- nonEmpty (T.splitOn "-" stem)
+    guard (length parts == 5 || length parts == 6)
+    guard (canonicalise PyPI (NE.head parts) == baseFpCanonical project)
+    version <- toList parts !!? 1
+    pure (version, Wheel)
+
+baseSdistParts :: BaseFileProject -> Text -> Maybe (Text, DistributionKind)
+baseSdistParts project file = do
+    stem <- asum (map (`T.stripSuffix` file) baseSdistSuffixes)
+    version <- baseAfterProjectName project stem
+    pure (version, Sdist)
+
+baseSdistSuffixes :: [Text]
+baseSdistSuffixes = [".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz"]
+
+baseAfterProjectName :: BaseFileProject -> Text -> Maybe Text
+baseAfterProjectName project stem
+    | T.null (baseFpCanonical project) = do
+        (separator, _) <- T.uncons stem
+        guard (baseIsNameSeparator separator)
+        pure (T.dropWhile baseIsNameSeparator stem)
+    | otherwise = baseMatchProjectChunks (baseFpChunks project) (T.dropWhile baseIsNameSeparator stem)
+
+baseMatchProjectChunks :: [Text] -> Text -> Maybe Text
+baseMatchProjectChunks [] rest = Just rest
+baseMatchProjectChunks (expected : remaining) rest = do
+    let (chunk, separated) = T.break baseIsNameSeparator rest
+    guard (canonicalise PyPI chunk == expected)
+    guard (not (T.null separated))
+    baseMatchProjectChunks remaining (T.dropWhile baseIsNameSeparator separated)
+
+baseIsNameSeparator :: Char -> Bool
+baseIsNameSeparator c = c == '-' || c == '_' || c == '.'
+
+baseCanonicalName :: PackageName -> Text
+baseCanonicalName = canonicalise PyPI . renderPackageName
+
 referenceSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
 referenceSimpleIndexFromValue requested value = do
     index <- first (ParseError . toText) (parseEither parseJSON value)
     reported <- projectName (siName index)
-    let files = [(file, fileCoordinate reported (ifFilename file)) | file <- siFiles index]
+    let files = [(file, baseFileCoordinate reported (ifFilename file)) | file <- siFiles index]
     pure (checkNameAgreement requested reported (referenceSimpleIndex reported (siInvalidEntries index) files))
 
 -- The base projection at 1a53a01, independent of the production release accumulator.
@@ -551,7 +691,6 @@ referenceHash (algorithm, digest) = do
     algo <- rightToMaybe (parseHashAlg algorithm)
     rightToMaybe (mkHash algo digest)
 
--- The availability of release 2.34.2 on the production full read and on its selected read.
 bothReads :: Value -> IO (Maybe Availability, Maybe Availability)
 bothReads index = do
     (full, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
