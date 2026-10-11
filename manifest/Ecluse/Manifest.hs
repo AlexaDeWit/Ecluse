@@ -3,59 +3,10 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DerivingVia #-}
 
-{- | The OpenAPI spec: a pure assembly of Écluse's OpenAPI 3 document from
-the closed serve-route enumeration and the configured mounts.
-
-The manifest is a __capability statement__, not a client-integration contract.
-Registry clients (npm, pnpm, yarn) hardcode the registry protocol and never read an
-API description. This document exists to say, for a human, /which registry protocols
-this one server speaks and exactly what is, and is not, supported/, per ecosystem.
-It is __statically generated__ from a fixed canonical source and published as static
-content. It is __not served__, and there is no route or WAI wiring for it.
-
-The document is __rendered from the mounted adapters' route grammar__. Each
-configured ecosystem's 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' carries
-its serve surface as data ('Ecluse.Core.Registry.Adapter.Types.serveRoutes', a
-'RouteSpec' per served 'Route'), the same grammar the server's
-'Ecluse.Core.Server.Route.Classifier' routes on. This module walks those specs into
-OpenAPI paths and marries each to its owned documentation. The described surface is
-therefore a projection of how the server mounts routes, not a hand-kept parallel
-copy. The owned response bodies carry code-first schemas, and the module
-distinguishes three kinds of surface:
-
-* Écluse authors the __owned__ bodies, so this module models them in full: the
-  error\/denial envelope (a codec, rendered from the same
-  'Ecluse.Core.Registry.Npm.Serve.npmErrorCodec' the serve path emits) and the
-  merged-and-filtered packument ('synthesizedPackumentSchema').
-* __Opaque pass-through__, the artifact bytes, is described as a streamed media
-  type and links out rather than reproducing the upstream protocol.
-* __Unsupported__, @search@, the dist-tag routes, and any unrecognised path, are
-  first-class documented boundaries (a @501@ and the deny-by-default @404@), so a reader
-  learns the limit from the manifest, not from an error reply.
-
-== Determinism
-
-The rendered bytes must be __byte-stable__ across runs and machines, so the
-published artifact yields a meaningful line-level diff on every contract change.
-'renderManifest' pins object-key ordering (sorted), and 'buildOpenApi' is a pure
-function of an explicit 'ManifestSource'. Generate from 'canonicalManifestSource'
-(fixed mounts and base URL), never from a live or environment-derived configuration,
-or the output churns on per-deployment values.
-
-== Schema strategy
-
-A response body is either a codec or a hand-authored schema, and the route's declared
-'Ecluse.Core.Server.Contract.Outcome's say which. A __codec body__ (npm's error
-envelope) carries one @autodocodec@ codec in core. The serve path encodes the wire
-body from it, and this tier renders the /same/ codec to the documented schema. The
-emitted body and its documentation are one source and cannot diverge.
-
-A __documented body__ (the merged packument, the publish document) is one Écluse
-builds imperatively rather than round-tripping through a type. It carries a
-hand-written schema here, registered as a named component, and a validation check
-binds it to the emitted bytes. npm's /inbound/ wire decoding stays lenient
-hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire"): codecs are for what Écluse owns
-and emits, not for tolerantly parsing someone else's loose document.
+{- | Build a static OpenAPI 3 capability document from registered adapter routes and explicit mounts.
+Owned response contracts supply schemas. Pass-through and unsupported responses retain their declared boundaries.
+Generate published artifacts from 'canonicalManifestSource' and use 'renderManifest' for deterministic bytes.
+The document has no runtime route.
 -}
 module Ecluse.Manifest (
     -- * Inputs
