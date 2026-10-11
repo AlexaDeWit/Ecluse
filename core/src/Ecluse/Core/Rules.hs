@@ -43,7 +43,7 @@ module Ecluse.Core.Rules (
 
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime)
-import UnliftIO (tryAny)
+import UnliftIO (evaluate, tryAny)
 import UnliftIO.MVar (modifyMVar)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
@@ -157,8 +157,7 @@ verdictSource = \case
         Nothing -> const (CannotVet (dieOnUnavailable params) NoDatabaseLoaded)
         Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
 
-{- The minimum-age verdict for a version whose publish time the evidence carries. The quarantine
-holds a new version until the registry has had time to yank a malicious publish. -}
+-- The quarantine gives the registry time to yank a malicious publish.
 ageVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
 ageVerdict minAge age
     | age >= minAge = Allow (PublishedLongEnough age minAge)
@@ -304,8 +303,8 @@ renderReach = \case
     AdmissionAndRevocation -> "applies at admission and revocation"
     AdmissionOnly -> "applies at admission only"
 
-{- | An evaluator for one request's versions, in boot order. Its advisory rules must come from one
-'prepare', since the first reached reads the package once for them all. A throw refuses.
+{- | Decide a request's versions in boot order, catching throws in verdicts and their payloads.
+Advisory rules must share one 'prepare' so they read one package generation.
 -}
 newEvaluator :: EvalContext -> [PreparedRule] -> IO (RuleEvidence -> IO Decision)
 newEvaluator ctx rules = do
@@ -322,10 +321,22 @@ type VersionEval = RuleEvidence -> IO (Either Text RuleEvaluation)
 
 bindRule :: EvalContext -> PackageCell (Either Text AdvisoryRead) -> PreparedRule -> IO VersionEval
 bindRule ctx shared rule = case prepEval rule of
-    PerVersion eval -> pure (caught . fmap Decided . eval ctx)
+    PerVersion eval -> pure (caughtEvaluation . fmap Decided . eval ctx)
     PerPackage packageRead -> do
         own <- newPackageCell
-        pure $ \ev -> fmap ($ ev) <$> heldFor own (evName ev) (decideFromRead (prepName rule) packageRead shared ev)
+        pure $ \ev ->
+            heldFor own (evName ev) (decideFromRead (prepName rule) packageRead shared ev)
+                >>= either (pure . Left) (caughtEvaluation . pure . ($ ev))
+
+-- Strict fields evaluate the verdict payloads. Optional payloads need their own evaluation.
+caughtEvaluation :: IO RuleEvaluation -> IO (Either Text RuleEvaluation)
+caughtEvaluation action = caught $ do
+    result <- action >>= evaluate
+    case result of
+        Decided (Deny etag _) -> traverse_ evaluate etag
+        Unavailable (WillResolve retry) _ _ -> traverse_ evaluate retry
+        _ -> pass
+    pure result
 
 caught :: IO a -> IO (Either Text a)
 caught = fmap (first displayExceptionT) . tryAny
@@ -354,8 +365,9 @@ decideFromRead :: Text -> PackageRead -> PackageCell (Either Text AdvisoryRead) 
 decideFromRead name packageRead shared reaching =
     heldFor shared package (caught (readShared packageRead package)) >>= \case
         Left escape -> pure (Left escape)
-        Right advisory ->
-            caught (resolveRead packageRead advisory <$ reportSource (prReporter packageRead) (readHealth name packageRead advisory reaching))
+        Right advisory -> do
+            health <- caught (evaluate (readHealth name packageRead advisory reaching))
+            caught (resolveRead packageRead advisory <$ reportSource (prReporter packageRead) (either (SourceUnavailable name . RuleThrew) id health))
   where
     package = evName reaching
 

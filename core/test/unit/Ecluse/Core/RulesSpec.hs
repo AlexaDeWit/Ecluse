@@ -24,7 +24,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import UnliftIO.Exception (finally, throwIO)
+import UnliftIO.Exception (evaluate, finally, impureThrow, throwIO)
 
 import Ecluse.Core.Breaker (Breaker, admit, initialBreaker, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), MissingScorePolicy (..), openCveDb, scoreAtLeast)
@@ -45,6 +45,7 @@ import Ecluse.Test.Rules (
     atDefaultPrecedence,
     atPrecedence,
     blockedBy,
+    constRule,
     evalRule,
     inertRuleDeps,
     isAllow,
@@ -53,7 +54,9 @@ import Ecluse.Test.Rules (
     isDeny,
     isNoDecision,
     isUndecidable,
+    mapPackageRead,
     mapResilience,
+    packageRule,
     sentences,
     servingRuleDeps,
     verdictSentence,
@@ -86,12 +89,32 @@ decideWith deps prs ev = prepare deps prs >>= \prepared -> evalRules ctx prepare
 decide :: [PrecededRule] -> RuleEvidence -> IO Decision
 decide = decideWith inertRuleDeps
 
--- | Expect the verdict, and the sentence a reader sees for its reason.
 shouldDecide :: IO RuleVerdict -> (RuleVerdict, Text) -> Expectation
 shouldDecide evaluated (verdict, sentence) = do
     actual <- evaluated
     actual `shouldBe` verdict
     verdictSentence actual `shouldBe` sentence
+
+-- GHC can append a runtime backtrace after the exception's own diagnostic line.
+shouldHaveExceptionCause :: Text -> Text -> Expectation
+shouldHaveExceptionCause actual expected = do
+    let (cause, diagnosticContext) = T.breakOn "\n" actual
+    cause `shouldBe` expected
+    unless (T.null diagnosticContext) $
+        diagnosticContext `shouldSatisfy` T.isPrefixOf "\nHasCallStack backtrace:\n"
+
+shouldMatchDecision :: Decision -> Decision -> Expectation
+shouldMatchDecision actual expected = case (actual, expected) of
+    (Undecidable transience (RuleUnable name (RuleThrew detail)), Undecidable _ (RuleUnable _ (RuleThrew cause))) -> do
+        Undecidable transience (RuleUnable name (RuleThrew cause)) `shouldBe` expected
+        detail `shouldHaveExceptionCause` cause
+    _ -> actual `shouldBe` expected
+
+shouldReturnDecisions :: IO [Decision] -> [Decision] -> Expectation
+shouldReturnDecisions evaluated expected = do
+    actual <- evaluated
+    length actual `shouldBe` length expected
+    for_ (zip actual expected) (uncurry shouldMatchDecision)
 
 -- | Rule capabilities whose advisory database is the given fake's rows.
 depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
@@ -1077,6 +1100,70 @@ spec = do
                         `shouldBe` [ "scope is not the allow-listed @myorg"
                                    , "published only 1 day ago, minimum age is 7 days"
                                    ]
+
+    describe "verdict exceptions" $ do
+        let versions = [(pkg Nothing 30){evVersion = v} | v <- map (mkVersion Npm) ["1.0.0", "2.0.0", "3.0.0"]]
+            poisoned = mkVersion Npm "2.0.0"
+            thrown = TestContractEscape "pure verdict"
+            refusal name = Undecidable (WillResolve Nothing) (RuleUnable name (RuleThrew (show thrown)))
+            healthy = Admitted "AllowIfOlderThan" (PublishedLongEnough (30 * nominalDay) (7 * nominalDay)) []
+            bombVerdict ev = if evVersion ev == poisoned then impureThrow thrown else NoDecision FixesNoAdvisory
+
+        for_
+            [ ("the whole verdict", impureThrow thrown)
+            , ("an allow reason", Allow (impureThrow thrown))
+            , ("a deny reason", Deny Nothing (impureThrow thrown))
+            , ("an abstention reason", NoDecision (impureThrow thrown))
+            , ("an inability", CannotVet FailNoDecision (impureThrow thrown))
+            , ("an advisory generation", Deny (Just (impureThrow thrown)) FixesNoAdvisory)
+            , ("a later advisory identifier", Allow (Remediates (mkAdvisoryIds ("GHSA-first" :| [impureThrow thrown]))))
+            ]
+            $ \(label, verdict) ->
+                it ("refuses by name when a per-version rule throws in " <> label) $
+                    evalRules ctx [constRule "PureBomb" verdict] (pkg Nothing 0)
+                        >>= (`shouldMatchDecision` refusal "PureBomb")
+
+        it "refuses only the poisoned verdict across one listing" $ do
+            let bomb = PreparedRule "PureBomb" 300 (PerVersion (\_ -> pure . bombVerdict))
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion versions `shouldReturnDecisions` [healthy, refusal "PureBomb", healthy]
+
+        it "refuses only the poisoned publish time across one listing" $ do
+            rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx rules
+            let evidence = [if evVersion ev == poisoned then ev{evPublishedAt = Known (Just (impureThrow thrown))} else ev | ev <- versions]
+            traverse decideVersion evidence `shouldReturnDecisions` [healthy, refusal "AllowIfOlderThan", healthy]
+            evalRules ctx rules (pkg Nothing 30){evPublishedAt = Known (Just (impureThrow thrown))}
+                >>= (`shouldMatchDecision` refusal "AllowIfOlderThan")
+
+        it "refuses only the poisoned advisory verdict without poisoning the shared read" $ do
+            lookupCount <- newIORef (0 :: Int)
+            let bomb =
+                    mapPackageRead
+                        (\packageRead -> packageRead{prVerdict = const bombVerdict})
+                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing (modifyIORef' lookupCount (+ 1)) (NoDecision FixesNoAdvisory))
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion versions `shouldReturnDecisions` [healthy, refusal "AdvisoryBomb", healthy]
+            readIORef lookupCount `shouldReturn` 1
+
+        it "keeps a first-version advisory fault local when the source observer evaluates it" $ do
+            reports <- newIORef []
+            let reporter = noSourceReporter{reportSource = evaluate >=> (\health -> modifyIORef' reports (health :))}
+                bomb =
+                    mapPackageRead
+                        (\packageRead -> packageRead{prVerdict = const bombVerdict, prReporter = reporter})
+                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing pass (NoDecision FixesNoAdvisory))
+                firstPoisoned = filter ((== poisoned) . evVersion) versions <> filter ((/= poisoned) . evVersion) versions
+            age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+            decideVersion <- newEvaluator ctx (bomb : age)
+            traverse decideVersion firstPoisoned `shouldReturnDecisions` [refusal "AdvisoryBomb", healthy, healthy]
+            readIORef reports >>= \case
+                [SourceUnavailable name (RuleThrew detail)] -> do
+                    name `shouldBe` "AdvisoryBomb"
+                    detail `shouldHaveExceptionCause` show thrown
+                other -> expectationFailure ("expected one thrown-rule source report, got " <> show other)
 
     describe "properties" $ do
         it "an empty rule set always denies by default" $
