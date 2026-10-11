@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
-import Ecluse.Core.Version (renderVersion)
+import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (expectRight, expectRightText)
@@ -34,7 +34,9 @@ spec = describe "live PyPI registry protocol" $
     it "reads a bounded Simple index and verifies one advertised wheel" $ do
         manager <- newManager tlsManagerSettings
         base <- expectRightText (mkRegistryUrl "https://pypi.org")
-        let name = mkPackageName PyPI Nothing "sampleproject"
+        expectedVersion <- maybe (fail "invalid sampleproject fixture version") pure (canonicalPep440 "4.0.0")
+        let versionKey = renderVersion expectedVersion
+            name = mkPackageName PyPI Nothing "sampleproject"
             origin = originClient defaultLimits manager base Nothing
         fetched <- fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name
         case fetched of
@@ -44,9 +46,9 @@ spec = describe "live PyPI registry protocol" $
                 manifest <- expectRight fetched
                 let info = manifestInfo manifest
                 renderPackageName (infoName info) `shouldBe` "sampleproject"
-                version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup "4.0.0" (infoVersions info))
+                version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
                 pkgName version `shouldBe` name
-                renderVersion (pkgVersion version) `shouldBe` "4.0.0"
+                renderVersion (pkgVersion version) `shouldBe` versionKey
                 artifact <-
                     maybe (fail "live index omitted the sampleproject 4.0.0 wheel") pure $
                         find ((== wheelFilename) . artFilename) (NE.toList (pkgArtifacts version))
