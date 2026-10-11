@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 /*
- * libFuzzer harness: runs the vendored lexer (vendor/json-stream/c_lib/lexer.c) and upstream's
+ * libFuzzer harness: runs the historical lexer (reference/lexer.c) and upstream's
  * lexer at 537a43a7 (lexer-537a43a7.c) side by side, and aborts on any difference in return code,
  * lexer header, or result buffer. Pieces are fed the way Data.JsonStream.CLexer feeds them.
  * Build and run with scripts/fuzz-json-lexer.sh.
@@ -35,7 +35,7 @@ static void fail(const char *what, size_t piece, int call)
   abort();
 }
 
-/* Mirrors estResultLimit in vendor/json-stream/Data/JsonStream/CLexer.hs. */
+/* Preserves the historical result buffer capacity. */
 static int est_result_limit(size_t len)
 {
   return 20 + (int) (len / 5);

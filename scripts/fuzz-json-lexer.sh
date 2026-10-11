@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build test/fuzz/json-lexer/lexer_fuzz.c with libFuzzer, AddressSanitizer and
-# UndefinedBehaviorSanitizer, then fuzz the vendored lexer against upstream's.
+# UndefinedBehaviorSanitizer, then fuzz the historical C lexer against upstream's.
 # usage: scripts/fuzz-json-lexer.sh [libFuzzer options], for example -max_total_time=600.
 # FUZZ_OUT holds the binary and the growing corpus (default dist-fuzz/json-lexer).
 # FUZZ_KNOWN=report drops the suppression of the known signed overflow in handle_number.
@@ -16,8 +16,8 @@ mkdir -p "$out/corpus"
 nix shell --inputs-from "$root" nixpkgs#clang_19 nixpkgs#llvmPackages_19.compiler-rt --command \
   clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
   -fsanitize-recover=signed-integer-overflow -fno-wrapv \
-  -I "$root/vendor/json-stream/c_lib" \
-  "$fuzz/lexer_fuzz.c" "$root/vendor/json-stream/c_lib/lexer.c" "$fuzz/upstream_lexer.c" \
+  -I "$fuzz/reference" \
+  "$fuzz/lexer_fuzz.c" "$fuzz/reference/lexer.c" "$fuzz/upstream_lexer.c" \
   -o "$out/lexer_fuzz"
 
 suppressions="suppressions=$fuzz/ubsan.supp:"

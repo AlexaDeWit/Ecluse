@@ -1,24 +1,23 @@
 version = 1
 
-# Vendored json-stream keeps upstream's files without licence headers, so their licence and
-# copyright live here.
+# The maintained fork retains its upstream BSD licence and attribution.
 [[annotations]]
-path = "vendor/json-stream/**"
-SPDX-FileCopyrightText = "2015 Ondrej Palkovsky"
-SPDX-License-Identifier = "BSD-3-Clause"
-
-[[annotations]]
-path = ["vendor/json-stream/Data/JsonStream/CLexer.hs", "vendor/json-stream/Data/JsonStream/Lexer.hs", "vendor/json-stream/Data/JsonStream/Lexer/Internal.hs", "vendor/json-stream/Data/JsonStream/Number.hs", "vendor/json-stream/c_lib/lexer.c"]
+path = "json-stream/src/**"
 SPDX-FileCopyrightText = ["2015 Ondrej Palkovsky", "2026 Alexandra de Wit"]
 SPDX-License-Identifier = "BSD-3-Clause"
 
-# Écluse's own files beside the vendored ones.
 [[annotations]]
-path = ["vendor/json-stream/README.md", "vendor/json-stream/json-stream.freeze", "vendor/json-stream.sha256"]
+path = "test/fuzz/json-lexer/reference/**"
+SPDX-FileCopyrightText = ["2015 Ondrej Palkovsky", "2026 Alexandra de Wit"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# Écluse's provenance and advisory metadata.
+[[annotations]]
+path = ["json-stream/README.md", "json-stream/upstream.freeze", "test/fuzz/json-lexer/reference.sha256"]
 SPDX-FileCopyrightText = "2026 Alexandra de Wit"
 SPDX-License-Identifier = "MIT"
 
-# Upstream's lexer at the vendored tree's base commit, the lexer fuzz harness's oracle.
+# Upstream's lexer at the fork's base commit, the lexer fuzz harness's oracle.
 [[annotations]]
 path = "test/fuzz/json-lexer/lexer-537a43a7.c"
 SPDX-FileCopyrightText = "2015 Ondrej Palkovsky"

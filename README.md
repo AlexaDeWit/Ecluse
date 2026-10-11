@@ -159,7 +159,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit and integration tests                                                                                               |
-| `vendor/`   | Third-party source built as part of Écluse under its own licence (`vendor/json-stream/`, BSD-3-Clause)                   |
+| `json-stream/` | Maintained json-stream fork: the private lexer and parser library, retaining upstream BSD-3-Clause attribution |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `runbooks/` | Maintainer procedures run step by step (releases)                                                                        |
 | `docs/`     | Architecture and design documents                                                                                        |

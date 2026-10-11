@@ -416,6 +416,7 @@ passage a maintainer writes in Swedish. No em-dashes, en-dashes, or emoji, with 
 ## 14. Licence headers
 
 Every tracked `.hs` file opens with an SPDX header (`SPDX-FileCopyrightText`,
-`SPDX-License-Identifier: MIT`) above any pragma, so the licence travels with the file. Never type
-it: `task spdx-fix` stamps it and `task lint-spdx` gates it. Vendored third-party files under
-`vendor/` carry their licence through `REUSE.toml`, not in-file headers.
+`SPDX-License-Identifier`) above any pragma, so the licence travels with the file.
+`task spdx-fix` stamps missing MIT headers and preserves existing licence identifiers.
+The maintained json-stream fork retains BSD-3-Clause headers and upstream attribution.
+`task lint-spdx` checks every tracked Haskell source.

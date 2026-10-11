@@ -1,15 +1,21 @@
+-- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: BSD-3-Clause
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- Keep findIndex's loop counter unboxed under Cabal's default -O1.
 {-# OPTIONS_GHC -fspec-constr #-}
 
--- | Incremental Haskell scanning with the vendored lexer's token and chunk semantics.
+-- | Incremental Haskell scanning with the inherited lexer's token and chunk semantics.
 -- State owns immutable byte slices, with no foreign result records.
 module Data.JsonStream.Lexer.Internal
     ( Cursor, Element (..), Scanned (..), PlainString, mkPlainString, plainBytes, start, next, feed, remaining ) where
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
+import Data.List (foldl')
 import Data.Scientific (scientific)
 import Data.Word (Word8)
 import Foreign.C.Types (CLong)
@@ -39,7 +45,7 @@ plainBytes (PlainString bytes) = bytes
 {-# INLINE plainBytes #-}
 
 -- | The current piece and lexical state carried across pieces.
-data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode [BS.ByteString]
+data Cursor = Cursor !BS.ByteString {-# UNPACK #-} !Int !Mode ~[BS.ByteString]
 
 data Mode = Base | StringPart !Bool !Bool | NumberPart
     | LiteralPart !Literal {-# UNPACK #-} !Int | StringFinish | Broken
@@ -204,7 +210,7 @@ number bytes initial continued numbers = go initial 0 0 False 0 continued 1
                                 else go (offset + 1) computed digits dotted fractionDigits True sign
     partial part
         | not continued = More (Cursor bytes size NumberPart [part])
-        | sum (map BS.length numbers) > numberDigitLimit = Failed
+        | foldl' (\total piece -> total + BS.length piece) 0 numbers > numberDigitLimit = Failed
         | otherwise = More (Cursor bytes size NumberPart (part : numbers))
     complete part offset computed fractionDigits invalid sign
         | invalid =

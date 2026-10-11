@@ -1,5 +1,9 @@
+-- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: BSD-3-Clause
 {-# LANGUAGE BangPatterns #-}
--- | The vendored lexer's numeric fallback, including its accepted noncanonical forms.
+-- | The inherited lexer's numeric fallback, including its accepted noncanonical forms.
 module Data.JsonStream.Number (parseNumber, numberDigitLimit) where
 
 import Control.Monad (when)
@@ -47,11 +51,10 @@ parseNumber tnumber = do
       where
         firstc = BS.head txt
 
-    parseSign txt
-      | BS.null txt = (1, txt)
-      | BS.head txt == '+' = (1, BS.tail txt)
-      | BS.head txt == '-' = (-1, BS.tail txt)
-      | otherwise = (1, txt)
+    parseSign txt = case BS.uncons txt of
+      Just ('+', rest) -> (1, rest)
+      Just ('-', rest) -> (-1, rest)
+      _ -> (1, txt)
 
     parseDecimal txt
       | BS.null txt = ((0, 0), txt)

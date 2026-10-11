@@ -1,0 +1,4 @@
+100644 1c803710bda0a7246399f67cb2c0e28dcd6a00ea 0	test/fuzz/json-lexer/reference/lexer.c
+100644 ea1886e54b8ad8d96340a13b235310c6126c10a3 0	test/fuzz/json-lexer/reference/lexer.h
+2f80e126cd17548b01e49f1418143b476faf4b7bccbfa04dabb796592593616f  test/fuzz/json-lexer/reference/lexer.c
+40f6e25d05087aefb93c75754e8e3a182389b204993a49e99d052f30d4370deb  test/fuzz/json-lexer/reference/lexer.h

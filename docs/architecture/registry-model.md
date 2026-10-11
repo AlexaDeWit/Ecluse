@@ -460,7 +460,7 @@ are CodeArtifact, any host that speaks the protocol, and Verdaccio for developme
 
 ### Incremental npm extraction
 
-npm and PyPI reads walk the tokens of the vendored json-stream lexer (`vendor/json-stream/`) inside
+npm and PyPI reads walk the tokens of the maintained json-stream lexer (`json-stream/`) inside
 the HTTP response lifetime. The reader feeds chunks of at most 32 KiB and counts decompressed bytes.
 A full read passes the response body through a digesting source, which updates SHA-256 from each
 chunk the reader consumes. A selected read reads the body

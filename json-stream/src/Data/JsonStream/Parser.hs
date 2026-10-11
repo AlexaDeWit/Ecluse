@@ -1,41 +1,20 @@
+-- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: BSD-3-Clause
 {-# LANGUAGE BangPatterns        #-}
-{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ExistentialQuantification #-}
 
--- |
--- Module : Data.JsonStream.Parser
--- License     : BSD-style
---
--- Maintainer  : palkovsky.ondrej@gmail.com
--- Stability   : experimental
--- Portability : portable
---
--- An incremental applicative-style JSON parser, suitable for high performance
--- memory efficient stream parsing.
---
--- The parser is optionally using "Data.Aeson" types and 'FromJSON' instance, it can be
--- easily combined with aeson monadic parsing instances when appropriate.
-
+-- | Incremental selective JSON parsing with json-stream's inherited matching and chunk rules.
+-- Use 'eitherDecode' for reported failures. List-producing entry points throw 'ErrorCall'.
+-- Unselected values are skipped without establishing whole-document JSON validity.
 module Data.JsonStream.Parser (
-    -- * How to use this library
-    -- $use
-
-    -- * Performance
-    -- $performance
-
-    -- * Constant space decoding
-    -- $constant
-
-    -- * Aeson compatibility
-    -- $aeson
-
     -- * The @Parser@ type
     Parser
   , ParseOutput(..)
@@ -100,13 +79,9 @@ import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as BL
 import qualified Data.ByteString.Lazy.Internal as BL
 import           Data.Char                   (isSpace)
-#if MIN_VERSION_aeson(2,0,0)
 import qualified Data.Aeson.KeyMap           as AEK
 import qualified Data.Aeson.Key              as AEK
 import           Data.Bifunctor              (first)
-#else
-import qualified Data.HashMap.Strict         as HMap
-#endif
 import           Data.Scientific             (Scientific, isInteger,
                                               toBoundedInteger, toRealFloat)
 import qualified Data.Text                   as T
@@ -117,18 +92,15 @@ import Data.JsonStream.CLexer ( unescapeText, tokenParser )
 import Data.JsonStream.TokenParser ( TokenResult(..), Element(..) )
 import Data.JsonStream.Unescape (unsafeDecodeASCII)
 import qualified Data.Map.Strict as Map
-import Unsafe.Coerce (unsafeCoerce)
+import Control.Exception (ErrorCall (..), throw)
 
--- | Limit for the size of an object key
 objectKeyStringLimit :: Int
 objectKeyStringLimit = 65536
 
--- | Private parsing result
-data ParseResult v =  MoreData (Parser v, BS.ByteString -> TokenResult)
-                    | Failed String
-                    | Done BS.ByteString TokenResult
-                    -- The bytestring is remaining unparsed data, we need to return it somehow
-                    | Yield v (ParseResult v)
+data ParseResult v =  MoreData ~(Parser v, BS.ByteString -> TokenResult)
+                    | Failed ~String
+                    | Done ~BS.ByteString ~TokenResult
+                    | Yield ~v ~(ParseResult v)
 
 instance Functor ParseResult where
   fmap f (MoreData (np, ntok)) = MoreData (fmap f np, ntok)
@@ -136,7 +108,7 @@ instance Functor ParseResult where
   fmap _ (Done ctx tok) = Done ctx tok
   fmap f (Yield v np) = Yield (f v) (fmap f np)
 
--- | A representation of the parser.
+-- | A selective parser that can yield multiple values before requesting another input piece.
 newtype Parser a = Parser {
     callParse :: TokenResult -> ParseResult a
 }
@@ -144,14 +116,11 @@ newtype Parser a = Parser {
 instance Functor Parser where
   fmap f (Parser p) = Parser $ \d -> fmap f (p d)
 
--- | Yield list of results, finish with last action
 yieldResults :: [a] -> ParseResult a -> ParseResult a
 yieldResults values end = foldr Yield end values
 
 -- | '<*>' will run both parsers in parallel and combine results.
---
--- It behaves as a list functor (produces all combinations), but the typical
--- use is:
+-- Results use the Cartesian product in input order.
 --
 -- >>> :set -XOverloadedStrings
 -- >>> let text = "[{\"name\": \"John\", \"age\": 20}, {\"age\": 30, \"name\": \"Frank\"}]"
@@ -203,9 +172,7 @@ instance Semigroup (Parser a) where
       process _ (Failed err) = Failed err
       process _ _ = Failed "Unexpected error in parallel processing <|>"
 
--- | Match items from the first parser, if none is matched, return items
--- from the second parser. Constant-space if second parser returns
--- constant number of items. '.|' is implemented using this operator.
+-- | Prefer matches from the first parser. Use the second when the first yields no values.
 --
 -- >>> let json = "[{\"key1\": [1,2], \"key2\": [5,6], \"key3\": [8,9]}]"
 -- >>> let parser = arrayOf $ "key1" .: (arrayOf value) <|> "key2" .: (arrayOf value)
@@ -214,8 +181,6 @@ instance Semigroup (Parser a) where
 -- >>> let parser = arrayOf $ "key-non" .: (arrayOf value) <|> "key2" .: (arrayOf value)
 -- >>> parseByteString parser json :: [Int]
 -- [5,6]
---
--- 'many' - Gather matches and return them as list.
 --
 -- >>> let json = "[{\"keys\":[1,2], \"values\":[5,6]}, {\"keys\":[9,8], \"values\":[7,6]}]"
 -- >>> let parser = arrayOf $ (,) <$> many ("keys" .: arrayOf integer) <*> many ("values" .: arrayOf integer)
@@ -285,7 +250,7 @@ elemFound elsearch start end parser = Parser $ moreData handle
     parseAndAppend (Done ctx ntp) = Yield end (Done ctx ntp)
 
 -- | Generate start/end values when an object is found, in between run a parser.
--- The inner parser is not run if an array is not found.
+-- The inner parser is not run if an object is not found.
 objectFound :: a -> a -> Parser a -> Parser a
 objectFound = elemFound ObjectBegin
 
@@ -298,7 +263,7 @@ objectFound = elemFound ObjectBegin
 arrayFound :: a -> a -> Parser a -> Parser a
 arrayFound = elemFound ArrayBegin
 
--- | Match nith item in an array.
+-- | Match the item at a zero-based array index.
 arrayWithIndexOf :: Int -> Parser a -> Parser a
 arrayWithIndexOf idx valparse = array' itemFn
   where
@@ -311,7 +276,7 @@ indexedArrayOf :: Parser a -> Parser (Int, a)
 indexedArrayOf valparse = array' (\(!key) -> (key,) <$> valparse)
 
 
--- | Go through an object; if once is True, yield only first success, then ignore the rest
+-- With once enabled, skip remaining fields after the first successful match.
 object' :: Bool -> (T.Text -> Parser a) -> Parser a
 object' once valparse = Parser $ \tp ->
   case tp of
@@ -352,7 +317,6 @@ object' once valparse = Parser $ \tp ->
           | otherwise -> moreData (getLongKey (str:acc) (len + BS.length str)) ntok
         _ -> Failed "Object longstr - lexer failed."
 
--- | Helper function to deduplicate TokMoreData/TokFailed logic
 moreData :: (TokenResult -> Element -> TokenResult -> ParseResult v) -> TokenResult -> ParseResult v
 moreData parser tok =
   case tok of
@@ -361,26 +325,21 @@ moreData parser tok =
     TokFailed -> Failed "More data - lexer failed."
 
 -- | Match all key-value pairs of an object, return them as a tuple.
--- If the source object defines same key multiple times, all values
--- are matched.
+-- Repeated keys retain all yielded values.
 objectItems :: Parser a -> Parser (T.Text, a)
 objectItems valparse = object' False $ \(!key) -> (key,) <$> valparse
 
 -- | Match all key-value pairs of an object, return only values.
--- If the source object defines same key multiple times, all values
--- are matched. Keys are ignored.
+-- Repeated keys retain all yielded values.
 objectValues :: Parser a -> Parser a
 objectValues valparse = object' False (const valparse)
 
 -- | Match all key-value pairs of an object, and parse the value based on the key.
--- If the source object defines same key multiple times, all values
--- are matched.
+-- Repeated keys retain all yielded values.
 objectKeyValues :: (T.Text -> Parser a) -> Parser a
 objectKeyValues = object' False
 
--- | Match only specific key of an object.
--- This function will return only the first matched value in an object even
--- if the source JSON defines the key multiple times (in violation of the specification).
+-- | Yield all results from the first occurrence of this key that produces any result.
 objectWithKey :: T.Text -> Parser a -> Parser a
 objectWithKey name valparse = object' True itemFn
   where
@@ -388,15 +347,10 @@ objectWithKey name valparse = object' True itemFn
       | key == name = valparse
       | otherwise = ignoreVal
 
--- | Parses underlying values and generates a AE.Value
 aeValue :: Parser AE.Value
 aeValue = Parser $ moreData value'
   where
-#if MIN_VERSION_aeson(2,0,0)
     tomap = AEK.fromList . map (first AEK.fromText)
-#else
-    tomap = HMap.fromList
-#endif
     value' tok el ntok =
       case el of
         JValue val -> Yield val (Done "" ntok)
@@ -410,9 +364,7 @@ aeValue = Parser $ moreData value'
         ObjectBegin -> AE.Object . tomap <$> callParse (manyReverse (objectItems aeValue)) tok
         _ -> Failed ("aeValue - unexpected token: " ++ show el)
 
--- | Identical to @fmap 'reverse' . 'many'@ but more efficient.
--- If you don't care about the order of the results but plan to fully evaluate the list,
--- this can be slightly more efficient than 'many' as it avoids the accumulating thunks.
+-- | Collect yielded values in reverse input order.
 manyReverse :: Parser a -> Parser [a]
 manyReverse f = Parser $ \ntok -> loop [] (callParse f ntok)
   where
@@ -421,8 +373,7 @@ manyReverse f = Parser $ \ntok -> loop [] (callParse f ntok)
     loop acc (Yield v np) = loop (v : acc) np
     loop _ (Failed err) = Failed err
 
--- | Convert a strict aeson value (no object/array) to a value.
--- Non-matching type is ignored and not parsed (unlike 'value')
+-- Non-matching scalar types are skipped without applying the Aeson parser.
 jvalue :: (AE.Value -> Maybe a) -> (CLong -> Maybe a) -> Parser a
 jvalue convert cvtint = Parser (moreData value')
   where
@@ -457,14 +408,11 @@ longByteString mbounds = Parser $ moreData (handle id 0)
 byteString :: Parser BS.ByteString
 byteString = longByteString Nothing
 
--- | Stops parsing string after the limit is reached. The string will not be matched
--- if it exceeds the size. The size is the size of escaped string including escape
--- characters. 
--- The return value is not unescaped.
+-- | Check accumulated escaped bytes only when another partial string piece arrives.
+-- Complete strings bypass this inherited check. It is not a hard size bound.
 safeByteString :: Int -> Parser BS.ByteString
 safeByteString limit = longByteString (Just limit)
 
--- | Match a possibly bounded string roughly limited by a limit
 longString :: Maybe Int -> Parser T.Text
 longString mbounds = Parser $ moreData (handle id 0)
   where
@@ -490,9 +438,8 @@ longString mbounds = Parser $ moreData (handle id 0)
 string :: Parser T.Text
 string = longString Nothing
 
--- | Stops parsing string after the limit is reached. The string will not be matched
--- if it exceeds the size. The size is the size of escaped string including escape
--- characters.
+-- | Check accumulated escaped bytes only when another partial string piece arrives.
+-- Complete strings bypass this inherited check. It is not a hard size bound.
 safeString :: Int -> Parser T.Text
 safeString limit = longString (Just limit)
 
@@ -505,7 +452,6 @@ number = jvalue cvt (Just . fromIntegral)
 
 -- | Parse to bounded integer type (not 'Integer').
 -- If you are using integer numbers, use this parser.
--- It skips the conversion JSON -> 'Scientific' -> 'Int' and uses an 'Int' directly.
 integer :: forall i. (Integral i, Bounded i) => Parser i
 integer = jvalue cvt clongToBounded
   where
@@ -592,7 +538,6 @@ takeI num valparse = Parser $ \tok -> loop num (callParse valparse tok)
     loop 0 (Yield _ np) = loop 0 np
     loop n (Yield v np) = Yield v (loop (n-1) np)
 
--- | Skip rest of string + call next parser
 ignoreStrRestThen :: Parser a -> Parser a
 ignoreStrRestThen next = Parser $ moreData handle
   where
@@ -603,7 +548,6 @@ ignoreStrRestThen next = Parser $ moreData handle
         _ -> Failed "Unexpected result in ignoreStrRestPlusOne"
 
 
--- | Skip value; cheat to avoid parsing and make it faster
 ignoreVal :: Parser a
 ignoreVal = ignoreVal' 0
 
@@ -682,9 +626,7 @@ unFoldI valparse = Parser $ \ntok -> loop (callParse valparse ntok)
     loop (Yield (v:rest) np) = Yield v (loop (Yield rest np))
     loop (Yield [] np) = loop np
 
--- | A back-door for lifting of possibly failing actions.
--- If an action fails with Left value, convert it into failure
--- of parsing
+-- | Convert a mapping failure into a parser failure.
 mapWithFailure :: (a -> Either String b) -> Parser a -> Parser b
 mapWithFailure mapping =
   updateParser
@@ -706,9 +648,6 @@ class OnObject o a where
   -- >>> let json = "{\"key1\": {\"nested-key\": 3}}"
   -- >>> parseByteString ("key1" .: "nested-key" .: integer) json :: [Int]
   -- > [3]
-  --
-  -- It works both as a standalone parser and as a part of 'objectOf' parser
-  --
   -- >>> let test = "[{\"name\": \"test1\", \"value\": 1}, {\"name\": \"test2\", \"value\": null}, {\"name\": \"test3\"}]"
   -- >>> let person = objectOf $ (,) <$> "name" .: string <*> "value" .: integer .| (-1)
   -- >>> let people = arrayOf person
@@ -717,20 +656,11 @@ class OnObject o a where
 
   (.:) :: T.Text -> Parser a -> o a
   -- | Returns 'Nothing' if value is null or does not exist or match. Otherwise returns 'Just' value.
-  --
   -- > key .:? val = optional (key .: val)
-  --
-  -- It could be similarly used in the 'objectOf' parser
   (.:?) :: T.Text -> Parser a -> o (Maybe a)
 
   -- | Return default value if the parsers on the left hand didn't produce a result.
-  --
   -- > p .| defval = p <|> pure defval
-  --
-  -- The operator works on complete left side, the following statements are equal:
-  --
-  -- > Record <$>  "key1" .: "nested-key" .: value .| defaultValue
-  -- > Record <$> (("key1" .: "nested-key" .: value) .| defaultValue)
   (.|) :: o a -> a -> o a
 
 infixr 7 .:
@@ -745,7 +675,7 @@ instance OnObject Parser a where
 instance OnObject Object a where
   (.:) = fastObjectWithKey
   (.:?) = fastObjectWithKeyMaybe
-  (Object pmap out) .| defval = Object pmap altFunc
+  (Object pmap initial out) .| defval = Object pmap initial altFunc
     where
       altFunc dmap = case out dmap of
         [] -> [defval]
@@ -762,10 +692,10 @@ infixr 7 .!
 ---
 
 -- | Result of parsing. Contains continuations to continue parsing.
-data ParseOutput a = ParseYield a (ParseOutput a) -- ^ Returns a value from a parser.
-                    | ParseNeedData (BS.ByteString -> ParseOutput a) -- ^ Parser needs more data to continue parsing.
-                    | ParseFailed String -- ^ Parsing failed, error is reported.
-                    | ParseDone BS.ByteString
+data ParseOutput a = ParseYield ~a ~(ParseOutput a) -- ^ Returns a value from a parser.
+                    | ParseNeedData ~(BS.ByteString -> ParseOutput a) -- ^ Parser needs more data to continue parsing.
+                    | ParseFailed ~String -- ^ Parsing failed, error is reported.
+                    | ParseDone ~BS.ByteString
                     -- ^ Parsing finished, unparsed data is returned.
                     -- Remaining data is not returned correctly if the parser parses directly numbers/booleans/nulls; JSON should be an array/object.
 
@@ -793,33 +723,29 @@ runParser parser = runParser' parser BS.empty
 --
 -- >>> parseByteString (arrayOf integer) "[1,2,3,4]" :: [Int]
 -- [1,2,3,4]
---
 -- >>> parseByteString (arrayOf ("name" .: string)) "[{\"name\":\"KIWI\"}, {\"name\":\"BIRD\"}]"
 -- ["KIWI","BIRD"]
 parseByteString :: Parser a -> BS.ByteString -> [a]
 parseByteString parser startdata = loop (runParser' parser startdata)
   where
-    loop (ParseNeedData _) = error "Not enough data."
+    loop (ParseNeedData _) = parserException "Not enough data."
     loop (ParseDone _) = []
-    loop (ParseFailed err) = error err
+    loop (ParseFailed err) = parserException err
     loop (ParseYield v np) = v : loop np
 
 -- | Parse a lazy bytestring, generate lazy list of parsed values. If an error occurs, throws an exception.
 parseLazyByteString :: Parser a -> BL.ByteString -> [a]
 parseLazyByteString parser input = loop input (runParser parser)
   where
-    loop BL.Empty (ParseNeedData _) = error "Not enough data."
+    loop BL.Empty (ParseNeedData _) = parserException "Not enough data."
     loop (BL.Chunk dta rest) (ParseNeedData np) = loop rest (np dta)
     loop _ (ParseDone _) = []
-    loop _ (ParseFailed err) = error err
+    loop _ (ParseFailed err) = parserException err
     loop rest (ParseYield v np) = v : loop rest np
 
 
--- | Deserialize a JSON value from lazy 'BL.ByteString'.
---
--- If this fails due to incomplete or invalid input, 'Nothing' is returned.
---
--- The input must consist solely of a JSON document, with no trailing data except for whitespace.
+-- | Deserialise one JSON value, allowing only whitespace after it.
+-- Return 'Nothing' for incomplete or invalid input.
 decode :: AE.FromJSON a => BL.ByteString -> Maybe a
 decode bs =
   case eitherDecode bs of
@@ -864,202 +790,55 @@ eitherDecodeStrict bs =
       | BS.all isSpace rest = Right v
     checkExit _ _ = Left "Data folowed by non-whitespace characters."
 
---- High performance object parsing
+-- | Applicative field selection with one pass over an object and typed private accumulators.
+data Object a = forall state. Object
+  ~(Map.Map T.Text (Parser (state -> state)))
+  ~state
+  ~(state -> [a])
 
--- Helper type into which we unsafeCoerce the data
-data HValue = forall a. HValue a
+instance Functor Object where
+  fmap f (Object fields initial results) = Object fields initial (fmap f . results)
 
--- | Representation for applicative JSON one-pass object parsing
-data Object f = Object 
-  (Map.Map T.Text (Parser HValue)) -- ^ Field parsers
-  (Map.Map T.Text [HValue] -> [f]) -- ^ How to generate results from already parsed fields
-  deriving (Functor)
-
--- | Helper function for some parser combining operators
-joinObjectFieldWith ::([a] -> [b] -> [c]) -> Object a -> Object b -> Object c
-joinObjectFieldWith joinFunc (Object amap adata) (Object bmap bdata) =
-  -- We MUST disallow duplicate field access as we do unsafeCoerce and that could lead to mixing types
-  let dmap = Map.unionWithKey (\k _ _ -> error ("JStream Object - duplicate field access: " <> T.unpack k)) amap bmap
-  in dmap `seq` Object dmap (\inp -> joinFunc (adata inp) (bdata inp))
+joinObjectFieldWith :: ([a] -> [b] -> [c]) -> Object a -> Object b -> Object c
+joinObjectFieldWith combine (Object afields azero aresults) (Object bfields bzero bresults) =
+  let fields = Map.unionWithKey duplicate (fmap (fmap updateLeft) afields) (fmap (fmap updateRight) bfields)
+      duplicate key _ _ = parserException ("JStream Object - duplicate field access: " <> T.unpack key)
+      updateLeft update (a, b) = let !next = update a in (next, b)
+      updateRight update (a, b) = let !next = update b in (a, next)
+  in fields `seq` Object fields (azero, bzero) (\(a, b) -> combine (aresults a) (bresults b))
 
 instance Applicative Object where
-  pure f = Object mempty (const (pure f))
+  pure a = Object mempty () (const [a])
   (<*>) = joinObjectFieldWith (liftA2 ($))
 
 instance Alternative Object where
-  empty = Object mempty (const [])
-  (<|>) = joinObjectFieldWith dfunc
+  empty = Object mempty () (const [])
+  (<|>) = joinObjectFieldWith choose
     where
-      dfunc [] bdata = bdata
-      dfunc adata _ = adata
+      choose [] right = right
+      choose left _ = left
 
 instance Semigroup (Object a) where
   (<>) = joinObjectFieldWith (<>)
 
--- We use unsafeCoerce to convert from HValue; we guarantee that there exists only
--- one key to the map and so the original Parser will get the right type of value.
--- This allows to drop the Typeable constraint, but the code better be OK here.
+fastObjectWithKey :: T.Text -> Parser a -> Object a
+fastObjectWithKey key parser = Object (Map.singleton key ((:) <$> parser)) [] reverse
 
--- | Similar to 'objectWithKey', generates a field-accessor in JSON object
-fastObjectWithKey :: forall a. T.Text -> Parser a -> Object a
-fastObjectWithKey tname parser = Object (Map.singleton tname parseObj) mkObj
+fastObjectWithKeyMaybe :: T.Text -> Parser a -> Object (Maybe a)
+fastObjectWithKeyMaybe key parser = Object (Map.singleton key ((:) <$> parser)) [] results
   where
-    mkObj dmap = case Map.lookup tname dmap of
-      Just vals -> (\(HValue a) -> unsafeCoerce a) <$> reverse vals
-      Nothing -> []
-    parseObj = HValue <$> parser
+    results [] = [Nothing]
+    results values = Just <$> reverse values
 
-fastObjectWithKeyMaybe :: forall a. T.Text -> Parser a -> Object (Maybe a)
-fastObjectWithKeyMaybe tname parser = Object (Map.singleton tname parseObj) mkObj
+-- | Parse all selected fields in one pass. Repeated field declarations throw 'ErrorCall'.
+-- Repeated JSON keys retain their yielded values in input order.
+objectOf :: Object a -> Parser a
+objectOf (Object fields initial results) =
+  unFoldI $ results <$> foldI (flip ($)) initial (object' False parseKey)
   where
-    mkObj dmap = case Map.lookup tname dmap of
-      Just vals@(_:_) -> (\(HValue a) -> Just (unsafeCoerce a)) <$> reverse vals
-      _ -> [Nothing]
-    parseObj = HValue <$> parser
-
--- | Parser for faster object parsing
---
--- The whole object is parsed in a single run. Use the '.:' combinator to
--- access the fields; you may not access the same field more than once. If you
--- try to access the same field, an 'error' is called.
---
--- The operators '.:', '.:?', '<|>' and '<>' are supported and will produce
--- the same results as if used directly with parallel parsing.
-objectOf :: forall f. Object f -> Parser f
-objectOf (Object pmap odata) =
-  unFoldI $ odata <$> foldResults (object' False parseKey)
-  where
-    foldResults :: Parser (T.Text, HValue) -> Parser (Map.Map T.Text [HValue])
-    foldResults = foldI (\bmap (k,v) -> Map.alter (addVal v) k bmap) mempty
-      where
-        addVal v Nothing = Just [v]
-        addVal v (Just old) = Just (v:old)
-
-    parseKey :: T.Text -> Parser (T.Text, HValue)
-    parseKey key = case Map.lookup key pmap of
+    parseKey key = case Map.lookup key fields of
       Nothing -> ignoreVal
-      Just p -> (key,) <$> p
+      Just parser -> parser
 
--- $use
---
--- >>> parseByteString value "[1,2,3]" :: [[Int]]
--- [[1,2,3]]
---
--- The 'value' parser matches any 'AE.FromJSON' value. The above command is essentially
--- identical to the aeson decode function; the parsing process can generate more
--- objects, therefore the results is [a].
---
--- Example of json-stream style parsing:
---
--- >>> parseByteString (arrayOf integer) "[1,2,3]" :: [Int]
--- [1,2,3]
---
--- Parsers can be combinated using  '<*>' and '<|>' operators. The parsers are
--- run in parallel and return combinations of the parsed values.
---
--- >>> let text = "[{\"name\": \"John\", \"age\": 20}, {\"age\": 30, \"name\": \"Frank\"} ]"
--- >>> let parser = arrayOf $ (,) <$> "name" .: string <*> "age"  .: integer
--- >>> parseByteString  parser text :: [(T.Text,Int)]
--- [("John",20),("Frank",30)]
---
--- When parsing larger values, it is advisable to use lazy ByteStrings. The parsing
--- is then more memory efficient as less lexical state
--- is needed to be held in memory for parallel parsers.
---
--- More examples are available on <https://github.com/ondrap/json-stream>.
-
-
--- $constant
--- Constant space decoding is possible if the grammar does not specify non-constant
--- operations. The non-constant operations are 'value', 'string', 'many' and in some instances
--- '<*>'.
---
--- The 'value' parser works by creating an aeson AST and passing it to the
--- 'parseJSON' method. The AST can consume a lot of memory before it is rejected
--- in 'parseJSON'. To achieve constant space the parsers 'safeString', 'objectOf', 'number', 'integer',
--- 'real' and 'bool'
--- must be used; these parsers reject and do not parse data if it does not match the
--- type.
---
--- The object key length is limited to ~64K. Object records with longer key are ignored and unparsed.
---
--- Numbers are limited to 200.000 digits. Longer numbers will make the parsing fail.
---
--- The 'many' parser works by accumulating all matched values. Obviously, number
--- of such values influences the amount of used memory.
---
--- The '<*>' operator runs both parsers in parallel and when they are both done, it
--- produces combinations of the received values. It is constant-space as long as the
--- number of element produced by child parsers is limited by a constant. This can be achieved by using
--- '.!' and '.:' functions combined with constant space
--- parsers or limiting the number of returned elements with 'takeI'.
---
--- Running many parallel parsers (e.g. when parsing objects with a lot of fields) will slow
--- things done. Use the 'objectOf'.
---
--- If the source object contains an object with multiple keys with a same name,
--- json-stream matches the key multiple times. The only exception
--- is 'objectWithKey' ('.:' and '.:?') that return at most one value for a given key.
-
--- $aeson
--- The parser uses internally "Data.Aeson" types, so that the FromJSON instances are
--- directly usable with the 'value' parser. It may be more convenient to parse the
--- outer structure with json-stream and the inner objects with aeson as long as constant-space
--- decoding is not required.
---
--- Json-stream defines the object-access operators '.:', '.:?'
--- but in a slightly different albeit more natural way. New operators are '.!' for
--- array access and '.|' to handle missing values.
---
--- >>> let test = "[{\"name\": \"test1\", \"value\": 1}, {\"name\": \"test2\", \"value\": null}, {\"name\": \"test3\"}]"
--- >>> let person = (,) <$> "name" .: string <*> "value" .: integer .| (-1)
--- >>> let people = arrayOf person
--- >>> parseByteString people test :: [(T.Text, Int)]
--- [("test1",1),("test2",-1),("test3",-1)]
---
--- The above code would run 3 parsers in parallel to get the appropriate results. 
--- You can use the 'objectOf' parser to get a similar result in a more performant way.
---
--- >>> let test = "[{\"name\": \"test1\", \"value\": 1}, {\"name\": \"test2\", \"value\": null}, {\"name\": \"test3\"}]"
--- >>> let person = objectOf $ (,) <$> "name" .: string <*> "value" .: integer .| (-1)
--- >>> let people = arrayOf person
--- >>> parseByteString people test :: [(T.Text, Int)]
--- [("test1",1),("test2",-1),("test3",-1)]
---
--- $performance
--- The parser tries to do the least amount of work to get the job done, skipping over items that
--- are not required. General guidelines to get best performance:
---
--- Do not use the 'value' parser for the whole object if the object is big.
--- Consider using the 'objectOf' parser to parse objects instead of direct applicative parsing
--- for creating objects if they have lots of records. Every '<*>' outside of direct 'objectOf' parser
--- causes parallel parsing. Too many parallel parsers kill performance.
---
--- > arrayOf $ objectOf $ MyStructure <$> "field1" .: string <*> "field2" .: integer <*> .... <*> "field20" .: string
---
--- will be the fastest and use the least memory. 
---
--- > arrayOf value :: Parser MyStructure -- MyStructure with FromJSON instance
---
--- will probably still behave better than
---
--- > arrayOf $ MyStructure <$> "field1" .: string <*> "field2" .: integer <*> .... <*> "field20" .: string
---
--- and also better (at least memory-wise) than
---
--- > value :: Parser [MyStructure]
---
--- unless the structure has hundreths of fields and you are parsing only a substructure.
---
--- The 'integer' parser was optimized in such
--- a way that the integer numbers skip the conversion to 'Scientific', resulting in a slightly
--- faster speed.
---
--- It is possible to use the '*>' operator to filter objects based on a condition, e.g.:
---
--- > arrayOf $ id <$> "error" .: number
--- >               *> "name" .: string
---
--- This will return all objects that contain attribute error with number content. The parser will
--- skip trying to decode the name attribute if error is not found.
---
+parserException :: String -> a
+parserException = throw . ErrorCall

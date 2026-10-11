@@ -11,12 +11,8 @@
 # weeder). So a change lands its scaffolding and the wiring that reaches it
 # together, or roots the definition below.
 
-# Reachability roots: the executable entry point, Cabal's generated Paths_, the vendored
-# json-stream modules, and one documented structural exception.
-#
-# Vendored json-stream stays as upstream wrote it, so every Data.JsonStream definition is a
-# root and upstream's unused API raises no finding. The owner approved this exception on
-# 2026-09-28.
+# Root the supported json-stream parser and lexer APIs. Private decoder and scanner helpers must remain reachable.
+# The application entry point, Cabal's Paths_ module and the exception below are the other roots.
 #
 # Ecluse.Core.Security.Egress.DevHttp.loopbackRegistryUrl stays rooted here rather
 # than moving out of ecluse-core. The plain-http RegistryUrl former stays locked
@@ -27,10 +23,12 @@
 # load harness, and weeder roots neither. The module exists only under the
 # dev-http-egress flag, so a release build carries no copy.
 roots = [
+  "^Data\\.JsonStream\\.Lexer\\.Internal\\.(mkPlainString|plainBytes|start|next|feed|remaining)$",
+  "^Data\\.JsonStream\\.Lexer\\.(plainText|decodeString)$",
   "^Main\\.main$",
   "^Paths_",
   "^Ecluse\\.Core\\.Security\\.Egress\\.DevHttp\\.loopbackRegistryUrl$",
-  "^Data\\.JsonStream\\.",
+  "^Data\\.JsonStream\\.Parser\\.(runParser|runParser'|parseByteString|parseLazyByteString|decode|eitherDecode|decodeStrict|eitherDecodeStrict|value|valueWith|string|byteString|safeString|number|integer|real|bool|jNull|safeByteString|objectWithKey|objectItems|objectValues|objectKeyValues|arrayOf|arrayWithIndexOf|indexedArrayOf|nullable|objectOf|filterI|takeI|mapWithFailure|manyReverse|foldI|foldMapI|unFoldI|catMaybeI|arrayFound|objectFound)$",
 ]
 
 # Treat instance methods as roots, so weeder does not report a lawful type-class

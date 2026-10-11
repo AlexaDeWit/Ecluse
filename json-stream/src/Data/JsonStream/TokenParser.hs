@@ -1,4 +1,10 @@
-{-# LANGUAGE OverloadedStrings #-}
+-- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: BSD-3-Clause
+{-# LANGUAGE StrictData #-}
+
+-- | Lazy token continuations preserve the public parser's incremental consumption.
 
 module Data.JsonStream.TokenParser (
     Element(..)
@@ -22,13 +28,11 @@ data Element =
   deriving (Show, Eq)
 
 -- | Public interface for parsing JSON tokens.
-data TokenResult =  TokMoreData (BS.ByteString -> TokenResult)
-                  | PartialResult Element TokenResult
-                  -- ^ found element, continuation, actual parsing view - so that we can report the unparsed
-                  -- data when the parsing finishes.
+data TokenResult =  TokMoreData ~(BS.ByteString -> TokenResult)
+                  | PartialResult ~Element ~TokenResult
+                  -- ^ The continuation stays lazy until its caller consumes it.
                   | TokFailed
 
--- For debugging purposes
 instance Show TokenResult where
   show (TokMoreData _) = "TokMoreData"
   show TokFailed = "TokFailed"

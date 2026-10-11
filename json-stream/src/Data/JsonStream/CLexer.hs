@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2015 Ondrej Palkovsky
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: BSD-3-Clause
 -- | Compatibility entry point for json-stream's incremental token parser.
 module Data.JsonStream.CLexer (tokenParser, unescapeText) where
 

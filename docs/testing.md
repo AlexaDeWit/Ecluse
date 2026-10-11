@@ -1205,9 +1205,9 @@ are historical diagnostics prepared before measurement, not retained local bytes
 TTL zero changes both eligible stores. Keep 200-body replay separate from the legacy 304 scenario,
 because 304 avoids assembled-store resolution.
 
-## The vendored JSON lexer
+## The maintained JSON lexer
 
-The npm and PyPI metadata reads walk the tokens of the lexer in `vendor/json-stream/`. The Haskell lexer preserves
+The npm and PyPI metadata reads walk the tokens of the lexer in `json-stream/`. The Haskell lexer preserves
 upstream json-stream's token behaviour. These checks cover its public interface and the registry walk.
 
 - **Recorded C traces** in `Data.JsonStream.LexerSpec` compare 2,914 frozen cases through the public
@@ -1215,6 +1215,10 @@ upstream json-stream's token behaviour. These checks cover its public interface 
   The recorded reference does not call the replacement lexer. Public parser tests also preserve
   large input pieces and chunk-sensitive lenient numbers. Lexer and residency tests check plain
   string validation, immutable snapshots, offset slices, and backing-allocation lifetime.
+- **The inherited decoder oracle** in `Data.JsonStream.UnescapeSpec` checks UTF-8, escapes,
+  surrogate pairs, truncation and offset slices against a frozen digest from the old decoder.
+  Its 68,577 deterministic cases use the public `decodeString` interface. Typed object tests cover
+  mixed field types, repeated keys, result order, lazy values and malformed selected or skipped fields.
 - **Differential properties** in `ecluse-core-unit` compare the walk with json-stream's own parser
   combinators on generated bodies: every emitted field, the byte count, the refusal, and whether a
   failure is the nesting limit. The bodies carry escapes, lone surrogates, invalid and overlong
@@ -1225,8 +1229,8 @@ upstream json-stream's token behaviour. These checks cover its public interface 
   suite, or alone with
   `cabal test ecluse-core-unit --test-options='--match Json --match Reader'`. Both readers use the
   Haskell lexer, so these properties check the walk rather than independently checking tokenisation.
-- **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the vendored C lexer beside
-  upstream's at the vendored tree's base commit under libFuzzer, AddressSanitizer and
+- **A lexer fuzz harness**, `test/fuzz/json-lexer/lexer_fuzz.c`, runs the historical C lexer beside
+  upstream's at the fork's base commit under libFuzzer, AddressSanitizer and
   UndefinedBehaviorSanitizer. It fails on any difference in return code, lexer state or result
   records, with the input cut into pieces at random. Run it with `task fuzz-json-lexer`, ten minutes
   by default, or pass libFuzzer options after `--`. clang and libFuzzer come from the flake's pinned

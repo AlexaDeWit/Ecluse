@@ -55,8 +55,9 @@ flake check fails CI whenever the committed freeze drifts from the set. The `ind
 version, so advance it with `task bump-index-state` only when cabal reports a pinned version as
 unknown. One source pin is held in two places. amazonka's are `amazonkaRev` in `flake.nix` and
 its `source-repository-package` tag in `cabal.project`, and the `amazonka-lockstep` flake check
-keeps them equal. json-stream is vendored under `vendor/json-stream/` and builds as part of the
-package, so it has no pin. Its README names the commit it came from and the command that diffs it.
+keeps them equal. The maintained json-stream fork lives under `json-stream/` and builds as a private Cabal library.
+Its README records its origin. `task json-stream-diff` compares it with that upstream commit.
+Only the historical C test reference remains pinned, through `task json-reference-check`.
 
 Move the pins deliberately: run `nix flake update` (or merge Renovate's weekly `flake.lock` refresh),
 then `task freeze`, and commit both together. When the weekly Renovate PR moves Haskell versions,
