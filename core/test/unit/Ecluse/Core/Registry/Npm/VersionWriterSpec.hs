@@ -32,9 +32,9 @@ import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (Provenance (..), mergePackuments)
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (DocTable, Packed, docTable, renderPlan)
-import Ecluse.Core.Registry.Json.Shape (Mode (Share), Shape (Generic), readShape)
+import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic), Trees (..), readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), Walked (..), withElement)
-import Ecluse.Core.Registry.Json.Writer (decodeWhole, newWriter, replacedMember, sealValue)
+import Ecluse.Core.Registry.Json.Writer (decodeWhole, discard, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult)
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
 import Ecluse.Core.Registry.Npm.Filter (assemblePackedPackument)
@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.Npm.Project (projectVersionEntryResult, projectVersi
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmFieldOf (..), NpmRead (FullRead), npmFields)
 import Ecluse.Core.Registry.Npm.VersionWriter
-import Ecluse.Core.Registry.Npm.Wire (VersionManifest (vmScripts))
+import Ecluse.Core.Registry.Npm.Wire (Dist (..), License (..), VersionManifest (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Strict (strictElements)
@@ -51,7 +51,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkWritingChunks)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm qualified as Fixture
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
@@ -59,6 +59,7 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = describe "VersionWriter" $ do
     literalSpec
+    genericSpec
     growthSpec
     generatedSpec
     assemblySpec
@@ -92,6 +93,161 @@ literalSpec = describe "literal parity" $ do
             directBound bound 64 True (byteChunks body) `shouldBe` baseBound bound 64 True (byteChunks body)
   where
     body = packument baseRelease
+
+genericSpec :: Spec
+genericSpec = describe "Generic shape parity" $ do
+    it "refuses the independent scripts array witness" $ do
+        let body = "{\"name\":\"thing\",\"version\":\"1\",\"dist\":{\"tarball\":\"https://example.test/a.tgz\"},\"scripts\":[]}"
+        for_ [Share, Keep] $ \mode -> do
+            (facts, typed, _, _, _) <- genericSuccess (genericDirect mode [body])
+            facts `shouldBe` Nothing
+            typed `shouldSatisfy` isLeft
+            assertGeneric mode body
+    for_ (adverseReleases <> genericContainers) $ \(label, body) ->
+        it label $ for_ [Share, Keep] $ \mode -> assertGeneric mode body
+    it "isolates ignored nested policy names beside the real fields in either order" $
+        for_ [True, False] $ \ignoredFirst -> for_ [Share, Keep] $ \mode -> do
+            let body = isolatedRelease ignoredFirst
+            assertGeneric mode body
+            (facts, typed, _, _, _) <- genericSuccess (genericDirect mode (byteChunks body))
+            fmap vmHasInstallScript facts `shouldBe` Just (Just False)
+            fmap vmAvailability facts `shouldBe` Just Available
+            fmap vmScripts facts `shouldBe` Just mempty
+            fmap pkgInstallCode typed `shouldBe` Right NoCodeOnInstall
+    it "keeps the first generic member when the later duplicate changes container type" $
+        for_ genericDuplicates $
+            \body -> for_ [Share, Keep] $ \mode -> assertGeneric mode body
+    it "resets after sealing or discarding generic arrays and malformed nested objects" $
+        for_ [True, False] $ \sealing -> for_ [Share, Keep] $ \mode -> do
+            let bodies = ["[]", extended "\"scripts\":{\"build\":{\"hasInstallScript\":true}}", isolatedRelease True, baseRelease]
+                chunks = byteChunks (BS.intercalate " " bodies)
+            genericSequence sealing mode (length bodies) chunks `shouldBe` genericBaseSequence sealing mode (length bodies) chunks
+            (_, result) <- expectRight (genericSequence sealing mode (length bodies) chunks)
+            facts <- expectRight result
+            map isJust facts `shouldBe` [False, False, True, True]
+            map (fmap vmScripts) facts `shouldBe` [Nothing, Nothing, Just mempty, Just mempty]
+
+type GenericHeld = (Maybe VersionManifest, Either String PackageDetails, Value, DocTable, Packed)
+
+type GenericOutcome = Either LimitError (Int, Either Bool GenericHeld)
+
+genericDirect :: Mode -> [ByteString] -> GenericOutcome
+genericDirect mode chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
+  where
+    setup :: ST st (TokenResult -> ST st (Steps (ST st) GenericHeld))
+    setup = do
+        writer <- newVersionWriter Nothing
+        pure $ \tokens -> withElement tokens $ \element rest ->
+            readShape writer (Generic 16) mode (testTable releaseUniqueFields) element rest $ \value table _ -> do
+                sealed <- sealVersion writer tarballHole
+                raw <- decodeWhole (packedWriter writer) sealed
+                let facts = versionFacts value
+                    typed = maybe (projectVersionEntryResult name (mkVersion Npm "alias") Nothing raw) (Right . projectVersionManifest name (mkVersion Npm "alias") Nothing) facts
+                pure (Finished (facts, typed, raw, docTable (tableTexts table), sealed))
+
+genericBase :: Mode -> [ByteString] -> GenericOutcome
+genericBase mode chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
+  where
+    setup :: ST st (TokenResult -> ST st (Steps (ST st) GenericHeld))
+    setup = do
+        writer <- newWriter Nothing
+        pure $ \tokens -> withElement tokens $ \element rest ->
+            readShape writer (Generic 16) mode (testTable releaseUniqueFields) element rest $ \() table _ -> do
+                sealed <- sealValue writer tarballHole
+                raw <- decodeWhole writer sealed
+                let typed = frozenProjectVersionEntryResult name (mkVersion Npm "alias") Nothing raw
+                pure (Finished (genericExpected raw, typed, raw, docTable (tableTexts table), sealed))
+
+genericTree :: Mode -> [ByteString] -> Either LimitError (Int, Either Bool (Maybe VersionManifest, Value))
+genericTree mode chunks = readOutcome (walkJsonChunks (MetadataBodyLimit (sum (map BS.length chunks))) tree chunks)
+  where
+    tree tokens = withElement tokens $ \element rest ->
+        readShape Trees (Generic 16) mode (testTable releaseUniqueFields) element rest $ \raw _ _ ->
+            Finished (genericExpected raw, raw)
+
+genericExpected :: Value -> Maybe VersionManifest
+genericExpected raw = do
+    FrozenVersionEntry vm <- parseMaybe parseJSON raw
+    let dist = frozenVmDist vm
+        licence = \case
+            FrozenLicenseSpdx expression -> LicenseSpdx expression
+            FrozenLicenseObject kind url -> LicenseObject kind url
+    pure
+        VersionManifest
+            { vmName = frozenVmName vm
+            , vmVersion = frozenVmVersion vm
+            , vmDist = Dist (frozenDistTarball dist) (frozenDistShasum dist) (frozenDistIntegrity dist) (frozenDistUnpackedSize dist)
+            , vmAvailability = frozenVmAvailability vm
+            , vmHasInstallScript = frozenVmHasInstallScript vm
+            , vmScripts = Map.map (const "") (Map.filterWithKey (\key _ -> key `elem` frozenInstallHooks) (frozenVmScripts vm))
+            , vmLicense = licence <$> frozenVmLicense vm
+            }
+
+assertGeneric :: Mode -> ByteString -> Expectation
+assertGeneric mode body = for_ [[body], byteChunks body] $ \chunks -> do
+    let direct = genericDirect mode chunks
+        factsAndRaw (facts, _, raw, _, _) = (facts, raw)
+    direct `shouldBe` genericBase mode chunks
+    fmap (second (fmap factsAndRaw)) direct `shouldBe` genericTree mode chunks
+
+genericSuccess :: GenericOutcome -> IO GenericHeld
+genericSuccess result = do
+    (_, parsed) <- expectRight result
+    expectRight parsed
+
+genericSequence :: Bool -> Mode -> Int -> [ByteString] -> Either LimitError (Int, Either Bool [Maybe VersionManifest])
+genericSequence sealing mode count chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
+  where
+    setup :: ST st (TokenResult -> ST st (Steps (ST st) [Maybe VersionManifest]))
+    setup = do
+        writer <- newVersionWriter Nothing
+        let loop remaining table facts tokens
+                | remaining <= 0 = pure (Finished (reverse facts))
+                | otherwise = withElement tokens $ \element rest ->
+                    readShape writer (Generic 16) mode table element rest $ \value table' after -> do
+                        if sealing then void (sealVersion writer tarballHole) else discardVersion writer
+                        loop (remaining - 1) table' (versionFacts value : facts) after
+        pure (loop count (testTable releaseUniqueFields) [])
+
+genericBaseSequence :: Bool -> Mode -> Int -> [ByteString] -> Either LimitError (Int, Either Bool [Maybe VersionManifest])
+genericBaseSequence sealing mode count chunks = readOutcome (walkWritingChunks (MetadataBodyLimit (sum (map BS.length chunks))) setup chunks)
+  where
+    setup :: ST st (TokenResult -> ST st (Steps (ST st) [Maybe VersionManifest]))
+    setup = do
+        writer <- newWriter Nothing
+        let loop remaining table facts tokens
+                | remaining <= 0 = pure (Finished (reverse facts))
+                | otherwise = withElement tokens $ \element rest ->
+                    readShape writer (Generic 16) mode table element rest $ \() table' after -> do
+                        sealed <- sealValue writer tarballHole
+                        raw <- decodeWhole writer sealed
+                        unless sealing (discard writer)
+                        loop (remaining - 1) table' (genericExpected raw : facts) after
+        pure (loop count (testTable releaseUniqueFields) [])
+
+genericContainers :: [(String, ByteString)]
+genericContainers =
+    [("generic dist " <> toString key <> " " <> toString value, requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"" <> key <> "\":" <> value <> "}")) | key <- ["shasum", "integrity", "unpackedSize"], value <- containers]
+        <> [("generic tarball " <> toString value, requiredRelease "dist" ("{\"tarball\":" <> value <> "}")) | value <- containers]
+        <> [("generic licence " <> toString key <> " " <> toString value, extended ("\"license\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["type", "url"], value <- containers]
+        <> [("generic person " <> toString key <> " " <> toString value, extended ("\"_npmUser\":{\"" <> key <> "\":" <> value <> "}")) | key <- ["name", "email", "url"], value <- containers]
+        <> [("generic optional " <> toString key <> " " <> toString value, extended ("\"" <> key <> "\":" <> value)) | key <- ["scripts", "hasInstallScript", "license", "_npmUser", "deprecated"], value <- containers]
+  where
+    containers = ["[]", "{}", "[{\"name\":\"nested\",\"install\":\"work\"}]", "{\"name\":[],\"scripts\":{\"install\":\"work\"}}"]
+
+genericDuplicates :: [ByteString]
+genericDuplicates =
+    [extended ("\"" <> key <> "\":" <> first' <> ",\"" <> key <> "\":" <> second') | key <- ["scripts", "hasInstallScript", "license", "_npmUser"], (first', second') <- [("null", "[]"), ("[]", "null"), ("null", "{}"), ("{}", "null")]]
+        <> [extended ("\"" <> container <> "\":{\"" <> key <> "\":" <> first' <> ",\"" <> key <> "\":" <> second' <> "}") | (container, key) <- [("license", "url"), ("_npmUser", "email")], (first', second') <- [("null", "[]"), ("[]", "null"), ("null", "{}"), ("{}", "null")]]
+        <> [requiredRelease "dist" ("{\"tarball\":\"a.tgz\",\"integrity\":" <> first' <> ",\"integrity\":" <> second' <> "}") | (first', second') <- [("null", "[]"), ("[]", "null"), ("null", "{}"), ("{}", "null")]]
+        <> [extended ("\"scripts\":{\"build\":" <> first' <> ",\"build\":" <> second' <> ",\"install\":\"\"}") | (first', second') <- [("\"ok\"", "[]"), ("[]", "\"ok\""), ("\"ok\"", "{}"), ("{}", "\"ok\"")]]
+
+isolatedRelease :: Bool -> ByteString
+isolatedRelease ignoredFirst = BS.dropEnd 1 (requiredRelease "dist" dist) <> "," <> (if ignoredFirst then ignored <> "," <> policy else policy <> "," <> ignored) <> "}"
+  where
+    dist = "{\"tarball\":\"https://registry.npmjs.org/thing/-/one.tgz\",\"ignored\":{\"tarball\":false,\"integrity\":[],\"scripts\":{\"install\":\"work\"}}}"
+    ignored = "\"ignored\":{\"name\":\"nested\",\"version\":\"nested\",\"dist\":{\"tarball\":false},\"scripts\":{\"install\":\"work\"},\"hasInstallScript\":true,\"deprecated\":true,\"license\":false,\"_npmUser\":false},\"other\":[{\"dist\":{\"tarball\":false},\"scripts\":{\"preinstall\":\"work\"}}]"
+    policy = "\"hasInstallScript\":false,\"scripts\":{\"build\":\"ok\"},\"deprecated\":false,\"license\":{\"type\":\"MIT\",\"ignored\":{\"type\":[],\"url\":false}},\"_npmUser\":{\"name\":\"reader\",\"ignored\":{\"email\":false,\"scripts\":{\"install\":\"work\"}}}"
 
 growthSpec :: Spec
 growthSpec = describe "script and table growth" $ do

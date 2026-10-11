@@ -52,7 +52,7 @@ data VersionValue
     | ReleaseValue (Maybe VersionManifest)
     | Unobserved
 
-data Role = Release | DistObject | LicenseObject | PersonObject | Scripts | Command | Ignore
+data Role = Release | ScalarField | DistObject | LicenseObject | PersonObject | Scripts | Command | Ignore
 
 data VersionFrame = VersionFrame Frame ObservedFields (Set Text)
 
@@ -126,7 +126,7 @@ instance Build (VersionWriter st) (ST st (Steps (ST st) s)) where
         writeMutVar (nextRole writer) Ignore
         openArray (packedWriter writer) next
     addItem writer _ = addItem (packedWriter writer) ()
-    closeArray writer count items next = closeArray (packedWriter writer) count items (\() -> next Unobserved)
+    closeArray writer count items next = closeArray (packedWriter writer) count items (\() -> next (ScalarValue (Array mempty)))
 
 observeString :: VersionWriter st -> Value -> (VersionValue -> ST st r) -> ST st r
 observeString writer value next = do
@@ -159,13 +159,13 @@ memberRole fields key = case fields of
         "license" -> LicenseObject
         "_npmUser" -> PersonObject
         "scripts" -> Scripts
-        "name" -> Release
-        "version" -> Release
-        "deprecated" -> Release
-        "hasInstallScript" -> Release
+        "name" -> ScalarField
+        "version" -> ScalarField
+        "deprecated" -> ScalarField
+        "hasInstallScript" -> ScalarField
         _ -> Ignore
     ObjectFields role _
-        | key `elem` objectMembers role -> Release
+        | key `elem` objectMembers role -> ScalarField
         | otherwise -> Ignore
     ScriptFields _ -> Command
     IgnoredFields -> Ignore
@@ -225,4 +225,5 @@ finishFields = \case
             <*> manifestLicense manifest
     ObjectFields _ fields -> ScalarValue (Object fields)
     ScriptFields scripts -> ScriptValue scripts
-    IgnoredFields -> Unobserved
+    -- Wire validation needs the object's kind, without retaining its children.
+    IgnoredFields -> ScalarValue (Object mempty)
