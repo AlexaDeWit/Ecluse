@@ -15,11 +15,12 @@ before you choose a new test's home.
 
 ## Unit tests: `ecluse-core-unit`, `ecluse-runtime-unit`, `ecluse-unit` (gating)
 
-Pure, fast, deterministic `hspec` and `hedgehog` tests over all pure logic: the rules engine,
-parsers, and configuration. No IO, no Docker. They run on every push in milliseconds. Properties
-exercise the rules engine: deny-by-default, deny-precedence over allows, and per-rule predicates.
+Deterministic `hspec` and `hedgehog` tests cover pure logic and local stubs, including the rules
+engine, parsers, and configuration. They run on every push without Docker or live external services.
+Properties exercise the rules engine: deny-by-default, deny-precedence over allows, and per-rule
+predicates.
 This tier tests the credential provider's refresh, cache, and expiry policy with an injected clock
-and a fake `mintToken`. A stubbed endpoint also tests the CodeArtifact request and response.
+and a fake `mintToken`. A local HTTP stub tests CodeArtifact token and expiry extraction.
 Proxy request-lifecycle tests run against an in-process WAI stub, so they assert the full
 fetch → parse → rules → mirror path without a network.
 
@@ -59,7 +60,7 @@ install Docker: Nix ships the toolchain, not the daemon. Run: `cabal test ecluse
 
 > **Token-mint caveat.** No emulator covers CodeArtifact's `GetAuthorizationToken` API.
 > The [unit spec](../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs)
-> tests its request and response through a stubbed endpoint. Other unit tests cover refresh,
+> asserts the token and expiry extracted from a stubbed response. Other unit tests cover refresh,
 > cache, and expiry with an injected clock and fake mint. No automatic test verifies a real AWS mint.
 
 ## Residency gate: `ecluse-residency` (gating)
