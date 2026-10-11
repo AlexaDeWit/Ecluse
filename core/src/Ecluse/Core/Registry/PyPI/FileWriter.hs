@@ -19,7 +19,7 @@ import Data.Primitive.PrimVar (PrimVar, newPrimVar, readPrimVar, writePrimVar)
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Entry (EntryKey (SingletonEntry))
-import Ecluse.Core.Registry.Json.Intern (entryString, nameText)
+import Ecluse.Core.Registry.Json.Intern (entryText, nameText)
 import Ecluse.Core.Registry.Json.Shape (Build (..), MemberKey (..), memberText)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.Json.Writer (Frame, Writer)
@@ -33,16 +33,20 @@ data FileWriter st = FileWriter (Writer st) (PrimVar st Int)
 fileWriter :: Writer st -> ST st (FileWriter st)
 fileWriter writer = FileWriter writer <$> newPrimVar 0
 
--- | A completed scalar, digest object, or file. A failed typed decode keeps no error tree.
+-- | Completed facts keep no error tree after a failed typed decode.
 data FileValue
-    = -- | A scalar used by one field reducer, including the empty-array container fallback.
+    = -- | Text already decoded by the walk.
+      TextValue Text
+    | -- | An integer the walk already represents as 'Int'.
+      IntegerValue Int
+    | -- | Other scalars and the empty-array container fallback.
       ScalarValue Value
     | -- | Digest text by algorithm, or a failed digest value.
       HashValue (Maybe (Map Text Text))
     | -- | A decoded file, or a failure whose diagnostic needs the packed payload.
       FileValue (Maybe IndexFile)
 
--- Keep mode needs a mask for file fields. Failed digests still reserve their keys so duplicates cannot repair them.
+-- Failed digests reserve their keys so a duplicate cannot repair the first value.
 data FileFields
     = FileFields Frame FileFacts {-# UNPACK #-} !Word8
     | HashFields Frame (Map Text Text) Bool
@@ -66,9 +70,9 @@ instance Build (FileWriter st) (ST st (Steps (ST st) s)) where
     type Built (FileWriter st) = FileValue
     type Fields (FileWriter st) = FileFields
     type Items (FileWriter st) = Int
-    sharedString (FileWriter writer _) entry next = sharedString writer entry (\() -> next (ScalarValue (entryString entry)))
-    ownString (FileWriter writer _) name next = ownString writer name (\() -> next (ScalarValue (String (nameText name))))
-    integer (FileWriter writer _) number next = integer writer number (\() -> next (ScalarValue (Number (fromIntegral number))))
+    sharedString (FileWriter writer _) entry next = sharedString writer entry (\() -> next (TextValue (entryText entry)))
+    ownString (FileWriter writer _) name next = ownString writer name (\() -> next (TextValue (nameText name)))
+    integer (FileWriter writer _) number next = integer writer number (\() -> next (IntegerValue number))
     whole (FileWriter writer _) value next = whole writer value (\() -> next (ScalarValue value))
     emptyContainer (FileWriter writer _) next = emptyContainer writer (\() -> next (ScalarValue (Array mempty)))
     openObject (FileWriter writer depth) next = do
@@ -137,6 +141,7 @@ fileFieldBit = \case
 
 scalarText :: FileValue -> Maybe Text
 scalarText = \case
+    TextValue text -> Just text
     ScalarValue (String text) -> Just text
     _ -> Nothing
 
@@ -147,14 +152,24 @@ reduceMember key value facts = case (key, value) of
     ("hashes", HashValue hashes) -> facts{ffHashes = hashes}
     ("hashes", ScalarValue Null) -> facts{ffHashes = Just mempty}
     ("hashes", _) -> facts{ffHashes = Nothing}
-    ("requires-python", ScalarValue scalar) -> updateOptionalFact (\text -> facts{ffRequiresPython = text}) scalar
-    ("provenance", ScalarValue scalar) -> updateOptionalFact (\text -> facts{ffProvenance = text}) scalar
-    ("size", ScalarValue scalar) -> facts{ffSize = force (parseMaybe parseJSON scalar)}
-    ("upload-time", ScalarValue scalar) -> facts{ffUploadTime = force (parseMaybe parsePublishTime scalar)}
-    ("yanked", ScalarValue scalar) -> facts{ffYanked = yankState (Just scalar)}
+    ("requires-python", _) -> updateOptionalFact (\text -> facts{ffRequiresPython = text})
+    ("provenance", _) -> updateOptionalFact (\text -> facts{ffProvenance = text})
+    ("size", IntegerValue number) -> facts{ffSize = Just number}
+    ("size", _) -> withScalar (\scalar -> facts{ffSize = force (parseMaybe parseJSON scalar)})
+    ("upload-time", _) -> withScalar (\scalar -> facts{ffUploadTime = force (parseMaybe parsePublishTime scalar)})
+    ("yanked", _) -> withScalar (\scalar -> facts{ffYanked = yankState (Just scalar)})
     _ -> facts
   where
-    updateOptionalFact update scalar = maybe facts{ffValid = False} update (parseMaybe parseJSON scalar)
+    withScalar update = case value of
+        TextValue text -> update (String text)
+        IntegerValue number -> update (Number (fromIntegral number))
+        ScalarValue scalar -> update scalar
+        _ -> facts
+    updateOptionalFact update = case value of
+        ScalarValue Null -> update Nothing
+        HashValue{} -> facts
+        FileValue{} -> facts
+        _ -> maybe facts{ffValid = False} (update . Just) (scalarText value)
 
 finishFacts :: FileFacts -> Maybe IndexFile
 finishFacts facts = do

@@ -21,6 +21,46 @@ spec = describe "fileWriter" $ do
         it ("keeps the tree decoder's facts and diagnostics for " <> decodeUtf8 field <> "=" <> decodeUtf8 value) $
             agrees ["\"" <> field <> "\":" <> value]
 
+    for_
+        [ encodeUtf8 (show (minBound :: Int))
+        , encodeUtf8 (show (maxBound :: Int))
+        , encodeUtf8 (show (toInteger (minBound :: Int) - 1))
+        , encodeUtf8 (show (toInteger (maxBound :: Int) + 1))
+        , "0"
+        , "-0"
+        , "12.0"
+        , "12e0"
+        , "120e-1"
+        , "12e-1"
+        , "1e309"
+        , "-1e309"
+        ]
+        $ \size ->
+            it ("keeps bounded integer and scientific size semantics for " <> decodeUtf8 size) $
+                agrees ["\"size\":" <> size]
+
+    for_
+        [ "2026-01-01T00:00:00.123456789012Z"
+        , "2026-01-01T00:00:00.1234567890123Z"
+        , "2026-01-01T01:00:00+01:00"
+        , "2016-12-31T23:59:60Z"
+        , "2026-02-30T00:00:00Z"
+        ]
+        $ \stamp ->
+            it ("keeps the timestamp fast path and library fallback for " <> decodeUtf8 stamp) $
+                agrees ["\"upload-time\":\"" <> stamp <> "\""]
+
+    for_ ["requires-python", "provenance"] $ \field ->
+        for_ [("7", "\"text\""), ("null", "7"), ("\"text\"", "false")] $ \(firstValue, repeated) ->
+            it ("keeps the first optional text value for " <> decodeUtf8 field <> "=" <> decodeUtf8 firstValue) $
+                agrees ["\"" <> field <> "\":" <> firstValue, "\"" <> field <> "\":" <> repeated]
+
+    it "keeps scalar facts and served values across single-byte chunks" $ do
+        let body = "{\"name\":\"thing\",\"files\":[{\"filename\":\"thing-1.0.tar.gz\",\"url\":\"https://files.example/a.tar.gz\",\"hashes\":{\"custom\":\"\\u00e9\"},\"requires-python\":\">=3\",\"provenance\":\"https://files.example/\\u00e9\",\"size\":12345,\"upload-time\":\"2026-01-01T00:00:00Z\",\"yanked\":\"\"}]}"
+            name = unscopedPyPI "thing"
+        (second packedSimpleDocument <$> (projectPyPIPackedChunks defaultLimits name (map BS.singleton (BS.unpack body)) >>= projectPyPIPacked defaultLimits name))
+            `shouldBe` (second Just <$> projectPyPIIndex defaultLimits name body)
+
     it "keeps the first repeated scalar, hash object and digest" $
         agrees ["\"yanked\":true", "\"yanked\":false", "\"hashes\":{\"custom\":\"first\",\"custom\":null}", "\"hashes\":false"]
 
