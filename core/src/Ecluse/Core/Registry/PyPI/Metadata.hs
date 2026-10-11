@@ -1,13 +1,10 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- The reads specialise here. Full laziness would float each member's rarely taken continuation out
--- of the element's continuation, and every member of a read would allocate it.
+-- Full laziness allocates rarely used continuations for each member, so reads specialise here.
 {-# OPTIONS_GHC -fno-full-laziness #-}
 
-{- | PyPI's part of a metadata read, which "Ecluse.Core.Registry.Metadata.Fetch" drives. Full and
-selected Simple-index reads share incremental extraction.
--}
+-- | PyPI full and selected Simple-index reads for "Ecluse.Core.Registry.Metadata.Fetch".
 module Ecluse.Core.Registry.PyPI.Metadata (
     pypiRead,
     pypiChargeFactors,
@@ -43,7 +40,7 @@ import Ecluse.Core.Security (AllowedHostPorts, Limits, ecosystemArtifactAuthorit
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | What the read driver needs to read a Simple index: the request, the walk in both modes, and their finishes.
+-- | Full and selected reads share the Simple-index request and field policy.
 pypiRead :: EcosystemRead
 pypiRead =
     EcosystemRead
@@ -55,11 +52,10 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
--- | PyPI's calibrated peaks are 3.196 bytes per source byte for reads and 1.242 bytes per basis byte for output. These cover sources from one meter step up. See @docs/testing.md@.
+-- | Native peaks per source/basis byte: 2.629 read, 1.242 output, from one meter step up. See @docs/testing.md@.
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3300, cfOutputPermille = 1600}
 
--- Walk an index's chunks with the production field policy.
 readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
 readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)
 
