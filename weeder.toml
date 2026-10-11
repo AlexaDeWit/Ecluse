@@ -23,6 +23,7 @@
 # load harness, and weeder roots neither. The module exists only under the
 # dev-http-egress flag, so a release build carries no copy.
 roots = [
+  "^Data\\.JsonStream\\.Parser\\.\\.!$",
   "^Data\\.JsonStream\\.Lexer\\.Internal\\.(mkPlainString|plainBytes|start|next|feed|remaining)$",
   "^Data\\.JsonStream\\.Lexer\\.(plainText|decodeString)$",
   "^Main\\.main$",

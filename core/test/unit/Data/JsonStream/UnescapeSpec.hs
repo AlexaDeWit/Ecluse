@@ -98,9 +98,9 @@ oracleCases =
   where
     directedCases (name, bytes) =
         [OracleCase name bytes False True, OracleCase (name <> "-slice") bytes True False]
-    byteCases first =
-        [plain ("byte-" <> show first) (BS.singleton first), plain ("escape-byte-" <> show first) (BS.pack [backslashByte, first])]
-            <> [plain ("pair-" <> show first <> "-" <> show second) (BS.pack [first, second]) | second <- allBytes]
+    byteCases leadingByte =
+        [plain ("byte-" <> show leadingByte) (BS.singleton leadingByte), plain ("escape-byte-" <> show leadingByte) (BS.pack [backslashByte, leadingByte])]
+            <> [plain ("pair-" <> show leadingByte <> "-" <> show followingByte) (BS.pack [leadingByte, followingByte]) | followingByte <- allBytes]
 
 plain :: Text -> ByteString -> OracleCase
 plain name bytes = OracleCase name bytes False False

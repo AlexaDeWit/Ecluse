@@ -95,12 +95,12 @@ objectSpec = describe "typed one-pass object fields" $ do
         expectEveryCut (J.objectOf ("required" J..: J.string)) "{}" (Right [])
 
     it "keeps Object alternatives left-biased and concatenation grouped by declaration" $ do
-        let first = "first" J..: (J.integer :: J.Parser Int)
-            second = "second" J..: (J.integer :: J.Parser Int)
+        let leftField = "first" J..: (J.integer :: J.Parser Int)
+            rightField = "second" J..: (J.integer :: J.Parser Int)
             body = "{\"second\":2,\"first\":1,\"first\":3}"
-        expectEveryCut (J.objectOf (first <|> second)) body (Right [1, 3])
-        expectEveryCut (J.objectOf (first <> second)) body (Right [1, 3, 2])
-        expectEveryCut (J.objectOf (first <|> second)) "{\"second\":2}" (Right [2])
+        expectEveryCut (J.objectOf (leftField <|> rightField)) body (Right [1, 3])
+        expectEveryCut (J.objectOf (leftField <> rightField)) body (Right [1, 3, 2])
+        expectEveryCut (J.objectOf (leftField <|> rightField)) "{\"second\":2}" (Right [2])
 
     it "parses selected right-hand fields even when the left alternative produces a value" $ do
         let parser = J.objectOf (("first" J..: J.string) <|> ("second" J..: J.string))
