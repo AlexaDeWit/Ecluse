@@ -163,24 +163,25 @@ the highest peak among all the listings. Those add the heavy bases, merges whose
 holds far more text than its version count suggests.
 
 The table gives heap bytes per source byte from the native arm64 Build job of
-[CI run 38082780368](https://github.com/AlexaDeWit/Ecluse/actions/runs/38082780368/job/114308391999).
-It measured merged `main` at `1a53a01b0480ae61f486a6ec1eda0a27cb646181`, including #1594.
+[CI run 38107103485](https://github.com/AlexaDeWit/Ecluse/actions/runs/38107103485/job/114374944192).
+Its PR merge `3f63e1e7912aa0b118ea39044e32c368380f9a58` has the same tree as
+`689b7a19f4c3c1840a115cc185582075293c050e`, including `main` at `7f214208`.
 The maxima include listings of at least one step. They display six decimal places, but the rules
 use measured byte counts before rounding. The last row is the limit for a single document's read.
 
 | Figure | npm | PyPI |
 |---|---|---|
-| Highest peak among the realistic listings | 0.953794 (express, publish order) | 3.196237 (boto3, single document) |
-| Margin figure | 1.2 | 4.0 |
-| Highest peak among all the listings | 1.071015 (express, oldest heavy base) | 3.196237 (boto3, single document) |
-| All-shape figure | 1.1 | 3.2 |
-| Full-read charge | 1.2 | 4.0 |
-| Highest peak among single documents | 0.862704 (react) | 3.196237 (boto3) |
+| Highest peak among the realistic listings | 0.837052 (react, single document) | 3.112123 (boto3, single document) |
+| Margin figure | 1.1 | 3.9 |
+| Highest peak among all the listings | 0.958492 (express, oldest heavy base) | 3.112123 (boto3, single document) |
+| All-shape figure | 1.0 | 3.2 |
+| Full-read charge | 1.1 | 3.9 |
+| Highest peak among single documents | 0.837052 (react) | 3.112123 (boto3) |
 | Read limit | 1.0 | 3.5 |
 
-A capture under one step can peak above the per-byte charge, up to 1.65 for npm (lodash) and 4.38
-for PyPI (requests). What the meter holds for one such read, whole steps and at least the 1 MiB
-entry step, covers every capture the tier measures. A request for a name that is not first-party
+Listings under one step peak at up to 1.05 bytes per source byte for npm (lodash, oldest heavy base)
+and 3.55 for PyPI (requests, publish order). Whole meter steps cover every measured read, including
+the initial 1 MiB entry step. A request for a name that is not first-party
 reads its private and public documents at once on one ticket, so two such reads can exceed what
 the meter holds by a fraction of a step. The sampler's measurement of live data outside the
 charges absorbs that excess.
@@ -212,8 +213,8 @@ The residency tier in [`docs/testing.md`](../testing.md#listing-peaks) fails whe
 or render outgrow what the meter holds for them, so a representation change cannot silently
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
-least 8% above its measured maximum. The read limits in the table above sit 0.2 under npm's charge
-and 0.5 under PyPI's. The output limits, set over the realistic shapes, are 1.75 per basis byte for
+least 8% above its measured maximum. The read limits in the table above sit 0.1 under npm's charge
+and 0.4 under PyPI's. The output limits, set over the realistic shapes, are 1.75 per basis byte for
 npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler

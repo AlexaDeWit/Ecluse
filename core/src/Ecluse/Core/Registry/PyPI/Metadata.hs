@@ -15,7 +15,7 @@ module Ecluse.Core.Registry.PyPI.Metadata (
     projectPyPIStream,
 ) where
 
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
@@ -48,18 +48,18 @@ pypiRead =
         , erFinishSelected = finishPyPIVersion
         }
 
-{- | PyPI's charges cover read peaks of 3.196 bytes per source byte and realistic output working sets
+{- | PyPI's charges cover read peaks of 3.112 bytes per source byte and realistic output working sets
 of 1.242 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
 -}
 pypiChargeFactors :: ChargeFactors
-pypiChargeFactors = ChargeFactors{cfFullReadPermille = 4000, cfOutputPermille = 1600}
+pypiChargeFactors = ChargeFactors{cfFullReadPermille = 3900, cfOutputPermille = 1600}
 
 -- Walk an index's chunks with the production field policy.
 readPyPIIndex :: Limits -> PackageName -> PyPIRead -> DocumentWalk PyPIProjection
 readPyPIIndex limits name mode bound table = readJsonWalk bound (pypiIndexWalk limits name mode table)
 
 -- | The production Simple-index walk over a caller's intern table.
-pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> TokenResult -> Step PyPIProjection
+pypiIndexWalk :: Limits -> PackageName -> PyPIRead -> InternTable -> Cursor -> Step PyPIProjection
 pypiIndexWalk limits name mode table = pypiWalk (maxNestingDepth limits) mode (collectField limits mode) keepsFile table (emptyProjection name)
 
 finishPyPIFull :: Limits -> PackageName -> Text -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, CachedDoc)

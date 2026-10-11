@@ -10,7 +10,8 @@ drawn for its read, so upstream text cannot choose which names collide.
 -}
 module Ecluse.Core.Registry.Json.Intern (
     -- * Names as read
-    Name (Plain),
+    Name,
+    plainName,
     decodedName,
     foldName,
     nameText,
@@ -28,6 +29,9 @@ module Ecluse.Core.Registry.Json.Intern (
     entryIndex,
     Interned (..),
     internName,
+    PreparedName,
+    prepareName,
+    internPreparedName,
     tableTexts,
     sipHash,
 ) where
@@ -40,13 +44,17 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Unsafe qualified as BSU
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable (..))
-import Data.JsonStream.Unescape (unsafeDecodeASCII)
+import Data.JsonStream.Lexer (PlainString, plainBytes, plainText)
 import Data.Primitive.SmallArray (SmallArray, newSmallArray, runSmallArray, writeSmallArray)
 import Data.Text.Array qualified as TA
 import Data.Text.Internal qualified as TI
 
 -- | A member name or string as the lexer read it: plain ASCII bytes, or text decoded from escapes or UTF-8.
-data Name = Plain !ByteString | Decoded !Text ~ByteString
+data Name = Plain !PlainString | Decoded !Text ~ByteString
+
+-- | A name whose bytes carry the lexer's plain-string validation.
+plainName :: PlainString -> Name
+plainName = Plain
 
 -- | A name decoded from escapes or UTF-8. Its bytes are encoded once, when first asked for.
 decodedName :: Text -> Name
@@ -55,20 +63,20 @@ decodedName text = Decoded text (encodeUtf8 text)
 -- | Take a name as its plain ASCII bytes or as its decoded text.
 foldName :: (ByteString -> a) -> (Text -> a) -> Name -> a
 foldName onPlain onDecoded = \case
-    Plain bytes -> onPlain bytes
+    Plain bytes -> onPlain (plainBytes bytes)
     Decoded text _ -> onDecoded text
 {-# INLINE foldName #-}
 
 -- | The name's text on an array of its own. Plain bytes are copied, so no text keeps its input chunk.
 nameText :: Name -> Text
 nameText = \case
-    Plain bytes -> unsafeDecodeASCII bytes
+    Plain bytes -> plainText bytes
     Decoded text _ -> text
 
 -- | The name's UTF-8 bytes. Plain bytes are the input's own, so hold them only for the current lookup.
 nameBytes :: Name -> ByteString
 nameBytes = \case
-    Plain bytes -> bytes
+    Plain bytes -> plainBytes bytes
     Decoded _ bytes -> bytes
 
 -- | A fresh key for one read's table, so no key outlives the table it seeds.
@@ -120,16 +128,31 @@ newInternTable key = foldl' seed (InternTable key mempty 0)
 returned table holds from then on.
 -}
 internName :: Name -> InternTable -> Interned
-internName name table@(InternTable key entries count) = case HashMap.lookup (Probe code (Slice probe)) entries of
+internName name table@(InternTable key _ _) = internProbe (probeOf key (nameBytes name)) (nameText name) table
+{-# INLINE internName #-}
+
+-- | A canonical name and its hash under one read's key, without a retained input slice or table.
+data PreparedName = PreparedName !SipKey !Probe !Text
+
+-- | Compute a canonical name's hash once without inserting it into the table.
+prepareName :: InternTable -> Text -> PreparedName
+prepareName (InternTable key _ _) text = case probeOf key (encodeUtf8 text) of
+    Probe code _ -> PreparedName key (Probe code (Owned text)) text
+
+-- | Intern a prepared name, recomputing its hash when used with another read's key.
+internPreparedName :: PreparedName -> InternTable -> Interned
+internPreparedName (PreparedName (SipKey keyFirst keySecond) probe text) table@(InternTable (SipKey currentFirst currentSecond) _ _)
+    | keyFirst == currentFirst && keySecond == currentSecond = internProbe probe text table
+    | otherwise = internName (decodedName text) table
+{-# INLINE internPreparedName #-}
+
+internProbe :: Probe -> Text -> InternTable -> Interned
+internProbe probe@(Probe code _) text table@(InternTable key entries count) = case HashMap.lookup probe entries of
     Just entry -> Interned entry table
     Nothing ->
-        let text = nameText name
-            entry = Entry text (String text) False count
+        let entry = Entry text (String text) False count
          in Interned entry (InternTable key (HashMap.insert (Probe code (Owned text)) entry entries) (count + 1))
-  where
-    probe = nameBytes name
-    code = fromIntegral (sipHash 1 3 key probe)
-{-# INLINE internName #-}
+{-# INLINE internProbe #-}
 
 insertEntry :: ByteString -> Entry -> InternTable -> InternTable
 insertEntry bytes entry (InternTable key entries count) =
@@ -137,6 +160,7 @@ insertEntry bytes entry (InternTable key entries count) =
 
 probeOf :: SipKey -> ByteString -> Probe
 probeOf key bytes = Probe (fromIntegral (sipHash 1 3 key bytes)) (Slice bytes)
+{-# INLINE probeOf #-}
 
 -- | Every entry's text in index order. Each index below the table's count holds exactly one entry.
 tableTexts :: InternTable -> SmallArray Text

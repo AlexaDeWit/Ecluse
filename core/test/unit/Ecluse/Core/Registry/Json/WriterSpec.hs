@@ -10,7 +10,7 @@ import Data.Aeson (Value (Object, String), encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.Lexer (Cursor)
 import Hedgehog (Gen, PropertyT, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -19,7 +19,7 @@ import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), decodedName, internName, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (docTable, packedBlob, packedBytes, packedEncodedLength, packedValue, valueEnd)
-import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), readShape)
+import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
 import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, replacedMember, sealValue)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
@@ -27,7 +27,7 @@ import Ecluse.Test.Json (genValue)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genJsonBytes)
 import Ecluse.Test.Registry.JsonStream (readOutcome, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Packed (renderAlone, walkedLength)
-import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape)
+import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape, toShapeWith)
 
 -- | A read that writes fails where the tree read fails, and otherwise holds the tree it would build.
 spec :: Spec
@@ -39,7 +39,9 @@ spec = describe "Writer" $ do
                 body <- forAll (genJsonBytes shapeNames >>= damaged)
                 chunks <- forAll (genChunks body)
                 share <- forAll Gen.bool
-                sameAsTree (toShape shape) (if share then Share else Keep) chunks
+                prepared <- forAll Gen.bool
+                let retained = if prepared then toShapeWith (prepareMembers (testTable ["url"])) shape else toShape shape
+                sameAsTree retained (if share then Share else Keep) chunks
 
         it "decodes only the members a pick names, as the tree holds them" $
             hedgehog $ do
@@ -48,7 +50,7 @@ spec = describe "Writer" $ do
                 let bound = MetadataBodyLimit (BS.length body)
                     tree tokens = withElement tokens $ \element rest ->
                         readShape Trees (Generic 8) Share (testTable ["url"]) element rest (\value _ _ -> Finished (restrict pick value))
-                    packed :: ST st (TokenResult -> ST st (Steps (ST st) Value))
+                    packed :: ST st (Cursor -> ST st (Steps (ST st) Value))
                     packed =
                         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
                             readShape writer (Generic 8) Share (testTable ["url"]) element rest $ \() _ _ ->
@@ -62,7 +64,7 @@ spec = describe "Writer" $ do
                 let bound = MetadataBodyLimit (BS.length body)
                     tree tokens = withElement tokens $ \element rest ->
                         readShape Trees (Generic 8) Share authorTable element rest $ \value _ _ -> Finished (withPointer value, ownAuthor value)
-                    packed :: ST st (TokenResult -> ST st (Steps (ST st) (Value, Maybe Value)))
+                    packed :: ST st (Cursor -> ST st (Steps (ST st) (Value, Maybe Value)))
                     packed =
                         newWriter (Just (authorKey, pointer)) <&> \writer tokens -> withElement tokens $ \element rest ->
                             readShape writer (Generic 8) Share authorTable element rest $ \() _ _ -> do
@@ -89,7 +91,7 @@ spec = describe "Writer" $ do
     it "forgets the replaced member of an earlier object once it seals a value that is not one" $ do
         let body = "{\"author\":{\"name\":\"abcdefghij\"}} \"zzzzzzzzzzzzzzzzzzzz\" "
             bound = MetadataBodyLimit (BS.length body)
-            packed :: ST st (TokenResult -> ST st (Steps (ST st) (Maybe Value, Maybe Value)))
+            packed :: ST st (Cursor -> ST st (Steps (ST st) (Maybe Value, Maybe Value)))
             packed =
                 newWriter (Just (authorKey, pointer)) <&> \writer tokens -> withElement tokens $ \element rest ->
                     readShape writer (Generic 8) Share authorTable element rest $ \() table afterObject -> do
@@ -123,7 +125,7 @@ sameOutcomes shape mode chunks = (readOutcome (walkJsonChunks bound tree chunks)
     tree tokens = withElement tokens $ \element rest ->
         readShape Trees shape mode (testTable ["url"]) element rest $ \value _ _ ->
             Finished (Just (value, Just value, Just (toStrict (encode value)), toStrict (encode value), True, True))
-    packed :: ST st (TokenResult -> ST st (Steps (ST st) (Maybe Held)))
+    packed :: ST st (Cursor -> ST st (Steps (ST st) (Maybe Held)))
     packed =
         newWriter Nothing <&> \writer tokens -> withElement tokens $ \element rest ->
             readShape writer shape mode (testTable ["url"]) element rest $ \() table _ -> do

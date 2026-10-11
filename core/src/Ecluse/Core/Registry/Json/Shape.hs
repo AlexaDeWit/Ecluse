@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Json.Shape (
     namedMembers,
     everyMember,
     knownMembers,
+    prepareMembers,
     listedMember,
     Mode (..),
     MemberKey (..),
@@ -26,12 +27,12 @@ import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict qualified as HashMap
-import Data.JsonStream.CLexer (unescapeText)
-import Data.JsonStream.TokenParser (Element (..), TokenResult (..))
+import Data.JsonStream.Lexer (Cursor, Element (..), decodeString)
+import Data.JsonStream.Lexer qualified as Lexer
 import Data.Vector qualified as V
 
-import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name (Plain), decodedName, entryKeeps, entryString, entryText, internName, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement)
+import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), Name, PreparedName, decodedName, entryKeeps, entryString, entryText, internName, internPreparedName, nameBytes, nameText, plainName, prepareName)
+import Ecluse.Core.Registry.Json.Walk (Walk (..), isString, memberName, nestingLimit, readString, skipFrom, tooDeep, withElement, withScanned)
 
 {- | What to retain of one value. Each budget is the structural depth left, and a value read with
 none left is skipped and fails the read.
@@ -53,11 +54,13 @@ data Shape
       Checked !Int Shape
 
 -- | Which members of an object are retained, and with what shape.
-data Members = Members (HashMap.HashMap ByteString (Key.Key, Shape)) (Maybe Shape)
+data Members = Members (HashMap.HashMap ByteString Member) (Maybe Shape)
+
+data Member = Member (Key.Key, Shape) (Maybe PreparedName)
 
 -- | Retain only the named members. The first entry for a name wins.
 namedMembers :: [(Text, Shape)] -> Members
-namedMembers entries = Members (HashMap.fromListWith (\_ earlier -> earlier) [(encodeUtf8 name, (Key.fromText name, shape)) | (name, shape) <- entries]) Nothing
+namedMembers entries = Members (HashMap.fromListWith (\_ earlier -> earlier) [(encodeUtf8 name, Member (Key.fromText name, shape) Nothing) | (name, shape) <- entries]) Nothing
 
 -- | Retain every member with one shape.
 everyMember :: Shape -> Members
@@ -65,12 +68,26 @@ everyMember = Members mempty . Just
 
 -- | Retain every member with one shape, sharing the key of each listed name.
 knownMembers :: [Text] -> Shape -> Members
-knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, (Key.fromText name, shape)) | name <- names]) (Just shape)
+knownMembers names shape = Members (HashMap.fromList [(encodeUtf8 name, Member (Key.fromText name, shape) Nothing) | name <- names]) (Just shape)
+
+-- | Cache the listed names' hashes for this read, leaving table insertion and nested shapes unchanged.
+prepareMembers :: InternTable -> Members -> Members
+prepareMembers table (Members named other) = Members (HashMap.map prepare named) other
+  where
+    prepare (Member schema@(key, _) _) =
+        let !prepared = prepareName table (Key.toText key)
+         in Member schema (Just prepared)
 
 -- | A listed name's key and shape. Every member a read keeps as read under that name holds this one key.
 listedMember :: Members -> Name -> Maybe (Key.Key, Shape)
-listedMember (Members named _) name = HashMap.lookup (nameBytes name) named
+listedMember members name = case findMember members name of
+    Just (Member schema _) -> Just schema
+    Nothing -> Nothing
 {-# INLINE listedMember #-}
+
+findMember :: Members -> Name -> Maybe Member
+findMember (Members named _) name = HashMap.lookup (nameBytes name) named
+{-# INLINE findMember #-}
 
 -- | Whether a value's keys and strings go through the document's table or keep their own copies.
 data Mode = Share | Keep
@@ -172,13 +189,13 @@ instance (Walk r) => Build Trees r where
     {-# INLINE closeArray #-}
 
 -- | Read the value starting at the element and build it once.
-readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readShape :: (Build b r) => b -> Shape -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readShape build = readAt build 0 False
 {-# INLINEABLE readShape #-}
 
 -- json-stream races a skip of a container an alternative rejects, whose lexer failure beats a nesting
 -- failure. open counts levels inside the outermost raced container, and raced marks a raced value.
-readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readAt :: (Build b r) => b -> Int -> Bool -> Shape -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readAt build open raced shape mode table element rest next = case shape of
     Scalar budget
         | budget <= 0 -> tooDeepAt open element rest
@@ -215,38 +232,38 @@ readAt build open raced shape mode table element rest next = case shape of
 {-# INLINEABLE readAt #-}
 
 -- Skip the value, then fail on the nesting limit, unless a parallel skip has already failed further on.
-tooDeepAt :: (Walk r) => Int -> Element -> TokenResult -> r
+tooDeepAt :: (Walk r) => Int -> Element -> Cursor -> r
 tooDeepAt open element rest
     | open > 0 = skipFrom element rest (raceFailure open)
     | otherwise = tooDeep element rest
 {-# INLINEABLE tooDeepAt #-}
 
-raceFailure :: (Walk r) => Int -> TokenResult -> r
-raceFailure !level tokens = case tokens of
-    TokFailed -> failWith "the JSON lexer failed"
-    TokMoreData _ -> failWith nestingLimit
-    PartialResult element rest -> case element of
-        ArrayEnd _ -> closed rest
-        ObjectEnd _ -> closed rest
+raceFailure :: (Walk r) => Int -> Cursor -> r
+raceFailure !level tokens = case Lexer.next tokens of
+    Lexer.Failed -> failWith "the JSON lexer failed"
+    Lexer.More _ -> failWith nestingLimit
+    Lexer.Token element rest -> case element of
+        ArrayEnd -> closed rest
+        ObjectEnd -> closed rest
         ArrayBegin -> raceFailure (level + 1) rest
         ObjectBegin -> raceFailure (level + 1) rest
         StringContent _ -> longString rest
-        StringEnd _ -> failWith "unexpected end of string"
+        StringEnd -> failWith "unexpected end of string"
         _ -> raceFailure level rest
   where
     closed rest
         | level <= 1 = failWith nestingLimit
         | otherwise = raceFailure (level - 1) rest
-    longString = \case
-        TokFailed -> failWith "the JSON lexer failed"
-        TokMoreData _ -> failWith nestingLimit
-        PartialResult (StringContent _) rest -> longString rest
-        PartialResult (StringEnd _) rest -> raceFailure level rest
-        PartialResult _ _ -> failWith "unexpected token in a string"
+    longString cursor = case Lexer.next cursor of
+        Lexer.Failed -> failWith "the JSON lexer failed"
+        Lexer.More _ -> failWith nestingLimit
+        Lexer.Token (StringContent _) rest -> longString rest
+        Lexer.Token StringEnd rest -> raceFailure level rest
+        Lexer.Token _ _ -> failWith "unexpected token in a string"
 {-# INLINEABLE raceFailure #-}
 
 -- json-stream's scalar parsers: a container is skipped and handed to the last continuation.
-readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> (TokenResult -> r) -> r
+readScalar :: (Build b r) => b -> Mode -> InternTable -> Element -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> (Cursor -> r) -> r
 readScalar build mode table element rest next container = case element of
     JInteger number -> integer build (fromIntegral number) (\value -> next value table rest)
     JValue (String text) -> string build mode table next (decodedName text) rest
@@ -259,7 +276,7 @@ readScalar build mode table element rest next container = case element of
 {-# INLINEABLE readScalar #-}
 
 -- The table's shared copy of a string, or a copy of its own when the mode keeps it.
-string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> TokenResult -> r) -> Name -> TokenResult -> r
+string :: (Build b r) => b -> Mode -> InternTable -> (Built b -> InternTable -> Cursor -> r) -> Name -> Cursor -> r
 string build mode table next name after = case mode of
     Keep -> ownString build name (\value -> next value table after)
     Share -> case internName name table of
@@ -268,24 +285,24 @@ string build mode table next name after = case mode of
 
 -- The first member under a key wins, as in json-stream. A repeat is read where json-stream reads it,
 -- then dropped, and nothing it holds enters the table.
-readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readObject :: (Build b r) => b -> Int -> Members -> Mode -> InternTable -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readObject build open members@(Members _ other) mode table0 tokens0 next = openObject build (\fields0 -> loop table0 fields0 tokens0)
   where
-    loop table !fields tokens = case tokens of
-        PartialResult (ObjectEnd _) rest -> closeObject build fields (\built -> next built table rest)
-        PartialResult (StringRaw bytes True _) rest -> member table fields (Plain bytes) rest
-        _ -> withElement tokens $ \element rest -> case element of
-            ObjectEnd _ -> closeObject build fields (\built -> next built table rest)
+    loop table !fields tokens = case Lexer.next tokens of
+        Lexer.Token ObjectEnd rest -> closeObject build fields (\built -> next built table rest)
+        Lexer.Token (StringPlain bytes) rest -> member table fields (plainName bytes) rest
+        scanned -> withScanned scanned $ \element rest -> case element of
+            ObjectEnd -> closeObject build fields (\built -> next built table rest)
             _ -> memberName element rest (member table fields) (loop table fields)
-    member table fields name rest = case listedMember members name of
-        Just (shared, shape) -> value table fields name (Just shared) shape rest
+    member table fields name rest = case findMember members name of
+        Just (Member (shared, shape) prepared) -> value table fields name (Just shared) prepared shape rest
         Nothing -> case other of
-            Just shape -> value table fields name Nothing shape rest
+            Just shape -> value table fields name Nothing Nothing shape rest
             Nothing -> withElement rest $ \element afterKey -> skipFrom element afterKey (loop table fields)
     -- A shared key goes through the table, and a key the table keeps holds its value as read.
-    value table fields name shared shape rest = case mode of
+    value table fields name shared prepared shape rest = case mode of
         Keep -> keyed (OwnKey (fromMaybe (Key.fromText (nameText name)) shared)) Keep table
-        Share -> case internName name table of
+        Share -> case maybe (internName name table) (`internPreparedName` table) prepared of
             Interned entry held -> keyed (SharedKey entry) (if entryKeeps entry then Keep else Share) held
       where
         keyed key !valueMode held = beginMember build key fields $ \ !repeated ->
@@ -300,11 +317,11 @@ readObject build open members@(Members _ other) mode table0 tokens0 next = openO
         {-# INLINE keyed #-}
 {-# INLINEABLE readObject #-}
 
-readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> TokenResult -> (Built b -> InternTable -> TokenResult -> r) -> r
+readArray :: (Build b r) => b -> Int -> Shape -> Mode -> InternTable -> Cursor -> (Built b -> InternTable -> Cursor -> r) -> r
 readArray build open item mode table0 tokens0 next = openArray build (\items0 -> loop table0 0 items0 tokens0)
   where
     loop table !count items tokens = withElement tokens $ \element rest -> case element of
-        ArrayEnd _ -> closeArray build count items (\array -> next array table rest)
+        ArrayEnd -> closeArray build count items (\array -> next array table rest)
         _ ->
             withDirect build (direct item mode table element) table (\field table' -> addItem build field items (\items' -> loop table' (count + 1) items' rest)) $
                 readAt build open False item mode table element rest $ \field table' afterValue ->
@@ -337,11 +354,13 @@ direct shape mode table element = case shape of
     ArrayWith budget _ fallback | budget > 0 -> direct fallback mode table element
     StringOr budget other
         | budget > 0 -> case element of
-            StringRaw{} -> scalarToken mode table element
+            StringPlain{} -> scalarToken mode table element
+            StringEncoded{} -> scalarToken mode table element
             JValue (String _) -> scalarToken mode table element
             _ -> direct other mode table element
     ObjectOr fallback _ -> case element of
-        StringRaw{} -> DirectWhole fallback
+        StringPlain{} -> DirectWhole fallback
+        StringEncoded{} -> DirectWhole fallback
         JValue _ -> DirectWhole fallback
         JInteger _ -> DirectWhole fallback
         _ -> Indirect
@@ -350,8 +369,8 @@ direct shape mode table element = case shape of
 
 scalarToken :: Mode -> InternTable -> Element -> Direct
 scalarToken mode table = \case
-    StringRaw bytes True _ -> direct' (Plain bytes)
-    StringRaw bytes False _ -> either (const Indirect) (direct' . decodedName) (unescapeText bytes)
+    StringPlain bytes -> direct' (plainName bytes)
+    StringEncoded bytes -> either (const Indirect) (direct' . decodedName) (decodeString bytes)
     JValue (String text) -> direct' (decodedName text)
     JValue scalar -> DirectWhole scalar
     JInteger number -> DirectInteger (fromIntegral number)

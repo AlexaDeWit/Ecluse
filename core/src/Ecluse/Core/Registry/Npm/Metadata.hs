@@ -34,7 +34,7 @@ import Control.Monad.ST (ST, stToIO)
 import Data.Aeson (Value (Object))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.JsonStream.TokenParser (TokenResult)
+import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageInfo (..), PackageName, renderPackageName)
@@ -70,18 +70,18 @@ npmRead =
         , erFinishSelected = finishNpmVersion
         }
 
-{- | npm's charges cover read peaks of 1.071 bytes per source byte and realistic output working sets
+{- | npm's charges cover read peaks of 0.958 bytes per source byte and realistic output working sets
 of 1.524 bytes per basis byte from one meter step up. Calibration is recorded in @docs/testing.md@.
 -}
 npmChargeFactors :: ChargeFactors
-npmChargeFactors = ChargeFactors{cfFullReadPermille = 1200, cfOutputPermille = 2000}
+npmChargeFactors = ChargeFactors{cfFullReadPermille = 1100, cfOutputPermille = 2000}
 
 -- Walk a packument's chunks into aeson's tree with the production field policy.
 readNpmPackument :: Limits -> PackageName -> PackumentRead -> DocumentWalk (Walked TreeRead)
 readNpmPackument limits name mode bound table = readJsonWalk bound (npmPackumentWalk limits name mode table)
 
 -- | The production packument walk into aeson's tree over a caller's intern table.
-npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> TokenResult -> Step (Walked TreeRead)
+npmPackumentWalk :: Limits -> PackageName -> PackumentRead -> InternTable -> Cursor -> Step (Walked TreeRead)
 npmPackumentWalk limits name mode table = npmWalk Trees (maxNestingDepth limits) mode (pureStep (treeStep limits name)) keepsTreeRelease table emptyTreeRead
 
 -- | What a full read finishes with: the read's table, and its typed facts and packed releases.
@@ -103,7 +103,7 @@ npmFullTable base name table0 = (seeded,) <$> newWriter (Just (authorKey, pointe
     Interned pointer seeded = internName (decodedName (authorPointer base name)) withKey
 
 -- | The production full-read walk: each kept release packed by the writer against the caller's table.
-npmFullWalk :: Writer st -> Limits -> PackageName -> InternTable -> TokenResult -> ST st (Steps (ST st) NpmFullRead)
+npmFullWalk :: Writer st -> Limits -> PackageName -> InternTable -> Cursor -> ST st (Steps (ST st) NpmFullRead)
 npmFullWalk writer limits name table = npmWalk writer (maxNestingDepth limits) WholePackument (packedStep writer limits name) keepsPackedRelease table emptyPackedRead
 {-# INLINE npmFullWalk #-}
 

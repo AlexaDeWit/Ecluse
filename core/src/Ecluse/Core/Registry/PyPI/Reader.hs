@@ -13,10 +13,10 @@ module Ecluse.Core.Registry.PyPI.Reader (
 
 import Data.Aeson (Value (Null, String))
 import Data.Aeson.Key qualified as Key
-import Data.JsonStream.TokenParser (Element (..), TokenResult)
+import Data.JsonStream.Lexer (Cursor, Element (..))
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, nameBytes, nameText)
-import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, readShape)
+import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (..), knownMembers, listedMember, namedMembers, prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
@@ -30,7 +30,7 @@ fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
 {- | Walk one project's Simple index, passing each field to the step as it completes. Only a file a
 full read keeps enters the table, and only the first of each member it repeats.
 -}
-pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> TokenResult -> Step s
+pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Cursor -> Step s
 {-# INLINE pypiWalk #-}
 pypiWalk depth mode step keeps table0 initial = start
   where
@@ -86,8 +86,9 @@ pypiWalk depth mode step keeps table0 initial = start
                     _ -> InvalidVersionField position value
              in emit acc field (\acc' -> continue (Walked table acc') afterValue)
 
-    fileFields = namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars])
-    hashFields = knownMembers hashNames (Scalar (depth - 4))
+    fileFields = prepare (namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars]))
+    hashFields = prepare (knownMembers hashNames (Scalar (depth - 4)))
+    prepare = if full then prepareMembers table0 else id
     metaFields = namedMembers ([("tracks", ArrayWith (depth - 2) (Scalar (depth - 3)) (Scalar (depth - 2))) | full] <> [("api-version", Scalar (depth - 2))] <> [("_last-serial", Scalar (depth - 2)) | full])
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
 
@@ -105,7 +106,7 @@ data Selecting a = Selecting !InternTable !FilenameMemo a
 
 -- A file is read up to the first name that rejects it, and its rest is skipped like any skipped value:
 -- no member there is decoded, and only the lexer can fail the read. A file of the release is read whole.
-selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> TokenResult -> (Maybe Value -> FilenameMemo -> InternTable -> TokenResult -> r) -> r
+selectedFile :: (Walk r) => Selection -> FilenameMemo -> InternTable -> Element -> Cursor -> (Maybe Value -> FilenameMemo -> InternTable -> Cursor -> r) -> r
 {-# INLINEABLE selectedFile #-}
 selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = fields, selHashes = hashes} memo0 table0 element rest next = case element of
     ObjectBegin -> eachMember visit (\(Selecting table memo file) after -> next (finishSelected file) memo table after) (Selecting table0 memo0 (CandidateFile False [] Nothing False)) rest

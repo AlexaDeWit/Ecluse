@@ -13,7 +13,7 @@ cp "$here/../.gitignore" "$temporary/"
 cd "$temporary"
 git init -q
 
-expected_hs=(app/Main.hs bench/Bench.hs core/src/Core.hs core/test/CoreSpec.hs runtime/src/Runtime.hs runtime/test/RuntimeSpec.hs src/App.hs test/AppSpec.hs tools/generator/Gen.hs web/site-gen/Site.hs 'src/With Space.hs')
+expected_hs=(json-stream/src/Data/JsonStream/Parser.hs app/Main.hs bench/Bench.hs core/src/Core.hs core/test/CoreSpec.hs runtime/src/Runtime.hs runtime/test/RuntimeSpec.hs src/App.hs test/AppSpec.hs tools/generator/Gen.hs web/site-gen/Site.hs 'src/With Space.hs')
 expected_sh=(scripts/source-inventory.sh scripts/check.sh 'web/With Space.sh')
 for path in "${expected_hs[@]}" "${expected_sh[@]}"; do
   mkdir -p "$(dirname "$path")"

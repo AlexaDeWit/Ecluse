@@ -460,7 +460,7 @@ are CodeArtifact, any host that speaks the protocol, and Verdaccio for developme
 
 ### Incremental npm extraction
 
-npm and PyPI reads walk the tokens of the vendored json-stream lexer (`vendor/json-stream/`) inside
+npm and PyPI reads walk the tokens of the maintained json-stream lexer (`json-stream/`) inside
 the HTTP response lifetime. The reader feeds chunks of at most 32 KiB and counts decompressed bytes.
 A full read passes the response body through a digesting source, which updates SHA-256 from each
 chunk the reader consumes. A selected read reads the body
@@ -485,8 +485,13 @@ ceilings bound other work. The walk accepts and refuses the same input as json-s
 combinators, except in the rest of a file that a selected PyPI read skips, and it builds each
 retained object once from its members.
 
-The vendored lexer allocates batches proportional to the input chunk size (`20 + chunkBytes / 5`
-result records). Its key accumulator stops at about 64 KiB and its number accumulator at about
+The Haskell lexer scans immutable input slices, with no C lexer or foreign result buffer.
+Each scan returns a token and a new immutable cursor. Tree reads stay pure, while packed writers
+retain their state threads. Returned tokens retain their input slices through later reads.
+The private library exposes the parser and one lexer interface. Cursor constructors and raw decoding
+stay private. Plain string tokens carry validation that their bytes need no JSON escaping or UTF-8
+decoding. Registry readers enforce body and chunk limits outside that interface.
+The key accumulator stops at about 64 KiB and the number accumulator at about
 200,000 digits. Retained strings become owned `Text`. A full read, and a selected npm read, keeps one
 copy of each key and string its releases or files repeat. The walk finds that copy by the bytes it
 read, in a table keyed by SipHash-1-3 under a key drawn for that read. When the read ends, it seals
