@@ -20,7 +20,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (hContentType, status200, status304, status401, status403, status404, statusCode)
+import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status302, status304, status400, status401, status403, status404, status429, status500, status503, statusCode)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Package (HashAlg (SHA512))
@@ -34,6 +34,8 @@ import Ecluse.Core.Registry.Npm.Route.Internal (
     npmTarballContract,
     npmTarballReplies,
  )
+import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
+import Ecluse.Core.Registry.PyPI.Route (pypiRouter)
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomeTally), SweepTally (tallyDeleted, tallyExamined))
@@ -53,6 +55,8 @@ import Ecluse.Core.Server.Context (
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
+    ResponseAction (RunPipeline),
+    RouteAction (RouteAction),
     ServeRuntime (ServeRuntime, srMemoryMeter, srMetadataCache, srMetrics),
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
@@ -77,20 +81,22 @@ import Ecluse.Test.Maintenance (
     servedVersion,
     servedVersions,
  )
-import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
+import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, requestsName, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
-import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
+import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMemoryMeter)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
-import Ecluse.Test.Wai (countingUpstream)
-import Network.HTTP.Types.Header (RequestHeaders, hETag, hHost, hIfNoneMatch)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
+import Ecluse.Test.Wai (countingUpstream, selfBaseUrl)
+import Network.HTTP.Types.Header (RequestHeaders, hDate, hETag, hHost, hIfNoneMatch)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, mapResponseHeaders, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
+import Network.Wai.Test (SResponse (..), request, runSession)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -104,6 +110,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     skippedCheckAuditSpec
     distTagSpec
     sharedCacheSpec
+    pypiPrivateArtifactSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -129,7 +136,6 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "records an unavailability and renders 503 when no upstream resolves" $ do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
-        -- 'depsFor 1' points both origins at a closed port, which refuses each fetch.
         deps <- depsFor 1
         resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
@@ -170,8 +176,6 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         hits <- newIORef (0 :: Int)
-        -- 'depsFor' points the private origin at a closed port, so this name's one authority
-        -- never answers and the client is told to retry rather than that the name is gone.
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
             let serveUnder firstParty =
@@ -190,30 +194,70 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             readIORef hits >>= (`shouldSatisfy` (> 0))
             decisions >>= (`shouldBe` [Unavailable, Admit])
 
-    it "keeps a first-party artifact off the public upstream, answering 404 after a private miss" $ do
+    it "keeps a first-party artifact off the public upstream, answering 503 when the private port is closed" $ do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
-            let serveUnder firstParty =
+            for_ [serveTarball, headTarball] $ \serve -> do
+                firstParty <-
                     captureServe
                         npmTarballContract
                         rt
-                        (mountWith base{pdFirstParty = firstParty})
-                        (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-            firstParty <- serveUnder (== leftpadName)
-            statusCode (responseStatus firstParty) `shouldBe` 404
-            readIORef hits >>= (`shouldBe` 0)
-            decisions >>= (`shouldBe` [Deny])
-            thirdParty <- serveUnder (/= leftpadName)
-            statusCode (responseStatus thirdParty) `shouldBe` 200
-            readIORef hits >>= (`shouldSatisfy` (> 0))
-            decisions >>= (`shouldBe` [Deny, Admit])
+                        (mountWith base{pdFirstParty = (== leftpadName)})
+                        (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                statusCode (responseStatus firstParty) `shouldBe` 503
+                lookup hRetryAfter (responseHeaders firstParty) `shouldBe` Nothing
+            readIORef hits `shouldReturn` 0
+            decisions `shouldReturn` [Unavailable, Unavailable]
+
+    for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status400, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable), (status503, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
+        it ("keeps first-party artifact HTTP " <> show (statusCode privateStatus) <> " private, answering " <> show expectedStatus <> " for GET and HEAD") $ do
+            (metricsPort, decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            publicHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
+                testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort -> do
+                    base <- depsFor publicPort
+                    let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base{pdFirstParty = (== leftpadName)}
+                    for_ [serveTarball, headTarball] $ \serve -> do
+                        response <-
+                            captureServe
+                                npmTarballContract
+                                rt
+                                (mountWith deps)
+                                (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                        statusCode (responseStatus response) `shouldBe` expectedStatus
+                        lookup hRetryAfter (responseHeaders response) `shouldBe` Nothing
+                    readIORef publicHits `shouldReturn` 0
+                    decisions `shouldReturn` [expectedDecision, expectedDecision]
+
+    it "keeps the public artifact status, headers and bytes after every private miss" $
+        testWithApplication (pure (\req respond -> upstreamApp req (respond . mapResponseHeaders ((hDate, "Thu, 01 Jan 2026 00:00:00 GMT") :)))) $ \publicPort -> do
+            rt <- mkRuntime noopMetricsPort
+            base <- depsFor publicPort
+            logEnv <- newTestLogEnv
+            let fetch deps =
+                    runSession (request defaultRequest) $ \req respond ->
+                        runHandler
+                            logEnv
+                            mempty
+                            (RequestCtx rt (mountWith deps))
+                            (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") req (respond . responseToWai npmTarballContract))
+            baseline <- fetch (withPrivateBaseUrl Nothing base)
+            simpleBody baseline `shouldBe` LBS.fromStrict artifactBytes
+            let assertSame response = do
+                    simpleStatus response `shouldBe` simpleStatus baseline
+                    simpleHeaders response `shouldBe` simpleHeaders baseline
+                    simpleBody response `shouldBe` simpleBody baseline
+            fetch base >>= assertSame
+            for_ [status404, status302, status400, status429, status500, status503] $ \privateStatus ->
+                testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private refusal"))) $ \privatePort ->
+                    fetch (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) >>= assertSame
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        -- No waiting room makes saturation refuse immediately.
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
@@ -391,7 +435,6 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
     it "keeps the warning and counter after a named public denial with both digests fixed" $
         withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
-            -- The public tag names 2.0.0 while it survives; the deny leaves only the private 1.0.0.
             for_ [(base, "2.0.0", ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, "1.0.0", ["1.0.0"], 2)] $ \(deps, latest, keys, count) -> do
                 (_, logged) <- captureJsonLog $ \logEnv -> do
                     resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
@@ -481,18 +524,12 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
                     statusCode (responseStatus tarball) `shouldBe` 200
                 evidenceLines = length . filter (T.isInfixOf "skipped for unavailability") . lines
             (_, logged) <- captureJsonLog $ \logEnv -> do
-                -- Five public serves of one version during one outage: one line.
                 replicateM_ 5 (serve logEnv deps "1.0.0")
-                -- Another version is its own identity.
                 serve logEnv deps "2.0.0"
-                -- The same version with another skipped rule set is its own identity too.
                 serve logEnv deps{pdRules = twoSkips} "1.0.0"
                 replicateM_ 3 (serve logEnv deps "1.0.0")
-                -- Recovery, once every rule answers, clears the record, so the next admission
-                -- with a skip logs again.
                 for_ ["DenyIfCve", "DenyIfEpss"] (reportSource reporter . SourceAnswered)
                 serve logEnv deps "1.0.0"
-            -- Two skipped rules on one admission are two lines, so the third identity adds two.
             evidenceLines logged `shouldBe` 5
             length (filter (T.isInfixOf "\"version\":\"2.0.0\"") (lines logged)) `shouldBe` 1
             length (filter (T.isInfixOf "\"rule\":\"DenyIfEpss\"") (lines logged)) `shouldBe` 1
@@ -501,7 +538,6 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
-            -- The public upstream sits on a closed port, so only the private copy can serve.
             deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
             (_, logged) <- captureJsonLog $ \logEnv ->
                 replicateM_ 3 $ do
@@ -509,8 +545,6 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
                     statusCode (responseStatus tarball) `shouldBe` 200
             logged `shouldSatisfy` (not . T.isInfixOf "skipped for unavailability")
 
--- The issue's reproduction over the fixtures: the quarantine allow beside an advisory deny set to
--- skip, with no advisory database loaded.
 skippingDeps :: Int -> IO PackumentDeps
 skippingDeps publicPort = do
     base <- depsFor publicPort
@@ -520,8 +554,6 @@ skippingDeps publicPort = do
 skipPolicy :: [PrecededRule]
 skipPolicy = atDefaultPrecedence (Rules.DenyIfCve (Rules.DenyIfCveParams 8.0 Rules.FailNoDecision)) : allowPolicy
 
--- 'skippingDeps' over a live outage reporter, so the gate's evidence line is bounded as the
--- composition root bounds it, with the reporter handed back so a case can recover the source.
 observedSkippingDeps :: Int -> IO (SourceReporter, PackumentDeps)
 observedSkippingDeps publicPort = do
     base <- depsFor publicPort
@@ -533,7 +565,6 @@ observedSkippingDeps publicPort = do
 ruleDepsOf :: SourceReporter -> RuleDeps
 ruleDepsOf reporter = inertRuleDeps{rdSourceReporter = reporter}
 
--- 'upstreamApp' over two old versions, so a case can admit each.
 twoVersionUpstream :: Application
 twoVersionUpstream req respond =
     case rawPathInfo req of
@@ -584,7 +615,6 @@ sharedCacheSpec = describe "the shared metadata cache across the two origins" $
             privateCached `shouldBe` Just False
             cachedUnder rt (pdPublicBaseUrl deps) `shouldReturn` False
 
--- Whether the shared cache holds a full-document entry under an origin's own key.
 cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool
 cachedUnder rt baseUrl = isJust <$> cachedMetadata noopMetricsPort (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
 
@@ -618,7 +648,6 @@ assertConflictLog expected logged = do
             encoded `shouldSatisfy` T.isInfixOf "\"versions\":\"1.0.0\""
         _ -> expectationFailure "a structured log entry must be an object"
 
--- The served document's top-level fields.
 servedFields :: Response -> IO (KeyMap.KeyMap Value)
 servedFields resp = do
     value <- case resp of
@@ -628,7 +657,6 @@ servedFields resp = do
         Object fields -> pure fields
         _ -> fail "expected a packument object"
 
--- The served version keys, sorted. 'Nothing' when the document carries no version object.
 servedKeys :: KeyMap.KeyMap Value -> Maybe [Text]
 servedKeys fields = case KeyMap.lookup "versions" fields of
     Just (Object versions) -> Just (sort (map Key.toText (KeyMap.keys versions)))
@@ -656,8 +684,6 @@ conflictPublicApp change = publicAppOver ["1.0.0", "2.0.0"] "2.0.0" (change . wi
   where
     withInstallScript v = v{vsHasInstallScript = True}
 
--- A public document over the given versions, tagged at the named one. Every version predates the
--- age rule, so only a named deny holds one back.
 publicAppOver :: [Text] -> Text -> (VersionSpec -> VersionSpec) -> Application
 publicAppOver versions latest change req respond =
     respond (responseLBS status200 [(hContentType, "application/json")] (encode document))
@@ -747,7 +773,6 @@ An unread manifest is evidence rather than a guard, so a rule reading only ident
 data LifetimeStore = Sweepable | FirstParty | ConsentMissing | TargetPreserved | ManifestMissing
     deriving stock (Eq, Show)
 
--- The store states that stop a delete before any rule runs.
 stopsBeforeRules :: LifetimeStore -> Bool
 stopsBeforeRules = \case
     FirstParty -> True
@@ -838,6 +863,59 @@ storedUpstream store req respond = do
         then upstreamApp req respond
         else respond (responseLBS status404 [] "")
 
+pypiPrivateArtifactSpec :: Spec
+pypiPrivateArtifactSpec = describe "PyPI first-party private artifacts" $ do
+    it "answers 503 without a suggested delay when the private origin cannot be read" $ do
+        (metricsPort, decisions) <- recordingMetricsPort
+        rt <- mkRuntime metricsPort
+        publicHits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort -> do
+            let deps = pypiPrivateDeps 1 publicPort
+            for_ [methodGet, methodHead] $ \method -> do
+                response <- capturePypiArtifact rt deps method
+                statusCode (responseStatus response) `shouldBe` 503
+                lookup hRetryAfter (responseHeaders response) `shouldBe` Nothing
+            readIORef publicHits `shouldReturn` 0
+            decisions `shouldReturn` [Unavailable, Unavailable]
+
+    for_ [(status404, 404, Deny), (status302, 503, Unavailable), (status429, 503, Unavailable), (status500, 503, Unavailable)] $ \(privateStatus, expectedStatus, expectedDecision) ->
+        it ("answers " <> show expectedStatus <> " after a private index hit and artifact HTTP " <> show (statusCode privateStatus)) $ do
+            (metricsPort, decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            publicHits <- newIORef (0 :: Int)
+            privateHits <- newIORef (0 :: Int)
+            testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
+                testWithApplication (pure (countingUpstream privateHits (pypiPrivateApp privateStatus))) $ \privatePort -> do
+                    for_ [methodGet, methodHead] $ \method -> do
+                        response <- capturePypiArtifact rt (pypiPrivateDeps privatePort publicPort) method
+                        statusCode (responseStatus response) `shouldBe` expectedStatus
+                        lookup hRetryAfter (responseHeaders response) `shouldBe` Nothing
+                    readIORef privateHits `shouldReturn` 4
+                    readIORef publicHits `shouldReturn` 0
+                    decisions `shouldReturn` [expectedDecision, expectedDecision]
+
+pypiPrivateDeps :: Int -> Int -> PackumentDeps
+pypiPrivateDeps privatePort publicPort =
+    (pypiServeDeps (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) (loopbackRegistryUrl ("http://localhost:" <> show publicPort)) (MirrorOnAdmit (loopbackRegistryUrl "http://mirror.test")) [] (pure fixedNow))
+        { pdFirstParty = (== requestsName)
+        }
+
+capturePypiArtifact :: ServeRuntime -> PackumentDeps -> Method -> IO Response
+capturePypiArtifact rt deps method =
+    case pypiRouter method [] ["simple", "requests", "requests-1.0.0.tar.gz"] of
+        RouteAction contract (RunPipeline _ action) -> captureServe contract rt binding (action defaultRequest)
+        _ -> throwIO MissingFixtureResponse
+  where
+    binding = (mountUnder pypiCredential deps){bindingPrefix = "pypi" :| [], bindingRouter = pypiRouter}
+
+pypiPrivateApp :: Status -> Application
+pypiPrivateApp privateStatus req respond
+    | rawPathInfo req == "/simple/requests/" =
+        respond (responseLBS status200 [(hContentType, "application/vnd.pypi.simple.v1+json")] (encode index))
+    | otherwise = respond (responseLBS privateStatus [] "private refusal")
+  where
+    index = simpleIndex "requests" [withFileKeys [("url", String (selfBaseUrl req <> "/files/requests-1.0.0.tar.gz"))] (simpleFile "requests-1.0.0.tar.gz")]
+
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
     logEnv <- newTestLogEnv
@@ -858,8 +936,7 @@ instance Exception MissingFixtureResponse
 
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
-    -- Capacity high enough that this handle never gates. The admission cases wrap
-    -- 'withServeAdmission' with their own tuned handle.
+    -- Admission cases use a separate tuned handle.
     admission <- newServeAdmission 1_000_000
     mkRuntimeWith admission metricsPort
 
@@ -947,7 +1024,6 @@ artifactBytes = "leftpad artifact bytes"
 packumentWithIntegrity :: ByteString -> Text -> Value
 packumentWithIntegrity host integrity = privatePackumentOver host integrity ["1.0.0"] "1.0.0"
 
--- A private document over the given versions, tagged at the named one.
 privatePackumentOver :: ByteString -> Text -> [Text] -> Text -> Value
 privatePackumentOver host integrity versions latest =
     packumentValue
@@ -980,8 +1056,6 @@ divergentPrivateApp = privateAppWithIntegrity (sha512Integrity "leftpad artifact
 privateAppWithIntegrity :: Text -> Application
 privateAppWithIntegrity integrity = privateAppAt integrity ["1.0.0"] "1.0.0"
 
--- A private upstream serving the given versions under its own latest tag, with digests that
--- agree with the public copy, so nothing diverges.
 privateAppOver :: [Text] -> Text -> Application
 privateAppOver = privateAppAt (sha512Integrity artifactBytes)
 

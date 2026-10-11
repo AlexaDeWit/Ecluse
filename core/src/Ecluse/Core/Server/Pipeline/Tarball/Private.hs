@@ -15,7 +15,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Private (
 ) where
 
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status403, statusCode)
+import Network.HTTP.Types (status403, status404, statusCode)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -67,12 +67,12 @@ import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     acceptArtifact,
     relayUnjudged,
-    relayUpstreamWhen,
+    relayUpstreamResult,
     withMethod,
     withValidators,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballReplies (..))
-import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
+import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import UnliftIO (tryAny)
 
@@ -90,12 +90,12 @@ streamPrivateArtifact ctx token =
     privateArtifactRequest ctx token >>= \case
         PrivateRefused -> PrivateAnswered Metric.Deny <$> liftIO refuse
         PrivateMissing miss -> pure (PrivateMissed miss)
-        -- The relay reports no cause of its own, so a rejected private status and an unreachable
-        -- private host are one miss, each keeping today's fall-through.
         PrivateRequest req ->
             liftIO $
-                maybe (PrivateMissed MissAbsent) (uncurry PrivateAnswered . snd)
-                    <$> relayUpstreamWhen (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivate relayUnjudged privateResponder
+                relayUpstreamResult (arMode ctx) (srPrivateManager (arRuntime ctx)) (progressFloor (pdLimits (arDeps ctx))) (shaped req) acceptPrivate relayUnjudged privateResponder >>= \case
+                    UpstreamRelayed (_, (decision, received)) -> pure (PrivateAnswered decision received)
+                    UpstreamRejected status -> pure (PrivateMissed (if status == status404 then MissAbsent else MissUnresolved))
+                    UpstreamTransportFailure -> pure (PrivateMissed MissUnresolved)
   where
     replies = arReplies ctx
     respond = arRespond ctx
@@ -113,7 +113,6 @@ streamPrivateArtifact ctx token =
         | isAuthorisationFailure (statusCode status) = (Metric.Deny,) <$> refuse
         | otherwise = (Metric.Admit,) <$> admitted
 
--- The private leg's outcome before any relay: a request to make, an explicit refusal, or a miss.
 data PrivateArtifact
     = PrivateRequest HTTP.Request
     | PrivateRefused
@@ -130,16 +129,12 @@ privateArtifactRequest ctx token = case pdPrivateBaseUrl deps of
   where
     deps = arDeps ctx
 
-    -- The precomputed private authority. A conventionally-built URL is on the private base, so
-    -- the gate stays applied and trivially satisfied without re-parsing the URL.
     privateHostPort = thgPrivateHostPort (pdTarballHostGate deps)
 
     byConventionalPath privateBase =
         either (const (PrivateMissing MissAbsent)) PrivateRequest $
             artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager (arRuntime ctx)) privateBase token) (arPackage ctx) (unFilename (arFile ctx))
 
-{- The location is gated from the same definition the download gate reads, and the credential
-rides only when the target is the private upstream itself. -}
 byIndexedLocation :: ArtifactRequest response -> Maybe ClientCredential -> RegistryUrl -> Maybe HostPort -> Handler PrivateArtifact
 byIndexedLocation ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
@@ -157,9 +152,7 @@ byIndexedLocation ctx token privateBase privateHostPort = do
         let carried = if target == privateHostPort then token else Nothing
         rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
 
-{- | The miss a private metadata failure leaves the artifact path, or 'Nothing' for an explicit
-access refusal. An identity fault settles the request, because this path renders no @502@ for one.
--}
+-- | Classify metadata misses, with 'Nothing' for access refusal and absence for identity faults.
 privateMetadataMiss :: MetadataError -> Maybe OriginMiss
 privateMetadataMiss = \case
     MetadataAuthorisationFailure{} -> Nothing
