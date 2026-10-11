@@ -15,7 +15,6 @@ module Data.JsonStream.Lexer.Internal (Cursor, Element (..), Scanned (..), Plain
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
-import Data.List (foldl')
 import Data.Scientific (scientific)
 import Data.Word (Word8)
 import Foreign.C.Types (CLong)
@@ -228,7 +227,7 @@ number bytes initial continued numbers = go initial 0 0 False 0 continued 1
                                                     else go (offset + 1) computed digits dotted fractionDigits True sign
     partial part
         | not continued = More (Cursor bytes size NumberPart [part])
-        | foldl' (\total piece -> total + BS.length piece) 0 numbers > numberDigitLimit = Failed
+        | foldl' (\total partBytes -> total + BS.length partBytes) 0 numbers > numberDigitLimit = Failed
         | otherwise = More (Cursor bytes size NumberPart (part : numbers))
     complete part offset computed fractionDigits invalid sign
         | invalid =
