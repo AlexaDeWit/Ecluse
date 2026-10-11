@@ -11,6 +11,18 @@ testing side is in
 and the checklist of tests, benchmarks and fixtures is in
 [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem).
 
+Supply fixtures and operation records to the shared contracts in `test/contracts/Ecluse/Test/Contract/`.
+Keep protocol decoding, request construction, native observations, and raw-wire oracles in the ecosystem's provider.
+Do not copy an existing contract's business assertions into a new spec.
+The [contract coverage map](test-contracts.md) identifies shared laws and native extensions.
+
+Register the supported profile, required capabilities, lifecycle groups, and stable case IDs.
+Declare obligations independently of driver availability, then check them against the production adapter registry.
+A missing driver for a supported operation fails coverage. A planned operation records its delivery issue and runs no placeholder.
+Provide negative controls that prove incorrect observations and missing registrations fail.
+Use `task test-contract-list` and `task test-contract-plan` to inspect E2E obligations without services.
+Run a new E2E group alone with `task test-e2e-run -- --group <group-id>` after `task test-e2e-prepare` and `task test-e2e-load`.
+
 Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
 Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.
 Boot refuses each blocked entry in an active mount's resolved policy.
@@ -366,6 +378,9 @@ describes the legs, the part of a read they cover, the margin, and what fails th
 ecosystem joins the gate through its registered `EcosystemBench` corpus, because the gate measures
 every capture there and fails on one with no calibrated figure. To calibrate the new ecosystem,
 open the pull request that adds its captures, and follow the recalibration steps in that section.
+Update the independent measurement obligation list as well as its concrete provider registration.
+The benchmark and allocation loaders reject a missing, duplicate, or unshipped provider before measuring work.
+Preserve corpus bytes, allocation and forcing boundaries, RTS flags, quotas, affinity, refusal rows, floors, and verdicts during contract extraction.
 
 Two of the gate's legs repeat the full read with the corpus advisories served: one under the
 shipped policy, and one under the shipped policy with both advisory denies.

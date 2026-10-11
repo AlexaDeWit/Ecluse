@@ -259,6 +259,19 @@ The [tier rules](../testing.md#what-gates-and-what-doesnt) decide placement from
 | `CredentialProvider` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Credential/<Backend>Spec.hs` for a stubbed mint. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs) asserts the token and expiry extracted from a stubbed response. No automatic test verifies a real AWS mint. |
 | `StoreMaintenance` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Maintenance/<Backend>Spec.hs` and matching child specs for control-plane responses. Add `test/integration/Ecluse/Runtime/Maintenance/<Backend>IntegrationSpec.hs` when an emulator supplies those operations. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifactSpec.hs) and its [child specs](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifact/) cover the control plane with doubles. The protocol implementation uses [Npm/MaintenanceSpec](../../core/test/unit/Ecluse/Core/Registry/Npm/MaintenanceSpec.hs) in `ecluse-core-unit`. [Npm/DredgerE2ESpec](../../test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs) exercises Verdaccio in `ecluse-e2e`, not live CodeArtifact. |
 
+Supply operation records for the applicable contracts in `test/contracts/Ecluse/Test/Contract/`.
+Keep acquisition, native faults, polling, and direct observations in the backend's provider.
+Register its capabilities, lifecycle groups, and stable case IDs against independently declared obligations.
+A fake provider proves consumer behaviour. It does not replace the required emulator or live backend check.
+Use the [contract coverage map](../test-contracts.md) to find existing laws and native extensions.
+
+A queue profile declares whether receipt removes the message or leases it for redelivery.
+Apply lease, delivery-count, and dead-letter laws only to durable providers.
+A maintenance profile preserves `StoreFacts`, consent, batch ceilings, deletion completion, refill behaviour, and optional cursor support.
+Keep credential mint request mapping and live-only mint coverage native.
+Planned package storage does not inherit support from S3 advisory storage.
+Future filesystem and S3 package providers require their own completion visibility contracts when those features ship.
+
 Extend `test/unit/Ecluse/Composition/{MirrorQueue,Credential,Maintenance}Spec.hs` for the new backend's composition choices in `ecluse-unit`.
 Shared credential refresh, caching, and expiry policy stays in `ecluse-core-unit`, with a fake clock and mint in
 [`CredentialSpec`](../../core/test/unit/Ecluse/Core/CredentialSpec.hs) and
