@@ -53,7 +53,7 @@ measurementCatalogue =
             , required "live/pypi" "measurement/pypi" "live-metadata" ["live/pypi/sampleproject"]
             ]
         , catalogueGroups =
-            [ group
+            [ measurementGroup
                 "retention/npm"
                 "retention"
                 "measurement/npm"
@@ -63,7 +63,7 @@ measurementCatalogue =
                 ( ["retention/npm/" <> mode <> "/" <> shape | mode <- ["selected", "full"], shape <- ["keys", "members", "dependencies"]]
                     <> ["retention/npm/selected/containers"]
                 )
-            , group
+            , measurementGroup
                 "retention/pypi"
                 "retention"
                 "measurement/pypi"
@@ -71,7 +71,7 @@ measurementCatalogue =
                 []
                 ["rts-stats", "serial-heap"]
                 ["retention/pypi/" <> item | item <- ["selected/containers", "selected/members", "selected/other-releases", "full/members", "full/past-limit"]]
-            , group
+            , measurementGroup
                 "live/npm"
                 "live-metadata"
                 "measurement/npm"
@@ -79,15 +79,15 @@ measurementCatalogue =
                 ["public-network"]
                 []
                 ["live/npm/" <> package | package <- ["react", "types-node", "lodash", "typescript"]]
-            , group "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] ["live/pypi/sampleproject"]
+            , measurementGroup "live/pypi" "live-metadata" "measurement/pypi" Smoke ["public-network"] [] ["live/pypi/sampleproject"]
             ]
         }
 
 required :: Text -> Text -> Text -> [Text] -> Obligation
 required identifier profile contract = Obligation identifier profile contract Supported (capabilities contract)
 
-group :: Text -> Text -> Text -> Tier -> [Text] -> [Text] -> [Text] -> Group
-group identifier contract profile tier prerequisites isolation cases =
+measurementGroup :: Text -> Text -> Text -> Tier -> [Text] -> [Text] -> [Text] -> Group
+measurementGroup identifier contract profile tier prerequisites isolation cases =
     Group identifier contract profile tier "measurement" [Case item [identifier] | item <- cases] (capabilities contract) prerequisites [] isolation
 
 capabilities :: Text -> [Text]

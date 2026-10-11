@@ -29,8 +29,8 @@ spec = describe "liveMetadata" $ do
         liveMetadata "different" (pure (Right manifest)) `shouldThrow` anyException
     it "rejects an empty provider result" $ do
         manifest <- sample
-        let empty = manifest{manifestInfo = (manifestInfo manifest){infoVersions = Map.empty}}
-        liveMetadata (renderPackageName benchPackageName) (pure (Right empty)) `shouldThrow` anyException
+        let emptyManifest = manifest{manifestInfo = (manifestInfo manifest){infoVersions = Map.empty}}
+        liveMetadata (renderPackageName benchPackageName) (pure (Right emptyManifest)) `shouldThrow` anyException
     it "fails a projection refusal instead of reporting successful coverage" $
         liveMetadata "expected" (pure (Left (MetadataNameMismatch "different"))) `shouldThrow` anyException
 
