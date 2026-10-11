@@ -66,7 +66,7 @@ run_rotations() {
     *) printf 'unsupported pod shape\n' >&2; return 1 ;;
   esac
   printf 'round,position,implementation,revision,exit_code,capture_exit_code\n' > "$results/samples.csv"
-  env | LC_ALL=C sort | rg '^(BENCH_LOAD_|GHCRTS=|GITHUB_EVENT_NAME=|RUNNER_ARCH=)' > "$results/measurement-environment.txt"
+  env | LC_ALL=C sort | awk '/^(BENCH_LOAD_|GHCRTS=|GITHUB_EVENT_NAME=|RUNNER_ARCH=)/' > "$results/measurement-environment.txt"
   local failed=0 round position implementation directory status
   local -a order pipeline_status
   for round in "${!rotations[@]}"; do
