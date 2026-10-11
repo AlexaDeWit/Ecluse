@@ -1116,15 +1116,15 @@ spec = do
                 `shouldReturn` refusal "AllowIfOlderThan"
 
         it "refuses only the poisoned advisory verdict without poisoning the shared read" $ do
-            reads <- newIORef (0 :: Int)
+            lookupCount <- newIORef (0 :: Int)
             let bomb =
                     mapPackageRead
                         (\packageRead -> packageRead{prVerdict = const bombVerdict})
-                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing (modifyIORef' reads (+ 1)) (NoDecision FixesNoAdvisory))
+                        (packageRule "AdvisoryBomb" 300 FailNoDecision Nothing (modifyIORef' lookupCount (+ 1)) (NoDecision FixesNoAdvisory))
             age <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
             decideVersion <- newEvaluator ctx (bomb : age)
             traverse decideVersion versions `shouldReturn` [healthy, refusal "AdvisoryBomb", healthy]
-            readIORef reads `shouldReturn` 1
+            readIORef lookupCount `shouldReturn` 1
 
         it "keeps a first-version advisory fault local when the source observer evaluates it" $ do
             reports <- newIORef []
