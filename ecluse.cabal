@@ -730,6 +730,7 @@ library ecluse-test-support
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
+    Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonBytes
@@ -807,11 +808,61 @@ library ecluse-test-support
     -- The advisory fixtures serve their EPSS feeds gzipped, as the publisher does.
     , zlib              ^>=0.7
 
+-- Contracts depend on core test support, never runtime or application providers.
+library ecluse-test-contracts
+  import:          shared
+  hs-source-dirs:  test/contracts
+  exposed-modules:
+    Ecluse.Test.Contract.Advisory
+    Ecluse.Test.Contract.Binding
+    Ecluse.Test.Contract.Catalogue
+    Ecluse.Test.Contract.Credential
+    Ecluse.Test.Contract.Install
+    Ecluse.Test.Contract.Install.Advisory
+    Ecluse.Test.Contract.Install.Outage
+    Ecluse.Test.Contract.Mirror
+    Ecluse.Test.Contract.Publication
+    Ecluse.Test.Contract.Telemetry
+    Ecluse.Test.Contract.Maintenance
+    Ecluse.Test.Contract.Measurement
+    Ecluse.Test.Contract.Metadata.Projection
+    Ecluse.Test.Contract.Options
+    Ecluse.Test.Contract.Phase
+    Ecluse.Test.Contract.Queue
+    Ecluse.Test.Contract.RegistrySmoke
+    Ecluse.Test.Contract.Result
+    Ecluse.Test.Contract.Retention
+    Ecluse.Test.Contract.Runner
+    Ecluse.Test.Contract.Serving
+    Ecluse.Test.Contract.Types
+
+  if flag(dev-http-egress)
+    exposed-modules: Ecluse.Test.Contract.Metadata.Fetch
+
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson             >=2.2 && <2.4
+    , bytestring        ^>=0.12
+    , containers        ^>=0.7
+    , crypton           >=2.1 && <2.2
+    , directory         ^>=1.3
+    , filepath          ^>=1.4 || ^>=1.5
+    , hspec             ^>=2.11
+    , hspec-core        ^>=2.11
+    , http-client       ^>=0.7
+    , http-types        ^>=0.12
+    , text              ^>=2.1
+    , time              ^>=1.12
+    , universe-base     ^>=1.1
+    , zlib              ^>=0.7
+
 -- Internal runtime-test-support library shared by suites that depend on the runtime tier.
 library ecluse-runtime-test-support
   import:          shared
   hs-source-dirs:  runtime/test-support
   exposed-modules:
+    Ecluse.Runtime.Test.Advisory
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
@@ -820,6 +871,7 @@ library ecluse-runtime-test-support
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
@@ -840,6 +892,24 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
+    Ecluse.Test.Contract.BindingSpec
+    Ecluse.Test.Contract.CatalogueSpec
+    Ecluse.Test.Contract.Fixtures
+    Ecluse.Test.Contract.OptionsSpec
+    Ecluse.Test.Contract.PhaseSpec
+    Ecluse.Test.Contract.ResultSpec
+    Ecluse.Test.Contract.RegistrySmokeSpec
+    Ecluse.Test.Contract.ServingSpec
+    Ecluse.Test.Contract.InstallSpec
+    Ecluse.Test.Contract.PublicationSpec
+    Ecluse.Test.Contract.QueueSpec
+    Ecluse.Test.Registry.Npm.StoredVersionsSpec
+    Ecluse.Test.Contract.RunnerSpec
+    Ecluse.Test.Contract.MeasurementSpec
+    Ecluse.Test.Contract.RetentionSpec
+    Ecluse.Test.EcosystemBenchSpec
+    Ecluse.Test.EnvSpec
+    Ecluse.Test.PollSpec
     Data.JsonStream.LexerSpec
     Data.JsonStream.ParserSpec
     Data.JsonStream.UnescapeSpec
@@ -1029,6 +1099,7 @@ test-suite ecluse-core-unit
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
@@ -1088,6 +1159,7 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit bench/load
   other-modules:
+    Ecluse.Test.ContainersSpec
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.AdvisoriesSpec
@@ -1200,6 +1272,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-manifest
     , ecluse:ecluse-site
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
     , autodocodec       ^>=0.5
@@ -1288,6 +1361,7 @@ test-suite ecluse-runtime-unit
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
@@ -1336,6 +1410,7 @@ test-suite ecluse-integration
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
   other-modules:
+    Ecluse.Server.Pipeline.ServingDriver
     Ecluse.AwsEndToEndIntegrationSpec
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
@@ -1374,6 +1449,7 @@ test-suite ecluse-integration
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , hspec            ^>=2.11
     , http-client      ^>=0.7
@@ -1426,6 +1502,7 @@ test-suite ecluse-residency
     , ecluse:ecluse-json-stream
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , hspec             ^>=2.11
     , http-client      ^>=0.7
@@ -1468,6 +1545,7 @@ test-suite ecluse-smoke
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , hedgehog         ^>=1.5
     , hspec            ^>=2.11
     , hspec-hedgehog   ^>=0.3
@@ -1482,21 +1560,16 @@ test-suite ecluse-smoke
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
 
--- End-to-end tests: the whole system as the real OCI image, driven by the real npm
--- and pip clients over its public HTTP surface. The suite covers the server↔worker
--- round-trip across real containers. It gates in CI as its own job and stays out of
--- the local gate, because it needs a Docker daemon, both clients, and the
--- `.#dockerImage` build. It COMPILES in the normal build, and RUNS only when
--- ECLTEST_E2E_IMAGE names a loaded image. Without that variable each spec module
--- reports one `pending` case, so a bare `cabal test` never fails without the setup.
+-- E2E runs the real OCI image with real clients in whole lifecycle groups.
+-- Pure listing needs no services. Execution fails when required prerequisites are absent.
 test-suite ecluse-e2e
   import:             shared
-  -- hspec-discover generates a Main without an export list.
-  ghc-options:        -Wno-missing-export-lists
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/e2e
   other-modules:
+    Ecluse.E2E.Catalogue
+    Ecluse.E2E.Requirements
     Ecluse.E2E.Fixtures.Advisories
     Ecluse.E2E.Fixtures.Npm
     Ecluse.E2E.Fixtures.PyPI
@@ -1504,6 +1577,8 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Advisories
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
+    Ecluse.E2E.Harness.Container
+    Ecluse.E2E.Harness.Lifecycle
     Ecluse.E2E.Harness.Collector
     Ecluse.E2E.Harness.Docker
     Ecluse.E2E.Harness.Npm
@@ -1521,7 +1596,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.PyPI.InstallE2ESpec
     Ecluse.E2E.TelemetryE2ESpec
 
-  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12
@@ -1529,15 +1603,18 @@ test-suite ecluse-e2e
     , directory      ^>=1.3
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , filepath       ^>=1.5
     , hspec          ^>=2.11
     , http-client    ^>=0.7
     , http-types     ^>=0.12
     , network        ^>=3.2
+    , random         ^>=1.2
     , text           ^>=2.1
     , time           ^>=1.12
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
+    , universe-base  ^>=1.1
 
 -- Benchmarks: the work-per-request micro-benches over the pure ecluse-core hot paths,
 -- plus the synthetic-corpus generator's correctness tests and the complexity
