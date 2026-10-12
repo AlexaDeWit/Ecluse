@@ -68,9 +68,13 @@ serveSidecar mode replies name version file request respond = do
 data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | Unavailable | Refused | Missing OriginMiss | CompanionAbsent
 
 admittedRead :: ArtifactRequest response -> (MemoryTicket -> Handler Selection) -> (Selection -> Handler ResponseReceived) -> Handler ResponseReceived
-admittedRead ctx =
-    withMetadataAdmission (arRuntime ctx) shed
+admittedRead ctx readSelection answer =
+    withMetadataAdmission (arRuntime ctx) shed retainedSelection (either pure answer)
   where
+    retainedSelection ticket =
+        readSelection ticket >>= \case
+            Retained bytes -> Left <$> serveRetained ctx bytes
+            selected -> pure (Right selected)
     shed = liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage)))
 
 privateSelection :: ArtifactRequest response -> Maybe ClientCredential -> MemoryTicket -> Handler Selection
