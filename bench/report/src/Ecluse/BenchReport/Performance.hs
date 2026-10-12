@@ -119,8 +119,8 @@ makePerformanceReceipt request artifacts native =
 benchmarkConsoleObservations :: Text -> [PerformanceObservation]
 benchmarkConsoleObservations = snd . foldl' step ([], []) . T.lines . stripAnsi
   where
-    step state@(stack, observations) line
-        | T.null (T.strip line) = state
+    step parsed@(stack, observations) line
+        | T.null (T.strip line) = parsed
         | otherwise =
             let indent = T.length (T.takeWhile (== ' ') line)
                 body = T.strip line

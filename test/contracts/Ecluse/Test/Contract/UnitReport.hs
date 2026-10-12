@@ -38,15 +38,15 @@ unitReportHook suite inspect spec = do
         catalogue <- inspect
         let scoped = unitCatalogueFor suite catalogue
         plan <- either (failRunner . T.unlines) pure $ makePlan scoped
-        identity <- readPlanIdentity False (digest $ jsonLine plan)
+        runIdentity <- readPlanIdentity False (digest $ jsonLine plan)
         writeJsonFile planPath plan
-        writeJsonFile path (unitReport identity suite 0 (catalogueGroups scoped) [])
+        writeJsonFile path (unitReport runIdentity suite 0 (catalogueGroups scoped) [])
         arguments <- getArgs
         pure $ \configuration ->
             let wrap formatter formatConfig = do
                     resolved <- Hspec.readConfig configuration arguments
                     when (Hspec.configDryRun resolved) $ failRunner "unit reporting requires execution, not --dry-run"
-                    wrapUnitFormatter path identity suite (catalogueGroups scoped) formatter formatConfig
+                    wrapUnitFormatter path runIdentity suite (catalogueGroups scoped) formatter formatConfig
              in configuration
                     { Hspec.configFormat = Just $ wrap $ fromMaybe (Formatters.formatterToFormat Formatters.checks) (Hspec.configFormat configuration)
                     , Hspec.configAvailableFormatters = [(name, wrap formatter) | (name, formatter) <- Hspec.configAvailableFormatters configuration]
@@ -58,7 +58,7 @@ unitCatalogueFor suite catalogue = catalogue{catalogueGroups = map (\scenarioGro
 
 -- | Wrap the selected formatter and persist only actual labelled outcomes, including pending and failures.
 wrapUnitFormatter :: FilePath -> ExecutionIdentity -> Text -> [Group] -> (Format.FormatConfig -> IO Format.Format) -> Format.FormatConfig -> IO Format.Format
-wrapUnitFormatter path identity suite groups formatter formatConfig = do
+wrapUnitFormatter path runIdentity suite groups formatter formatConfig = do
     display <- formatter formatConfig
     outcomes <- newIORef []
     failedOutside <- newIORef False
@@ -82,14 +82,14 @@ wrapUnitFormatter path identity suite groups formatter formatConfig = do
     persist outcomes failedOutside = do
         observed <- reverse <$> readIORef outcomes
         failed <- readIORef failedOutside
-        let recorded = unitReport identity suite (Format.formatConfigUsedSeed formatConfig) groups observed
+        let recorded = unitReport runIdentity suite (Format.formatConfigUsedSeed formatConfig) groups observed
             report = if failed then recorded{reportGroups = map (\scenarioGroup -> scenarioGroup{grStatus = Failed, grDiagnostics = ["unit suite reported a failure outside the canonical cases"]}) (reportGroups recorded)} else recorded
         writeJsonFile path report
         pure report
 
 -- | Group success requires every declared case to execute and pass. Missing cases are never synthesised.
 unitReport :: ExecutionIdentity -> Text -> Integer -> [Group] -> [CaseResult] -> Report
-unitReport identity suite seed groups outcomes = Report 1 identity suite False (map groupResult groups) outcomes seed groups
+unitReport runIdentity suite seed groups outcomes = Report 1 runIdentity suite False (map groupResult groups) outcomes seed groups
   where
     groupResult scenarioGroup =
         let actual = filter ((== groupId scenarioGroup) . crGroupId) outcomes

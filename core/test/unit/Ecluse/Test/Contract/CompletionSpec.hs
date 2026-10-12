@@ -41,7 +41,7 @@ spec = describe "full completion" $ do
         validateCompletion altered [catalogue] `shouldSatisfy` isLeft
     it "audits executed cases rather than trusting their declarations" $
         case makePlan catalogue of
-            Left faults -> expectationFailure (toString $ show faults)
+            Left faults -> expectationFailure (show faults :: String)
             Right plan -> do
                 auditCompletion completion [(Fixture.executionIdentity, plan, [report])] `shouldBe` []
                 forM_ (reportCases report) $ \result -> do

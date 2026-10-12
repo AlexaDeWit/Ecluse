@@ -448,8 +448,8 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 17 complete lifecycle groups and 252 unique examples.
-Of these, 21 execute canonical serving, queue, or advisory contracts.
+The integration runner registers 17 complete lifecycle groups and 254 unique examples.
+Of these, 23 execute canonical serving, queue, or advisory contracts.
 The other 231 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
 Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
