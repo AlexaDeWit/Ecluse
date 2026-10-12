@@ -80,7 +80,11 @@ data StubFault
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
 stubConfig :: Maybe StubFault -> Text
-stubConfig fault = T.unlines (readLogFormat : concatMap (serverBlock fault) universe)
+stubConfig fault =
+    T.unlines $
+        -- The CodeArtifact fixture hostname exceeds nginx's default 64-byte hash bucket.
+        ["server_names_hash_bucket_size 128;", readLogFormat]
+            <> concatMap (serverBlock fault) universe
 
 -- One line for each finished request, in the fields 'stubReads' reads back.
 readLogFormat :: Text
