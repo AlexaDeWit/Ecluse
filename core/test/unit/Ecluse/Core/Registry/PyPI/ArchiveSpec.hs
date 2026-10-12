@@ -11,16 +11,19 @@ import Codec.Archive.Tar.Entry qualified as Tar
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.GZip qualified as GZip
 import Codec.Compression.Lzma qualified as Lzma
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
+import UnliftIO.Async (waitCatch, withAsync)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes, zip64Bytes, zipBytes)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes, zip64Bytes, zipBytes, zipBzipBytes, zipLzmaBytes, zipTruncatedBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -29,6 +32,12 @@ spec = describe "archiveMetadata" $ do
         it ("extracts exact PKG-INFO from " <> toString suffix) $ do
             tar <- tarBytes [("example-1/PKG-INFO", metadata), ("example-1/package.py", "print('never execute')")]
             extract defaultLimits ("example-1" <> suffix) (BSL.toStrict (compress tar)) `shouldReturn` Right metadata
+        it ("opens a fresh decoder for linked PKG-INFO in " <> toString suffix) $ do
+            aliasPath <- expectRight (Tar.toTarPath False "example-1/PKG-INFO")
+            targetPath <- expectRight (Tar.toTarPath False "example-1/metadata.txt")
+            target <- maybe (fail "invalid fixture link target") pure (Tar.toLinkTarget "metadata.txt")
+            let archive = Tar.write [Tar.simpleEntry aliasPath (Tar.SymbolicLink target), Tar.fileEntry targetPath (BSL.fromStrict metadata)]
+            extract defaultLimits ("example-1" <> suffix) (BSL.toStrict (compress archive)) `shouldReturn` Right metadata
         it ("rejects truncated " <> toString suffix) $ do
             tar <- tarBytes [("example-1/PKG-INFO", metadata)]
             let compressed = BSL.toStrict (compress tar)
@@ -40,6 +49,19 @@ spec = describe "archiveMetadata" $ do
         it ("reads metadata from " <> toString filename) $ do
             bytes <- zipBytes [(path, metadata), ("example/data", "unchanged")]
             extract defaultLimits filename bytes `shouldReturn` Right metadata
+    for_ [("BZIP2", zipBzipBytes), ("LZMA", zipLzmaBytes)] $ \(method, bytes) -> do
+        it ("reads Python zipfile " <> method <> " members") $
+            extract defaultLimits "example-1-py3-none-any.whl" bytes `shouldReturn` Right metadata
+        it ("checks " <> method <> " compressed data") $ do
+            let corrupt = BS.take 60 bytes <> BS.singleton 255 <> BS.drop 61 bytes
+            extract defaultLimits "example-1-py3-none-any.whl" corrupt >>= (`shouldSatisfy` isLeft)
+    for_ zipTruncatedBytes $ \(method, bytes) ->
+        it ("refuses a truncated " <> method <> " payload inside complete ZIP framing") $
+            extract defaultLimits "example-1-py3-none-any.whl" bytes >>= (`shouldSatisfy` isLeft)
+    it "refuses malformed and excessive ZIP LZMA properties" $ do
+        for_ [(60, 4), (62, 255), (66, 127)] $ \(offset, value) -> do
+            let bytes = BS.take offset zipLzmaBytes <> BS.singleton value <> BS.drop (offset + 1) zipLzmaBytes
+            extract defaultLimits "example-1-py3-none-any.whl" bytes >>= (`shouldSatisfy` isLeft)
     it "rejects duplicate, unsafe, and conflicting metadata entries"
         $ for_
             [ [("example-1.dist-info/METADATA", metadata), ("example-1.dist-info/METADATA", metadata)]
@@ -96,11 +118,59 @@ spec = describe "archiveMetadata" $ do
     it "rejects a central offset redirected into another member's payload" $ do
         extract defaultLimits "example-1-py3-none-any.whl" embeddedHeaderControl `shouldReturn` Right metadata
         extract defaultLimits "example-1-py3-none-any.whl" redirectedHeaderArchive >>= (`shouldSatisfy` isLeft)
+    it "charges a tiny ZIP independently of configured metadata ceilings" $ do
+        bytes <- zipBytes [("example-1.dist-info/METADATA", metadata)]
+        small <- observedCharge defaultLimits{maxMetadataBytes = 1024 * 1024} "example-1-py3-none-any.whl" bytes
+        generous <- observedCharge defaultLimits "example-1-py3-none-any.whl" bytes
+        small `shouldBe` generous
+        generous `shouldSatisfy` (< 1024 * 1024)
+    it "charges retained ZIP entries and selected metadata as they grow" $ do
+        tiny <- zipBytes [("example-1.dist-info/METADATA", metadata)]
+        indexed <- zipBytes (("example-1.dist-info/METADATA", metadata) : [("example/data-" <> show n, "x") | n <- [1 .. 2000 :: Int]])
+        large <- zipBytes [("example-1.dist-info/METADATA", metadata <> BS.replicate (128 * 1024) 65)]
+        baseCharge <- observedCharge defaultLimits "example-1-py3-none-any.whl" tiny
+        observedCharge defaultLimits "example-1-py3-none-any.whl" indexed >>= (`shouldSatisfy` (> baseCharge))
+        observedCharge defaultLimits "example-1-py3-none-any.whl" large >>= (`shouldSatisfy` (> baseCharge))
+    it "does not charge discarded tar payload bytes as retained workspace" $ do
+        small <- tarBytes [("example-1/PKG-INFO", metadata), ("example-1/data", BS.replicate 65536 65)]
+        large <- tarBytes [("example-1/PKG-INFO", metadata), ("example-1/data", BS.replicate (2 * 1024 * 1024) 65)]
+        a <- observedCharge defaultLimits "example-1.tar.gz" (BSL.toStrict (GZip.compress small))
+        b <- observedCharge defaultLimits "example-1.tar.gz" (BSL.toStrict (GZip.compress large))
+        b `shouldBe` a
+    it "restarts absolute workspace requests for a sequential file" $ do
+        bytes <- zipBytes [("example-1.dist-info/METADATA", metadata)]
+        requests <- newIORef []
+        let charge wanted = modifyIORef' requests (wanted :)
+            extractAgain = archiveMetadata defaultLimits charge (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes
+        void (extractAgain >>= expectRight)
+        first <- reverse <$> readIORef requests
+        void (extractAgain >>= expectRight)
+        both <- reverse <$> readIORef requests
+        both `shouldBe` first <> first
+    it "uses the bzip2 block-size declaration rather than an XZ reservation" $ do
+        tar <- tarBytes [("example-1/PKG-INFO", metadata)]
+        let compressed level = BSL.toStrict (BZip.compressWith BZip.defaultCompressParams{BZip.compressBlockSize = BZip.BlockSize level} tar)
+        small <- observedCharge defaultLimits "example-1.tar.bz2" (compressed 1)
+        large <- observedCharge defaultLimits "example-1.tar.bz2" (compressed 9)
+        large `shouldSatisfy` (> small)
+        large `shouldSatisfy` (< 8 * 1024 * 1024)
+    it "does not classify a late admission failure as malformed archive bytes" $ do
+        bytes <- zipBytes [("example-1.dist-info/METADATA", metadata <> BS.replicate 65536 65)]
+        let stop requested = when (requested > 200000) (throwIO ChargeStopped)
+        archiveMetadata defaultLimits stop (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes `shouldThrow` (== ChargeStopped)
+    it "propagates cancellation from a workspace reservation" $ do
+        bytes <- zipBytes [("example-1.dist-info/METADATA", metadata <> BS.replicate 65536 65)]
+        let stop requested = when (requested > 200000) (throwIO ThreadKilled)
+        withAsync (archiveMetadata defaultLimits stop (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes) $ \worker -> do
+            result <- waitCatch worker
+            case result of
+                Left fault -> (fromException fault :: Maybe AsyncException) `shouldBe` Just ThreadKilled
+                Right _ -> expectationFailure "archive cancellation did not propagate"
     it "refuses an unsupported suffix and an inconsistent filename" $ do
         extract defaultLimits "example-1.egg" "archive" >>= (`shouldSatisfy` isLeft)
         extract defaultLimits "other-1.tar.gz" "archive" >>= (`shouldSatisfy` isLeft)
   where
-    extract limits = archiveMetadata limits (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1")
+    extract limits = archiveMetadata limits (const (pure ())) (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1")
 
 -- Python tarfile/lzma fixture. Its partner changes only the dictionary property and the block-header CRC.
 ordinaryDictionaryArchive :: ByteString
@@ -114,3 +184,16 @@ embeddedHeaderControl = BS.pack [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00,
 
 redirectedHeaderArchive :: ByteString
 redirectedHeaderArchive = BS.pack [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0xa5, 0x4b, 0x5d, 0x71, 0x21, 0xfd, 0x53, 0x3d, 0x00, 0x00, 0x00, 0x3d, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2d, 0x31, 0x2e, 0x64, 0x69, 0x73, 0x74, 0x2d, 0x69, 0x6e, 0x66, 0x6f, 0x2f, 0x4d, 0x45, 0x54, 0x41, 0x44, 0x41, 0x54, 0x41, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2d, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x32, 0x2e, 0x34, 0x0a, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x0a, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x31, 0x0a, 0x0a, 0x44, 0x65, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x2e, 0x0a, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0xa5, 0x4b, 0x5d, 0x47, 0xc9, 0x86, 0xe0, 0x6d, 0x00, 0x00, 0x00, 0x6d, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2f, 0x64, 0x61, 0x74, 0x61, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8f, 0x44, 0x3f, 0x68, 0x2d, 0x00, 0x00, 0x00, 0x2d, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2d, 0x31, 0x2e, 0x64, 0x69, 0x73, 0x74, 0x2d, 0x69, 0x6e, 0x66, 0x6f, 0x2f, 0x4d, 0x45, 0x54, 0x41, 0x44, 0x41, 0x54, 0x41, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2d, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x32, 0x2e, 0x34, 0x0a, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0x6f, 0x74, 0x68, 0x65, 0x72, 0x0a, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x3a, 0x20, 0x31, 0x0a, 0x50, 0x4b, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0xa5, 0x4b, 0x5d, 0x8f, 0x44, 0x3f, 0x68, 0x2d, 0x00, 0x00, 0x00, 0x2d, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x01, 0xa7, 0x00, 0x00, 0x00, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2d, 0x31, 0x2e, 0x64, 0x69, 0x73, 0x74, 0x2d, 0x69, 0x6e, 0x66, 0x6f, 0x2f, 0x4d, 0x45, 0x54, 0x41, 0x44, 0x41, 0x54, 0x41, 0x50, 0x4b, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6d, 0xa5, 0x4b, 0x5d, 0x47, 0xc9, 0x86, 0xe0, 0x6d, 0x00, 0x00, 0x00, 0x6d, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x01, 0x77, 0x00, 0x00, 0x00, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2f, 0x64, 0x61, 0x74, 0x61, 0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x84, 0x00, 0x00, 0x00, 0x0e, 0x01, 0x00, 0x00, 0x00, 0x00]
+
+data ChargeStopped = ChargeStopped
+    deriving stock (Eq, Show)
+
+instance Exception ChargeStopped
+
+observedCharge :: Limits -> Text -> ByteString -> IO Int
+observedCharge limits filename bytes = do
+    peak <- newIORef 0
+    let charge requested = modifyIORef' peak (max requested)
+    result <- archiveMetadata limits charge (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") filename bytes
+    void (expectRight result)
+    readIORef peak

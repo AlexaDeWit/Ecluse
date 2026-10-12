@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- | Stream PAX-aware tar members and resolve metadata links inside the bounded archive index.
 module Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar) where
@@ -44,8 +45,8 @@ emptyState :: TarState
 emptyState = TarState 0 0 Map.empty Map.empty Map.empty False Nothing Nothing
 
 -- | A metadata link can require one more local decoding pass, never another download or retained unrelated payload.
-extractTar :: Limits -> PackageName -> Version -> ConduitT () ByteString TarDecode () -> IO (Either ParseError ByteString)
-extractTar limits package version source = do
+extractTar :: Limits -> (Int -> IO ()) -> PackageName -> Version -> (forall a. (ConduitT () ByteString TarDecode () -> IO a) -> IO a) -> IO (Either ParseError ByteString)
+extractTar limits charge package version withSource = do
     firstPass <- runPass Nothing
     case firstPass >>= resolveMetadata limits of
         Left fault -> pure (Left fault)
@@ -54,7 +55,7 @@ extractTar limits package version source = do
             secondPass <- runPass (Just target)
             pure $ secondPass >>= maybe (bad "metadata link target has no regular-file content") Right . tsCaptured
   where
-    runPass target = runExceptT . runConduit $ source .| boundInflated limits .| walkTar limits package version target emptyState
+    runPass target = withSource $ \source -> runExceptT . runConduit $ source .| boundInflated limits .| walkTar limits charge package version target emptyState
 
 boundInflated :: Limits -> ConduitT ByteString ByteString TarDecode ()
 boundInflated limits = go 0
@@ -68,8 +69,9 @@ boundInflated limits = go 0
                 yield chunk
                 go next
 
-walkTar :: Limits -> PackageName -> Version -> Maybe Text -> TarState -> ConduitT ByteString o TarDecode TarState
-walkTar limits package version target tarState = do
+walkTar :: Limits -> (Int -> IO ()) -> PackageName -> Version -> Maybe Text -> TarState -> ConduitT ByteString o TarDecode TarState
+walkTar limits charge package version target tarState = do
+    liftIO (charge (tarWorkspace tarState))
     header <- takeBytes 512
     when (BS.length header /= 512) (refuse "tar archive has no complete trailer")
     if BS.all (== 0) header
@@ -83,9 +85,9 @@ walkTar limits package version target tarState = do
             when (tsCount tarState >= maxArtifactCount limits) (refuse "archive entry count exceeds its bound")
             entry <- checked (readHeader header)
             next <- case Tar.entryContent entry of
-                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits code size tarState
-                content -> ordinaryEntry limits package version target header content tarState
-            walkTar limits package version target next{tsCount = tsCount tarState + 1}
+                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits charge code size tarState
+                content -> ordinaryEntry limits charge package version target header content tarState
+            walkTar limits charge package version target next{tsCount = tsCount tarState + 1}
 
 readHeader :: ByteString -> Either ParseError Tar.Entry
 readHeader header = case Tar.read (BSL.fromStrict header) of
@@ -96,12 +98,12 @@ takeBytes :: Int -> ConduitT ByteString o TarDecode ByteString
 takeBytes size = takeCE size .| foldC
 
 skipPayload :: Integer -> ConduitT ByteString o TarDecode ()
-skipPayload = consumePayload Nothing
+skipPayload = consumePayload (const (pure ())) Nothing
 
-consumePayload :: Maybe (IORef [ByteString]) -> Integer -> ConduitT ByteString o TarDecode ()
-consumePayload output = go
+consumePayload :: (Int -> IO ()) -> Maybe (IORef [ByteString]) -> Integer -> ConduitT ByteString o TarDecode ()
+consumePayload charge output = go 0 0
   where
-    go remaining
+    go seen chunks remaining
         | remaining == 0 = pure ()
         | otherwise =
             await >>= \case
@@ -109,25 +111,34 @@ consumePayload output = go
                 Just chunk -> do
                     let count = fromInteger (min remaining (toInteger (BS.length chunk)))
                         (wanted, rest) = BS.splitAt count chunk
-                    for_ output $ \held -> liftIO (modifyIORef' held (wanted :))
+                        seen' = seen + count
+                        chunks' = chunks + 1
+                    for_ output $ \held -> liftIO $ do
+                        charge (3 * seen' + 64 * chunks')
+                        modifyIORef' held (wanted :)
                     unless (BS.null rest) (leftover rest)
-                    go (remaining - toInteger count)
+                    go seen' chunks' (remaining - toInteger count)
 
-readPayload :: Int -> Integer -> ConduitT ByteString o TarDecode ByteString
-readPayload cap size = do
+readPayload :: (Int -> IO ()) -> Int -> Integer -> ConduitT ByteString o TarDecode ByteString
+readPayload charge cap size = do
     when (size < 0 || size > toInteger cap) (refuse "tar metadata or extended header exceeds its bound")
     held <- liftIO (newIORef [])
-    consumePayload (Just held) size
+    consumePayload charge (Just held) size
     chunks <- liftIO (readIORef held)
     pure (BS.concat (reverse chunks))
+
+tarWorkspace :: TarState -> Int
+tarWorkspace tarState = 65536 + 2 * tsCharge tarState + attributesWeight (tsGlobal tarState) + attributesWeight (tsLocal tarState) + maybe 0 BS.length (tsCaptured tarState)
+  where
+    attributesWeight = Map.foldlWithKey' (\total key value -> total + 192 + BS.length key + BS.length value) 0
 
 padding :: Integer -> Integer
 padding size = (512 - size `mod` 512) `mod` 512
 
-extendedEntry :: Limits -> Char -> Int64 -> TarState -> ConduitT ByteString o TarDecode TarState
-extendedEntry limits code rawSize tarState = do
+extendedEntry :: Limits -> (Int -> IO ()) -> Char -> Int64 -> TarState -> ConduitT ByteString o TarDecode TarState
+extendedEntry limits charge code rawSize tarState = do
     let size = toInteger rawSize
-    payload <- readPayload (min 16384 (maxMetadataBytes limits)) size
+    payload <- readPayload (\wanted -> charge (tarWorkspace tarState + wanted)) (min 16384 (maxMetadataBytes limits)) size
     skipPayload (padding size)
     values <-
         checked $
@@ -142,8 +153,8 @@ extendedEntry limits code rawSize tarState = do
             unless (Map.null (Map.intersection values (tsLocal tarState))) (refuse "ambiguous extended tar headers")
             pure tarState{tsLocal = Map.union values (tsLocal tarState), tsPending = True}
 
-ordinaryEntry :: Limits -> PackageName -> Version -> Maybe Text -> ByteString -> Tar.EntryContent -> TarState -> ConduitT ByteString o TarDecode TarState
-ordinaryEntry limits package version target header content tarState = do
+ordinaryEntry :: Limits -> (Int -> IO ()) -> PackageName -> Version -> Maybe Text -> ByteString -> Tar.EntryContent -> TarState -> ConduitT ByteString o TarDecode TarState
+ordinaryEntry limits charge package version target header content tarState = do
     let attrs = Map.filter (not . BS.null) (Map.union (tsLocal tarState) (tsGlobal tarState))
     path <- checked (utf8 (Map.findWithDefault (headerPath header) "path" attrs))
     parts <- checked (checkPath path)
@@ -155,15 +166,16 @@ ordinaryEntry limits package version target header content tarState = do
     member <- checked (memberOf canonical attrs header content)
     size <- checked (payloadSize attrs header content)
     when (size > toInteger (maxMirrorArtifactBytes limits)) (refuse "tar entry size exceeds its bound")
-    let charge = BS.length (TE.encodeUtf8 canonical) + 192 + case member of Link link -> BS.length (TE.encodeUtf8 link); _ -> 0
-    when (charge > maxMetadataBytes limits - tsCharge tarState) (refuse "archive path inventory exceeds its bound")
+    let pathCost = BS.length (TE.encodeUtf8 canonical) + 192 + case member of Link link -> BS.length (TE.encodeUtf8 link); _ -> 0
+    when (pathCost > maxMetadataBytes limits - tsCharge tarState) (refuse "archive path inventory exceeds its bound")
+    liftIO (charge (tarWorkspace tarState + 2 * pathCost))
     captured <- case member of
-        Regular | maybe selected (== canonical) target -> Just . BS.copy <$> readPayload (maxMetadataBytes limits) size
+        Regular | maybe selected (== canonical) target -> Just . BS.copy <$> readPayload (\wanted -> charge (tarWorkspace tarState + 2 * pathCost + wanted)) (maxMetadataBytes limits) size
         _ -> Nothing <$ skipPayload size
     skipPayload (padding size)
     pure
         tarState
-            { tsCharge = tsCharge tarState + charge
+            { tsCharge = tsCharge tarState + pathCost
             , tsMembers = Map.insert canonical member (tsMembers tarState)
             , tsLocal = Map.empty
             , tsPending = False
@@ -237,7 +249,7 @@ parsePax = go Map.empty
                 if key `elem` ["path", "linkpath", "size"]
                     then do
                         when (Map.member key fields) (bad "duplicate pax framing attribute")
-                        pure (Map.insert key payload fields)
+                        pure (Map.insert key (BS.copy payload) fields)
                     else Right fields
             go next (BS.drop (fromInteger size) bytes)
 

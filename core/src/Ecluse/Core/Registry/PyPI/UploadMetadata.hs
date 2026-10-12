@@ -8,6 +8,7 @@
 module Ecluse.Core.Registry.PyPI.UploadMetadata (
     PyPIUploadMetadata,
     parseUploadMetadata,
+    uploadMetadataMemoryBytes,
     uploadFields,
 ) where
 
@@ -48,6 +49,19 @@ parseUploadMetadata cap package version bytes = do
         when (T.toLower value `elem` ["name", "version", "metadata-version", "dynamic"] || isNothing (fieldName (T.toLower value))) $
             bad "invalid Dynamic declaration"
     pure (PyPIUploadMetadata checked)
+
+-- | Charge the actual raw, decoded, and encoded metadata plus bounded header structures before preparation.
+uploadMetadataMemoryBytes :: ByteString -> Either ParseError Int
+uploadMetadataMemoryBytes bytes
+    | wanted > toInteger (maxBound :: Int) = bad "Core Metadata memory charge exceeds the platform bound"
+    | otherwise = Right (fromInteger wanted)
+  where
+    wanted = 1024 + 6 * toInteger (BS.length bytes) + 512 * toInteger (headerCount 0 bytes)
+    headerCount seen remaining
+        | BS.null remaining || seen >= (65537 :: Int) = seen
+        | otherwise =
+            let (line, suffix) = BS.break (== 10) remaining
+             in if line == "" || line == "\r" then seen else headerCount (seen + 1) (BS.drop 1 suffix)
 
 -- | Form names follow the native upload API, including its pluralisation exceptions.
 uploadFields :: PyPIUploadMetadata -> [(Text, Text)]

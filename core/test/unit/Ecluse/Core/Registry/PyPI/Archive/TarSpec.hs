@@ -8,18 +8,19 @@ module Ecluse.Core.Registry.PyPI.Archive.TarSpec (spec) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
-import Conduit (yieldMany)
+import Conduit (liftIO, yield, yieldMany)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Ecluse.Core.Registry (ParseError)
 import Numeric (showOct)
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Registry.PyPI.Archive.Tar (extractTar)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Test.Package (pypiVersion, unscopedPyPI)
-import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, paxRecord, tarBytes)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -70,6 +71,13 @@ spec = describe "extractTar" $ do
         alias <- link True "placeholder" "unused"
         target <- regular "example-1/metadata.txt" metadata
         extract defaultLimits [extended, alias, target] `shouldReturn` Right metadata
+    it "pays for an indexed path before reading its metadata payload" $ do
+        tar <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
+        readPayload <- newIORef False
+        let source = yield (BS.take 512 tar) >> liftIO (writeIORef readPayload True) >> yield (BS.drop 512 tar)
+            charge requested = when (requested > 65536) (throwIO TarChargeStopped)
+        extractTar defaultLimits charge (unscopedPyPI "example") (pypiVersion "1") ($ source) `shouldThrow` (== TarChargeStopped)
+        readIORef readPayload `shouldReturn` False
     it "rejects duplicate framing keys, invalid size, and sparse framing extensions" $ do
         info <- regular "example-1/PKG-INFO" metadata
         for_ [paxRecord "size=10\n" <> paxRecord "size=11\n", paxRecord "size=-1\n", paxRecord "GNU.sparse.size=10\n"] $ \attributes -> do
@@ -79,7 +87,7 @@ spec = describe "extractTar" $ do
     extract limits = readChunks limits . BSL.toChunks . Tar.write
 
 readChunks :: Limits -> [ByteString] -> IO (Either ParseError ByteString)
-readChunks limits = extractTar limits (unscopedPyPI "example") (pypiVersion "1") . yieldMany
+readChunks limits chunks = extractTar limits (const (pure ())) (unscopedPyPI "example") (pypiVersion "1") ($ yieldMany chunks)
 
 regular :: FilePath -> ByteString -> IO Tar.Entry
 regular path bytes = do
@@ -103,3 +111,8 @@ zeroSizeHeader header = BS.take 148 changed <> checksum <> BS.drop 156 changed
     changed = BS.take 124 header <> "00000000000\NUL" <> BS.take 12 (BS.drop 136 header) <> BS.replicate 8 32 <> BS.drop 156 header
     digits = toText (showOct (BS.foldl' (\total byte -> total + fromIntegral byte) (0 :: Integer) changed) "")
     checksum = encodeUtf8 (T.replicate (6 - T.length digits) "0" <> digits) <> "\NUL "
+
+data TarChargeStopped = TarChargeStopped
+    deriving stock (Eq, Show)
+
+instance Exception TarChargeStopped

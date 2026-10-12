@@ -11,7 +11,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Registry.PyPI.UploadMetadata (parseUploadMetadata, uploadFields)
+import Ecluse.Core.Registry.PyPI.UploadMetadata (parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
 import Ecluse.Core.Version (mkVersion)
 
 spec :: Spec
@@ -49,6 +49,11 @@ spec = describe "parseUploadMetadata" $ do
             `shouldSatisfy` either (const False) (elem ("description", "first\r\nsecond\r\n third"))
         fmap uploadFields (parse (base <> "\nfirst\n       |literal body pipe\n"))
             `shouldSatisfy` either (const False) (elem ("description", "first\n       |literal body pipe\n"))
+    it "charges actual metadata bytes and header structures without expanding description lines" $ do
+        let body = BS.replicate 65536 10
+            opaque = BS.replicate 65536 65
+        uploadMetadataMemoryBytes (base <> "\n" <> body) `shouldBe` uploadMetadataMemoryBytes (base <> "\n" <> opaque)
+        uploadMetadataMemoryBytes (base <> "Classifier: a\nClassifier: b\n") `shouldSatisfy` either (const False) (> BS.length base)
     it "rejects conflicting description representations" $
         parse (base <> "Description: first\n\nsecond\n") `shouldSatisfy` isLeft
   where
