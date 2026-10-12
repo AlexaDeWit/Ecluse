@@ -16,6 +16,7 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import Ecluse.Test.Contract.Types (Group)
+import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
@@ -145,3 +146,16 @@ scenarios recorder = do
             it (caseLabel "npm/install/publication-unconfigured" "answers a publish with 405 when no publication target is configured") $ \e2e -> do
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
                 status `shouldBe` 405
+
+    describe "MAL source requirements"
+        $ for_
+            [ ("mal-forced-source-required", "{\"deny-known-malicious\":{\"enabled\":true}}")
+            , ("mal-manual-source-required", "{\"manual-mal\":{\"type\":\"DenyIfKnownMalicious\",\"onUnavailable\":\"skip\"}}")
+            ]
+        $ \(identifier, policy) ->
+            it (caseLabel ("npm/install/" <> identifier) "refuses an active MAL rule without a source at check-config and boot") $ \plane ->
+                for_ [["check-config"], ["proxy"]] $ \args -> do
+                    run <- runRoleOnce plane [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.test"), ("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_RULES", policy)] args
+                    roleExit run `shouldSatisfy` (/= ExitSuccess)
+                    roleOutput run `shouldSatisfy` T.isInfixOf "DenyIfKnownMalicious"
+                    roleOutput run `shouldSatisfy` T.isInfixOf "advisories.url"

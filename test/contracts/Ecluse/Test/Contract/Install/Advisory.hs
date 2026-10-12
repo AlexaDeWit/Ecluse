@@ -6,60 +6,92 @@
 module Ecluse.Test.Contract.Install.Advisory (
     AdvisoryDriver (..),
     AdvisoryPolicy (..),
+    AdvisoryCase (..),
     AdvisorySession (..),
     AdvisoryScenarioDriver (..),
     advisoryContract,
     Denial (..),
+    parseDenial,
     advisoryRefuses,
+    advisoryDenies,
     advisoryAdmits,
 ) where
 
+import Data.Aeson (Value, decodeStrict')
 import Data.List (lookup)
 import Data.Text qualified as T
-import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Contract.Install
+import Ecluse.Test.Json (asObject, objectAt, textAt)
 
--- | Policies exercised against the same compiled advisory generation.
-data AdvisoryPolicy = DenyCve | DenyEpss | Remediation | RemediationDisabled
+-- | Each policy selects its independently compiled source and expected coordinates.
+data AdvisoryPolicy
+    = -- | Deny the independently scored affected release by CVSS.
+      DenyCve
+    | -- | Deny the independently scored affected release by EPSS.
+      DenyEpss
+    | -- | Admit the exact fix despite its quarantine age.
+      Remediation
+    | -- | Keep the exact fix quarantined when remediation is disabled.
+      RemediationDisabled
+    | -- | Let the configured source activate the MAL default without an explicit rule.
+      KnownMaliciousDefault
     deriving stock (Eq, Show)
+
+-- | Expected releases and evidence belong to the selected source, not the scored corpus.
+data AdvisoryCase = AdvisoryCase
+    { advisoryPackage :: Text
+    , advisoryAffectedVersion :: Text
+    , advisoryFixedVersion :: Text
+    , advisoryExpectedId :: Text
+    , advisoryRefusalMessage :: Text -> Text
+    , advisoryRequiresMirror :: Bool
+    }
 
 -- | Native listing observations and fresh client operations for a release.
 data AdvisorySession = AdvisorySession
     { advisoryListedVersions :: IO [Text]
     , advisoryRelease :: Text -> IO AdvisoryDriver
+    , advisoryMirrorContains :: Maybe (Text -> IO Bool)
     }
 
 -- | Independent advisory coordinates and native resource acquisition.
 data AdvisoryScenarioDriver = AdvisoryScenarioDriver
     { advisoryWithPolicy :: AdvisoryPolicy -> (AdvisorySession -> IO ()) -> IO ()
-    , advisoryPackage :: Text
-    , advisoryAffectedVersion :: Text
-    , advisoryFixedVersion :: Text
-    , advisoryExpectedId :: Text
-    , advisoryRefusalMessage :: Text -> Text
+    , advisoryCaseForPolicy :: AdvisoryPolicy -> AdvisoryCase
     }
 
--- | Require CVE and EPSS denial plus an exact-fix quarantine override and its negative control.
+-- | Require scored and MAL denials plus an exact-fix override and its disabled control.
 advisoryContract :: Text -> SpecWith AdvisoryScenarioDriver
 advisoryContract prefix = do
-    for_ [("deny-cve", DenyCve, "DenyIfCve"), ("deny-epss", DenyEpss, "DenyIfEpss")] $ \(suffix, policy, rule) ->
+    for_ [("deny-cve", DenyCve, "DenyIfCve"), ("deny-epss", DenyEpss, "DenyIfEpss"), ("mal-denial", KnownMaliciousDefault, "DenyIfKnownMalicious")] $ \(suffix, policy, rule) ->
         it (caseLabel (prefix <> "/" <> suffix) ("denies an affected release by " <> rule)) $ \driver ->
-            advisoryWithPolicy driver policy $ \session -> do
-                advisoryListedVersions session `shouldReturn` [advisoryFixedVersion driver]
-                refuse driver session (advisoryAffectedVersion driver) rule (Just (advisoryExpectedId driver))
+            advisoryWithPolicy driver policy (advisoryDenies (advisoryCaseForPolicy driver policy) rule)
     it (caseLabel (prefix <> "/exact-fix") "admits the exact fix while the disabled control quarantines it") $ \driver -> do
+        let fixture = advisoryCaseForPolicy driver Remediation
         advisoryWithPolicy driver Remediation $ \session ->
-            advisoryRelease session (advisoryFixedVersion driver) >>= advisoryAdmits
+            advisoryRelease session (advisoryFixedVersion fixture) >>= advisoryAdmits
         advisoryWithPolicy driver RemediationDisabled $ \session -> do
-            advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion driver]
-            refuse driver session (advisoryFixedVersion driver) "BlockedByDefault" Nothing
-  where
-    refuse driver session version rule advisory = do
-        release <- advisoryRelease session version
-        advisoryRefuses (advisoryRefusalMessage driver version) (Denial (advisoryPackage driver) version rule advisory) release
+            advisoryListedVersions session `shouldReturn` [advisoryAffectedVersion fixture]
+            refuse fixture session (advisoryFixedVersion fixture) "BlockedByDefault" Nothing
+
+-- | A denial retains the unaffected listing and cannot publish into a required mirror.
+advisoryDenies :: AdvisoryCase -> Text -> AdvisorySession -> Expectation
+advisoryDenies fixture rule session = do
+    advisoryListedVersions session `shouldReturn` [advisoryFixedVersion fixture]
+    refuse fixture session (advisoryAffectedVersion fixture) rule (Just (advisoryExpectedId fixture))
+    when (advisoryRequiresMirror fixture) $
+        case advisoryMirrorContains session of
+            Nothing -> expectationFailure "the advisory case requires a real mirror observation"
+            Just contains -> contains (advisoryAffectedVersion fixture) `shouldReturn` False
+
+refuse :: AdvisoryCase -> AdvisorySession -> Text -> Text -> Maybe Text -> Expectation
+refuse fixture session version rule advisory = do
+    release <- advisoryRelease session version
+    advisoryRefuses (advisoryRefusalMessage fixture version) (Denial (advisoryPackage fixture) version rule advisory) release
 
 -- | A parsed denial record, with coordinate and advisory ownership retained.
 data Denial = Denial
@@ -99,3 +131,12 @@ advisoryAdmits driver = do
             { installRun = advisoryInstall driver
             , installExpected = True
             }
+
+-- | Read one structured public denial without discarding its coordinate or advisory identifiers.
+parseDenial :: Text -> Maybe Denial
+parseDenial line = do
+    value <- decodeStrict' (encodeUtf8 line) :: Maybe Value
+    let top = asObject value
+        fields = objectAt "data" top
+    guard (textAt "message" top == Just "denied")
+    Denial <$> textAt "package" fields <*> textAt "version" fields <*> textAt "rule" fields <*> pure (textAt "cve" fields)

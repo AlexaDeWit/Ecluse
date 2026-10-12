@@ -36,7 +36,7 @@ profiles =
     [ Profile "npm/read" ["npm"] ["http"] ["read", "client-install"]
     , Profile "npm/registry" ["npm"] ["verdaccio", "memory"] ["read", "mirror", "publication", "client-install"]
     , Profile "npm/maintenance" ["npm"] ["verdaccio", "sqs", "s3"] ["read", "mirror", "maintenance", "advisories"]
-    , Profile "npm/advisories" ["npm"] ["http", "s3"] ["read", "advisories", "client-install"]
+    , Profile "npm/advisories" ["npm"] ["http", "verdaccio", "sqs", "s3"] ["read", "mirror", "advisories", "client-install"]
     , Profile "pypi/write" ["pypi"] ["http", "sqs", "s3"] ["read", "mirror", "client-install", "telemetry"]
     , Profile "pypi/publication" ["pypi"] ["http"] ["read", "publication", "client-install"]
     , Profile "pypi/write-telemetry" ["pypi"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "client-install", "telemetry"]

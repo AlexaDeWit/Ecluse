@@ -29,6 +29,10 @@ spec = describe "full completion" $ do
     it "keeps the outage law outside PyPI and the read-only foundation" $ do
         requiredFamilyLawsFor "pypi" FullEcosystem `shouldBe` requiredFamilyLaws FullEcosystem
         requiredFamilyLawsFor "npm" ReadOnlyEcosystemFoundation `shouldBe` requiredFamilyLaws ReadOnlyEcosystemFoundation
+    it "requires MAL refusal in both scopes and MAL revocation in full completion" $ do
+        for_ [FullEcosystem, ReadOnlyEcosystemFoundation] $ \scope ->
+            lookup "advisories" (requiredFamilyLaws scope) `shouldSatisfy` maybe False (elem "mal-denial")
+        lookup "dredger" (requiredFamilyLaws FullEcosystem) `shouldSatisfy` maybe False (elem "mal-revocation")
     it "accepts independently declared laws with matching cases" $
         validateCompletion completion [catalogue] `shouldBe` Right completion
     it "rejects each omitted law even when its mapping and registration disappear together" $

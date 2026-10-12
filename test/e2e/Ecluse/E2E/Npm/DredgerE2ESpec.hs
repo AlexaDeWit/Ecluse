@@ -21,6 +21,7 @@ import UnliftIO (bracket, bracket_)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.E2E.Fixtures.Advisories (maliciousExportBase)
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
     corpusRevokedPkg,
@@ -45,16 +46,18 @@ import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
--- | Preserve four independent store lifetimes under the canonical Dredger composition.
+-- | Preserve five independent store lifetimes under the canonical Dredger composition.
 npmSweepDriver :: ConcreteFixture FamilyMetadata -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
 npmSweepDriver fixture recorder =
     SweepDriver
         { withIdentitySweep = acquire withSeededStore
         , withAdvisorySweep = acquire withAdvisoryStore
+        , withMaliciousSweep = acquire withAdvisoryStores
         , withRecoverySweep = acquire withRecoveryStores
         , withRolloutSweep = acquire withRolloutStores
         , sweepIdentityFixture = identityFixture
         , sweepAdvisoryFixture = advisoryFixture
+        , sweepMaliciousFixture = maliciousFixture
         , sweepRecoveryFixture = recoveryFixture
         , sweepRolloutFixture = rolloutFixture
         , sweepStoreOps = storeOps
@@ -62,6 +65,7 @@ npmSweepDriver fixture recorder =
         , sweepGuardedOps = guardedSweepOps
         , sweepPlainOps = sweepOps
         , sweepAdvisoryOps = advisoryOps
+        , sweepMaliciousOps = maliciousAdvisoryOps
         , sweepRecoveryOps = recoveryOps
         , sweepRolloutOps = rolloutOps
         , sweepAdmissionOutage = Just outageDriver{withAdmissionOutage = acquire withOutageStores}
@@ -101,10 +105,13 @@ consentKey = "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
 
 -- The first generation precedes boot because readiness waits for a successful advisory sync.
 withAdvisoryStore :: ((GlobalDataPlane, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
-withAdvisoryStore action plane = do
+withAdvisoryStore action = withAdvisoryStores (\(plane, proxy, _) -> action (plane, proxy))
+
+withAdvisoryStores :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
+withAdvisoryStores action plane = do
     createAdvisoryBucket plane
     compileGeneration plane CorpusV1
-    withE2EWith defaultE2EConfig{ecExtraEnv = revocationProxyEnv} (\e2e -> withDredgerPrivateCache plane e2e (\_ -> action (plane, e2e))) plane
+    withE2EWith defaultE2EConfig{ecExtraEnv = revocationProxyEnv} (\e2e -> withDredgerPrivateCache plane e2e (\cache -> action (plane, e2e, cache))) plane
 
 revocationProxyEnv :: [(Text, Text)]
 revocationProxyEnv = advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules), ("ECLUSE_CACHE__TTL", "1")]
@@ -115,7 +122,7 @@ compileGeneration plane generation = do
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
 
 swapMessage :: Text
-swapMessage = "advisory database swapped in"
+swapMessage = "cve-sync[" <> show Npm <> "]: advisory database swapped in"
 
 withRecoveryStores :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
 withRecoveryStores action plane =
@@ -409,3 +416,10 @@ outageDriver =
         , outagePackage = PackageFixture (psName corpusRevokedPkg) "1.0.0" ["1.0.0"]
         , outageCasePrefix = "npm/dredger/"
         }
+
+maliciousFixture :: AdvisoryFixture
+maliciousFixture = advisoryFixture{advisoryIdentifier = "MAL-derived-1"}
+
+maliciousAdvisoryOps :: AdvisoryOps GlobalDataPlane E2E
+maliciousAdvisoryOps =
+    advisoryOps{publishNextGeneration = \plane -> observeRun <$> publishAdvisoryExport plane Npm maliciousExportBase}
