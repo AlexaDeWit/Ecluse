@@ -8,6 +8,7 @@ module Ecluse.E2E.Npm.DredgerE2ESpec (npmSweepDriver) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
@@ -38,7 +39,7 @@ import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
 -- | Preserve four independent store lifetimes under the canonical Dredger composition.
-npmSweepDriver :: ConcreteFixture -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
+npmSweepDriver :: ConcreteFixture FamilyMetadata -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
 npmSweepDriver fixture recorder =
     SweepDriver
         { withIdentitySweep = acquire withSeededStore
@@ -272,7 +273,8 @@ rolloutOps =
         , withServingRole = \plane queue policy -> withServeOnlyProxy plane queue (servingEnvironment policy)
         , withWorkerRole = \plane queue -> withMirrorRole plane (mirrorRoleEnv queue permissiveRules)
         , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf (publishedLine release)) 240
-        , wasPublished = \worker release -> T.isInfixOf (publishedLine release) <$> containerLogs worker
+        , workerLogs = containerLogs
+        , publicationCoordinate = pure
         }
   where
     servingEnvironment PermissivePolicy = permissiveEnv <> publishTargetEnv

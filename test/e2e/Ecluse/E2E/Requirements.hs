@@ -5,7 +5,6 @@
 -- | Reviewed E2E obligations remain independent of concrete registrations and providers.
 module Ecluse.E2E.Requirements (obligations) where
 
-import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerObligation)
 import Ecluse.Test.Contract.Types
 
 -- | Required cases preserve the original examples and their negative controls.
@@ -144,6 +143,12 @@ obligations =
         Supported
         ["read", "mirror", "client-install", "telemetry"]
         ["pypi/telemetry/domain-spans", "pypi/telemetry/private-fetch"]
-    , pypiDredgerObligation
+    , Obligation
+        "pypi/dredger"
+        "pypi/maintenance"
+        "pypi/dredger"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]

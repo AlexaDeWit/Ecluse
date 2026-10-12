@@ -22,7 +22,7 @@ import Ecluse.E2E.TelemetryE2ESpec (pypiReadTelemetryFamily)
 import Ecluse.Test.Contract.Ecosystem
 
 -- | Native read, write, install, maintenance and telemetry providers share the full ecosystem laws.
-pypiDriver :: EcosystemDriver PythonGraph Value PyPISweepPlane PyPISweepStore PipProject
+pypiDriver :: EcosystemDriver Bool PythonGraph Value PyPISweepPlane PyPISweepStore PipProject
 pypiDriver =
     EcosystemDriver
         { ecosystemName = "pypi"
@@ -32,7 +32,7 @@ pypiDriver =
         , ecosystemAdvisories = Available (pypiAdvisoryFamily pypiPilotFixture)
         , ecosystemMirroring = Available (pypiMirrorFamily pypiMirrorFixture)
         , ecosystemPublication = Available (pypiPublicationFamily pypiPublicationFixture)
-        , ecosystemDredger = Available (fixtureGroup pypiDredgerFixture, pypiSweepDriver pypiDredgerFixture)
+        , ecosystemDredger = Available (fixtureMetadata pypiDredgerFixture, pypiSweepDriver pypiDredgerFixture)
         , ecosystemTelemetry =
             Available
                 ( pypiReadTelemetryFamily pypiTelemetryFixture

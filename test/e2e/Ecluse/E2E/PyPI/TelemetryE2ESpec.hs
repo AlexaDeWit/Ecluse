@@ -13,12 +13,12 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
 import Ecluse.E2E.PyPI.MirrorEvidence (canonicalVersion, mirrorCompleted)
 import Ecluse.E2E.TelemetryE2ESpec (collectorDriver)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Telemetry
 
 -- | Bind two independent projects to the shared domain-span and private-miss-to-hit laws.
-pypiMirrorTelemetryFamily :: ConcreteFixture -> FamilyFixture MirrorTelemetryFixture
+pypiMirrorTelemetryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture MirrorTelemetryFixture
 pypiMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action plane ->
     timedFixture recorder (withMirrorProjects PreserveUploadFields [domainProject, privateProject] plane . curry) $ \(target, distributions) -> do
         ((_, platform), _) <- either (fail . toString) pure mirrorArchitectures

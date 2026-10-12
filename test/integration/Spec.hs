@@ -25,34 +25,42 @@ import Ecluse.Runtime.ServerIntegrationSpec qualified as ServerShutdown
 import Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec qualified as TelemetryMetrics
 import Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec qualified as TelemetryScrape
 import Ecluse.Runtime.Telemetry.TracingIntegrationSpec qualified as TelemetryTraces
+import Ecluse.Test.Contract.Binding (allCaseIds)
 import Ecluse.Test.Contract.Integration.Catalogue qualified as Coverage
 import Ecluse.Test.Contract.Runner (DeclaredGroup (DeclaredGroup), contractMain)
+import Ecluse.Test.Contract.Types (Case (Case), Group (groupCases, groupId))
+import Test.Hspec (Spec)
 
 -- | Missing Docker fails during fixture acquisition and cannot become pending coverage.
 main :: IO ()
-main =
-    contractMain
-        Coverage.integrationCatalogue
-        "integration"
-        [ DeclaredGroup Coverage.awsComposition (const AwsComposition.spec)
-        , DeclaredGroup Coverage.pypiHttp (const PyPI.spec)
-        , DeclaredGroup Coverage.mirrorViewHttp (const MirrorView.spec)
-        , DeclaredGroup Coverage.egressHttp (const Egress.spec)
-        , DeclaredGroup Coverage.originHttp (const Origin.spec)
-        , DeclaredGroup Coverage.npmMetadataHttp (const NpmMetadata.spec)
-        , DeclaredGroup Coverage.publicationHttp (const Publication.spec)
-        , DeclaredGroup Coverage.pipelineFaultsHttp (const PipelineFaults.spec)
-        , DeclaredGroup Coverage.npmArtifactHttp (const NpmArtifact.spec)
-        , DeclaredGroup Coverage.workerSqs (const Worker.spec)
-        , DeclaredGroup Coverage.pilotS3 (const Pilot.spec)
-        , DeclaredGroup Coverage.advisorySyncS3 (const AdvisorySync.spec)
-        , DeclaredGroup Coverage.mirrorStateS3Internal (const MirrorStateS3Internal.spec)
-        , DeclaredGroup Coverage.mirrorStateS3 (const MirrorStateS3.spec)
-        , DeclaredGroup Coverage.advisoryExportS3 (const AdvisoryExport.spec)
-        , DeclaredGroup Coverage.queueSqs (const SqsQueue.spec)
-        , DeclaredGroup Coverage.serverShutdownHttp (const ServerShutdown.spec)
-        , DeclaredGroup Coverage.collectorMetrics (const TelemetryMetrics.spec)
-        , DeclaredGroup Coverage.telemetryScrapeHttp (const TelemetryScrape.spec)
-        , DeclaredGroup Coverage.collectorTraces (const TelemetryTraces.spec)
-        ]
-        (const (pure Nothing))
+main = do
+    declarations <-
+        sequence
+            [ discover Coverage.awsComposition AwsComposition.spec
+            , discover Coverage.pypiHttp PyPI.spec
+            , discover Coverage.mirrorViewHttp MirrorView.spec
+            , discover Coverage.egressHttp Egress.spec
+            , discover Coverage.originHttp Origin.spec
+            , discover Coverage.npmMetadataHttp NpmMetadata.spec
+            , discover Coverage.publicationHttp Publication.spec
+            , discover Coverage.pipelineFaultsHttp PipelineFaults.spec
+            , discover Coverage.npmArtifactHttp NpmArtifact.spec
+            , discover Coverage.workerSqs Worker.spec
+            , discover Coverage.pilotS3 Pilot.spec
+            , discover Coverage.advisorySyncS3 AdvisorySync.spec
+            , discover Coverage.mirrorStateS3Internal MirrorStateS3Internal.spec
+            , discover Coverage.mirrorStateS3 MirrorStateS3.spec
+            , discover Coverage.advisoryExportS3 AdvisoryExport.spec
+            , discover Coverage.queueSqs SqsQueue.spec
+            , discover Coverage.serverShutdownHttp ServerShutdown.spec
+            , discover Coverage.collectorMetrics TelemetryMetrics.spec
+            , discover Coverage.telemetryScrapeHttp TelemetryScrape.spec
+            , discover Coverage.collectorTraces TelemetryTraces.spec
+            ]
+    contractMain Coverage.integrationCatalogue "integration" declarations (const (pure Nothing))
+
+discover :: Group -> Spec -> IO DeclaredGroup
+discover metadata spec = do
+    identifiers <- allCaseIds spec
+    let registration = metadata{groupCases = [Case identifier [groupId metadata] | identifier <- sort identifiers]}
+    pure (DeclaredGroup registration (const spec))

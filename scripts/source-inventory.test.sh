@@ -9,6 +9,7 @@ trap 'rm -rf "$temporary"' EXIT
 mkdir -p "$temporary/scripts" "$temporary/bin"
 cp "$here/source-inventory.sh" "$temporary/scripts/"
 cp "$here/../Taskfile.yml" "$temporary/"
+cp -r "$here/../taskfiles" "$temporary/"
 cp "$here/../.gitignore" "$temporary/"
 cd "$temporary"
 git init -q

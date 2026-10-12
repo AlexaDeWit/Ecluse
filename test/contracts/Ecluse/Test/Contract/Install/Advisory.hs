@@ -14,6 +14,7 @@ module Ecluse.Test.Contract.Install.Advisory (
     advisoryAdmits,
 ) where
 
+import Data.List (lookup)
 import Data.Text qualified as T
 import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
 
@@ -71,7 +72,9 @@ data Denial = Denial
 
 -- | Real client and mount observations for one requested release.
 data AdvisoryDriver = AdvisoryDriver
-    { advisoryInstall :: IO (ClientResult, Bool)
+    { advisoryExpectedArtifact :: Text
+    , advisoryAdvertisedArtifacts :: [(Text, Text)]
+    , advisoryInstall :: IO (ClientResult, Bool)
     , advisoryArtifactStatus :: IO Int
     , advisoryAwaitDenials :: Denial -> IO [Denial]
     }
@@ -87,9 +90,10 @@ advisoryRefuses nativeMessage expected driver = do
     observed <- advisoryAwaitDenials driver expected
     observed `shouldSatisfy` elem expected
 
--- | An admitted remediation installs the independently observed release.
+-- | Require the exact native artifact before installing the admitted remediation.
 advisoryAdmits :: AdvisoryDriver -> Expectation
-advisoryAdmits driver =
+advisoryAdmits driver = do
+    lookup (advisoryExpectedArtifact driver) (advisoryAdvertisedArtifacts driver) `shouldSatisfy` isJust
     installsObserved
         InstallDriver
             { installRun = advisoryInstall driver

@@ -8,7 +8,6 @@ module Ecluse.E2E.PyPI.DredgerE2ESpec (
     pypiSweepDriver,
     pypiDredgerFixture,
     pypiDredgerProfile,
-    pypiDredgerObligation,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -34,16 +33,16 @@ import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (GlobalDataPlane, PipProject, Topology (..))
 import Ecluse.E2E.Harness.Verdaccio (awaitMirrorWindow)
 import Ecluse.E2E.PyPI.MirrorEvidence (canonicalVersion, mirrorCompleted)
+import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Contract.Types
-import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (..))
 import Ecluse.Test.Poll (pollUntil)
 
 -- | Each canonical family owns a fresh pair of native stores and a remote state service.
-pypiSweepDriver :: ConcreteFixture -> PhaseRecorder -> SweepDriver Native.PyPISweepPlane Native.PyPISweepStore PipProject
+pypiSweepDriver :: ConcreteFixture FamilyMetadata -> PhaseRecorder -> SweepDriver Native.PyPISweepPlane Native.PyPISweepStore PipProject
 pypiSweepDriver fixture recorder =
     SweepDriver
         { withIdentitySweep = acquire withIdentity
@@ -66,18 +65,14 @@ pypiSweepDriver fixture recorder =
     acquire resource action = timedFixture recorder (withFixture fixture) (timedFixtureWith recorder resource action)
 
 -- | Acquisition starts PyPI, the isolated TLS stub and the shared SQS/S3 emulator.
-pypiDredgerFixture :: ConcreteFixture
+pypiDredgerFixture :: ConcreteFixture FamilyMetadata
 pypiDredgerFixture =
     ConcreteFixture
         { withFixture = withDataPlane (Topology [PyPI] False True)
-        , fixtureGroup =
-            Group
-                "pypi/dredger"
+        , fixtureMetadata =
+            FamilyMetadata
                 "pypi/dredger"
                 "pypi/maintenance"
-                E2E
-                "pypi"
-                []
                 ["read", "mirror", "maintenance", "advisories"]
                 ["docker", "image", "openssl", "tar", "python3", "pip"]
                 ["proxy", "nginx", "codeartifact-fixture", "ministack"]
@@ -87,17 +82,6 @@ pypiDredgerFixture =
 -- | The profile names the deterministic CodeArtifact protocol fixture, never a cloud account.
 pypiDredgerProfile :: Profile
 pypiDredgerProfile = Profile "pypi/maintenance" ["pypi"] ["codeartifact-fixture", "sqs", "s3"] ["read", "mirror", "maintenance", "advisories"]
-
--- | Every canonical Dredger case remains required for PyPI completion.
-pypiDredgerObligation :: Obligation
-pypiDredgerObligation =
-    Obligation
-        "pypi/dredger"
-        "pypi/maintenance"
-        "pypi/dredger"
-        Supported
-        ["read", "mirror", "maintenance", "advisories"]
-        (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
 
 withIdentity :: ((Native.PyPISweepPlane, Native.PyPISweepStore, Native.PyPISweepStore) -> IO ()) -> GlobalDataPlane -> IO ()
 withIdentity action global = Native.withPyPISweepPlane global $ \plane ->
@@ -202,9 +186,10 @@ rolloutOps =
         , awaitPublished = \worker release -> do
             (name, version) <- workerRelease release
             awaitContainerLog worker (mirrorCompleted name version) 240
-        , wasPublished = \worker release -> do
+        , workerLogs = containerLogs
+        , publicationCoordinate = \release -> do
             (name, version) <- workerRelease release
-            elem ("mirrored artifact published: " <> name <> "@" <> version) . mapMaybe lineMessage . T.lines <$> containerLogs worker
+            pure (name <> "@" <> version)
         }
   where
     servingEnvironment (IdentityPolicy names) = [("ECLUSE_RULES", denyingRules names)]

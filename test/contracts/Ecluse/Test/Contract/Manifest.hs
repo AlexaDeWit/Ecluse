@@ -10,13 +10,18 @@ module Ecluse.Test.Contract.Manifest (
     readIdentity,
     jsonLine,
     writeJsonFile,
+    writeArtifactFile,
+    readJsonFile,
+    normaliseArchitecture,
+    digestFile,
     readPlanIdentity,
+    readRequiredPlanIdentity,
     digest,
     failRunner,
     usesProductImage,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
+import Crypto.Hash (Digest, SHA256, hash, hashlazy)
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -24,6 +29,8 @@ import Data.Text qualified as T
 
 import System.Directory (createDirectoryIfMissing, renameFile)
 import System.FilePath (takeDirectory)
+import System.IO (withBinaryFile)
+import UnliftIO.Exception (evaluate)
 
 import Ecluse.Test.Contract.Completion (Completion, auditCompletion)
 import Ecluse.Test.Contract.Result
@@ -90,13 +97,26 @@ readIdentityFields checkDeclaredDigest forceRequired imageRequired planDigest = 
 readPlanIdentity :: Bool -> Text -> IO ExecutionIdentity
 readPlanIdentity = readIdentityFields False False
 
+-- | Artifact commands require explicit identities even outside CI.
+readRequiredPlanIdentity :: Bool -> Text -> IO ExecutionIdentity
+readRequiredPlanIdentity = readIdentityFields False True
+
 -- | Atomic JSON writes preserve the last complete receipt if a producer stops between writes.
 writeJsonFile :: (ToJSON a) => FilePath -> a -> IO ()
-writeJsonFile path value = do
+writeJsonFile path = writeArtifactFile path . jsonLine
+
+-- | The caller holds the artifact lock across replacement and its surrounding transaction.
+writeArtifactFile :: FilePath -> ByteString -> IO ()
+writeArtifactFile path bytes = do
     createDirectoryIfMissing True $ takeDirectory path
-    BS.writeFile (path <> ".tmp") (jsonLine value)
+    BS.writeFile (path <> ".tmp") bytes
     renameFile (path <> ".tmp") path
 
+-- | Decode an artifact with the same failure handling as manifest audits.
+readJsonFile :: (FromJSON a) => FilePath -> IO a
+readJsonFile path = BS.readFile path >>= decodeFileBytes
+
+-- | Runner and host names use the same architecture identity.
 normaliseArchitecture :: Text -> Text
 normaliseArchitecture = \case
     "x86_64" -> "amd64"
@@ -112,6 +132,12 @@ jsonLine value = BL.toStrict (encode value) <> "\n"
 -- | Hash the exact bytes distributed as the execution plan.
 digest :: ByteString -> Text
 digest bytes = show (hash bytes :: Digest SHA256)
+
+-- | Stream large image archives without retaining their bytes in memory.
+digestFile :: FilePath -> IO Text
+digestFile path = withBinaryFile path ReadMode $ \handle -> do
+    bytes <- BL.hGetContents handle
+    evaluate (show (hashlazy bytes :: Digest SHA256))
 
 decodeFileBytes :: (FromJSON a) => ByteString -> IO a
 decodeFileBytes = either (failRunner . toText) pure . eitherDecodeStrict'

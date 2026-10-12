@@ -114,6 +114,15 @@ integrationObligations =
         , "integration/mirror-view/native-011"
         , "integration/mirror-view/native-012"
         , "integration/mirror-view/native-013"
+        , "integration/mirror-view/native-014/without-public-admission"
+        , "integration/mirror-view/native-014/with-public-sibling"
+        , "integration/mirror-view/native-015/absent-public"
+        , "integration/mirror-view/native-015/unavailable-public"
+        , "integration/mirror-view/native-015/malformed-public"
+        , "integration/mirror-view/native-015/default-denial"
+        , "integration/mirror-view/native-015/undecidable-policy"
+        , "integration/mirror-view/native-015/incomplete-inventory"
+        , "integration/mirror-view/native-016"
         ]
     , required
         "integration/egress"

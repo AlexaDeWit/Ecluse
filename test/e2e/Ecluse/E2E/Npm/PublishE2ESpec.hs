@@ -8,14 +8,14 @@ with no target configured is a base-topology case in "Ecluse.E2E.Npm.InstallE2ES
 module Ecluse.E2E.Npm.PublishE2ESpec (npmPublicationFamily) where
 
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Publication
 
 -- | Supply accepted and refused native publication operations to the common scenarios.
-npmPublicationFamily :: ConcreteFixture -> FamilyFixture PublicationFixture
+npmPublicationFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture PublicationFixture
 npmPublicationFamily fixture = concreteFamily fixture $ \recorder action ->
     timedFixtureWith recorder (withE2EWith defaultE2EConfig{ecExtraEnv = publishTargetEnv}) $ \e2e ->
         action (PublicationFixture publishVersion (publicationDriver e2e publishInScopeName) (publicationDriver e2e publishOutOfScopeName))

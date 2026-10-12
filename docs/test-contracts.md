@@ -273,8 +273,9 @@ task test-e2e-audit
 Preparation cannot overwrite an existing artifact directory. Commands sharing that directory hold the same lock.
 Rerun a fixed subject with its named task. It reuses the prepared image and immutable plan.
 Before checking prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
-Only successful execution and cleanup publish `reports/<subject>.json`.
-Failed-attempt reports, logs, and status remain available for diagnosis and cannot satisfy completion.
+Every nonempty current report publishes to `reports/<subject>.json`, including failed results.
+Publication preserves the command's failure status. Failed reports cannot satisfy completion.
+Attempt reports, logs, and status remain available for diagnosis.
 The full audit requires every group and case exactly once, with matching execution identities.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
 
@@ -332,10 +333,10 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 | Canonical module | Registered cases | Native evidence retained |
 |---|---|---|
 | `Install` | The shared npm and PyPI installation families, plus the retained original install IDs | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
-| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Native file lists, digests, exact denial text and remediation controls. |
+| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Exact expected artifact membership in native listings before remediation installation, advertised digests, exact denial text and remediation controls. |
 | `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
 | `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
-| `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
+| `Mirror` | All seven `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
 | `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
 | `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
 | `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
@@ -352,6 +353,12 @@ Native deprecation/yank handling, npm publication metadata and tamper-refusal as
 The new shared installation family runs these four IDs for each of `npm` and `pypi`:
 `installation/accepted-install`, `installation/default-denial`, `installation/artifact-integrity`,
 and `installation/artifact-head`, with the ecosystem prefix.
+
+Admission preserves the native version or distribution observation until the contract compares it with the expected result.
+Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
+`core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
+Those negative controls create and inspect their files before checking the contract's failure.
+
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
 and `npm/advisories/exact-fix`.
 The PyPI full contract also runs `pypi/telemetry/signals`,
@@ -469,15 +476,17 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 17 complete lifecycle groups and 292 unique examples.
+The integration runner registers 20 complete lifecycle groups and 341 unique examples.
 Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 269 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The other 318 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
-The PyPI additions retain exact source authority, companion integrity, credential confinement, and no-policy or mirror assertions.
+The PyPI cases retain source authority, companion integrity, credential confinement, and private mirror observations.
 Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
 Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
 
-The pure catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+The pure expected catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+Preparation builds the expected plan from that snapshot.
+The integration entrypoint discovers actual case IDs from its fixed Hspec specs before acquiring fixtures.
 Removing a case, profile, or required capability fails catalogue validation.
 Mutation checks exercise every registered case and capability without constructing integration specs.
 The shared runner compares actual Hspec result IDs against each group's declared case set.
@@ -492,15 +501,18 @@ The old wrapper remains as a native source reference, but the runner does not sc
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
 | `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/mirror-view` | `native-001` to `native-016` (22) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/publication` | npm `native-001` to `native-019` and 23 PyPI cases (48) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
-| `integration/worker` | `native-001` to `native-008` (8) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
+| `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
 | `integration/pilot` | `native-001` to `native-003` (8) | None | `Ecluse.PilotIntegrationSpec` |
 | `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
+| `integration/mirror-state-s3-internal` | `native-001` (1) | None | `Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec` |
+| `integration/mirror-state-s3` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Mirror.State.S3IntegrationSpec` |
 | `integration/advisory-export` | `native-001` to `native-002` (2) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
 | `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
 | `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |

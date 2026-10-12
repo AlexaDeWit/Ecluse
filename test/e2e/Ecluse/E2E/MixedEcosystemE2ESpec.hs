@@ -11,6 +11,7 @@ import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (allowPkg, psName, psVersion)
@@ -20,8 +21,8 @@ import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
 
 -- | Drive one product image with both real clients and local stores.
-mixedMountContract :: ConcreteFixture -> DeclaredGroup
-mixedMountContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
+mixedMountContract :: ConcreteFixture Group -> DeclaredGroup
+mixedMountContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =

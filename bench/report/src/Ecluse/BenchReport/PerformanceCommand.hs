@@ -3,20 +3,29 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Artifact and identity binding runs after the native measurement process exits.
-module Ecluse.BenchReport.PerformanceCommand (writeObligation, writeReceipt, auditReceipt) where
+module Ecluse.BenchReport.PerformanceCommand (
+    writeObligation,
+    writeReceipt,
+    auditReceipt,
+    compileObligation,
+    prepareReceipt,
+    verifyRequest,
+) where
 
 import Data.Aeson (FromJSON, eitherDecodeStrict')
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Version (showVersion)
+import System.Info (compilerName, compilerVersion)
 
 import Ecluse.BenchLoad.Contract (LoadScope (FullLoad, ReadLoadFoundation), requiredLoadPasses)
 import Ecluse.BenchLoad.Floors (passKey)
 import Ecluse.BenchLoad.Pod (parsePodShape)
 import Ecluse.BenchReport.Performance
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Test.Contract.Manifest (digest, failRunner, jsonLine, readPlanIdentity, writeJsonFile)
+import Ecluse.Test.Contract.Manifest (digest, digestFile, failRunner, jsonLine, readJsonFile, readPlanIdentity, writeJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (identityPlanDigest))
 import Ecluse.Test.Corpus (corpusLabel, corpusPackages, cpName, pypiCorpusPackages)
@@ -24,10 +33,11 @@ import Ecluse.Test.Corpus (corpusLabel, corpusPackages, cpName, pypiCorpusPackag
 -- | Compile requirements from canonical laws and declared corpus identities, without executing tests.
 writeObligation :: Text -> Text -> FilePath -> IO ()
 writeObligation kind subject conditionsPath = do
-    conditions <- readJson conditionsPath
+    conditions <- readJsonFile conditionsPath
     obligation <- either failRunner pure (compileObligation kind subject conditions)
     BS.putStr (jsonLine obligation)
 
+-- | Required settings and rows come from reviewed harness requirements.
 compileObligation :: Text -> Text -> Map Text Text -> Either Text PerformanceObligation
 compileObligation kind subject conditions = do
     let keys =
@@ -49,22 +59,33 @@ compileObligation kind subject conditions = do
         "load-foundation" -> loadRows ReadLoadFoundation ecosystem
         "load" -> loadRows FullLoad ecosystem
         _ -> Left ("unknown performance kind: " <> kind)
-    pure (PerformanceObligation kind subject rows conditions)
+    pure (PerformanceObligation kind subject rows (requiredConditions kind conditions))
   where
     loadRows scope ecosystem = do
         shape <- maybeToRight "load obligations require podShape" (Map.lookup "podShape" conditions) >>= parsePodShape
         passes <- first show (requiredLoadPasses scope ecosystem shape)
         pure [scenario <> "/" <> passKey whichPass | (_, (scenario, whichPass)) <- passes]
 
+requiredConditions :: Text -> Map Text Text -> Map Text Text
+requiredConditions kind conditions =
+    Map.fromList $
+        [("compiler", toText compilerName <> "-" <> toText (showVersion compilerVersion)), ("optimisation", "-O1"), ("profiling", "off")]
+            <> case kind of
+                "allocation" -> [("mode", "captures"), ("passes", "5")]
+                "live-allocation" -> [("mode", "live"), ("passes", "5")]
+                "benchmark" -> [("rts", "-T"), ("stdev", "10")]
+                _ -> [("podShape", Map.findWithDefault "" "podShape" conditions), ("durationSeconds", "30"), ("concurrency", "100"), ("serveMaxInFlight", "automatic"), ("affinity", "taskset -c 0 oha")]
+
 -- | Always write the receipt before reporting a failed or incomplete native measurement.
 writeReceipt :: FilePath -> FilePath -> FilePath -> IO ()
 writeReceipt requestPath nativePath receiptPath = do
-    request <- readJson requestPath
+    request <- readJsonFile requestPath
     verifyRequest request
     receipt <- prepareReceipt request nativePath
     writeJsonFile receiptPath receipt
     finishAudit request receipt
 
+-- | Keep native conditions ahead of caller declarations and hash every supporting artifact.
 prepareReceipt :: PerformanceRequest -> FilePath -> IO PerformanceReceipt
 prepareReceipt request nativePath = do
     unless (nativePath `elem` requestArtifacts request) (failRunner "native artifact must belong to the requested artifact set")
@@ -85,14 +106,15 @@ prepareReceipt request nativePath = do
 -- | Rebuild observations and artifact hashes before accepting a stored receipt.
 auditReceipt :: FilePath -> FilePath -> IO ()
 auditReceipt requestPath receiptPath = do
-    request <- readJson requestPath
+    request <- readJsonFile requestPath
     verifyRequest request
-    receipt <- readJson receiptPath
+    receipt <- readJsonFile receiptPath
     nativePath <- maybe (failRunner "receipt has no native artifact") (pure . toString) (Map.lookup "nativeArtifact" (npConditions (prNative receipt)))
     actual <- prepareReceipt request nativePath
     unless (actual == receipt) (failRunner "performance receipt differs from its native artifacts or execution request")
     finishAudit request receipt
 
+-- | Rebuild requirements and compare the request with the current execution identity.
 verifyRequest :: PerformanceRequest -> IO ()
 verifyRequest request = do
     let obligation = requestObligation request
@@ -111,10 +133,7 @@ finishAudit request receipt =
     problems = auditPerformanceReceipts (requestIdentity request) (requestAttempt request) [requestObligation request] [receipt]
 
 hashArtifacts :: [FilePath] -> IO (Map FilePath Text)
-hashArtifacts paths = Map.fromList <$> traverse (\path -> (path,) . digest <$> BS.readFile path) paths
-
-readJson :: (FromJSON a) => FilePath -> IO a
-readJson path = BS.readFile path >>= decodeJson
+hashArtifacts paths = Map.fromList <$> traverse (\path -> (path,) <$> digestFile path) paths
 
 decodeJson :: (FromJSON a) => ByteString -> IO a
 decodeJson = either (failRunner . toText) pure . eitherDecodeStrict'

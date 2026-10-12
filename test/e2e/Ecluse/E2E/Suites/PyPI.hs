@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The complete PyPI ecosystem contract and its explicit native extensions.
+-- | The full PyPI conformance subject, including named failures for missing drivers.
 module Ecluse.E2E.Suites.PyPI (declarations) where
 
 import Ecluse.E2E.Drivers.PyPI (pypiDriver)
 import Ecluse.Test.Contract.Ecosystem (fullEcosystemContract)
 import Ecluse.Test.Contract.Runner (DeclaredGroup)
 
--- | Every required family remains part of the executable suite.
+-- | Missing required behaviour fails without stopping unrelated contracts.
 declarations :: [DeclaredGroup]
 declarations = fullEcosystemContract pypiDriver

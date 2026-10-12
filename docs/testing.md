@@ -815,7 +815,10 @@ Changing a subject's direct declaration list does not change the full contract's
 No timing improvement is claimed until comparable runs measure it.
 
 The tier stays outside local `task gate` and `task check`. Run `task test-e2e` inside the Nix flake.
-It prepares, loads, and runs all three subjects serially in a fresh `scratchpad/e2e/run.*` directory, then audits their reports.
+It prepares and loads the image in a fresh `scratchpad/e2e/run.*` directory, then runs each subject and the full audit.
+An ordinary case failure with a valid current report does not stop the later subjects or audit.
+The final command fails after it collects their evidence.
+A prerequisite, cleanup, cancellation, timeout, or unexpected native exit stops execution.
 It prints the artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 Staged commands require an explicit directory:
 
@@ -833,12 +836,14 @@ task test-e2e-audit
 Preparation writes `docker-image.tar`, `plan.json`, and `identity.json` once.
 Another preparation cannot overwrite that directory, including after a failed preparation.
 An artifact lock prevents overlapping preparation, loading, execution, or auditing in the same directory.
+Task keeps that lock for each complete operation, including the full local run.
 `test-e2e-load` validates the prepared identity before loading the archive.
 `test-e2e-audit` checks current reports against the complete plan and identity.
 Rerun a subject with its fixed task, such as `task test-e2e-pypi`.
 Each attempt invalidates its previous published report before checking prerequisites.
 Each nonempty current report publishes to `reports/<subject>.json`, including after a failed runner or cleanup.
-The command preserves its failure status, and the audit rejects failed results. Attempt reports, status, and logs remain under `reports/attempts/`.
+The command preserves its native failure status, including exit 7, and the audit rejects failed results.
+Attempt reports, native status, cleanup status, and logs remain under `reports/attempts/`.
 Test entrypoints accept no custom selection arguments.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds.
 The separate manifest and audit commands appear in the [coverage and reproduction map](test-contracts.md#reproduction).
@@ -952,7 +957,9 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
 | [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main` |
 
-Each workflow makes its per-ecosystem receipts after the native measurement process exits.
+Each workflow calls a fixed Task measurement target, then a receipt target after the native process exits.
+Task records the options it passes before measurement. The native producer records its own measurement conditions.
+The typed receipt code compares these facts with independent required conditions.
 The receipt audits actual row outcomes against independent obligations and hashes its source files.
 It records the process result, run attempt, compiler, optimisation, profiling and relevant run settings.
 This postprocess step does not change the measured workload, sampling or verdict.
@@ -1820,8 +1827,9 @@ CI measures coverage per gating suite and reports it to [Codecov](https://about.
 The conformance jobs add completion evidence. They do not change the four coverage uploads or their merged denominator.
 Generation is local and tool-agnostic. A suite is built instrumented: HPC, in an isolated
 `dist-coverage/` that leaves the normal build cache alone. Then `hpc-codecov` converts the
-`.tix`/`.mix` output to Codecov's native JSON. `scripts/coverage.sh` produces one tier. The Taskfile
-`coverage` task assembles the merged view inline.
+`.tix`/`.mix` output to Codecov's native JSON.
+Task orders the four suites and the tick unions in [`taskfiles/coverage.yml`](../taskfiles/coverage.yml).
+One converter, `scripts/coverage.sh`, receives explicit tick and output paths for both partial and combined reports.
 
 **Codecov is the merged authority, and `task coverage` reproduces it.** Codecov merges the per-flag
 uploads into one project total. A single tier's number therefore *under-counts* the modules the
@@ -1838,7 +1846,7 @@ Separate manifest and audit executables check the report against every compiled 
 The test binary retains its own `.tix` file, preserving the suite's coverage ticks.
 
 **What CI uploads.** The `coverage` job is a four-leg matrix, one runner per instrumented suite.
-Each leg builds and runs its own suite through `scripts/coverage.sh` and uploads the JSON that
+Each leg calls its fixed Task coverage target and uploads the JSON that
 produces: `ecluse-core-unit`, `ecluse-runtime-unit`, and `ecluse-unit` (all under the Codecov flag
 `unit`), and `ecluse-integration` (flag `integration`). Only the integration leg needs a Docker
 daemon.

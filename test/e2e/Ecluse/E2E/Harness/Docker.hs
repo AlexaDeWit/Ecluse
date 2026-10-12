@@ -101,7 +101,7 @@ import Ecluse.Test.Poll (pollUntil)
 mirrorHost :: Text
 mirrorHost = "mirror"
 
--- | Return a skip reason when the product image or Docker daemon is unavailable.
+-- | Explain missing infrastructure before acquiring a required group's resources.
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable =
     usingExistingPlane >>= \case

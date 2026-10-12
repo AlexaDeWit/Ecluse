@@ -1,48 +1,11 @@
 #!/usr/bin/env bash
-# Generate one suite's partial Codecov report. See docs/testing.md for the combined view.
-# Explicit mix paths avoid hpc-codecov's incompatible Cabal path discovery.
+# Convert explicit HPC ticks and check the unchanged product-module denominator.
 set -euo pipefail
 
-suite="${1:-ecluse-unit}"
-shift || true
-builddir="dist-coverage" # isolated so -fhpc instrumentation never invalidates
-                         # the normal `cabal build` cache in dist-newstyle
-outdir="coverage"
-
-# The combined task suppresses per-suite notices.
-if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
-  case "$suite" in
-    ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
-    ecluse-unit) other="ecluse-core-unit and ecluse-integration" ;;
-    ecluse-integration) other="ecluse-core-unit and ecluse-unit" ;;
-    *) other="the other gating tiers" ;;
-  esac
-  {
-    echo "coverage: PARTIAL VIEW: measuring '$suite' ONLY."
-    echo "  Codecov merges this with '$other' into the project total, so this number"
-    echo "  under-counts every module '$other' exercises. For the merged, Codecov-matching"
-    echo "  picture run:  task coverage   (combined unit + integration, needs Docker)."
-  } >&2
-fi
-
-# Instrumented build + run of just this suite.
-if [ "$suite" = ecluse-integration ]; then
-  bash scripts/test-integration.sh validate-coverage "$@"
-  cabal build "$suite" --enable-coverage --builddir="$builddir"
-  bash scripts/test-integration.sh coverage \
-    --enable-coverage \
-    --builddir="$builddir" \
-    --test-show-details=direct \
-    "$@"
-else
-  cabal test "$suite" \
-    --enable-coverage \
-    --builddir="$builddir" \
-    --test-show-details=direct \
-    "$@"
-fi
-
-tix="$(bash scripts/coverage-tix.sh "$suite" "$builddir")"
+tix="${1:?tick file}"
+out="${2:?output file}"
+suite="${3:-combined}"
+builddir="${4:-dist-coverage}"
 
 # Every HPC mix directory produced by the coverage build.
 mix_args=()
@@ -50,8 +13,7 @@ while IFS= read -r d; do
   mix_args+=(-m "$d")
 done < <(find "$builddir" -type d -path '*/hpc/vanilla/mix')
 
-mkdir -p "$outdir"
-out="$outdir/${suite}.json"
+mkdir -p "$(dirname "$out")"
 
 # Shared contracts and drivers are not product coverage.
 support_exclude=()

@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Pip (
     pipInstallIn,
     pipResolveIn,
     pipInstalled,
+    pipInstalledTree,
     pipInstallsWheel,
     pipInstallGraph,
     pipInstallAndInspect,
@@ -129,6 +130,10 @@ pipInstallsWheel e2e advertised =
 -- | Whether a wheel's @.dist-info@ directory landed in the project's install target.
 pipInstalled :: PipProject -> Text -> IO Bool
 pipInstalled proj distInfo = doesDirectoryExist (ppDir proj </> targetDir </> toString distInfo)
+
+-- | Observe all installation output, including unexpected distributions and partial files.
+pipInstalledTree :: PipProject -> IO InstalledTree
+pipInstalledTree proj = snapshotTree (ppDir proj) [targetDir]
 
 -- | Read advertised @(filename, sha256)@ pairs through the proxy, failing if the mount refuses.
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]

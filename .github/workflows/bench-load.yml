@@ -101,39 +101,22 @@ jobs:
         run: nix develop .#ci --command task update
 
       - name: Build the harness
-        run: nix develop .#ci --command cabal build -v0 exe:bench-load
+        run: nix develop .#ci --command task performance:load-build
 
       # The harness bounds each proxy with a cgroup of its own, so it needs a subtree it may
       # write. Swap goes off, or a pod shape could page instead of meeting its limit.
       - name: Delegate a cgroup subtree to the harness
-        run: |
-          set -euo pipefail
-          sudo swapoff -a
-          sudo mkdir -p "$BENCH_LOAD_CGROUP/harness"
-          sudo chown -R "$(id -u):$(id -g)" "$BENCH_LOAD_CGROUP"
-          echo "+cpu +memory +pids" | sudo tee "$BENCH_LOAD_CGROUP/cgroup.subtree_control" >/dev/null
-          echo "controllers enabled for the proxy cgroups: $(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")"
+        run: nix develop .#ci --command task performance:load-cgroup
 
-      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run load tests
         id: measure
-        env:
-          ECLUSE_PERFORMANCE_OBSERVATIONS: load-observations.json
-        run: |
-          set -eo pipefail
-          rm -f bench-load-results.md load-observations.json
-          # This shell, and so the harness, joins the leaf beside the proxy cgroups.
-          echo "$$" | sudo tee "$BENCH_LOAD_CGROUP/harness/cgroup.procs" >/dev/null
-          # oha is pinned to logical CPU 0. -N3 sets three GHC capabilities for the harness
-          # and scenario children via GHCRTS. It does not reserve CPUs or exclude CPU 0.
-          # Each proxy gets only -T and derives its own capabilities at boot.
-          nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
+        run: nix develop .#ci --command task performance:load-measure
 
       - name: Record load evidence
         if: always()
         env:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
-        run: nix develop .#ci --command bash scripts/performance-receipt.sh load
+        run: nix develop .#ci --command task performance:load-receipt
 
       # Off main only: the runs on main are the baseline, and each pod shape takes the
       # newest run that measured it. The GC-thrash probe has no scenario table to compare. A

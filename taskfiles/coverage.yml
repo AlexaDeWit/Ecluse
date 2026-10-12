@@ -1,0 +1,77 @@
+version: '3'
+tasks:
+  combined:
+    env:
+      COVERAGE_FLAGS: '{{.COVERAGE_FLAGS}}'
+    preconditions:
+      - sh: docker info >/dev/null 2>&1
+        msg: 'coverage: the combined report needs a running Docker daemon.'
+    cmds:
+      - task: unit
+        vars: {SUITE: ecluse-core-unit}
+      - task: unit
+        vars: {SUITE: ecluse-unit}
+      - task: unit
+        vars: {SUITE: ecluse-runtime-unit}
+      - task: integration
+      - hpc combine --union --output=dist-coverage/unit-core-runtime.tix "$(bash scripts/coverage-tix.sh ecluse-core-unit)" "$(bash scripts/coverage-tix.sh ecluse-runtime-unit)"
+      - hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/unit-core-runtime.tix "$(bash scripts/coverage-tix.sh ecluse-unit)"
+      - hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix "$(bash scripts/coverage-tix.sh ecluse-integration)"
+      - bash scripts/coverage.sh dist-coverage/combined.tix coverage/combined.json
+
+  unit:
+    env:
+      COVERAGE_FLAGS: '{{.COVERAGE_FLAGS}}'
+      SUITE: '{{.SUITE}}'
+    cmds:
+      - 'case "$SUITE" in ecluse-core-unit|ecluse-unit|ecluse-runtime-unit) ;; *) echo "use coverage-integration for the fixed integration suite" >&2; exit 2 ;; esac'
+      - 'printf "Partial coverage for %s. Use task coverage for the combined report.\n" "$SUITE"'
+      - cabal test "$SUITE" --enable-coverage --builddir=dist-coverage --test-show-details=direct $COVERAGE_FLAGS
+      - bash scripts/coverage.sh "$(bash scripts/coverage-tix.sh "$SUITE")" "coverage/$SUITE.json" "$SUITE"
+
+  integration:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${ECLTEST_RUN_ID:-}" ]; then printf '%s\n' "$ECLTEST_RUN_ID"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-}" ]; then printf '%s\n' "$ECLTEST_SOURCE"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+      ROOT: '{{.ECLTEST_INTEGRATION_ARTIFACT_DIR | default (printf "scratchpad/integration/%s" .RUN_ID)}}'
+    env:
+      COVERAGE_FLAGS: '{{.COVERAGE_FLAGS}}'
+      ECLTEST_INTEGRATION_ARTIFACT_DIR: '{{.ROOT}}'
+      ECLTEST_REPORT_PATH: '{{.ROOT}}/report.json'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_REQUIRED: '1'
+      ECLTEST_SHARD: integration
+      ECLTEST_ARGUMENTS: '{{env "ECLTEST_ARGUMENTS" | default .CLI_ARGS}}'
+    cmds:
+      - task --exit-code coverage:integration-options
+      - task --exit-code test:integration-prepare
+      - cabal build ecluse-integration --enable-coverage --builddir=dist-coverage
+      - bash scripts/process-capture.sh "$ECLTEST_INTEGRATION_ARTIFACT_DIR/native-status" "$ECLTEST_INTEGRATION_ARTIFACT_DIR/run.log" bash scripts/test-containers.sh run task --exit-code coverage:integration-native
+      - task --exit-code test:integration-audit-capture
+      - bash scripts/coverage.sh "$(bash scripts/coverage-tix.sh ecluse-integration)" coverage/ecluse-integration.json ecluse-integration
+      - bash scripts/process-status.sh "$ECLTEST_INTEGRATION_ARTIFACT_DIR/native-status" "$ECLTEST_INTEGRATION_ARTIFACT_DIR/audit-status"
+
+  integration-options:
+    env:
+      COVERAGE_FLAGS: '{{.COVERAGE_FLAGS}}'
+    cmds:
+      - test -z "$ECLTEST_ARGUMENTS"
+      - |
+        for option in $COVERAGE_FLAGS; do
+          case "$option" in
+            --enable-coverage|--builddir=dist-coverage|--test-show-details=direct|-fdev-http-egress|--flags=dev-http-egress) ;;
+            *) echo "integration: unsupported coverage option '$option'" >&2; exit 2 ;;
+          esac
+        done
+
+  integration-native:
+    env:
+      COVERAGE_FLAGS: '{{.COVERAGE_FLAGS}}'
+    cmds:
+      - 'ECLTEST_PLAN_DIGEST="$(sha256sum "$ECLTEST_INTEGRATION_ARTIFACT_DIR/plan.json" | cut -d" " -f1)" cabal test ecluse-integration --enable-coverage --builddir=dist-coverage --test-show-details=direct $COVERAGE_FLAGS'

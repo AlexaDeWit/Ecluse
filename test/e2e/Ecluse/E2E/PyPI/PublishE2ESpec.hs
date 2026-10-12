@@ -20,14 +20,15 @@ import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Publication
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 
 -- | Native boundary and disabled-route controls supplement the shared publication laws.
-nativePublicationContract :: ConcreteFixture -> DeclaredGroup
-nativePublicationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder ->
+nativePublicationContract :: ConcreteFixture Group -> DeclaredGroup
+nativePublicationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder ->
     around (timedFixture recorder (withFixture fixture)) $ do
         it (caseLabel "pypi/publish-native/conflicting-names" "refuses conflicting multipart names before contacting the target") $ \plane ->
             withPublicationFixture plane $ \target distributions ->
@@ -53,7 +54,7 @@ nativePublicationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \reco
                     plane
 
 -- | Bind real multipart publication and a fresh native pip installation to the common contract.
-pypiPublicationFamily :: ConcreteFixture -> FamilyFixture PublicationFixture
+pypiPublicationFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture PublicationFixture
 pypiPublicationFamily fixture = concreteFamily fixture $ \recorder action plane ->
     timedFixture recorder (withPublicationFixture plane . curry) $ \(target, distributions) ->
         timedFixture recorder (\use -> withE2EWith publicationConfig use plane) $ \proxy ->

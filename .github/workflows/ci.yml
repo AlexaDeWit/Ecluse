@@ -127,21 +127,16 @@ jobs:
         run: nix develop .#ci --command task update
 
       # The harness links the shipped RTS options, so every run measures under the same
-      # runtime. pipefail keeps the harness exit code through tee.
+      # runtime. Task retains the native status and output before receipt publication.
       - name: Hold each leg's allocation to its budget
         id: measure
-        env:
-          ECLUSE_PERFORMANCE_OBSERVATIONS: perf-allocation-observations.json
-        run: |
-          set -eo pipefail
-          rm -f perf-allocation-report.md perf-allocation-observations.json
-          nix develop .#ci --command task perf-allocation 2>&1 | tee perf-allocation-report.md
+        run: nix develop .#ci --command task performance:allocation-measure
 
       - name: Audit per-ecosystem allocation receipts
         if: always()
         env:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
-        run: nix develop .#ci --command bash scripts/performance-receipt.sh allocation
+        run: nix develop .#ci --command task performance:allocation-receipt
 
       - name: Upload the report
         if: always()
@@ -471,7 +466,7 @@ jobs:
         env:
           ECLTEST_COMPONENT: ${{ matrix.subject }}
           ECLTEST_JOB_STATUS: ${{ job.status }}
-        run: bash scripts/e2e.sh diagnostics
+        run: nix develop .#ci --command task test:e2e-diagnostics
 
       - name: Upload execution evidence
         if: always()

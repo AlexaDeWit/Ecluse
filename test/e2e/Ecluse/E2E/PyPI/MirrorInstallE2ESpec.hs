@@ -20,16 +20,17 @@ import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
 import Ecluse.E2E.PyPI.MirrorEvidence
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 import Ecluse.Test.Contract.Install (TargetRefusal (..))
 import Ecluse.Test.Contract.Mirror
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 import UnliftIO (finally)
 
 -- | Native protocol and recovery obligations complement the full ecosystem laws.
-nativeMirrorContract :: ConcreteFixture -> DeclaredGroup
-nativeMirrorContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder ->
+nativeMirrorContract :: ConcreteFixture Group -> DeclaredGroup
+nativeMirrorContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder ->
     around (timedFixture recorder (withFixture fixture)) $
         describe "PyPI whole-version mirror installs" $ do
             it (caseLabel "pypi/mirror-native/read-roundtrip" "preserves every native file and supported field after restart") $ \plane ->
@@ -162,7 +163,7 @@ verifyHot plane target distributions (cold, tree) =
             plane
 
 -- | Supply real native installations and target observations to every shared mirror law.
-pypiMirrorFamily :: ConcreteFixture -> (MirrorFixture PythonGraph Value, FamilyFixture (MirrorDriver PythonGraph Value))
+pypiMirrorFamily :: ConcreteFixture FamilyMetadata -> (MirrorFixture PythonGraph Value, FamilyFixture (MirrorDriver PythonGraph Value))
 pypiMirrorFamily fixture =
     ( MirrorFixture
         { mirrorExpectedGraph = mirrorGraph

@@ -101,7 +101,8 @@ data RolloutOps plane store = RolloutOps
     , withServingRole :: forall a. plane -> Text -> SweepPolicy -> (store -> IO a) -> IO a
     , withWorkerRole :: forall a. plane -> Text -> (String -> IO a) -> IO a
     , awaitPublished :: String -> Text -> IO Bool
-    , wasPublished :: String -> Text -> IO Bool
+    , workerLogs :: String -> IO Text
+    , publicationCoordinate :: Text -> IO Text
     }
 
 -- | Generation publication returns process evidence and waits for the proxy's observed swap.

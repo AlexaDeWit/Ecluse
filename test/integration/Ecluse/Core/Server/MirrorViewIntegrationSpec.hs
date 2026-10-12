@@ -225,11 +225,11 @@ spec = describe "managed PyPI mirror reads" $ do
             for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status403
 
     for_
-        [ ("without an admitted public version", [DenyByIdentity "demo@1"])
-        , ("with an admitted public sibling", [DenyByIdentity "demo@1", AllowByIdentity "demo"])
+        [ ("without-public-admission", "without an admitted public version", [DenyByIdentity "demo@1"])
+        , ("with-public-sibling", "with an admitted public sibling", [DenyByIdentity "demo@1", AllowByIdentity "demo"])
         ]
-        $ \(label, policy) ->
-            it ("serves the sibling of a denied missing version " <> label) $ do
+        $ \(identifier, label, policy) ->
+            it (caseLabel ("integration/mirror-view/native-014/" <> identifier) ("serves the sibling of a denied missing version " <> label)) $ do
                 inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
                 record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
                 view <- testView (pure (Right (StateLoaded revision record)))
@@ -246,15 +246,15 @@ spec = describe "managed PyPI mirror reads" $ do
                     simpleStatus denied `shouldBe` status403
 
     for_
-        [ ("absent public metadata", [DenyByIdentity "demo@1"], native status404 [])
-        , ("unavailable public metadata", [DenyByIdentity "demo@1"], native status503 [])
-        , ("malformed public metadata", [DenyByIdentity "demo@1"], native status200 [])
-        , ("default denial", [], native status200 [1, 2])
-        , ("undecidable policy", [DenyIfCve (DenyIfCveParams 8 FailDeny)], native status200 [1, 2])
-        , ("admitted incomplete inventory", [AllowByIdentity "demo"], native status200 [1])
+        [ ("absent-public", "absent public metadata", [DenyByIdentity "demo@1"], native status404 [])
+        , ("unavailable-public", "unavailable public metadata", [DenyByIdentity "demo@1"], native status503 [])
+        , ("malformed-public", "malformed public metadata", [DenyByIdentity "demo@1"], native status200 [])
+        , ("default-denial", "default denial", [], native status200 [1, 2])
+        , ("undecidable-policy", "undecidable policy", [DenyIfCve (DenyIfCveParams 8 FailDeny)], native status200 [1, 2])
+        , ("incomplete-inventory", "admitted incomplete inventory", [AllowByIdentity "demo"], native status200 [1])
         ]
-        $ \(label, policy, public) ->
-            it ("keeps missing recorded versions unavailable with " <> label) $ do
+        $ \(identifier, label, policy, public) ->
+            it (caseLabel ("integration/mirror-view/native-015/" <> identifier) ("keeps missing recorded versions unavailable with " <> label)) $ do
                 inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
                 record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
                 view <- testView (pure (Right (StateLoaded revision record)))
@@ -264,7 +264,7 @@ spec = describe "managed PyPI mirror reads" $ do
                     response <- getPath "/pypi/simple/demo/" app
                     simpleStatus response `shouldBe` status503
 
-    it "requires integrity-admitted evidence before a named denial releases mirror coverage" $ do
+    it (caseLabel "integration/mirror-view/native-016" "requires integrity-admitted evidence before a named denial releases mirror coverage") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))

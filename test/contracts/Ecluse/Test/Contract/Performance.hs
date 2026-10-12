@@ -10,6 +10,7 @@ module Ecluse.Test.Contract.Performance (
     PerformanceObligation (..),
     PerformanceReceipt (..),
     auditPerformanceReceipts,
+    loadFloorProblem,
 ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.:), (.=))
@@ -117,7 +118,7 @@ auditPerformanceReceipts expected attempt obligations receipts =
             <> [ "load floors were not held: " <> receiptKey receipt
                | prKind receipt `elem` ["load", "load-foundation"]
                , let conditions = npConditions (prNative receipt)
-               , Map.lookup "floorEnforcement" conditions /= Just "held" || Map.lookup "floorEnforcementReasons" conditions /= Just ""
+               , isJust (loadFloorProblem conditions)
                ]
             <> ["performance artifacts missing: " <> receiptKey receipt | Map.null (prArtifacts receipt)]
             <> ["invalid performance artifact digest: " <> toText path | (path, value) <- Map.toList (prArtifacts receipt), null path || T.length value /= 64 || not (T.all isHexDigit value)]
@@ -134,3 +135,13 @@ auditPerformanceReceipts expected attempt obligations receipts =
 
 duplicates :: Text -> [Text] -> [Text]
 duplicates kind values = ["duplicate " <> kind <> ": " <> value | value <- Catalogue.duplicates values]
+
+-- | Only native evidence with held floors and no contradictory reasons qualifies.
+loadFloorProblem :: Map Text Text -> Maybe Text
+loadFloorProblem conditions = case Map.lookup "floorEnforcement" conditions of
+    Just "held" -> case Map.lookup "floorEnforcementReasons" conditions of
+        Nothing -> Just "load floor enforcement reasons missing"
+        Just "" -> Nothing
+        Just _ -> Just "contradictory load floor enforcement"
+    Just "not-held" -> Just "load floors not held"
+    _ -> Just "load floor enforcement missing"
