@@ -272,8 +272,9 @@ task test-e2e-audit
 Preparation cannot overwrite an existing artifact directory. Commands sharing that directory hold the same lock.
 Rerun a fixed subject with its named task. It reuses the prepared image and immutable plan.
 Before checking prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
-Only successful execution and cleanup publish `reports/<subject>.json`.
-Failed-attempt reports, logs, and status remain available for diagnosis and cannot satisfy completion.
+Every nonempty current report publishes to `reports/<subject>.json`, including failed results.
+Publication preserves the command's failure status. Failed reports cannot satisfy completion.
+Attempt reports, logs, and status remain available for diagnosis.
 The full audit requires every group and case exactly once, with matching execution identities.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
 
@@ -500,10 +501,10 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | Group | Native example IDs | Canonical examples | Native module |
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
-| `integration/pypi` | `native-001` to `native-021` (27) | 9 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/pypi` | `native-001` to `native-021` (27) | 10 serving, including `artifact-head` | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
-| `integration/npm-metadata` | `native-001` to `native-035` (37) | 9 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving, including `artifact-head` | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
 | `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
