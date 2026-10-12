@@ -28,6 +28,7 @@ import Ecluse.Integration.Ministack (endpointFor, withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Mirror.State.S3 (newS3MirrorState)
 import Ecluse.Runtime.Mirror.State.S3.Internal (ObjectRead (..), ObjectWrite (..), readObject, writeObject)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (retryingIO)
@@ -35,7 +36,7 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
-    it "recovers pending companions and preserves concurrent versions, additions, and references" $ \container -> do
+    it (caseLabel "integration/mirror-state-s3/native-001" "recovers pending companions and preserves concurrent versions, additions, and references") $ \container -> do
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-recovery"
             target = stateTarget "https://private.test/simple"
@@ -104,7 +105,7 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
                 msReadCompanion final (const pass) reference >>= (`shouldSatisfy` invalidState)
             other -> expectationFailure ("missing retained companion: " <> show other)
 
-    it "reconciles a lost successful write and rejects malformed or oversized persisted records" $ \container -> do
+    it (caseLabel "integration/mirror-state-s3/native-002" "reconciles a lost successful write and rejects malformed or oversized persisted records") $ \container -> do
         let endpoint = Just (endpointFor container)
             bucket = "mirror-state-faults"
             target = stateTarget "https://private.test/simple"

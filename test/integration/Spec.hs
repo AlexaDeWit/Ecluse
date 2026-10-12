@@ -8,6 +8,7 @@ module Main (main) where
 import Ecluse.AwsEndToEndIntegrationSpec qualified as AwsComposition
 import Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec qualified as PyPI
 import Ecluse.Core.Security.EgressIntegrationSpec qualified as Egress
+import Ecluse.Core.Server.MirrorViewIntegrationSpec qualified as MirrorView
 import Ecluse.Core.Server.Pipeline.OriginIntegrationSpec qualified as Origin
 import Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec qualified as NpmMetadata
 import Ecluse.Core.Server.Pipeline.PublishIntegrationSpec qualified as Publication
@@ -16,6 +17,8 @@ import Ecluse.Core.Server.Pipeline.TarballIntegrationSpec qualified as NpmArtifa
 import Ecluse.Core.Worker.LoopIntegrationSpec qualified as Worker
 import Ecluse.PilotIntegrationSpec qualified as Pilot
 import Ecluse.Runtime.Cve.SyncIntegrationSpec qualified as AdvisorySync
+import Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec qualified as MirrorStateS3Internal
+import Ecluse.Runtime.Mirror.State.S3IntegrationSpec qualified as MirrorStateS3
 import Ecluse.Runtime.Pilot.ExportIntegrationSpec qualified as AdvisoryExport
 import Ecluse.Runtime.Queue.SqsIntegrationSpec qualified as SqsQueue
 import Ecluse.Runtime.ServerIntegrationSpec qualified as ServerShutdown
@@ -33,6 +36,7 @@ main =
         "integration"
         [ DeclaredGroup Coverage.awsComposition (const AwsComposition.spec)
         , DeclaredGroup Coverage.pypiHttp (const PyPI.spec)
+        , DeclaredGroup Coverage.mirrorViewHttp (const MirrorView.spec)
         , DeclaredGroup Coverage.egressHttp (const Egress.spec)
         , DeclaredGroup Coverage.originHttp (const Origin.spec)
         , DeclaredGroup Coverage.npmMetadataHttp (const NpmMetadata.spec)
@@ -42,6 +46,8 @@ main =
         , DeclaredGroup Coverage.workerSqs (const Worker.spec)
         , DeclaredGroup Coverage.pilotS3 (const Pilot.spec)
         , DeclaredGroup Coverage.advisorySyncS3 (const AdvisorySync.spec)
+        , DeclaredGroup Coverage.mirrorStateS3Internal (const MirrorStateS3Internal.spec)
+        , DeclaredGroup Coverage.mirrorStateS3 (const MirrorStateS3.spec)
         , DeclaredGroup Coverage.advisoryExportS3 (const AdvisoryExport.spec)
         , DeclaredGroup Coverage.queueSqs (const SqsQueue.spec)
         , DeclaredGroup Coverage.serverShutdownHttp (const ServerShutdown.spec)

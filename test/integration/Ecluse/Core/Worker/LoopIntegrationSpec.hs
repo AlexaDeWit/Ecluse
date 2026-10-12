@@ -66,7 +66,7 @@ spec =
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
-            it "retires an incomplete npm inventory without fetching or publishing a selected subset" $ \container ->
+            it (caseLabel "integration/worker/native-009" "retires an incomplete npm inventory without fetching or publishing a selected subset") $ \container ->
                 withStub status200 "artifact bytes" $ \upstream ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-incomplete-upload-data" defaultQueueOptions

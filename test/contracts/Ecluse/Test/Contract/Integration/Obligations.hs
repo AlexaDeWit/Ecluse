@@ -98,6 +98,24 @@ integrationObligations =
         , "integration.serving.pypi.conditional-coherence"
         ]
     , required
+        "integration/mirror-view"
+        "mirror-view"
+        ["metadata-read", "artifact-read", "serving"]
+        [ "integration/mirror-view/native-001"
+        , "integration/mirror-view/native-002"
+        , "integration/mirror-view/native-003"
+        , "integration/mirror-view/native-004"
+        , "integration/mirror-view/native-005"
+        , "integration/mirror-view/native-006"
+        , "integration/mirror-view/native-007"
+        , "integration/mirror-view/native-008"
+        , "integration/mirror-view/native-009"
+        , "integration/mirror-view/native-010"
+        , "integration/mirror-view/native-011"
+        , "integration/mirror-view/native-012"
+        , "integration/mirror-view/native-013"
+        ]
+    , required
         "integration/egress"
         "egress"
         ["egress"]
@@ -220,6 +238,29 @@ integrationObligations =
         , "integration/publication/native-017"
         , "integration/publication/native-018"
         , "integration/publication/native-019"
+        , "integration/publication/native-pypi-001"
+        , "integration/publication/native-pypi-002/201"
+        , "integration/publication/native-pypi-002/400"
+        , "integration/publication/native-pypi-002/401"
+        , "integration/publication/native-pypi-002/409"
+        , "integration/publication/native-pypi-003/absent"
+        , "integration/publication/native-pypi-003/empty"
+        , "integration/publication/native-pypi-003/invalid"
+        , "integration/publication/native-pypi-003/conflict-first"
+        , "integration/publication/native-pypi-003/conflict-last"
+        , "integration/publication/native-pypi-004/missing"
+        , "integration/publication/native-pypi-004/wrong"
+        , "integration/publication/native-pypi-004/ambiguous"
+        , "integration/publication/native-pypi-005/trailing"
+        , "integration/publication/native-pypi-005/forbidden-name"
+        , "integration/publication/native-pypi-006"
+        , "integration/publication/native-pypi-007"
+        , "integration/publication/native-pypi-008/chunked"
+        , "integration/publication/native-pypi-008/known"
+        , "integration/publication/native-pypi-009"
+        , "integration/publication/native-pypi-010"
+        , "integration/publication/native-pypi-011"
+        , "integration/publication/native-pypi-012"
         ]
     , required
         "integration/pipeline-faults"
@@ -313,6 +354,7 @@ integrationObligations =
         , "integration/worker/native-006"
         , "integration/worker/native-007"
         , "integration/worker/native-008"
+        , "integration/worker/native-009"
         ]
     , required
         "integration/pilot"
@@ -332,6 +374,18 @@ integrationObligations =
         "advisory-sync"
         ["advisory-sync"]
         [ "integration/advisory-sync/native-001"
+        ]
+    , required
+        "integration/mirror-state-s3-internal"
+        "mirror-state-s3-internal"
+        ["mirror-state"]
+        ["integration/mirror-state-s3-internal/native-001"]
+    , required
+        "integration/mirror-state-s3"
+        "mirror-state-s3"
+        ["mirror-state"]
+        [ "integration/mirror-state-s3/native-001"
+        , "integration/mirror-state-s3/native-002"
         ]
     , required
         "integration/advisory-export"

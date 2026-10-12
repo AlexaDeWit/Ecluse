@@ -7,6 +7,7 @@ module Ecluse.Test.Contract.Integration.Catalogue (
     integrationCatalogue,
     awsComposition,
     pypiHttp,
+    mirrorViewHttp,
     egressHttp,
     originHttp,
     npmMetadataHttp,
@@ -16,6 +17,8 @@ module Ecluse.Test.Contract.Integration.Catalogue (
     workerSqs,
     pilotS3,
     advisorySyncS3,
+    mirrorStateS3Internal,
+    mirrorStateS3,
     advisoryExportS3,
     queueSqs,
     serverShutdownHttp,
@@ -41,6 +44,7 @@ integrationCatalogue =
         , catalogueProfiles =
             [ Profile "integration/aws-composition" ["npm"] ["ministack"] ["serving", "mirror-worker"]
             , Profile "integration/pypi" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
+            , Profile "integration/mirror-view" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/egress" [] ["wai"] ["egress"]
             , Profile "integration/origin" ["npm"] ["wai"] ["origin"]
             , Profile "integration/npm-metadata" ["npm"] ["wai"] ["metadata-read", "serving"]
@@ -50,6 +54,8 @@ integrationCatalogue =
             , Profile "integration/worker" ["npm"] ["ministack"] ["queue-lease", "mirror-worker"]
             , Profile "integration/pilot" ["npm", "pypi"] ["ministack"] ["advisory-compilation", "advisory-publication"]
             , Profile "integration/advisory-sync" [] ["ministack"] ["advisory-sync"]
+            , Profile "integration/mirror-state-s3-internal" ["pypi"] ["ministack"] ["mirror-state"]
+            , Profile "integration/mirror-state-s3" ["pypi"] ["ministack"] ["mirror-state"]
             , Profile "integration/advisory-export" [] ["ministack"] ["advisory-publication", "advisory-last-good"]
             , Profile "integration/queue-sqs" ["npm"] ["ministack"] ["queue-payload", "queue-lease", "queue-redelivery"]
             , Profile "integration/server-shutdown" [] ["wai"] ["server-shutdown"]
@@ -61,6 +67,7 @@ integrationCatalogue =
         , catalogueGroups =
             [ awsComposition
             , pypiHttp
+            , mirrorViewHttp
             , egressHttp
             , originHttp
             , npmMetadataHttp
@@ -70,6 +77,8 @@ integrationCatalogue =
             , workerSqs
             , pilotS3
             , advisorySyncS3
+            , mirrorStateS3Internal
+            , mirrorStateS3
             , advisoryExportS3
             , queueSqs
             , serverShutdownHttp
@@ -176,6 +185,30 @@ pypiHttp =
         , "integration.serving.pypi.artifact-integrity"
         , "integration.serving.pypi.artifact-head"
         , "integration.serving.pypi.conditional-coherence"
+        ]
+
+-- | Declared coverage for integration/mirror-view.
+mirrorViewHttp :: Group
+mirrorViewHttp =
+    registered
+        "integration/mirror-view"
+        "mirror-view"
+        ["metadata-read", "artifact-read", "serving"]
+        []
+        ["wai"]
+        [ "integration/mirror-view/native-001"
+        , "integration/mirror-view/native-002"
+        , "integration/mirror-view/native-003"
+        , "integration/mirror-view/native-004"
+        , "integration/mirror-view/native-005"
+        , "integration/mirror-view/native-006"
+        , "integration/mirror-view/native-007"
+        , "integration/mirror-view/native-008"
+        , "integration/mirror-view/native-009"
+        , "integration/mirror-view/native-010"
+        , "integration/mirror-view/native-011"
+        , "integration/mirror-view/native-012"
+        , "integration/mirror-view/native-013"
         ]
 
 -- | Declared coverage for integration/egress.
@@ -324,6 +357,29 @@ publicationHttp =
         , "integration/publication/native-017"
         , "integration/publication/native-018"
         , "integration/publication/native-019"
+        , "integration/publication/native-pypi-001"
+        , "integration/publication/native-pypi-002/201"
+        , "integration/publication/native-pypi-002/400"
+        , "integration/publication/native-pypi-002/401"
+        , "integration/publication/native-pypi-002/409"
+        , "integration/publication/native-pypi-003/absent"
+        , "integration/publication/native-pypi-003/empty"
+        , "integration/publication/native-pypi-003/invalid"
+        , "integration/publication/native-pypi-003/conflict-first"
+        , "integration/publication/native-pypi-003/conflict-last"
+        , "integration/publication/native-pypi-004/missing"
+        , "integration/publication/native-pypi-004/wrong"
+        , "integration/publication/native-pypi-004/ambiguous"
+        , "integration/publication/native-pypi-005/trailing"
+        , "integration/publication/native-pypi-005/forbidden-name"
+        , "integration/publication/native-pypi-006"
+        , "integration/publication/native-pypi-007"
+        , "integration/publication/native-pypi-008/chunked"
+        , "integration/publication/native-pypi-008/known"
+        , "integration/publication/native-pypi-009"
+        , "integration/publication/native-pypi-010"
+        , "integration/publication/native-pypi-011"
+        , "integration/publication/native-pypi-012"
         ]
 
 -- | Declared coverage for integration/pipeline-faults.
@@ -435,6 +491,7 @@ workerSqs =
         , "integration/worker/native-006"
         , "integration/worker/native-007"
         , "integration/worker/native-008"
+        , "integration/worker/native-009"
         ]
 
 -- | Declared coverage for integration/pilot.
@@ -466,6 +523,30 @@ advisorySyncS3 =
         ["docker"]
         ["ministack"]
         [ "integration/advisory-sync/native-001"
+        ]
+
+-- | Declared coverage for integration/mirror-state-s3-internal.
+mirrorStateS3Internal :: Group
+mirrorStateS3Internal =
+    registered
+        "integration/mirror-state-s3-internal"
+        "mirror-state-s3-internal"
+        ["mirror-state"]
+        ["docker"]
+        ["ministack"]
+        ["integration/mirror-state-s3-internal/native-001"]
+
+-- | Declared coverage for integration/mirror-state-s3.
+mirrorStateS3 :: Group
+mirrorStateS3 =
+    registered
+        "integration/mirror-state-s3"
+        "mirror-state-s3"
+        ["mirror-state"]
+        ["docker"]
+        ["ministack"]
+        [ "integration/mirror-state-s3/native-001"
+        , "integration/mirror-state-s3/native-002"
         ]
 
 -- | Declared coverage for integration/advisory-export.
