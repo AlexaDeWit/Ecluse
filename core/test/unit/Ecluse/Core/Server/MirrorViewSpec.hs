@@ -24,7 +24,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryTicket, MeterSettings (..), new
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
 import Ecluse.Core.Server.Cache.Types (StoreBudget (StoreBudget))
 import Ecluse.Core.Server.MirrorView
-import Ecluse.Core.Version (versionRaw)
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Snapshot (digestOf)
@@ -127,7 +127,7 @@ field key = \case
     _ -> Nothing
 
 info :: MirrorInventory -> PackageInfo
-info inventory = PackageInfo mirrorPackage (Map.singleton (versionRaw mirrorVersion) (inventoryDetails inventory)) Map.empty []
+info inventory = PackageInfo mirrorPackage (Map.singleton (renderVersion mirrorVersion) (inventoryDetails inventory)) Map.empty []
 
 raw :: MirrorInventory -> CachedDoc
 raw inventory = case inventoryReadData inventory of

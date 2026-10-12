@@ -11,6 +11,7 @@ module Ecluse.Core.Mirror.State (
     recordTarget,
     recordPackage,
     recordVersions,
+    recordEnvelope,
     recordVersion,
     StoredMirrorFragment,
     fragmentDetails,

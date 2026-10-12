@@ -284,7 +284,7 @@ serveMergedPackument serving evalCtx record privResult pubResult =
         Right (unmanagedManifest, managedManifest, pending) -> do
             let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
                 (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
-                privateSources = catMaybes [unmanaged <|> (emptyContribution <$> unmanagedManifest <* managed), managed]
+                privateSources = catMaybes [unmanaged, managed]
                 trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
             public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (originManifest pubResult))
             let sources = privateSources <> maybeToList (paContribution public)
@@ -305,9 +305,6 @@ serveMergedPackument serving evalCtx record privResult pubResult =
     views = case record of
         Nothing -> Right (originManifest privResult, Nothing, Map.empty)
         Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
-
-emptyContribution :: Manifest -> Contribution
-emptyContribution manifest = Contribution TrustedSource (manifestInfo manifest){infoVersions = Map.empty} (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)
 
 mirrorUnavailable :: PackumentServing response -> Handler ResponseReceived
 mirrorUnavailable serving = do

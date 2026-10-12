@@ -5,7 +5,7 @@
 -- | Managed mirrors preserve private authorisation and complete visibility through HTTP routes.
 module Ecluse.Core.Server.MirrorViewIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Array, Object), encode)
+import Data.Aeson (Object, Value (Array, Object, String), eitherDecode, encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List (dropWhileEnd)
 import Data.Map.Strict qualified as Map
@@ -46,6 +46,30 @@ import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
 
 spec :: Spec
 spec = describe "managed PyPI mirror reads" $ do
+    it "keeps the admitted project envelope on cold and hot reads through public outage" $ do
+        inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        absent <- testView (pure (Right StateAbsent))
+        withManagedProxy absent False (native status404 []) (projectWithEnvelope sourceEnvelope False) $ \app -> do
+            response <- getPath "/pypi/simple/demo/" app
+            simpleStatus response `shouldBe` status200
+            responseEnvelope response `shouldBe` Right sourceEnvelope
+        present <- testView (pure (Right (StateLoaded revision record)))
+        withManagedProxy present False (projectWithEnvelope privateEnvelope False) (native status503 []) $ \app -> do
+            replicateM_ 2 $ do
+                response <- getPath "/pypi/simple/demo/" app
+                simpleStatus response `shouldBe` status200
+                responseEnvelope response `shouldBe` Right sourceEnvelope
+
+    it "keeps the private project envelope when an unmanaged private version is present" $ do
+        inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        view <- testView (pure (Right (StateLoaded revision record)))
+        withManagedProxy view False (projectWithEnvelope privateEnvelope True) (native status503 []) $ \app -> do
+            response <- getPath "/pypi/simple/demo/" app
+            simpleStatus response `shouldBe` status200
+            responseEnvelope response `shouldBe` Right privateEnvelope
+
     it "refuses private access before consulting retained source fields" $ do
         calls <- newIORef (0 :: Int)
         view <- testView (modifyIORef' calls (+ 1) $> Right StateAbsent)
@@ -191,6 +215,29 @@ newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
   where
     path = "/pypi/simple/demo/" <> encodeUtf8 (mirrorFilename 3)
+
+sourceEnvelope, privateEnvelope :: Object
+sourceEnvelope = KeyMap.fromList [("name", String "demo"), ("meta", object ["api-version" .= ("1.0" :: Text)]), ("project-status", object ["status" .= ("active" :: Text)]), ("alternate-locations", fromListValue [String "https://alternate.test/simple/demo/"])]
+privateEnvelope = KeyMap.insert "project-status" (object ["status" .= ("archived" :: Text)]) sourceEnvelope
+
+responseEnvelope :: SResponse -> Either String Object
+responseEnvelope response = do
+    value <- eitherDecode (simpleBody response)
+    case value of
+        Object fields -> Right (KeyMap.delete "files" fields)
+        _ -> Left "expected project object"
+
+projectWithEnvelope :: Object -> Bool -> Application
+projectWithEnvelope envelope extraVersion request respond = do
+    inventory <- mirrorSample [1, 2] False (selfBaseUrl request <> "/files/") "native"
+    let files = case inventoryReadData inventory of
+            PyPIMirrorRead document -> map snd (simpleFiles document)
+            NpmMirrorRead _ -> []
+        extra = do
+            Object fields <- maybeToList (listToMaybe files)
+            pure (Object (KeyMap.insert "filename" (String "demo-2.0-1-py3-none-any.whl") fields))
+        body = Object (KeyMap.insert "files" (fromListValue (files <> if extraVersion then extra else [])) envelope)
+    respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode body))
 
 native :: Status -> [Int] -> Application
 native = nativeWith False "wheel"

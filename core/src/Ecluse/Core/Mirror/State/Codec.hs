@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge, expandWireBytes)
 import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 
@@ -115,6 +115,7 @@ projectRecordWeight limits record = do
     checkRecord limits 0 record
     pure . saturatingStateCharge $
         4096
+            + toInteger (expandWireBytes (fromIntegral (estimateValueBytes (Object (recordEnvelope record)))))
             + sum
                 [ 256
                     + toInteger (textStorageBytes key)
@@ -180,7 +181,7 @@ chargedEncodeProjectRecord charge limits record = case projectRecordWeight limit
         traverse (\bytes -> evaluate (BS.length bytes) $> bytes) result
 
 forceRecordSources :: ProjectMirrorRecord -> ()
-forceRecordSources record = foldl' forceVersion () (Map.elems (recordVersions record))
+forceRecordSources record = force (recordEnvelope record) `seq` foldl' forceVersion () (Map.elems (recordVersions record))
   where
     forceVersion () version = foldl' forceFragment () (versionFragments version)
     forceFragment () (StoredMirrorFragment _ source _) = case source of
@@ -216,21 +217,28 @@ companionBytes record =
 recordValue :: ProjectMirrorRecord -> Value
 recordValue record =
     object
-        [ "schema" .= (1 :: Int)
+        [ "schema" .= (2 :: Int)
         , "target" .= targetKey (recordTarget record)
         , "package" .= nameValue (recordPackage record)
+        , "envelope" .= recordEnvelope record
         , "versions" .= [object ["version" .= key, "fragments" .= map fragmentValue (toList (versionFragments version)), "verified" .= [object ["filename" .= name, "digest" .= hashValueWire digest] | (name, digest) <- Map.toList (versionVerifiedIdentities version)], "companions" .= map companionValue (Map.toList (versionCompanions version))] | (key, version) <- Map.toList (recordVersions record)]
         ]
 
 parseRecord :: Value -> Parser ProjectMirrorRecord
 parseRecord = withObject "project mirror state" $ \value -> do
     schema <- value .: "schema"
-    unless (schema == (1 :: Int)) (fail "unsupported mirror state schema")
+    unless (schema == (2 :: Int)) (fail "unsupported mirror state schema")
     target <- StateTarget <$> value .: "target"
     name <- value .: "package" >>= parseName
+    envelope <- value .: "envelope"
     versions <- value .: "versions" >>= traverse (parseVersion name)
     ensureDistinct (map fst versions)
-    pure (ProjectMirrorRecord target name (Map.fromList versions))
+    for_ (listToMaybe versions) $ \(_, version) -> do
+        let StoredMirrorFragment details source _ :| _ = versionFragments version
+        case source of
+            PyPIMirrorRead document -> void (either (const (fail "invalid project envelope identity")) pure (restoreMirrorFragment details (PyPIMirrorRead (simpleDocument envelope (simpleFiles document)))))
+            NpmMirrorRead _ -> unless (KeyMap.null envelope) (fail "npm record has an unexpected project envelope")
+    pure (ProjectMirrorRecord target name envelope (Map.fromList versions))
 
 parseVersion :: PackageName -> Value -> Parser (Text, MirrorVersion)
 parseVersion name = withObject "mirror version" $ \value -> do

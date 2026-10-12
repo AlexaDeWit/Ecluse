@@ -45,6 +45,10 @@ fragment coordinates prevent later admissions from colliding with earlier array 
 Conditional updates union new identities and refuse conflicting bytes or declarations. A source
 URL change does not change immutable byte identity. Native archive upload metadata stays transient.
 
+The project envelope follows the latest successfully committed source admission. File verification
+and companion updates leave it unchanged. Fully managed listings restore that envelope. Listings
+with unmanaged private versions retain the existing private-envelope authority.
+
 The independently configured S3-compatible store must provide strong reads and conditional
 creation and replacement. It retains expected files, supported consumer fields, verified digest
 evidence and declared companion bytes. Its permissions and retention requirements are in the

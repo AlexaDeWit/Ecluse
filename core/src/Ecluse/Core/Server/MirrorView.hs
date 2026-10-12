@@ -93,7 +93,7 @@ mirrorProjectViews revision record private = do
     let (_, rebased) = mapAccumL rekeyVersion 0 restored
         details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
         files = concat [simpleFiles document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
-        packed = packedSimple mempty (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
+        packed = packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
         fingerprint = encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
         managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) (fst pypiPacked packed) (fromIntegral (weighCachedDoc (fst pypiPacked packed))) (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)

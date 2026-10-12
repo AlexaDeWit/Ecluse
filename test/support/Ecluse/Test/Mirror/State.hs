@@ -9,9 +9,10 @@ module Ecluse.Test.Mirror.State (
     mirrorFilename,
     mirrorSample,
     mirrorSource,
+    withMirrorEnvelope,
 ) where
 
-import Data.Aeson (Value (String), object, (.=))
+import Data.Aeson (Object, Value (String), object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
@@ -19,9 +20,9 @@ import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (PyPIMirrorRead))
+import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), inventoryDetails, inventoryReadData)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
-import Ecluse.Core.Registry.PyPI.Document (simpleDocument)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleFiles)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Support (expectRight)
 
@@ -62,3 +63,9 @@ mirrorSource artifacts note =
             | artifact <- toList artifacts
             ]
         )
+
+-- | Replace project fields while preserving the checked file-to-source pairing.
+withMirrorEnvelope :: Object -> MirrorInventory -> IO MirrorInventory
+withMirrorEnvelope envelope inventory = case inventoryReadData inventory of
+    PyPIMirrorRead document -> expectRight (restoreMirrorInventory (inventoryDetails inventory) (PyPIMirrorRead (simpleDocument envelope (simpleFiles document))))
+    NpmMirrorRead _ -> fail "expected PyPI inventory"

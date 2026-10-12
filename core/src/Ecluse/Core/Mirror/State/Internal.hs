@@ -28,6 +28,7 @@ module Ecluse.Core.Mirror.State.Internal (
     recordTarget,
     recordPackage,
     recordVersions,
+    recordEnvelope,
     versionFragments,
     versionCompanions,
     versionVerifiedIdentities,
@@ -43,6 +44,7 @@ module Ecluse.Core.Mirror.State.Internal (
 ) where
 
 import Crypto.Hash (Digest, SHA256, hash)
+import Data.Aeson (Object)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text.Short qualified as TS
@@ -52,6 +54,7 @@ import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Package
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
@@ -84,6 +87,7 @@ data MirrorVersion = MirrorVersion
 data ProjectMirrorRecord = ProjectMirrorRecord
     { projectTarget :: StateTarget
     , projectPackage :: PackageName
+    , projectEnvelope :: Object
     , projectVersions :: Map Text MirrorVersion
     }
     deriving stock (Eq, Show)
@@ -140,6 +144,10 @@ recordTarget = projectTarget
 recordPackage :: ProjectMirrorRecord -> PackageName
 recordPackage = projectPackage
 
+-- | Project fields follow the latest committed source admission, independently of file-byte updates.
+recordEnvelope :: ProjectMirrorRecord -> Object
+recordEnvelope = projectEnvelope
+
 -- | Versions contain accumulated admission fragments without a mutable completion flag.
 recordVersions :: ProjectMirrorRecord -> Map Text MirrorVersion
 recordVersions = projectVersions
@@ -160,12 +168,15 @@ versionVerifiedIdentities = storedIdentities
 extendProjectRecord :: Limits -> StateTarget -> MirrorInventory -> Maybe ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord
 extendProjectRecord limits target inventory previous = do
     let name = inventoryPackage inventory
-        initial = ProjectMirrorRecord target name Map.empty
+        initial = ProjectMirrorRecord target name mempty Map.empty
         record = fromMaybe initial previous
         key = renderVersion (inventoryVersion inventory)
     unless (recordTarget record == target && recordPackage record == name) (Left StateIdentityMismatch)
     updated <- extendVersion inventory (Map.lookup key (recordVersions record))
-    let result = record{projectVersions = Map.insert key updated (recordVersions record)}
+    let envelope = case inventoryReadData inventory of
+            PyPIMirrorRead document -> simpleEnvelope document
+            NpmMirrorRead _ -> mempty
+        result = record{projectEnvelope = envelope, projectVersions = Map.insert key updated (recordVersions record)}
     first StateBound (checkVersionCountOf limits (Map.size (recordVersions result)))
     first StateBound (checkArtifactCount limits (sum (map (Map.size . versionFiles) (Map.elems (recordVersions result)))))
     pure result
@@ -183,8 +194,11 @@ extendVersion inventory previous = do
             (details, source) <-
                 maybeToRight (StateInvalid "cannot retain paired source fragment") $
                     splitMirrorInventory (Map.keysSet additions) inventory
-            files <- first (const (StateInvalid "invalid source fragment")) (restoreMirrorFragment details source)
-            let fragment = StoredMirrorFragment details source files
+            let ownedSource = case source of
+                    PyPIMirrorRead document -> PyPIMirrorRead (simpleDocument mempty (simpleFiles document))
+                    NpmMirrorRead _ -> source
+            files <- first (const (StateInvalid "invalid source fragment")) (restoreMirrorFragment details ownedSource)
+            let fragment = StoredMirrorFragment details ownedSource files
                 companions = Map.fromList [(name, CompanionPending) | (name, file) <- Map.toList additions, declaredCompanion (expectedArtifact file)]
             pure $ case previous of
                 Nothing -> MirrorVersion (fragment :| []) Map.empty companions

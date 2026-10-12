@@ -5,7 +5,7 @@
 -- | Interrupted copies retain every admitted identity and source fragment across conditional updates.
 module Ecluse.Core.Mirror.StateSpec (spec) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
@@ -21,12 +21,12 @@ import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
-import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
 import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Mirror.State (mirrorFilename, mirrorPackage, mirrorSample, mirrorSource, mirrorVersion)
+import Ecluse.Test.Mirror.State (mirrorFilename, mirrorPackage, mirrorSample, mirrorSource, mirrorVersion, withMirrorEnvelope)
 import Ecluse.Test.Package (hexSha256Of, hexSha512Of)
 import Ecluse.Test.Support (expectRight)
 
@@ -185,17 +185,28 @@ spec = describe "durable mirror expectations" $ do
         conflictingSource <- expectRight (mkHash SHA512 (hexSha512Of "other"))
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [sha256, conflictingSource]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [wrong]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
+        recordEnvelope updated `shouldBe` recordEnvelope record
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
         decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
 
-    it "unions concurrent versions without replacing an earlier version" $ do
-        initialInventory <- mirrorSample [1] False "https://first.test/" "original"
+    it "updates one project envelope across versions without replacing earlier file fields" $ do
+        let firstEnvelope = KeyMap.singleton "project-status" (object ["status" .= ("active" :: Text)])
+            nextEnvelope = KeyMap.singleton "project-status" (object ["status" .= ("archived" :: Text)])
+        initialInventory <- mirrorSample [1] False "https://first.test/" "original" >>= withMirrorEnvelope firstEnvelope
         let details = inventoryDetails initialInventory
             newVersion = mkVersion PyPI "2"
             renamed = fmap (\artifact -> artifact{artFilename = T.replace "1.0" "2.0" (artFilename artifact), artUrl = T.replace "1.0" "2.0" (artUrl artifact)}) (pkgArtifacts details)
-        second <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second"))
+        second <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second")) >>= withMirrorEnvelope nextEnvelope
         old <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
         updated <- expectRight (extendProjectRecord defaultLimits target second (Just old))
+        recordEnvelope old `shouldBe` firstEnvelope
+        recordEnvelope updated `shouldBe` nextEnvelope
+        for_ (Map.elems (recordVersions updated)) $ \version ->
+            for_ (versionFragments version) $ \fragment -> case fragmentReadData fragment of
+                PyPIMirrorRead document -> simpleEnvelope document `shouldBe` mempty
+                NpmMirrorRead _ -> expectationFailure "unexpected npm fragment"
+        encoded <- expectRight (encodeProjectRecord defaultLimits updated)
+        decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
         Map.keys (recordVersions updated) `shouldBe` ["1", "2"]
         recordVersion mirrorVersion updated `shouldBe` recordVersion mirrorVersion old
 
@@ -226,6 +237,7 @@ spec = describe "durable mirror expectations" $ do
                         pure (Right (StateStored revision))
                     }
         (_, updated) <- retainProjectCompanion defaultLimits (const pass) store mirrorPackage mirrorVersion verified >>= expectRight
+        recordEnvelope updated `shouldBe` recordEnvelope record
         version <- getVersion updated
         checkMirrorCompletion version [expectedArtifact file] `shouldBe` MirrorComplete
         bytes <- expectRight (encodeProjectRecord defaultLimits updated)
@@ -253,7 +265,7 @@ spec = describe "durable mirror expectations" $ do
         decodeProjectRecord defaultLimits target mirrorPackage bytes `shouldBe` Right record
 
     it "rejects unsupported schema, malformed JSON, and excessive nesting" $ do
-        decodeProjectRecord defaultLimits target mirrorPackage "{\"schema\":2}" `shouldSatisfy` isLeft
+        decodeProjectRecord defaultLimits target mirrorPackage "{\"schema\":999}" `shouldSatisfy` isLeft
         decodeProjectRecord defaultLimits target mirrorPackage "{" `shouldSatisfy` isLeft
         decodeProjectRecord defaultLimits{maxNestingDepth = 2} target mirrorPackage "{\"a\":{\"b\":{}}}" `shouldSatisfy` isLeft
 
@@ -280,9 +292,11 @@ spec = describe "durable mirror expectations" $ do
         fst result `shouldBe` revision
         readIORef writes `shouldReturn` 1
 
-    it "rereads after a collision and preserves a concurrent filename addition" $ do
-        a <- mirrorSample [1] False "https://first.test/" "original"
-        b <- mirrorSample [2] False "https://later.test/" "new"
+    it "rereads after a collision and commits its envelope after the competing admission" $ do
+        let committed = KeyMap.singleton "project-status" (object ["status" .= ("active" :: Text)])
+            competing = KeyMap.singleton "project-status" (object ["status" .= ("archived" :: Text)])
+        a <- mirrorSample [1] False "https://first.test/" "original" >>= withMirrorEnvelope committed
+        b <- mirrorSample [2] False "https://later.test/" "new" >>= withMirrorEnvelope competing
         other <- expectRight (extendProjectRecord defaultLimits target b Nothing)
         held <- newIORef Nothing
         collision <- newIORef True
@@ -300,6 +314,7 @@ spec = describe "durable mirror expectations" $ do
                                 else writeIORef held (Just record) $> Right (StateStored revision)
                     }
         (_, record) <- recordExpectedInventory defaultLimits (const pass) target store a >>= expectRight
+        recordEnvelope record `shouldBe` committed
         version <- getVersion record
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2]
 
