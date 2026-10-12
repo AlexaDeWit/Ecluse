@@ -53,7 +53,7 @@ import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Supported npm publication fields after source-registry bookkeeping is removed.
+-- | Original source fields bind the publication metadata to its admitted snapshot.
 newtype NpmUploadMetadata = NpmUploadMetadata (KeyMap Value)
     deriving stock (Eq, Show)
 
@@ -69,11 +69,14 @@ prepareNpmSource name version doc = do
     case inventoryFiles inventory of
         _ :| [] -> pure ()
         _ -> Left (PublishSourceUnavailable "the npm inventory contains more than one physical tarball")
-    pure (inventory, NpmUploadMetadata (authoredFields fields))
+    pure (inventory, NpmUploadMetadata fields)
 
 -- | Bind npm source fields to this verified member of the complete version inventory.
 prepareNpmUpload :: MirrorInventory -> NpmUploadMetadata -> ExpectedMirrorFile -> VerifiedArtifactBytes -> Either PublishFault (MirrorUploadData NpmUploadMetadata)
-prepareNpmUpload inventory metadata file verified = checkedMirrorUploadData inventory file verified metadata
+prepareNpmUpload inventory metadata@(NpmUploadMetadata fields) file verified = do
+    unless (inventoryReadData inventory == NpmMirrorRead fields) $
+        Left (PublishSourceUnavailable "npm upload fields belong to another source snapshot")
+    checkedMirrorUploadData inventory file verified metadata
 
 -- | npm uses its ordinary bounded metadata reader and one immutable tarball upload per version.
 npmPublishCodec :: PublishCodec
@@ -132,7 +135,8 @@ npmPublishDocument plan uploadData =
     artifact = expectedDescriptor (uploadFile uploadData)
     tarball = uploadBytes uploadData
     filename = unFilename (maFilename artifact)
-    NpmUploadMetadata authored = uploadMetadata uploadData
+    NpmUploadMetadata fields = uploadMetadata uploadData
+    authored = authoredFields fields
     dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (objectAt "dist" authored)
     manifest = versionManifestObject rendered versionText dist authored
     versionText = renderVersion (inventoryVersion (uploadInventory uploadData))

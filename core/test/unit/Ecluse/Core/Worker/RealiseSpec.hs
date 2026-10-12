@@ -30,9 +30,6 @@ spec :: Spec
 spec = do
     describe "processBatch -- retiring a decided job at the queue handle" $ do
         it "acks a policy-denied job, retiring it from the queue" $ do
-            -- A current-policy deny is non-retryable, so the worker acks the job rather than
-            -- leaving it for the backend to redeliver. The ack is the retire decision, observed at
-            -- the handle.
             (queue, ackedReceipts) <- recordingAckQueue
             withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort $ \runtime logRef -> do
                 enqueue_ queue sampleMirrorJob
@@ -44,9 +41,6 @@ spec = do
                 acked `shouldBe` map msgReceipt messages
 
         it "dead-letters an over-cap artifact on the memory backend: metered, never published, routed to deadLetter not ack (issue #846)" $
-            -- A fetch cap below the served bytes makes the over-cap fault terminal, so the worker
-            -- routes it to the dead-letter terminus and meters it. The memory backend drops it, its
-            -- only terminus.
             withUpstream $ \url -> do
                 (queue, deadReceipts) <- recordingDeadLetterQueue
                 (metricsPort, recordedMetrics) <- recordingWorkerMetricsPort
@@ -73,9 +67,7 @@ spec = do
                 acked `shouldBe` map msgReceipt messages
 
     describe "processBatch -- ack decisions at the queue handle" $ do
-        -- The worker's retire-vs-retry decision is its ack call, recorded by 'recordingAckQueue'.
-        -- The memory backend's ack is a no-op, so "Ecluse.Core.Worker.LoopIntegrationSpec" pins real redelivery against
-        -- SQS.
+        -- The memory backend cannot prove redelivery. LoopIntegrationSpec covers it against SQS.
         it "acks a successfully-mirrored job, retiring it from the queue" $
             withUpstream $ \url -> do
                 (queue, ackedReceipts) <- recordingAckQueue

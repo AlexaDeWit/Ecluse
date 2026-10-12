@@ -218,9 +218,6 @@ mismatchSri = sriSha512Of "completely-different-bytes"
 faithfulPolicies :: Text -> IO WorkerPolicies
 faithfulPolicies mirrorUrl = mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI trueSri :| [])
 
--- The path the job's artifact URL appends to the upstream stub base.
--- The path an npm publish PUTs to: @\/{package}@. The mirror-target stub records it, so
--- the redelivery case asserts each delivery's PUT landed here.
 npmPublishPath :: ByteString
 npmPublishPath = "/left-pad"
 

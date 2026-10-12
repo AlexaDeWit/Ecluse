@@ -129,6 +129,15 @@ library ecluse-core
   import:          shared
   hs-source-dirs:  core/src
   exposed-modules:
+    Ecluse.Core.Mirror.State
+    Ecluse.Core.Mirror.State.Internal
+    Ecluse.Core.Mirror.State.Codec
+    Ecluse.Core.Registry.PyPI.Archive
+    Ecluse.Core.Registry.PyPI.Archive.Path
+    Ecluse.Core.Registry.PyPI.Archive.Tar
+    Ecluse.Core.Registry.PyPI.UploadMetadata
+    Ecluse.Core.Registry.PyPI.Publish
+    Ecluse.Core.Registry.PyPI.Publish.Multipart
     Ecluse.Core.Breaker
     Ecluse.Core.BuildIdentity
     Ecluse.Core.Clock
@@ -352,6 +361,11 @@ library ecluse-core
     exposed-modules: Ecluse.Core.Security.Egress.DevHttp
 
   build-depends:
+    , tar ^>=0.6.4
+    , bzlib ^>=0.5
+    , lzma ^>=0.0.1
+    , zlib ^>=0.7
+    , wai-extra ^>=3.1
     , aeson                 >=2.2      && <2.4
     , autodocodec           ^>=0.5
     , bytestring            ^>=0.12
@@ -520,6 +534,8 @@ library ecluse-runtime
   import:          shared
   hs-source-dirs:  runtime/src
   exposed-modules:
+    Ecluse.Runtime.Mirror.State.S3
+    Ecluse.Runtime.Mirror.State.S3.Internal
     Ecluse.Runtime.Aws.Env
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
@@ -566,6 +582,7 @@ library ecluse-runtime
   autogen-modules: Paths_ecluse
 
   build-depends:
+    , lens ^>=5.3
     , ecluse:ecluse-core
     , aeson                           >=2.2 && <2.4
     , amazonka                        ^>=2.0
@@ -705,6 +722,8 @@ library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
   exposed-modules:
+    Ecluse.Test.Mirror.State
+    Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
@@ -777,6 +796,7 @@ library ecluse-test-support
     exposed-modules: Ecluse.Test.Server.Mount
 
   build-depends:
+    , tar ^>=0.6.4
     , ecluse:ecluse-core
     , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
@@ -957,6 +977,13 @@ test-suite ecluse-core-unit
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
+    Ecluse.Core.Mirror.StateSpec
+    Ecluse.Core.Registry.PyPI.ArchiveSpec
+    Ecluse.Core.Registry.PyPI.Archive.PathSpec
+    Ecluse.Core.Registry.PyPI.Archive.TarSpec
+    Ecluse.Core.Registry.PyPI.UploadMetadataSpec
+    Ecluse.Core.Registry.PyPI.PublishSpec
+    Ecluse.Core.Registry.PyPI.Publish.MultipartSpec
     Data.JsonStream.LexerSpec
     Data.JsonStream.ParserSpec
     Data.JsonStream.UnescapeSpec
@@ -1147,6 +1174,9 @@ test-suite ecluse-core-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , tar ^>=0.6.4
+    , bzlib ^>=0.5
+    , lzma ^>=0.0.1
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , ecluse:ecluse-test-contracts
@@ -1397,6 +1427,7 @@ test-suite ecluse-runtime-unit
     SpecHook
     Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Test.PackageStoreSpec
+    Ecluse.Runtime.Mirror.State.S3.InternalSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec
@@ -1471,6 +1502,8 @@ test-suite ecluse-integration
   hs-source-dirs:     test/integration
   other-modules:
     Ecluse.Server.Pipeline.ServingDriver
+    Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec
+    Ecluse.Runtime.Mirror.State.S3IntegrationSpec
     Ecluse.AwsEndToEndIntegrationSpec
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec

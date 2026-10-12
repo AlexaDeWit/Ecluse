@@ -81,8 +81,7 @@ spec =
                 outcomes `shouldBe` [Just ()]
 
             it (caseLabel "integration/queue-sqs/native-003" "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)") $ \container -> do
-                -- Terminal faults must return through redrive, never DeleteMessage.
-                -- Reappearance proves that terminal handling retained the payload.
+                -- Redelivery proves the terminal fault remains available to the configured redrive policy.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
                 expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue

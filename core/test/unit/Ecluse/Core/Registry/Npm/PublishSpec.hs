@@ -30,7 +30,8 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource)
+import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
@@ -302,6 +303,12 @@ checkedUploadDataSpec = describe "checked mirror upload data" $ do
         details = vdDetails doc
         changed update = doc{vdDetails = update details}
         check = prepareNpmSource isOdd v1_0_0
+    it "refuses fields from another snapshot of the same package and version" $ do
+        (inventory, _) <- expectRight (check doc)
+        (_, otherMetadata) <- expectRight (check doc{vdRaw = Just (fst npmCached sourceVersion)})
+        let file :| _ = inventoryFiles inventory
+        verified <- expectRight (verifyMirrorBytes file dummyTarballBytes)
+        prepareNpmUpload inventory otherMetadata file verified `shouldSatisfy` isSourceRefusal
     it "refuses another ecosystem even when its snapshot identity agrees" $ do
         let name = unscopedPyPI "is-odd"
             version = pypiVersion "1.0.0"

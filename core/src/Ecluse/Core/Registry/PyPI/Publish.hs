@@ -10,7 +10,6 @@ module Ecluse.Core.Registry.PyPI.Publish (
     classifyPublish,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.Text qualified as T
@@ -18,7 +17,7 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types.Header (hContentType)
 
 import Ecluse.Core.Credential (ClientCredential, credUsername)
-import Ecluse.Core.Package (Artifact (artFilename))
+import Ecluse.Core.Package (Artifact (artFilename), hashValue)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (parseErrorMessage), PublishError (..), PublishFault (..), isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
@@ -63,7 +62,7 @@ publishRequest target credential upload = do
     base <- first (PublishFetch . FetchUrlUnformable) (parseRequestEither target)
     let filename = artFilename (expectedArtifact (uploadFile upload))
         bytes = uploadBytes upload
-        digest = show (hash bytes :: Digest SHA256)
+        digest = hashValue (uploadTargetHash upload)
         boundary = "ecluse-" <> encodeUtf8 (T.take 48 digest)
     python <- pythonTag filename
     let fields = [(":action", "file_upload"), ("protocol_version", "1"), ("filetype", if ".whl" `T.isSuffixOf` filename then "bdist_wheel" else "sdist"), ("pyversion", python), ("sha256_digest", digest)] <> uploadFields (uploadMetadata upload)

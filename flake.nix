@@ -371,6 +371,8 @@
           toolHpkgs.ghc
           pkgs.cabal-install
           pkgs.zlib
+          pkgs.bzip2
+          pkgs.xz
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
           # and `task gen-version-fixtures`. They are node-semver (npm, built by
