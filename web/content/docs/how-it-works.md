@@ -7,8 +7,8 @@ weight = 1
 Écluse is a proxy you put in front of public package registries to protect the builds that install
 from them. Point your CI and developer tooling at Écluse instead of at a public registry. Écluse
 fetches from that registry on their behalf and decides which versions a build may install. npm
-supports reads, mirroring, and first-party publication. PyPI supports project-index and distribution
-reads, but not mirroring or publication.
+and PyPI support reads, mirroring, and first-party publication.
+[Protocol support](@/docs/protocol-support.md) describes each protocol and its configuration requirements.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with
@@ -19,12 +19,14 @@ too old, when another advisory still affects the version, or when the advisory s
 differently. Pin such a fix with `AllowByIdentity`. Everything else is deny by default and opt-in by
 name.
 
-If you run a private registry, Écluse reads it first and passes your own packages through
-untouched. Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can
-also mirror each admitted public version into a registry you nominate, so a mirrored version
-survives a public outage or yank. You declare each registry under a tag that names the store behind
-it. A mirror target under the `codeArtifact` tag mints its own short-lived write token, and the
-other tags take a static token you supply. Écluse hosts no packages itself.
+If you run a private registry, Écluse treats its packages as trusted, subject to integrity and
+managed-mirror completion checks. Any https registry that speaks the ecosystem's protocol serves
+in that role. Écluse can also mirror admitted public versions into a registry you nominate.
+A complete mirrored version survives a public outage or yank.
+
+You declare each registry under a tag that names the store behind it. A mirror target under the
+`codeArtifact` tag mints its own short-lived write token, and the other tags take a static token
+you supply. Package archives remain in your registries.
 
 Écluse ships as one container image with four roles:
 
@@ -47,8 +49,8 @@ path prefix: `/npm/` or `/pypi/`.
 | Role | What it does | Trust | Required? |
 |------|--------------|-------|-----------|
 | Public upstream | The registry Écluse gates | Subject to admission | Defaults to `registry.npmjs.org` for npm and `pypi.org` for PyPI |
-| Private upstream | Serves your own packages first | Trusted | No. Without it, a pure public gate |
-| Mirror target | Receives admitted npm versions and answers presence probes | Operator-controlled | No. Declaring it makes the npm mount a mirror |
+| Private upstream | Supplies trusted package versions | Trusted | No. Without it, a pure public gate |
+| Mirror target | Receives admitted package files and supplies completion proof | Operator-controlled | No. Declaring it enables mirroring for the mount |
 | Publication target | Receives your `publish` requests | Trusted | Opt-in |
 
 These are roles, not necessarily separate servers. The
@@ -57,22 +59,20 @@ and explains what you lose when two share one.
 
 ### A request, step by step
 
-For npm, a client requests a version listing and then a tarball. PyPI reads use project indexes
-and distribution files instead, with no mirror or publication step.
+For npm, a client requests a version listing and then a tarball. PyPI clients request project indexes
+and distribution files. Both protocols support background mirroring and first-party publication.
 
 {{ diagram(name="request-flow", alt="A client talks only to Écluse, which fetches the private upstream and the public registry in parallel and queues a background mirror job to the mirror target.") }}
 
-1. **The listing.** Écluse fetches the private and the public registry in parallel. It trusts
-   every private version that meets the trusted integrity floor, gates every public version
-   through the policy, and serves the merged listing. A public version the policy did not admit is
-   absent from it, so a resolver never picks it. The served `dist-tags.latest` follows the public
-   registry's own tag when that version is admitted. Otherwise it names the highest admitted
-   version, stable before prerelease. A private registry's or a mirror store's own `latest` tag is
-   never served.
-2. **The tarball.** A private hit streams through unfiltered, and a private miss is gated on its
-   public metadata. When admitted, Écluse streams the tarball from the public registry while a
-   mirror job copies it into the mirror target in the background. Mirroring is demand-driven, so
-   only a version a client pulls gets mirrored.
+1. **The listing.** For non-first-party names, Écluse fetches private and public metadata in parallel.
+   Private versions must meet the trusted integrity floor, and managed mirror versions must also prove completion.
+   The policy filters public versions before the listing is merged. For npm, `dist-tags.latest` follows an admitted
+   public tag, otherwise the highest admitted version, with stable versions before prereleases.
+   It never exposes a private or mirror store's `latest` tag.
+2. **The artifact.** Private files use the trusted path. A managed mirror hit also requires current
+   authorisation, matching target identities, and a complete expected version. A private miss uses current
+   public metadata and policy. An admitted public request streams the file and queues a whole-version job
+   when mirroring is configured. For PyPI, that job copies every supported wheel and sdist in the admitted version.
 3. **A publish.** Publishing stays off until you configure a publication target. With one, Écluse
    refuses any name outside the mount's first-party namespaces before it writes upstream.
 
@@ -82,11 +82,12 @@ Those reads rely on the client's integrity checks.
 A public/private digest conflict logs a WARNING with both digests and increments the divergence
 counter. Comparison uses complete digest sets for each shared filename and algorithm.
 Hexadecimal case does not affect agreement. Diagnostics keep the original digest spelling.
-The private version and its tags stay listed, and direct private artifact reads still work.
+An unmanaged private copy stays listed and readable under the existing trusted rules.
 The alarm remains when a public rule denies the conflicting copy. The denied public version stays
 excluded. Only metadata that passes identity, artifact-location, and integrity checks supplies conflict evidence.
-A disagreement proves neither copy correct. A damaged private copy can still be served because the
-private repository is trusted to hold previously admitted or first-party content.
+A disagreement proves neither copy correct. An unmanaged private copy can still be served because the
+private repository is trusted to hold previously admitted or first-party content. Managed mirror
+reads must still pass their completeness checks.
 Divergence alone never authorises Dredger to delete a version. Removing an allow does not revoke a mirrored
 version unless a named deny that applies at revocation becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
@@ -95,7 +96,13 @@ Listings omit files whose URLs lack a filename, name `.` or `..`, or have a back
 The check also applies after one percent decode and refuses encoded separators or invalid UTF-8.
 A release disappears when no file survives.
 
-The mirror write republishes the version object the public registry served when the worker
+PyPI mirroring retains the supported file inventory and consumer metadata. Its worker extracts native
+upload fields from verified archives. [PyPI uploads and mirror state](@/docs/configuration.md#pypi-uploads-and-mirror-state)
+explains completion and recovery through partial copies.
+
+### npm mirror metadata
+
+The npm mirror write republishes the version object the public registry served when the worker
 admitted the version, so an install from the mirror resolves the same dependencies, executable
 mappings, engines, scripts, and deprecation notice as an install from the public registry. The
 worker reads that object at admission time, never from the queued job.

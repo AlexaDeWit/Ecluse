@@ -14,8 +14,8 @@ inventory, deletion, integrity, and recovery. These lists are normative for each
 Driver capability flags cannot shrink them. Independent obligations detect a family omitted
 from registration, while actual Hspec execution proves the registered laws ran.
 Each missing required family must fail by name, and unrelated families continue.
-PyPI runs the same full composition as npm. Missing write drivers produce named failed cases.
-These failures expose incomplete conformance without claiming production write support.
+npm and PyPI both run the full composition. The separate read-only foundation API remains partial
+and does not satisfy the full ecosystem contract.
 
 ## Metadata and serving
 

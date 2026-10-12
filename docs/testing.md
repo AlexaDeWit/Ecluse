@@ -718,9 +718,10 @@ the same outage. The tree comparison detects differences in installed paths, fil
 executable permissions, link targets, and every byte outside those lockfile source URL values.
 It detects metadata loss only when that loss changes this fixture's installed tree or lockfile.
 It does not prove that every metadata field survives, even when the fixture declares that field.
-Every ecosystem with a mirror write owes this scenario. PyPI has no mirror write, so it has no
-counterpart. Its one case under the outage is the failing `pip` install of a mount with no private
-store, where the stub's log shows that the PyPI public route answered nothing.
+Every ecosystem with a mirror write owes this scenario. PyPI compares exact installed package and
+new script bytes and executable permissions across public and hot-mirror installs. Its full contract
+also covers a second target architecture, complete wheel and sdist inventory, interrupted copying,
+restart, and public outage. A mount without private storage retains its failing outage control.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,
@@ -1563,8 +1564,8 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-PyPI runs the full composition and completion audit. Its missing write drivers produce 26 named failed cases.
-All 17 existing PyPI cases still execute. These failures keep the E2E aggregate and terminal CI gate red.
+npm and PyPI both register the full ecosystem composition. The separately named read-only foundation
+remains an API for incomplete providers, not either ecosystem's active completion claim.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.

@@ -13,8 +13,8 @@ resilience, limiting the blast radius of a bad publish, not malware detection. T
 control is the quarantine: each new public version waits out a window, because registries
 usually find and yank a malicious publish within it.
 
-Écluse delegates storage to the store each mount declares. npm supports reads, mirroring, and
-first-party publication, and PyPI supports reads. The code is Haskell (GHC 9.10), pinned
+Écluse delegates storage to the store each mount declares. npm and PyPI support reads, mirroring,
+and first-party publication. The code is Haskell (GHC 9.10), pinned
 through Nix flakes, with `ecluse.cabal` and `flake.lock` as the dependency authority.
 
 ## Roles

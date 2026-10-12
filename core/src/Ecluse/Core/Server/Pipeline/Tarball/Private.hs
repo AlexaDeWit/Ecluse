@@ -81,7 +81,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballR
 import Ecluse.Core.Server.Response (mkRefusal)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder), UpstreamResult (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Version (versionRaw)
+import Ecluse.Core.Version (renderVersion)
 import UnliftIO (tryAny)
 
 -- | The private leg's answer: the response it committed, or why it did not answer.
@@ -116,7 +116,7 @@ streamPrivateArtifact ctx token = do
     replies = arReplies ctx
     respond = arRespond ctx
 
-    covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (versionRaw (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (versionRaw (arVersion ctx)) details) Map.empty [])
+    covered expected = maybe False $ \details -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) expected) (PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) details) Map.empty [])
     shaped = withValidators (arValidators ctx) . withMethod (arMode ctx)
     unavailable = respond (tarballError replies status503 [] (mkRefusal (pdHelp (arDeps ctx)) "managed mirror view is unavailable"))
     refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp (arDeps ctx))))

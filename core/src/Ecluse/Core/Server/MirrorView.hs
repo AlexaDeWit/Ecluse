@@ -21,6 +21,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
+import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime)
 import Data.Traversable (for)
 import UnliftIO (tryAny)
@@ -95,7 +96,7 @@ mirrorProjectViews revision record private = do
         details = Map.fromList [(key, vdDetails doc) | (key, doc) <- rebased]
         files = concat [simpleFiles document | (_, doc) <- rebased, Just raw <- [vdRaw doc], Just document <- [snd pypiSimpleCached raw]]
         packed = packedSimple (recordEnvelope record) (docTable (smallArrayFromList [])) [(key, packTree urlHole value) | (key, value) <- files]
-        fingerprint = encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
+        fingerprint = TE.encodeUtf8 (show revision) <> maybe mempty (digestBytes . manifestDigest) private
         managed = Manifest (PackageInfo (recordPackage record) details Map.empty []) (fst pypiPacked packed) (fromIntegral (weighCachedDoc (fst pypiPacked packed))) (digestFromContext (hashUpdate hashInit fingerprint))
     pure (unmanaged, managed <$ guard (not (Map.null details)), pending)
 

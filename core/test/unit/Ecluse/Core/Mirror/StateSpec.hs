@@ -5,6 +5,7 @@
 -- | Interrupted copies retain every admitted identity and source fragment across conditional updates.
 module Ecluse.Core.Mirror.StateSpec (spec) where
 
+import Control.Monad (foldM)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS

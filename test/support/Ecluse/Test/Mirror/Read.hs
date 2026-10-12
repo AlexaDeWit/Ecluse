@@ -23,6 +23,7 @@ module Ecluse.Test.Mirror.Read (
     readLimits,
 ) where
 
+import Control.Monad (foldM)
 import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (Object, String), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap

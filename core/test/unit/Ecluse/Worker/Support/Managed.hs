@@ -16,6 +16,7 @@ module Ecluse.Worker.Support.Managed (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text.Encoding qualified as TE
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
@@ -116,18 +117,18 @@ fixtureStore target record revision fault companions =
                 Just failure -> pure (Left failure)
                 Nothing -> do
                     current <- readIORef record
-                    rev <- StateRevision target name . encodeUtf8 . show <$> readIORef revision
+                    rev <- StateRevision target name . TE.encodeUtf8 . show <$> readIORef revision
                     pure (Right (maybe StateAbsent (StateLoaded rev) current))
         , msWriteProject = \_ name expected updated -> do
             current <- readIORef record
             number <- readIORef revision
-            let rev = StateRevision target name (encodeUtf8 (show number))
+            let rev = StateRevision target name (TE.encodeUtf8 (show number))
             if expected /= (rev <$ current)
                 then pure (Right StateConflict)
                 else do
                     writeIORef record (Just updated)
                     writeIORef revision (number + 1)
-                    pure (Right (StateStored (StateRevision target name (encodeUtf8 (show (number + 1))))))
+                    pure (Right (StateStored (StateRevision target name (TE.encodeUtf8 (show (number + 1))))))
         , msRetainCompanion = \_ (VerifiedCompanionBytes _ reference bytes) -> do
             modifyIORef' companions (Map.insert (companionDigest reference) bytes)
             pure (Right reference)

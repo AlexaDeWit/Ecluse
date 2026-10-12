@@ -200,6 +200,13 @@ unmanaged private handling intact. These controls do not promise atomic direct-r
 Project listings still discover public releases. Already mirrored artifact and companion reads
 need no public request or new admission after current private authorisation and identity proof.
 
+`MAL-*` advisory IDs do not impose an unconditional deny at any mirror phase. Public serving
+and worker ingest apply the configured admission rules. `DenyIfCve` treats an affecting advisory
+without a CVSS score as meeting every threshold, subject to rule precedence. Completed private
+copies keep the trusted-read path and do not re-run public advisory admission. Dredger reaping
+requires a named decisive deny whose `appliesTo` includes `revocation`, plus that store's deletion
+consent and the other [deletion guards](@/docs/dredger.md).
+
 A mount's optional `maxRequestBytes` overrides its inherited upload cap without changing another
 mount. Unset, it uses the existing global configured or computed value. The memory plan reserves
 aggregate capacity for the largest effective publishing cap and refuses an override that cannot fit.
