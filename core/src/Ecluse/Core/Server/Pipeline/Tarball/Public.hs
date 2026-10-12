@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The gated leg of the artifact path: vet the requested version, then relay the public upstream.
-
-The gate runs the same admission oracle the worker's ingest re-evaluation runs, so a version the
-worker would refuse is refused here too. An admitted @GET@ enqueues the demand-driven mirror.
--}
+-- | Gate public artifacts through the worker's admission oracle. An admitted GET enqueues mirroring.
 module Ecluse.Core.Server.Pipeline.Tarball.Public (
     servePublicArtifact,
     servePublicArtifactWithCoverage,
@@ -40,7 +36,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
-    MetadataError,
+    MetadataError (MetadataAbsent),
     VersionDoc (vdDetails),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     VersionRead,
@@ -108,8 +104,6 @@ servePublicArtifact = servePublicArtifactWithCoverage (const True)
 -- | A managed fallback must cover the whole expected version before its requested file is admitted.
 servePublicArtifactWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
 servePublicArtifactWithCoverage covered ctx = do
-    -- The advisory database active for this request, resolved once and used both for the
-    -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
     -- A selected read keeps one release, so its entry step is its whole charge.
     withMetadataAdmission
@@ -120,7 +114,6 @@ servePublicArtifactWithCoverage covered ctx = do
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
 
--- Stream an admitted artifact, recording the admission and the checks the gate had to skip.
 serveAdmitted :: ArtifactRequest response -> Maybe DbEtag -> Artifact -> [SkippedCheck] -> Handler ResponseReceived
 serveAdmitted ctx advisoryEtag artifact skipped = do
     let metrics = srMetrics (arRuntime ctx)
@@ -129,7 +122,6 @@ serveAdmitted ctx advisoryEtag artifact skipped = do
     withRunInIO $ \runInIO ->
         streamPublicArtifact ctx artifact (runInIO . observeRelayAnomaly metrics (arPackage ctx) (arVersion ctx))
 
--- Answer a gate refusal, recording the denial on the metrics and the audit log.
 refusePublic :: ArtifactRequest response -> Maybe DbEtag -> ServeDecision -> Handler ResponseReceived
 refusePublic ctx advisoryEtag decision = do
     let metrics = srMetrics (arRuntime ctx)
@@ -145,11 +137,14 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
--- Execute the captured read and fresh policy while both admission brackets are held.
 gatePublicVersion :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
 gatePublicVersion covered ctx advisoryEtag prepared = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
-    eval <- liftIO (versionEvaluation <$> executePrepared prepared)
+    eval <-
+        liftIO $
+            executePrepared prepared <&> \case
+                Left MetadataAbsent -> VersionMissing
+                result -> versionEvaluation result
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused (if covered Nothing then versionAbsent else upstreamUnavailable))
@@ -164,14 +159,11 @@ gatePublicVersion covered ctx advisoryEtag prepared = do
     rt = arRuntime ctx
     deps = arDeps ctx
 
--- The serve verdict a gate outcome carries, for the rule-eval span.
 gateVerdict :: PublicArtifactGate -> ServeDecision
 gateVerdict = \case
     Admitted{} -> Admit
     Refused decision -> decision
 
-{- Gate one requested artifact through the shared admission oracle the worker's ingest
-re-evaluation also runs. The trusted private leg never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Filename -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details =
     uncurry (publicArtifactGate details) <$> admitArtifactWithEvidence ctx (pdRules deps) (pdMinIntegrity deps) file details
@@ -262,8 +254,6 @@ enqueueJob ctx traceContext = do
     -- The span bracket marks a swallowed failure errored on the producer span.
     pure enqueued
 
--- Project the swallowed enqueue outcome onto the producer span's status, so a trace explains
--- why the mirror was not enqueued.
 enqueueErrorDetail :: Either TransportFault () -> Maybe Text
 enqueueErrorDetail = either (Just . enqueueFailureDetail) (const Nothing)
 

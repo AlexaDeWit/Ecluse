@@ -51,25 +51,34 @@ spec = describe "managed PyPI mirror reads" $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         absent <- testView (pure (Right StateAbsent))
-        withManagedProxy absent False (native status404 []) (projectWithEnvelope sourceEnvelope False) $ \app -> do
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowByIdentity "demo")]
+        queue <- newTestMemoryQueue
+        control <- withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) absent False (native status404 []) (projectWithEnvelope sourceEnvelope False) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
             simpleStatus response `shouldBe` status200
-            responseEnvelope response `shouldBe` Right sourceEnvelope
+            responseEnvelope response `shouldBe` Right (KeyMap.insert "versions" (fromListValue [String "1"]) sourceEnvelope)
+            pure (responseEnvelope response)
         present <- testView (pure (Right (StateLoaded revision record)))
         withManagedProxy present False (projectWithEnvelope privateEnvelope False) (native status503 []) $ \app -> do
             replicateM_ 2 $ do
                 response <- getPath "/pypi/simple/demo/" app
                 simpleStatus response `shouldBe` status200
-                responseEnvelope response `shouldBe` Right sourceEnvelope
+                responseEnvelope response `shouldBe` control
 
     it (caseLabel "integration/mirror-view/native-002" "keeps the private project envelope when an unmanaged private version is present") $ do
         inventory <- mirrorSample [1, 2] False "https://public.test/" "source" >>= withMirrorEnvelope sourceEnvelope
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        absent <- testView (pure (Right StateAbsent))
+        control <- withManagedProxy absent False (projectWithEnvelope privateEnvelope True) (native status503 []) $ \app -> do
+            response <- getPath "/pypi/simple/demo/" app
+            simpleStatus response `shouldBe` status200
+            responseEnvelope response `shouldBe` Right (KeyMap.insert "versions" (fromListValue [String "1", String "2"]) privateEnvelope)
+            pure (responseEnvelope response)
         view <- testView (pure (Right (StateLoaded revision record)))
         withManagedProxy view False (projectWithEnvelope privateEnvelope True) (native status503 []) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
             simpleStatus response `shouldBe` status200
-            responseEnvelope response `shouldBe` Right privateEnvelope
+            responseEnvelope response `shouldBe` control
 
     it (caseLabel "integration/mirror-view/native-003" "refuses private access before consulting retained source fields") $ do
         calls <- newIORef (0 :: Int)
@@ -162,11 +171,12 @@ spec = describe "managed PyPI mirror reads" $ do
         inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
-        withManagedProxy view False (native status200 [1, 2]) (native status503 []) $ \app -> do
-            response <- getPath "/pypi/simple/demo/" app
-            simpleStatus response `shouldBe` status503
-            artifact <- getPath artifactPath app
-            simpleStatus artifact `shouldBe` status503
+        for_ [status503, status404] $ \publicStatus ->
+            withManagedProxy view False (native status200 [1, 2]) (native publicStatus []) $ \app -> do
+                response <- getPath "/pypi/simple/demo/" app
+                simpleStatus response `shouldBe` status503
+                artifact <- getPath artifactPath app
+                simpleStatus artifact `shouldBe` status503
 
     it (caseLabel "integration/mirror-view/native-011" "admits a later filename from public even when an unrecorded private copy exists") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
