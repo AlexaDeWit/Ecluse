@@ -80,53 +80,53 @@ packageStoreSpec = mapM_ snd . packageStoreLaws
 packageStoreLaws :: FullPackageStoreDriver -> [(Text, Spec)]
 packageStoreLaws driver =
     [ declare "reads" $ do
-        example "reads" "present" "reads every stored file and supported metadata" $ \session -> do
+        contractCase "reads" "present" "reads every stored file and supported metadata" $ \session -> do
             publishBoth session
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
-        example "reads" "absent" "distinguishes a missing release from a failed read" $ \session ->
+        contractCase "reads" "absent" "distinguishes a missing release from a failed read" $ \session ->
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right Nothing
     , declare "writes" $ do
-        example "writes" "complete" "publishes the complete release and preserves its sibling" $ \session -> do
+        contractCase "writes" "complete" "publishes the complete release and preserves its sibling" $ \session -> do
             publishBoth session
             pssObservedWrites session `shouldReturn` [primary, sibling]
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
-        example "writes" "idempotent" "repeated publication keeps the same complete inventory" $ \session -> do
+        contractCase "writes" "idempotent" "repeated publication keeps the same complete inventory" $ \session -> do
             publishBoth session
             psoWrite (pssOperations session) primary `shouldReturn` Right ()
             psoInventory (pssOperations session) `shouldReturn` Right expectedInventory
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
     , declare "inventory" $
-        example "inventory" "exact" "enumerates precisely the published packages and versions" $ \session -> do
+        contractCase "inventory" "exact" "enumerates precisely the published packages and versions" $ \session -> do
             psoInventory (pssOperations session) `shouldReturn` Right []
             publishBoth session
             psoInventory (pssOperations session) `shouldReturn` Right expectedInventory
     , declare "deletion" $
-        example "deletion" "selected" "removes the selected version and preserves its sibling" $ \session -> do
+        contractCase "deletion" "selected" "removes the selected version and preserves its sibling" $ \session -> do
             publishBoth session
             psoDelete (pssOperations session) [primaryVersion] `shouldReturn` [(primaryVersion, Right ())]
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right Nothing
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
             psoInventory (pssOperations session) `shouldReturn` Right [(psdPackage driver, [siblingVersion])]
     , declare "integrity" $
-        example "integrity" "bytes-and-digests" "preserves every artifact byte and declared verified digest" $ \session -> do
+        contractCase "integrity" "bytes-and-digests" "preserves every artifact byte and declared verified digest" $ \session -> do
             psoWrite (pssOperations session) primary `shouldReturn` Right ()
             pssObservedWrites session `shouldReturn` [primary]
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
     , declare "recovery" $ do
-        example "recovery" "publish-retry" "reports a failed write before a later attempt completes" $ \session -> do
+        contractCase "recovery" "publish-retry" "reports a failed write before a later attempt completes" $ \session -> do
             pssFailNextWrite session
             psoWrite (pssOperations session) primary >>= (`shouldSatisfy` isLeft)
             psoWrite (pssOperations session) primary `shouldReturn` Right ()
             psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
-        example "recovery" "reopen" "a fresh handle reads the completed release without its source" $ \session -> do
+        contractCase "recovery" "reopen" "a fresh handle reads the completed release without its source" $ \session -> do
             publishBoth session
             reopened <- pssReopen session
             psoRead reopened primaryVersion `shouldReturn` Right (Just primary)
             psoRead reopened siblingVersion `shouldReturn` Right (Just sibling)
             psoInventory reopened `shouldReturn` Right expectedInventory
-        example "recovery" "delete-retry" "reports incomplete deletion and completes a later attempt" $ \session -> do
+        contractCase "recovery" "delete-retry" "reports incomplete deletion and completes a later attempt" $ \session -> do
             publishBoth session
             pssFailNextDelete session
             failed <- psoDelete (pssOperations session) [primaryVersion]
@@ -147,7 +147,7 @@ packageStoreLaws driver =
         primaryVersion `shouldNotBe` siblingVersion
         psoWrite (pssOperations session) primary `shouldReturn` Right ()
         psoWrite (pssOperations session) sibling `shouldReturn` Right ()
-    example family suffix description = it (caseLabel (identifier driver family <> "/" <> suffix) description)
+    contractCase family suffix description = it (caseLabel (identifier driver family <> "/" <> suffix) description)
     declare family spec = (family, around (psdWithSession driver) spec)
 
 -- | The required cases are declared independently of the Hspec examples above.
@@ -157,9 +157,9 @@ packageStoreCatalogue subject =
         { catalogueProductionEcosystems = ["npm"]
         , catalogueProfiles = [Profile profile ["npm"] [subject] families]
         , catalogueObligations =
-            [ Obligation group profile family Supported [family] (caseIdentifiers subject family)
+            [ Obligation storeGroupId profile family Supported [family] (caseIdentifiers subject family)
             | family <- families
-            , let group = storeIdentifier subject family
+            , let storeGroupId = storeIdentifier subject family
             ]
         , catalogueGroups = map (packageStoreGroup subject) families
         }
@@ -188,19 +188,19 @@ validatePackageStore subject =
 packageStoreGroup :: Text -> Text -> Group
 packageStoreGroup subject family =
     Group
-        { groupId = group
+        { groupId = storeGroupId
         , groupContractId = family
         , groupProfileId = "package-store/" <> subject
         , groupTier = Unit
         , groupPartition = "package-store-" <> subject
-        , groupCases = [Case name [group] | name <- caseIdentifiers subject family]
+        , groupCases = [Case name [storeGroupId] | name <- caseIdentifiers subject family]
         , groupCapabilities = [family]
         , groupPrerequisites = []
         , groupResources = ["loopback-registry", "deterministic-control-plane"]
         , groupIsolation = ["fresh-store-per-example"]
         }
   where
-    group = storeIdentifier subject family
+    storeGroupId = storeIdentifier subject family
 
 families :: [Text]
 families = ["reads", "writes", "inventory", "deletion", "integrity", "recovery"]

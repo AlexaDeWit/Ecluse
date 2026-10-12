@@ -45,7 +45,7 @@ data AdvisoryScenarioDriver = AdvisoryScenarioDriver
 advisoryContract :: Text -> SpecWith AdvisoryScenarioDriver
 advisoryContract prefix = do
     for_ [("deny-cve", DenyCve, "DenyIfCve"), ("deny-epss", DenyEpss, "DenyIfEpss")] $ \(suffix, policy, rule) ->
-        it (caseLabel (prefix <> "/" <> suffix) ("denies an affected release by " <> toString rule)) $ \driver ->
+        it (caseLabel (prefix <> "/" <> suffix) ("denies an affected release by " <> rule)) $ \driver ->
             advisoryWithPolicy driver policy $ \session -> do
                 advisoryListedVersions session `shouldReturn` [advisoryFixedVersion driver]
                 refuse driver session (advisoryAffectedVersion driver) rule (Just (advisoryExpectedId driver))

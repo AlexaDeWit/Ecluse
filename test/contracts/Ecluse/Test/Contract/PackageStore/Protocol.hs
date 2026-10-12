@@ -19,6 +19,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status, status200, status201, status400, status401, status404, status409, status503)
 
@@ -140,7 +141,7 @@ readArtifact origin artifact = case artifactRequestByUrl (ocToken origin) (artUr
         response <- boundedFetch (ocManager origin) (progressFloor (ocLimits origin)) (MirrorArtifactBodyLimit 4096) request
         pure $ do
             received <- first show response
-            unless (responseStatus received == 200) (Left "stored artifact did not answer HTTP 200")
+            unless (responseStatusCode received == 200) (Left "stored artifact did not answer HTTP 200")
             digest <- maybeToRight "stored artifact has no SRI digest" (hashValue <$> find ((== SRI) . hashAlg) (artHashes artifact))
             pure (PackageStoreArtifact (artFilename artifact) (responseBody received) digest)
 
@@ -245,7 +246,7 @@ decodePublish bytes = do
     unless (KeyMap.keys attachments == [Key.fromText filename]) (Left "npm publish carries an unexpected attachment inventory")
     attachment <- maybeToRight "publish attachment is missing" (KeyMap.lookup (Key.fromText filename) attachments)
     encoded <- fieldText "data" attachment
-    payload <- first toText (convertFromBase Base64 (encodeUtf8 encoded) :: Either String ByteString)
+    payload <- first toText (convertFromBase Base64 (TE.encodeUtf8 encoded) :: Either String ByteString)
     unless (fieldValue "length" attachment == Just (Number (fromIntegral (BS.length payload)))) (Left "attachment length differs from its decoded bytes")
     pure (PackageStoreRelease declaredVersion metadata (PackageStoreArtifact filename payload digest :| []))
 

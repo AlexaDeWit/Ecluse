@@ -105,10 +105,10 @@ auditCompletion completion executions =
     fromLeft [] (validateCompletion completion [planCatalogue plan | (_, plan, _) <- executions])
         <> ["completion has no execution evidence" | null executions]
         <> ["completion combines different sources, architectures or runs" | length (ordNub runIdentities) > 1]
-        <> concatMap (\(identity, plan, reports) -> concatMap (auditPartitionReport identity plan) reports) executions
+        <> concatMap (\(runIdentity, plan, reports) -> concatMap (auditPartitionReport runIdentity plan) reports) executions
         <> concatMap observed (completionEvidence completion)
   where
-    runIdentities = [(identitySource identity, identityArchitecture identity, identityRunId identity) | (identity, _, _) <- executions]
+    runIdentities = [(identitySource runIdentity, identityArchitecture runIdentity, identityRunId runIdentity) | (runIdentity, _, _) <- executions]
     primary = [report | (_, _, reports) <- executions, report <- reports, not (reportRepeat report)]
     observed evidence = case matching evidence of
         [result] -> ["completion law did not pass: " <> evidenceFamily evidence <> "/" <> evidenceLaw evidence | crStatus result /= Passed]

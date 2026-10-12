@@ -16,6 +16,7 @@ module Ecluse.Test.Contract.Ecosystem (
     missingCapabilityObligations,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Test.Hspec (aroundAll, expectationFailure, it)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -79,7 +80,7 @@ composeEcosystem scope driver =
         <> ecosystemNativeExtensions driver
   where
     subject = ecosystemName driver
-    laws family = fromMaybe [] $ lookup family (requiredFamilyLaws scope)
+    laws family = Map.findWithDefault [] family (Map.fromList $ requiredFamilyLaws scope)
     prefix suffix = subject <> "/" <> suffix
     external family = \case
         Available _ -> []
