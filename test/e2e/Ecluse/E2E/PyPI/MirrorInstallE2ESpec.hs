@@ -173,7 +173,7 @@ pypiMirrorFamily fixture =
                 ( ["/simple/" <> project <> "/" | project <- projects]
                     <> ["/simple/" <> project <> "/" <> filename | project <- projects, filename <- mirrorFileNames project]
                 )
-        , mirrorExpectedTargets = fmap (\((native, first), (other, second)) -> (targetExpected native first, targetExpected other second)) mirrorArchitectures
+        , mirrorExpectedTargets = fmap (\((native, nativeFiles), (other, otherFiles)) -> (targetExpected native nativeFiles, targetExpected other otherFiles)) mirrorArchitectures
         , mirrorExpectedSources = fmap (\((_, platform), _) -> [redactedProxy <> "/pypi/simple/" <> project <> "/" <> mirrorWheelFile project platform | project <- projects]) mirrorArchitectures
         }
     , concreteFamily fixture $ \recorder action plane ->

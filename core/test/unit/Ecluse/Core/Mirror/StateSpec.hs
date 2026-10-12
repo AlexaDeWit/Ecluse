@@ -197,9 +197,9 @@ spec = describe "durable mirror expectations" $ do
         let details = inventoryDetails initialInventory
             newVersion = mkVersion PyPI "2"
             renamed = fmap (\artifact -> artifact{artFilename = T.replace "1.0" "2.0" (artFilename artifact), artUrl = T.replace "1.0" "2.0" (artUrl artifact)}) (pkgArtifacts details)
-        second <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second")) >>= withMirrorEnvelope nextEnvelope
+        nextInventory <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second")) >>= withMirrorEnvelope nextEnvelope
         old <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
-        updated <- expectRight (extendProjectRecord defaultLimits target second (Just old))
+        updated <- expectRight (extendProjectRecord defaultLimits target nextInventory (Just old))
         recordEnvelope old `shouldBe` firstEnvelope
         recordEnvelope updated `shouldBe` nextEnvelope
         for_ (Map.elems (recordVersions updated)) $ \version ->

@@ -34,9 +34,9 @@ spec :: Spec
 spec = do
     describe "managed mirror source restoration" $ do
         it "retains every source entry across colliding fragment coordinates and changed native URLs" $ do
-            first <- mirrorSample [1] False "https://public.test/" "first"
+            originalInventory <- mirrorSample [1] False "https://public.test/" "first"
             later <- mirrorSample [2] False "https://public.test/" "second"
-            initial <- expectRight (extendProjectRecord defaultLimits target first Nothing)
+            initial <- expectRight (extendProjectRecord defaultLimits target originalInventory Nothing)
             record <- expectRight (extendProjectRecord defaultLimits target later (Just initial))
             targetInventory <- mirrorSample [1, 2] False "https://private.test/moved/" "stripped"
             let current = Just (VersionDoc (inventoryDetails targetInventory) Nothing)
@@ -71,11 +71,11 @@ spec = do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             let private = Manifest (info inventory) (raw inventory) 1024 (digestOf "private")
-            (_, first, pending) <- expectRight (mirrorProjectViews revision record (Just private))
-            (_, second, _) <- expectRight (mirrorProjectViews (rev "new") record (Just private))
+            (_, initialManifest, pending) <- expectRight (mirrorProjectViews revision record (Just private))
+            (_, updatedManifest, _) <- expectRight (mirrorProjectViews (rev "new") record (Just private))
             pending `shouldSatisfy` Map.null
-            (first >>= snd pypiPacked . manifestRaw) `shouldSatisfy` isJust
-            fmap manifestDigest first `shouldNotBe` fmap manifestDigest second
+            (initialManifest >>= snd pypiPacked . manifestRaw) `shouldSatisfy` isJust
+            fmap manifestDigest initialManifest `shouldNotBe` fmap manifestDigest updatedManifest
 
     describe "per-request project validation" $ do
         it "performs one state exchange on every read and accepts only the requested 304 revision" $ do

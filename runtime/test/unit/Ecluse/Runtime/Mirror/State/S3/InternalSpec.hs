@@ -10,6 +10,7 @@ import Amazonka.Auth (fromKeys)
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Network.HTTP.Types
+import Network.HTTP.Types.Header (hETag, hIfMatch, hIfNoneMatch)
 import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, responseStream, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec

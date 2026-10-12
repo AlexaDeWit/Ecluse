@@ -34,8 +34,8 @@ spec = describe "withInflatedChunks" $ do
     it "closes an active inflater when its consumer returns early" $ do
         let bytes = BSL.toStrict (Raw.compress (BSL.replicate 100000 97))
         pull <- withInflatedChunks RawDeflate (const (pure ())) bytes $ \readChunk -> do
-            first <- readChunk >>= expectRight
-            BS.length first `shouldBe` 32768
+            initialChunk <- readChunk >>= expectRight
+            BS.length initialChunk `shouldBe` 32768
             pure readChunk
         pull `shouldReturn` Right BS.empty
     it "closes an active inflater before a consumer exception escapes" $ do

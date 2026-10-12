@@ -147,13 +147,13 @@ spec = describe "managed PyPI mirror reads" $ do
         let public request respond = modifyIORef' publicCalls (+ 1) >> native status503 [] request respond
             path = artifactPath <> ".metadata"
         withManagedProxy view False (native status200 [1]) public $ \app -> do
-            first <- getPath path app
-            simpleStatus first `shouldBe` status200
-            simpleBody first `shouldBe` "retained metadata"
+            initialResponse <- getPath path app
+            simpleStatus initialResponse `shouldBe` status200
+            simpleBody initialResponse `shouldBe` "retained metadata"
             headed <- requestAt methodHead path defaultRequest app
             simpleStatus headed `shouldBe` status200
             simpleBody headed `shouldBe` ""
-            etag <- maybe (fail "missing companion validator") pure (lookup "ETag" (simpleHeaders first))
+            etag <- maybe (fail "missing companion validator") pure (lookup "ETag" (simpleHeaders initialResponse))
             unchanged <- getPathWith [("If-None-Match", etag)] path app
             simpleStatus unchanged `shouldBe` status304
         readIORef publicCalls `shouldReturn` 0

@@ -143,10 +143,10 @@ spec = describe "archiveMetadata" $ do
         let charge wanted = modifyIORef' requests (wanted :)
             extractAgain = archiveMetadata defaultLimits charge (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes
         void (extractAgain >>= expectRight)
-        first <- reverse <$> readIORef requests
+        initialCharges <- reverse <$> readIORef requests
         void (extractAgain >>= expectRight)
         both <- reverse <$> readIORef requests
-        both `shouldBe` first <> first
+        both `shouldBe` initialCharges <> initialCharges
     it "uses the bzip2 block-size declaration rather than an XZ reservation" $ do
         tar <- tarBytes [("example-1/PKG-INFO", metadata)]
         let compressed level = BSL.toStrict (BZip.compressWith BZip.defaultCompressParams{BZip.compressBlockSize = BZip.BlockSize level} tar)

@@ -458,11 +458,11 @@ pypiPublishSpec = describe "first-party PyPI publication relay" $ do
             budget <- newByteAdmissionTuned 1 0 50_000
             app <- pypiProxy (Just (const (pypiDeps port budget)))
             let send = postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["acme-widget"]) app
-            first <- async send
+            heldRequest <- async send
             arrival <- timeout 5_000_000 (takeMVar entered)
             arrival `shouldBe` Just ()
-            second <- send
-            status second `shouldBe` 503
+            shedResponse <- send
+            status shedResponse `shouldBe` 503
             putMVar release ()
-            completed <- wait first
+            completed <- wait heldRequest
             status completed `shouldBe` 201

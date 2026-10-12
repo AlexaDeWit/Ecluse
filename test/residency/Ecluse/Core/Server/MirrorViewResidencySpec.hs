@@ -73,14 +73,14 @@ spec = do
         for_ [1, 1000] $ \count -> it (show count <> " versions use one exchange per request") $ do
             fixture <- makeReadFixture count
             session <- newReadSession fixture
-            first <- readManagedProject session
-            second <- readManagedProject session
+            initialRead <- readManagedProject session
+            cachedRead <- readManagedProject session
             advanceReadSession session
             third <- readManagedProject session
-            checkResult count (3 * count + 3) first
-            checkResult count (3 * count + 3) second
+            checkResult count (3 * count + 3) initialRead
+            checkResult count (3 * count + 3) cachedRead
             checkResult count (3 * count + 4) third
-            readBody second `shouldBe` readBody first
+            readBody cachedRead `shouldBe` readBody initialRead
             exchanges <- readExchanges session
             case exchanges of
                 (3, [Nothing, Just old, Just same]) -> old `shouldBe` same
