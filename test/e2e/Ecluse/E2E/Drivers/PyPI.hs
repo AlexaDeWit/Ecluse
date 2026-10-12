@@ -2,9 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | PyPI read operations and explicit production write absences.
+-- | PyPI read operations and explicit gaps in the required write drivers.
 module Ecluse.E2E.Drivers.PyPI (pypiDriver) where
 
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterPublish))
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.E2E.AdvisoriesE2ESpec (pypiAdvisoryFamily)
 import Ecluse.E2E.Fixtures.Contracts
 import Ecluse.E2E.InstallationE2ESpec (installationFamily, pypiInstallationDriver)
@@ -22,13 +24,18 @@ pypiDriver =
         , ecosystemInstallation = Available (installationFamily pypiInstallationFixture pypiInstallationDriver)
         , ecosystemPolicy = Available (ServingEvidence "integration/pypi")
         , ecosystemAdvisories = Available (pypiAdvisoryFamily pypiPilotFixture)
-        , ecosystemMirroring = Unavailable (MissingCapability "the PyPI adapter has no publication operation for the mirror worker")
-        , ecosystemPublication = Unavailable (MissingCapability "the PyPI adapter has no native upload operation")
-        , ecosystemDredger = Unavailable (MissingCapability "boot refuses a PyPI mirror target before the Dredger role can start")
+        , ecosystemMirroring = Unavailable (writeGap "mirroring")
+        , ecosystemPublication = Unavailable (writeGap "publication")
+        , ecosystemDredger = Unavailable (writeGap "Dredger")
         , ecosystemTelemetry =
             Available
                 ( pypiReadTelemetryFamily pypiTelemetryFixture
-                , Unavailable (MissingCapability "the PyPI mirror worker cannot publish a private copy for worker and private-fetch telemetry")
+                , Unavailable (writeGap "mirror telemetry")
                 )
         , ecosystemNativeExtensions = [nativeInstallationContract pypiPublicFixture, nativeAdvisoryContract pypiAdvisoryNativeFixture]
         }
+
+writeGap :: Text -> MissingCapability
+writeGap family = MissingCapability $ case adapterPublish pypiAdapter of
+    Nothing -> "the PyPI adapter has no publisher required by the " <> family <> " conformance driver"
+    Just _ -> "the PyPI adapter advertises a publisher, but the " <> family <> " conformance driver is not bound"
