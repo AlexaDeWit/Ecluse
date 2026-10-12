@@ -20,8 +20,10 @@ chmod +x "$work/bin/docker"
 export PATH="$work/bin:$PATH"
 export ECLTEST_RUN_ID=run-a ECLTEST_SHARD=pypi
 script="$here/test-containers.sh"
+export ECLTEST_CLEANUP_STATUS_PATH="$work/cleanup-status"
 
 bash "$script" run bash -c 'test "$ECLTEST_CONTAINER_LOCK" = held'
+[ "$(cat "$work/cleanup-status")" = 0 ]
 grep -q 'label=com.ecluse.test.run=run-a --filter label=com.ecluse.test.shard=pypi' "$TEST_TRACE"
 if grep -q 'images -q' "$TEST_TRACE"; then
   echo 'automatic cleanup touched shared images' >&2
@@ -36,6 +38,7 @@ FAIL_REMOVE=1 bash "$script" run true || status=$?
 status=0
 FAIL_REMOVE=1 bash "$script" run bash -c 'exit 17' || status=$?
 [ "$status" = 17 ]
+[ "$(cat "$work/cleanup-status")" = 1 ]
 
 wait_for() {
   local n

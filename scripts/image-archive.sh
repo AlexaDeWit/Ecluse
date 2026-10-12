@@ -8,7 +8,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: image-archive.sh executables <archive> | compare <first> <second>" >&2
+  echo "usage: image-archive.sh executables <archive> | compare <first> <second> | configuration <archive>" >&2
   exit 2
 }
 
@@ -139,7 +139,19 @@ compare() {
   return 1
 }
 
+# The configuration digest remains stable across classic and containerd image stores.
+configuration() {
+  local config digest
+  config="$(tar -xOf "$1" manifest.json | jq -er 'if length == 1 then .[0].Config else error("expected one image") end')"
+  digest="$(tar -xOf "$1" "$config" | sha256sum | cut -d' ' -f1)"
+  printf 'sha256:%s\n' "$digest"
+}
+
 case "${1:-}" in
+  configuration)
+    [ "$#" = 2 ] || usage
+    configuration "$2"
+    ;;
   executables)
     [ "$#" = 2 ] || usage
     executables "$2"

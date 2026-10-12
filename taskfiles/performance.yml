@@ -1,0 +1,212 @@
+version: '3'
+tasks:
+  invalidate:
+    cmds:
+      - mkdir -p "$PERF_ARTIFACT_DIR"
+      - rm -f "$PERF_ARTIFACT_DIR/diagnostic.json" "$PERF_ARTIFACT_DIR"/ecosystem-{npm,pypi}/{obligation,request,receipt}.json
+
+  reporter:
+    cmds:
+      - cabal build exe:bench-report
+
+  load-build:
+    vars:
+      OPTIMISATION: '1'
+      PROFILING: 'disable'
+    cmds:
+      - cabal build -v0 exe:bench-load --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling
+
+  load-cgroup:
+    cmds:
+      - bash scripts/load-cgroup.sh prepare
+
+  allocation-measure:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+      OPTIMISATION: '1'
+      PROFILING: 'disable'
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/allocation/%s" .RUN_ID)}}'
+      ECLUSE_PERFORMANCE_OBSERVATIONS: perf-allocation-observations.json
+    cmds:
+      - mkdir -p "$PERF_ARTIFACT_DIR"
+      - rm -f perf-allocation-report.md perf-allocation-observations.json "$PERF_ARTIFACT_DIR/conditions.json"
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}}'
+      - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" perf-allocation-report.md cabal run -v0 perf-acceptance --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling -- captures
+      - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
+
+  allocation-receipt:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/allocation/%s" .RUN_ID)}}'
+    cmds:
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" receipt-allocation "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+
+  live-allocation-measure:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+      OPTIMISATION: '1'
+      PROFILING: 'disable'
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/live-allocation/%s" .RUN_ID)}}'
+      ECLUSE_PERFORMANCE_OBSERVATIONS: perf-acceptance-observations.json
+    cmds:
+      - mkdir -p "$PERF_ARTIFACT_DIR"
+      - rm -f perf-acceptance-report.md perf-acceptance-observations.json "$PERF_ARTIFACT_DIR/conditions.json"
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}}'
+      - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" perf-acceptance-report.md cabal run -v0 perf-acceptance --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling -- live
+      - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
+
+  live-allocation-receipt:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/live-allocation/%s" .RUN_ID)}}'
+    cmds:
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" receipt-live-allocation "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+
+  benchmark-measure:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+      OPTIMISATION: '1'
+      PROFILING: 'disable'
+      BENCHMARK_RTS: '-T'
+      BENCHMARK_STDEV: '10'
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/benchmark/%s" .RUN_ID)}}'
+    cmds:
+      - mkdir -p "$PERF_ARTIFACT_DIR"
+      - rm -f bench-output.txt bench-results.csv "$PERF_ARTIFACT_DIR/conditions.json"
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}} rts={{.BENCHMARK_RTS}} stdev={{.BENCHMARK_STDEV}} consoleLog=bench-output.txt'
+      - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" bench-output.txt cabal bench ecluse-bench --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling --benchmark-options="--csv bench-results.csv --stdev {{.BENCHMARK_STDEV}} +RTS {{.BENCHMARK_RTS}} -RTS"
+      - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
+
+  benchmark-receipt:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/benchmark/%s" .RUN_ID)}}'
+    cmds:
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" receipt-benchmark "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+
+  load-foundation-measure:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+      OPTIMISATION: '1'
+      PROFILING: 'disable'
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load-foundation/%s" .RUN_ID)}}'
+      MEASUREMENT_AFFINITY: '{{if eq (env "BENCH_LOAD_ISOLATE_OHA") "1"}}taskset -c 0 oha{{else}}unrestricted{{end}}'
+      ECLUSE_PERFORMANCE_OBSERVATIONS: load-observations.json
+    cmds:
+      - mkdir -p "$PERF_ARTIFACT_DIR"
+      - rm -f bench-load-results.md load-observations.json "$PERF_ARTIFACT_DIR/conditions.json"
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" conditions "$PERF_ARTIFACT_DIR/conditions.json" optimisation=-O{{.OPTIMISATION}} profiling={{if eq .PROFILING "disable"}}off{{else}}on{{end}} "podShape=${BENCH_LOAD_POD:-}" "durationSeconds=${BENCH_LOAD_DURATION_SECONDS:-}" "concurrency=${BENCH_LOAD_CONCURRENCY:-}" "serveMaxInFlight=${BENCH_LOAD_SERVE_MAX_IN_FLIGHT:-automatic}" "selectedScenarios=${BENCH_LOAD_SCENARIOS:-}" "thrashLimitsMiB=${BENCH_LOAD_THRASH_LIMITS_MIB:-}" "affinity=$MEASUREMENT_AFFINITY"'
+      - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" bench-load-results.md bash scripts/load-cgroup.sh enter cabal run -v0 bench-load --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling -- +RTS -N3 -RTS
+      - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
+
+  load-foundation-receipt:
+    vars:
+      RUN_ID:
+        sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
+      SOURCE:
+        sh: if [ -n "${ECLTEST_SOURCE:-${GITHUB_SHA:-}}" ]; then printf '%s\n' "${ECLTEST_SOURCE:-$GITHUB_SHA}"; else git rev-parse HEAD; fi
+      ARCHITECTURE:
+        sh: if [ -n "${ECLTEST_ARCHITECTURE:-}" ]; then printf '%s\n' "$ECLTEST_ARCHITECTURE"; else uname -m; fi
+    env:
+      ECLTEST_SOURCE: '{{.SOURCE}}'
+      ECLTEST_ARCHITECTURE: '{{.ARCHITECTURE}}'
+      ECLTEST_RUN_ID: '{{.RUN_ID}}'
+      ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
+      ECLTEST_REQUIRED: '1'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load-foundation/%s" .RUN_ID)}}'
+    cmds:
+      - task --exit-code performance:invalidate
+      - task: reporter
+      - '"$(cabal list-bin exe:bench-report)" receipt-load-foundation "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+

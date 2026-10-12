@@ -47,13 +47,9 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run benchmarks
         id: measure
-        run: |
-          set -eo pipefail
-          rm -f bench-results.csv bench-output.txt
-          nix develop .#ci --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 10' 2>&1 | tee bench-output.txt
+        run: nix develop .#ci --command task performance:benchmark-measure
 
       # The renderer accepts partial CSV output and reports a missing CSV without failing.
       - name: Render results to the run summary
@@ -64,7 +60,7 @@ jobs:
         if: always()
         env:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
-        run: nix develop .#ci --command bash scripts/performance-receipt.sh benchmark
+        run: nix develop .#ci --command task performance:benchmark-receipt
 
       # Off main only: the runs on main are the baseline. A missing baseline renders as
       # "no baseline". Both steps continue on error and stop after five minutes, so neither

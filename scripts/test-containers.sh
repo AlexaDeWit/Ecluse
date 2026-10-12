@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Serialise planes on one daemon and reap only the current invocation's objects.
 set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$here/process-group.sh"
 
 readonly LABEL_KEY=com.ecluse.test
 readonly SCOPE_KEY=com.ecluse.test.scope
@@ -57,25 +59,16 @@ reap() {
 }
 
 finish() {
-  local status=$?
+  local status=$? cleanup_status=0
   trap - EXIT INT TERM
   if ! reap invocation; then
+    cleanup_status=1
     echo 'test-containers: cleanup failed' >&2
     [ "$status" -ne 0 ] || status=1
   fi
-  exit "$status"
-}
-
-stop_child() {
-  local status="$1" attempt
-  trap '' INT TERM
-  kill -TERM -- "-$child_pid" 2>/dev/null || true
-  for ((attempt = 0; attempt < 50; attempt++)); do
-    kill -0 -- "-$child_pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  kill -KILL -- "-$child_pid" 2>/dev/null || true
-  wait "$child_pid" || true
+  if [ -n "${ECLTEST_CLEANUP_STATUS_PATH:-}" ]; then
+    printf '%s\n' "$cleanup_status" > "$ECLTEST_CLEANUP_STATUS_PATH"
+  fi
   exit "$status"
 }
 
@@ -89,13 +82,7 @@ run() {
   export ECLTEST_CONTAINER_LOCK=held
   docker info >/dev/null
   trap finish EXIT
-  set -m
-  "$@" &
-  child_pid=$!
-  set +m
-  trap 'stop_child 130' INT
-  trap 'stop_child 143' TERM
-  wait "$child_pid"
+  run_process_group "$@"
 }
 
 case "${1:-}" in
