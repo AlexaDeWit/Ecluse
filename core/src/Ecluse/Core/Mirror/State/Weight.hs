@@ -73,7 +73,7 @@ hashWeight digest = 256 + textWeight (hashValue digest)
 
 companionWeight :: CompanionState -> Integer
 companionWeight CompanionPending = 0
-companionWeight (CompanionRetained reference) = 256 + hashWeight (companionDigest reference)
+companionWeight (CompanionRetained (CompanionRef digest _)) = 256 + hashWeight digest
 
 -- | Compact JSON estimates count visible bytes. Add each string or key's uncounted backing allocation.
 valueBackingExcess :: Value -> Integer
