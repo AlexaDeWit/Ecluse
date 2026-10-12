@@ -2,12 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Exercise the remediation fast lane before and after Pilot publishes an artifact.
+{- | Exercise remediation and MAL decisions across accepted Pilot generations.
 The running proxy loads it through the Docker-backed S3 fixture.
 -}
 module Ecluse.Runtime.Cve.SyncIntegrationSpec (spec) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (String), encode, object, (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -28,8 +28,8 @@ import Ecluse.Config (loadConfig)
 import Ecluse.Core.Cve.Slot (newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Rules (RuleDeps, prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
+import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
+import Ecluse.Core.Rules.Types (Decision (BlockedByDefault), EvalContext (EvalContext), FailureAlignment (FailDeny), Reason (NoKnownMaliciousAdvisory), Rule (AllowIfOlderThan, AllowIfRemediatesCve, DenyIfKnownMalicious), identityEvidence)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
@@ -43,13 +43,14 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
+import Ecluse.Test.Osv.Withdrawal (maliciousZip)
 import Ecluse.Test.OsvDb (epssFixtureFile, withSourceStubs)
-import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
+import Ecluse.Test.Package (hexSha1Of, npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, slotRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, blockedBy, slotRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
@@ -89,13 +90,11 @@ spec =
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000, schedAbsentReport = 600_000_000}
                             app <- proxyApp ruleDeps privateUrl publicUrl
                             withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule (SyncHooks{hookFirstSync = pass, hookPushAge = pass}))) $ \_ -> do
-                                -- Phase 1 control: no database, and the fix is too young for the
-                                -- quarantine, so the fast lane abstains and no version survives.
+                                -- The configured MAL deny cannot vet before the first accepted generation.
                                 denied <- getPath "/npm/corpus-vuln" app
-                                status denied `shouldBe` 403
+                                status denied `shouldBe` 503
                                 let deniedBody = decodeUtf8 (simpleBody denied) :: Text
-                                deniedBody `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
-                                deniedBody `shouldSatisfy` T.isInfixOf "minimum age"
+                                deniedBody `shouldSatisfy` T.isInfixOf "no advisory database loaded"
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
@@ -105,6 +104,16 @@ spec =
                                 -- the served document carries the fixed version.
                                 served <- awaitAdmitted app "/npm/corpus-vuln"
                                 (decodeUtf8 (simpleBody served) :: Text) `shouldSatisfy` T.isInfixOf "\"1.2.0\""
+
+                                malRules <- prepare ruleDeps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny)]
+                                let evidence = identityEvidence (unscopedNpm "corpus-vuln") (npmVersion "1.2.0")
+                                    malDecision = evalRules (EvalContext fixedNow Nothing) malRules evidence
+                                maliciousZip Npm [("corpus-vuln", ["1.2.0"])] Nothing >>= publishArchive (Just endpoint) (s3EnvVars endpointUrl bucket)
+                                pollUntil 120 100_000 ((== Just "DenyIfKnownMalicious") . blockedBy) malDecision
+                                    >>= (\decision -> blockedBy decision `shouldBe` Just "DenyIfKnownMalicious")
+                                maliciousZip Npm [("corpus-vuln", ["1.2.0"])] (Just (String "2026-10-01T00:00:00Z")) >>= publishArchive (Just endpoint) (s3EnvVars endpointUrl bucket)
+                                pollUntil 120 100_000 (== BlockedByDefault [NoKnownMaliciousAdvisory]) malDecision
+                                    `shouldReturn` BlockedByDefault [NoKnownMaliciousAdvisory]
 
                                 -- The fetch fails fast on the declared length, before any bytes
                                 -- sink to disk.
@@ -142,8 +151,10 @@ createBucketWithRetry awsEnv bucket attempts =
 -- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject, under @env@
 -- with the feeds pointed at stubs. The output lands in its own temp dir, apart from the sync's.
 publishViaPilot :: Maybe AwsEndpoint -> [(String, String)] -> CorpusVersion -> IO ()
-publishViaPilot s3Endpoint env v = do
-    zipBytes <- osvCorpusZip v
+publishViaPilot s3Endpoint env v = osvCorpusZip v >>= publishArchive s3Endpoint env
+
+publishArchive :: Maybe AwsEndpoint -> [(String, String)] -> LByteString -> IO ()
+publishArchive s3Endpoint env zipBytes = do
     epssBytes <- readFileLBS epssFixtureFile
     logEnv <- quietLogEnv
     withSourceStubs zipBytes (status200, epssBytes) $ \sources _ -> do
@@ -159,11 +170,10 @@ publishViaPilot s3Endpoint env v = do
                     config
                     PilotCompileOptions{pcoEcosystem = "npm", pcoOutDir = pilotDir, pcoUpload = True}
 
--- The real serve application over the shipped fast-lane policy: the quarantine plus
--- AllowIfRemediatesCve, with the packument stub as the public origin.
+-- The configured-source shared policy, with the packument stub as its public origin.
 proxyApp :: RuleDeps -> Text -> Text -> IO Application
 proxyApp ruleDeps privateUrl publicUrl = do
-    prepared <- prepare ruleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
+    prepared <- prepare ruleDeps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny), atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence AllowIfRemediatesCve]
     manager <- newManager defaultManagerSettings
     queue <- newTestMemoryQueue
     env <- newTestEnvWith queue (manager, manager) telemetryDisabled

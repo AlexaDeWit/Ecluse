@@ -12,6 +12,14 @@ pulling a bad version back out of the mirror target and its private cache.
 For mirror stores with a control plane, it reports that boot builds the maintenance client
 against the live environment without attempting that build itself.
 
+Configured `advisories.url` activates `DenyIfKnownMalicious` at precedence 300. Its first-generation
+readiness and publication-age requirements apply before any successful sync. A failed poll keeps
+the last-good generation until expiry. A stale or undated generation refuses even under `skip`
+and supplies no deletion authority. Trusted private copies remain readable until eligible removal.
+MAL denial retains consent, first-party protection, deletion caps, and the accepted worker-transfer
+and client-cache limits. See [configuration](@/docs/configuration.md#known-malicious-packages-and-upgrades)
+for migration, opt-out, precedence, and rollout order.
+
 ## Health probes
 
 An orchestrator watches two endpoints on the proxy, and they answer for different things, so wire

@@ -12,7 +12,7 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig)
+import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig, withoutMaliciousDefault)
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
@@ -23,7 +23,7 @@ import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailDeny), Rule (AllowIfOlderThan, DenyIfCve), completeEvidence)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Corpus (corpusPackages, cpName, cpPackage, pypiCorpusPackages)
-import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, corpusAdvisories, shippedPolicy)
+import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), checkCapturesServed, compileAdvisoryInputs, compileCorpusAdvisories, configuredShippedPolicy, corpusAdvisories, shippedPolicy)
 import Ecluse.Test.Osv (osvZipOf)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
@@ -105,15 +105,20 @@ spec = do
                 `shouldReturn` Left "the capture typing_extensions differs from its lookup key typing-extensions"
 
     describe "shippedPolicy" $
-        it "is the shared policy config/default.yaml ships" $ do
-            (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
-            shippedPolicy `shouldMatchList` Map.elems (policyRules baseline)
+        it "is the shared policy config/default.yaml ships without an advisory source" $ do
+            (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
+            shippedPolicy `shouldMatchList` Map.elems (policyRules (withoutMaliciousDefault catalogue))
+
+    describe "configuredShippedPolicy" $
+        it "matches the effective shared policy with an advisory source" $ do
+            (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
+            configuredShippedPolicy `shouldMatchList` Map.elems (policyRules catalogue)
 
 assertCapturedRemediation :: RuleDeps -> EvalContext -> PackageDetails -> PackageDetails -> Expectation
 assertCapturedRemediation deps ctx fixedRelease affected = do
-    enabled <- prepare deps shippedPolicy
+    enabled <- prepare deps configuredShippedPolicy
     admittedBy <$> evalRules ctx enabled (completeEvidence fixedRelease) `shouldReturn` Just "AllowIfRemediatesCve"
     disabled <- prepare deps [atDefaultPrecedence (AllowIfOlderThan 604800)]
     evalRules ctx disabled (completeEvidence fixedRelease) >>= (`shouldSatisfy` isBlockedByDefault)
-    denies <- prepare deps (shippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
+    denies <- prepare deps (configuredShippedPolicy <> [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 0 FailDeny))])
     blockedBy <$> evalRules ctx denies (completeEvidence affected) `shouldReturn` Just "DenyIfCve"

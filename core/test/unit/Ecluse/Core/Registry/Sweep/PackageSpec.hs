@@ -58,16 +58,17 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps, RuleEval (PerVersion), prepare)
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
+    AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
     assessAdvisoryAge,
     maxAdvisoryAgeFor,
  )
 import Ecluse.Core.Rules.Types (
+    AdvisoryAge (AdvisoryAge),
     DenyIfCveParams (DenyIfCveParams),
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule, prRule),
-    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyIfDeprecated, DenyIfYanked, DenyInstallTimeExecution),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked, DenyInstallTimeExecution),
     RuleEvidence (evVersion),
     RuleReach (AdmissionAndRevocation, AdmissionOnly),
     RuleVerdict (Deny),
@@ -110,6 +111,20 @@ spec = do
 -- because the store may hold the only surviving copy.
 verdictSpec :: Spec
 verdictSpec = describe "the delete verdict" $ do
+    for_ [("1.0.0", []), ("2.0.0", [npmVersion "2.0.0"])] $ \(raw, retained) ->
+        it ("uses identity-only MAL evidence for " <> toString raw) $ do
+            let deps = servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", AdvisoryRange "MAL-sweep" Nothing (Just "0") (FixedBefore "2.0.0") Nothing)])
+            (recorded, left) <- revocationStep deps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny)] leftPadName (npmVersion raw) Nothing
+            left `shouldBe` retained
+            when (null retained) $ recInfo recorded >>= (`shouldSatisfy` any (T.isInfixOf "MAL-sweep (known malicious)"))
+    for_ [AdvisoryStale (AdvisoryAge epoch (9 * nominalDay) (6 * nominalDay)), AdvisoryUndated] $ \stale ->
+        it ("retains a MAL candidate when eligibility changes to " <> show stale) $ do
+            reading <- newIORef [AdvisoryFresh]
+            let deps = withAdvisoryFreshness (nextReading stale reading) (servingRuleDeps (DbEtag "etag-1") (fakeCveLookup [("left-pad", AdvisoryRange "MAL-sweep" Nothing (Just "0") (FixedBefore "2.0.0") Nothing)]))
+            (recorded, left) <- revocationStep deps [atDefaultPrecedence (DenyIfKnownMalicious FailDeny)] leftPadName (npmVersion "1.0.0") Nothing
+            left `shouldBe` [npmVersion "1.0.0"]
+            recResults recorded `shouldReturn` [SweepExamined, SweepGuardSkipped]
+
     for_ [False, True] $ \poisonEvidence ->
         it ("keeps the poisoned version and deletes its neighbours, evidence=" <> show poisonEvidence) $ do
             let versions = map npmVersion ["1.0.0", "2.0.0", "3.0.0"]

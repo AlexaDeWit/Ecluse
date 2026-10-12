@@ -163,23 +163,24 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
 DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
-DenyIfDeprecated = DenyIfYanked = DenyInstallTimeExecution (300) < DenyByIdentity (400)
+DenyIfDeprecated = DenyIfYanked = DenyIfKnownMalicious = DenyInstallTimeExecution (300) < DenyByIdentity (400)
 ```
 
-`DenyIfYanked`, `DenyIfDeprecated`, `DenyInstallTimeExecution`, and `DenyByIdentity` default strictly above every allow. The two
-advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
+`DenyIfKnownMalicious`, availability denies, `DenyInstallTimeExecution`, and `DenyByIdentity` default above every allow. The two
+scored advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
 exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
 escape hatch. Both still sit above the quarantine, the remediation lane, and a scope
 allow-list, and configured together they tie, which the boot order resolves by name. An operator may
 raise a specific allow above a specific deny, or the reverse, with an explicit precedence.
 
-The [default policy](configuration.md#the-default-policy) has two shared rules: the pure
+The source-free [default policy](configuration.md#the-default-policy) has two shared rules: the pure
 `AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane. The fast lane
 abstains without an advisory database, leaving the quarantine as the shared allow.
 The npm mount also ships `deny-scripts` (`DenyInstallTimeExecution`) at admission only, so it
 refuses new public admission without deleting stored copies. Disable it with `enabled: false`
 under `mounts.npm.rules`, or admit a named package with an `AllowByIdentity` pin whose explicit
-precedence is above 300. Every remaining rule is off by default and opts in by name.
+precedence is above 300. `DenyIfKnownMalicious` adds a third shared default when `advisories.url` is configured.
+The remaining rules opt in by name.
 
 ## CVE subsystem
 
@@ -192,7 +193,7 @@ carries a numeric CVSS base score and, where the EPSS feed scores one of its ide
 probability. Each read brackets its own acquisition, so the
 [shadow-swap](#local-polling-decoupled-ingestion) can retire a superseded artifact the moment no
 read still holds it. One read per request serves every advisory rule, so every decision in one
-response reads one generation. Two rules read it in opposite directions.
+response reads one generation. Four rule types read it.
 
 ### `AllowIfRemediatesCve`, remediation fast-track
 
@@ -209,7 +210,7 @@ malicious publish.
   quarantine instead of being admitted on an unverified claim.
 
 It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the scope
-allow-list, so a trusted scope never pays the advisory read. Pilot stores version bounds and exact
+allow-list, so a trusted scope avoids its read only when no higher advisory rule runs. Pilot stores version bounds and exact
 points under one ecosystem spelling. The remediation lookup renders served versions and its parsed
 fixed bound through the same renderer. PyPI `1.19.0` and `1.19` identify the same fix. npm advisory
 `v1.2.0` identifies served `1.2.0`, while public npm parsing remains strict. Semver build metadata
@@ -221,13 +222,31 @@ in Haskell with the same per-ecosystem ordering as
 [`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison counts
 as affected, so the lane only opens on evidence.
 
+### `DenyIfKnownMalicious`, primary namespace evidence
+
+An exact, case-sensitive `MAL-` prefix with a nonempty suffix identifies the OpenSSF namespace.
+The rule filters the existing stored primary `arCveId`, then uses the same affected-version matcher.
+Withdrawn records already disappear during compilation. Aliases do not supply classification.
+Epoch 5 stores the required identifier and ranges, so this rule needs no column or format change.
+
+The MAL view filters existing parsed segments once per package. All advisory predicates reuse
+one canonical lookup and one borrowed generation. Health reporting and version decisions share
+the resolved function. Neither version count nor rule count adds SQL reads.
+
+Configuration retains the named descriptor and its activation flag through the existing patch
+layers. The source setting seeds that flag once. Runtime receives only the final effective policy.
+The rule ranks at 300 because known MAL evidence must precede normal identity pins and scope allows.
+Its unavailable default denies. Expired or undated generations always refuse, including under skip.
+Only a decisive denial can authorise eligible Dredger deletion.
+
 ### `DenyIfCve`, the deny direction
 
 `DenyIfCve` reads the same lookup to block version *V* of *P* when an advisory affects *V* at or
 above a configured CVSS `minCvss`. It is **opt-in** and does two jobs against the npm feed.
 Most of that feed is the malware feed: `MAL-*` advisories that carry no CVSS score and name the
 bad version exactly. A smaller share is CVSS-scored CVEs. An unscored advisory counts as **above
-every threshold**, so the rule always denies malware while `minCvss` governs the scored CVEs.
+every threshold**, so the rule denies unscored records while `minCvss` governs scored advisories.
+The separate MAL rule does not depend on either score state.
 
 - **`Deny`** when some advisory affects *V* and clears the threshold. The reason names the
   deciding advisories.
@@ -338,7 +357,7 @@ per mount from that mount's own rules: one whose rules include an advisory deny 
 sync, and one whose rules do not is ready without a database. The listener serves throughout. A
 never-published artifact keeps the role polling and logs an operator-facing `ERROR` naming Pilot
 and the store, first when the boot retry budget is spent and then every 15 minutes until one loads.
-An absent database only abstains into deny-by-default.
+An absent database makes active advisory denies refuse. The remediation allow abstains.
 
 Polling removes the one external dependency that would otherwise sit under the fail-closed gate:
 an advisory-source outage becomes sync lag, not per-package blocking. Lookups also leave the hot

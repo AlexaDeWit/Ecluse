@@ -62,6 +62,7 @@ module Ecluse.Config (
     renderPolicyError,
     emptyPolicy,
     decodeDefaultConfig,
+    withoutMaliciousDefault,
     ConfigError (..),
     renderConfigError,
     loadConfig,
@@ -117,19 +118,44 @@ decodeDefaultConfig bytes = do
     policy <- first (pure . PolicyErrors) (resolvePolicy emptyPolicy patch)
     pure (ast, policy)
 
+-- | Remove the MAL default, which a policy keeps only while an advisory source activates it.
+withoutMaliciousDefault :: RulePolicy -> RulePolicy
+withoutMaliciousDefault = RulePolicy . Map.delete maliciousDefaultName . policyRules
+
+-- The descriptor remains patchable after a disable, until the final mount policy is selected.
+data PendingPolicy = PendingPolicy RulePolicy Bool
+
+maliciousDefaultName :: Text
+maliciousDefaultName = "deny-known-malicious"
+
+effectivePolicy :: PendingPolicy -> RulePolicy
+effectivePolicy (PendingPolicy policy active)
+    | active = policy
+    | otherwise = withoutMaliciousDefault policy
+
+resolvePendingPolicy :: PendingPolicy -> RulePatch -> Either [PolicyError] PendingPolicy
+resolvePendingPolicy (PendingPolicy policy active) (RulePatch patch) =
+    (`PendingPolicy` nextActive) <$> resolvePolicy policy (RulePatch descriptorPatch)
+  where
+    entry = Map.lookup maliciousDefaultName patch
+    nextActive = case entry of
+        Nothing -> active
+        Just declared -> fromMaybe (isJust (entryType declared) || active) (entryEnabled declared)
+    descriptorPatch = Map.adjust (\declared -> declared{entryEnabled = Just True}) maliciousDefaultName patch
+
 {- | Load the merged configuration: the defaults, the operator document, then the environment
 overlay, strongest-last. A mount is __active__ only where that overlay declares a key under it.
 -}
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
-    (defaultAst, baseline) <- decodeDefaultConfig defaultConfigBytes
+    (defaultAst, catalogue) <- decodeDefaultConfig defaultConfigBytes
     docAst <- parseDocumentAst mBytes
     let overridesAst = deepMerge docAst (buildEnvAst envVars)
     let merged = deepMerge defaultAst overridesAst
     parsed <- decodeAppConfig merged
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
-    globalPolicy <- resolveGlobalPolicy baseline overridesAst
+    globalPolicy <- resolveGlobalPolicy (PendingPolicy catalogue (isJust (advUrl (cfgAdvisories parsed)))) overridesAst
     validateMirrorSettings appConfig
     mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
@@ -185,17 +211,17 @@ decodeRulesPatch ast = case parseEither parseRulesPatch ast of
     Right patch -> Right patch
     Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
 
-resolveGlobalPolicy :: RulePolicy -> Value -> Either [ConfigError] RulePolicy
-resolveGlobalPolicy baseline overridesAst = do
+resolveGlobalPolicy :: PendingPolicy -> Value -> Either [ConfigError] PendingPolicy
+resolveGlobalPolicy shared overridesAst = do
     globalRulePatch <- decodeRulesPatch overridesAst
-    first sharedPolicyErrors (resolvePolicy baseline globalRulePatch)
+    first sharedPolicyErrors (resolvePendingPolicy shared globalRulePatch)
 
 sharedPolicyErrors :: [PolicyError] -> [ConfigError]
 sharedPolicyErrors errors
     | SuppressUnknownRule "deny-scripts" `elem` errors = [SharedPolicyErrors errors]
     | otherwise = [PolicyErrors errors]
 
-resolveMounts :: Value -> Value -> RulePolicy -> AppConfig -> Either [ConfigError] MountMap
+resolveMounts :: Value -> Value -> PendingPolicy -> AppConfig -> Either [ConfigError] MountMap
 resolveMounts defaultAst overridesAst globalPolicy appConfig =
     case partitionEithers (map resolveOne (Map.toAscList (cfgMounts appConfig))) of
         ([], mounts) -> Right (Map.fromList mounts)
@@ -261,9 +287,9 @@ mountRulePatch ast eco =
   where
     prefix = "mounts." <> ecosystemName eco <> ".rules parse error: "
 
-resolveMountPolicy :: RulePolicy -> RulePatch -> RulePatch -> Either [ConfigError] RulePolicy
+resolveMountPolicy :: PendingPolicy -> RulePatch -> RulePatch -> Either [ConfigError] RulePolicy
 resolveMountPolicy shared shipped declared =
-    first (pure . PolicyErrors) (resolvePolicy shared shipped >>= (`resolvePolicy` declared))
+    effectivePolicy <$> first (pure . PolicyErrors) (resolvePendingPolicy shared shipped >>= (`resolvePendingPolicy` declared))
 
 mountOf :: Ecosystem -> MountConfig -> RulePolicy -> MountMode -> Mount
 mountOf eco mcfg policy mode =
@@ -407,7 +433,7 @@ ageLine :: Ecosystem -> MaxAdvisoryAge -> Text
 ageLine eco limit =
     "mount \""
         <> ecosystemName eco
-        <> "\": CVE-based denial refuses on an advisory push older than "
+        <> "\": advisory denial refuses on an advisory push older than "
         <> renderDuration (maxAdvisoryAge limit)
         <> ", "
         <> renderBasis (maxAdvisoryAgeBasis limit)

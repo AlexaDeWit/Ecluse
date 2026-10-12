@@ -67,6 +67,15 @@ decodeWithdrawal withdrawn = withdrawalBytes withdrawn >>= either fail pure . ei
 
 spec :: Spec
 spec = describe "one OSV advisory record" $ do
+    it "preserves the captured primary MAL ID and removes every withdrawn affected point" $ do
+        bytes <- BS.readFile "test/fixtures/osv/malicious/MAL-2025-46969.json"
+        active <- either fail pure (eitherDecodeStrict bytes)
+        let extracted = extractFromAdvisory noScores active
+        map extCveId extracted `shouldBe` ["MAL-2025-46969"]
+        map extPackage extracted `shouldBe` ["chalk"]
+        map extSeverity extracted `shouldBe` [Nothing]
+        extractFromAdvisory noScores active{osvWithdrawn = Just (UTCTime (fromGregorian 2026 10 1) 0)} `shouldBe` []
+
     describe "osvExportUrl" $ do
         it "derives the per-ecosystem export under the base URL" $
             osvExportUrl "https://osv-vulnerabilities.storage.googleapis.com" "npm"

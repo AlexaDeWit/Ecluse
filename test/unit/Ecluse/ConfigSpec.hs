@@ -27,6 +27,7 @@ import Ecluse.Config (
     advisoryAgeLines,
     advisoryEpssLines,
     decodeDefaultConfig,
+    withoutMaliciousDefault,
     loadConfig,
     mountAdvisoryDenials,
     mountDatabaseRequirement,
@@ -41,7 +42,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext), Fact (Known), PrecededRule (prRule, ruleReach), RuleEvidence (evPublishedAt), RuleReach (AdmissionAndRevocation, AdmissionOnly), identityEvidence, revocationRules, ruleName)
+import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext), Fact (Known), FailureAlignment (..), PrecededRule (..), Rule (DenyIfKnownMalicious), RuleEvidence (evPublishedAt), RuleReach (AdmissionAndRevocation, AdmissionOnly), identityEvidence, revocationRules, ruleName)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
@@ -51,18 +52,20 @@ import Ecluse.Test.Support (expectRight)
 -- | Configuration loading and operator diagnostics.
 spec :: Spec
 spec = do
+    maliciousDefaultSpec
     describe "the embedded default configuration" $ do
         it "loads as a valid, self-contained backbone with no operator overlay" $
             loadConfig [] Nothing `shouldSatisfy` isRight
 
         it "ships exactly the expected shared baseline rules under their default names" $ do
-            (_, RulePolicy rules) <- expectRight (decodeDefaultConfig defaultConfigBytes)
-            Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
+            (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
+            Map.keys (policyRules catalogue) `shouldMatchList` ["deny-known-malicious", "min-age", "remediation-fast-track"]
+            Map.keys (policyRules (withoutMaliciousDefault catalogue)) `shouldMatchList` ["min-age", "remediation-fast-track"]
 
         it "applies every shared shipped rule at both phases" $ do
             (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             map ruleReach (Map.elems (policyRules baseline))
-                `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation]
+                `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation, AdmissionAndRevocation]
 
         it "returns a typed YAML refusal for malformed default bytes" $
             decodeDefaultConfig "rules: [" `shouldSatisfy` parseRefusal "config/default.yaml is invalid YAML: "
@@ -297,7 +300,7 @@ spec = do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
             cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just privateMountDoc)
             advisoryAgeLines cfg
-                `shouldBe` ["mount \"npm\": CVE-based denial refuses on an advisory push older than 6 days, derived a day ahead of this mount's earliest AllowIfOlderThan quarantine of 7 days"]
+                `shouldBe` ["mount \"npm\": advisory denial refuses on an advisory push older than 6 days, derived a day ahead of this mount's earliest AllowIfOlderThan quarantine of 7 days"]
 
         it "names an explicit maximum as its own basis" $ do
             cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "3600")]) (Just privateMountDoc)
@@ -308,7 +311,7 @@ spec = do
             advisoryAgeLines cfg `shouldSatisfy` any (T.isInfixOf "3 days, the shipped floor")
 
         it "reports nothing for a mount whose rules read no advisory database" $ do
-            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false},\"deny-known-malicious\":{\"enabled\":false}}")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldBe` []
 
         it "reports nothing at all without an advisory store, because nothing syncs" $ do
@@ -438,3 +441,42 @@ parseRefusal :: Text -> Either [ConfigError] a -> Bool
 parseRefusal prefix = \case
     Left [ParseError message] -> prefix `T.isPrefixOf` message
     _ -> False
+
+maliciousDefaultSpec :: Spec
+maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
+    let source = [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
+        malRules cfg = concatMap (filter ((== "DenyIfKnownMalicious") . ruleName . prRule) . mountPolicy) . Map.elems $ configMounts cfg
+        load sourceEnv global mount = expectConfig (pubUrlEnv <> sourceEnv) (Just (encodeUtf8 ("{\"rules\":" <> global <> ",\"mounts\":{\"pypi\":{\"rules\":" <> mount <> "}}}")))
+        off = "{\"deny-known-malicious\":{\"enabled\":false}}"
+        on = "{\"deny-known-malicious\":{\"enabled\":true}}"
+        partial = "{\"deny-known-malicious\":{\"precedence\":310,\"onUnavailable\":\"skip\",\"appliesTo\":[\"admission\"]}}"
+        expected = PrecededRule 300 AdmissionAndRevocation (DenyIfKnownMalicious FailDeny)
+    it "keeps the configured and source-free effective shared policies distinct" $ do
+        (_, catalogue) <- expectRight (decodeDefaultConfig defaultConfigBytes)
+        absent <- load [] "{}" "{}"
+        present <- load source "{}" "{}"
+        concatMap mountPolicy (Map.elems (configMounts absent)) `shouldMatchList` Map.elems (policyRules (withoutMaliciousDefault catalogue))
+        concatMap mountPolicy (Map.elems (configMounts present)) `shouldMatchList` Map.elems (policyRules catalogue)
+        malRules absent `shouldBe` []
+        malRules present `shouldBe` [expected]
+        map mountDatabaseRequirement (Map.elems (configMounts present)) `shouldBe` [DatabaseRequired]
+        map mountEpssRequirement (Map.elems (configMounts present)) `shouldBe` [EpssOptional]
+    for_ [[], source] $ \sourceEnv -> do
+        for_ [(off, "{}"), ("{}", off), (off, off), (off, partial)] $ \(global, mount) ->
+            it ("retains disable through patches " <> show (sourceEnv, global, mount)) $
+                load sourceEnv global mount >>= (\cfg -> malRules cfg `shouldBe` [])
+        it ("allows an explicit mount enable after global disable " <> show sourceEnv) $
+            load sourceEnv off on >>= (\cfg -> malRules cfg `shouldBe` [expected])
+        it ("retains disabled knobs when explicitly re-enabled " <> show sourceEnv) $
+            load sourceEnv partial on >>= (\cfg -> malRules cfg `shouldBe` [PrecededRule 310 AdmissionOnly (DenyIfKnownMalicious FailNoDecision)])
+        it ("recognises a manual declaration " <> show sourceEnv) $
+            load sourceEnv "{\"deny-known-malicious\":{\"type\":\"DenyIfKnownMalicious\"}}" "{}"
+                >>= (\cfg -> malRules cfg `shouldBe` [expected])
+        it ("does not disable a separately named manual rule " <> show sourceEnv) $
+            load sourceEnv "{\"manual-mal\":{\"type\":\"DenyIfKnownMalicious\"}}" off
+                >>= (\cfg -> malRules cfg `shouldBe` [expected])
+    it "does not activate an absent source through partial knobs" $
+        load [] partial "{}" >>= (\cfg -> malRules cfg `shouldBe` [])
+    it "reads a document source before selecting the default" $ do
+        cfg <- expectConfig pubUrlEnv (Just "{\"advisories\":{\"url\":\"s3://advisories/ecluse\"},\"mounts\":{\"pypi\":{\"enabled\":true}}}")
+        malRules cfg `shouldBe` [expected]

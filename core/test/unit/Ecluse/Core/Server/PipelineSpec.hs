@@ -23,6 +23,9 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Method, Status, hContentType, methodGet, methodHead, status200, status302, status304, status400, status401, status403, status404, status429, status500, status503, statusCode)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
+import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend))
@@ -70,6 +73,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpMemoryAdmissionOverdraw))
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, writeFakeContents),
@@ -86,7 +90,7 @@ import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDiver
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
-import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable)
+import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable, servingRuleDeps)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMemoryMeter)
@@ -158,6 +162,21 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         serveUnder npmCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 401)
         serveUnder apiKeyCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 503)
         serveUnder apiKeyCredential [("Authorization", "Bearer " <> edgeToken)] >>= (`shouldBe` 401)
+
+    it "refuses public metadata and direct artifacts on MAL evidence with structured audit IDs" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            rt <- mkRuntime noopMetricsPort
+            base <- depsFor port
+            let source = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("leftpad", AdvisoryRange "MAL-pipeline" Nothing Nothing Unbounded Nothing)])
+            rules <- prepare source (atDefaultPrecedence (Rules.DenyIfKnownMalicious Rules.FailDeny) : allowPolicy)
+            let deps = base{pdRules = rules}
+            metadata <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
+            statusCode (responseStatus metadata) `shouldBe` 403
+            (_, logged) <- captureJsonLog $ \logEnv -> do
+                artifact <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                statusCode (responseStatus artifact) `shouldBe` 403
+            for_ ["\"rule\":\"DenyIfKnownMalicious\"", "\"cve\":\"MAL-pipeline\""] $ \field ->
+                logged `shouldSatisfy` T.isInfixOf field
 
     it "serves a gated tarball and records an admit, driving the metrics and tracing ports" $
         testWithApplication (pure upstreamApp) $ \port -> do

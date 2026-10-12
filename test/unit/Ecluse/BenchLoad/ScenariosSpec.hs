@@ -12,7 +12,7 @@ import Test.Hspec
 import Ecluse.BenchLoad.Floors (Calibration (calNpmLatency, calOperatingPoint, calPypiLatency, calRuns), Enforcement (Enforced), Floors (floorsByShape, floorsCalibration), LatencyCeiling (lcCeilingMs), Pass (ConcurrencyOne, Loaded), RunFacts (..), RunnerReading (RunnerReading), Trigger (Scheduled), enforce, loadFloors, unheldViolations)
 import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
-import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, fixtures)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures)
 import Ecluse.BenchLoad.Selection (measurementConditionVersion)
 import Ecluse.BenchLoad.Support (twoCores)
 
@@ -29,6 +29,11 @@ spec = do
             checkFixtureCoverage (map (\fixture -> fixture{fixtureScenarios = []}) fixtures) `shouldSatisfy` isLeft
         it "rejects duplicate scenario identities" $
             checkFixtureCoverage (map (\fixture -> fixture{fixtureScenarios = fixtureScenarios fixture <> fixtureScenarios fixture}) fixtures) `shouldSatisfy` isLeft
+    describe "MAL qualification selection" $
+        for_ ["npm/merge-cold-mal-hit", "npm/merge-cold-mal-mixed-heavy", "pypi/index-cold-mal-hit", "pypi/index-cold-mal-mixed-heavy"] $ \name ->
+            it ("requires explicit selection for " <> toString name) $ do
+                isJust (findScenario name) `shouldBe` True
+                checkedCounts twoCores `shouldSatisfy` Set.notMember (name, Loaded)
 
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do

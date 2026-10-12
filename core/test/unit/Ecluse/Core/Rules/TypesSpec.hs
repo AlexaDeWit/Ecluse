@@ -84,6 +84,7 @@ vocabularySpec = describe "RuleType" $ do
             , (Types.AllowByIdentityType, "AllowByIdentity", AllowByIdentity "thing")
             , (Types.AllowIfRemediatesCveType, "AllowIfRemediatesCve", AllowIfRemediatesCve)
             , (Types.DenyIfCveType, "DenyIfCve", DenyIfCve (DenyIfCveParams 8 FailDeny))
+            , (Types.DenyIfKnownMaliciousType, "DenyIfKnownMalicious", DenyIfKnownMalicious FailDeny)
             , (Types.DenyIfEpssType, "DenyIfEpss", DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
             , (Types.DenyIfYankedType, "DenyIfYanked", DenyIfYanked)
             , (Types.DenyIfDeprecatedType, "DenyIfDeprecated", DenyIfDeprecated)
@@ -257,6 +258,7 @@ genRule =
         , pure DenyInstallTimeExecution
         , DenyByIdentity <$> genIdentity
         , DenyIfCve <$> (DenyIfCveParams <$> Gen.element [0, 7, 10] <*> genAlignment)
+        , DenyIfKnownMalicious <$> genAlignment
         , DenyIfEpss <$> (DenyIfEpssParams <$> Gen.element [0, 0.5, 1] <*> genAlignment)
         ]
   where
@@ -275,6 +277,7 @@ generated rule = case rule of
     DenyInstallTimeExecution -> rule
     DenyByIdentity{} -> rule
     DenyIfCve{} -> rule
+    DenyIfKnownMalicious{} -> rule
     DenyIfEpss{} -> rule
 
 -- | An npm or PyPI version with each fact read or unread, from complete evidence to identity alone.

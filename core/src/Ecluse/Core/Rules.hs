@@ -42,6 +42,7 @@ module Ecluse.Core.Rules (
     noSourceReporter,
 ) where
 
+import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime, diffUTCTime, getCurrentTime)
 import UnliftIO (evaluate, tryAny)
@@ -154,6 +155,10 @@ verdictSource = \case
     DenyIfCve params -> FromAdvisories (AdvisoryAlignment FailDeny (dicOnUnavailable params)) $ \case
         Nothing -> const (CannotVet (dicOnUnavailable params) NoDatabaseLoaded)
         Just (etag, advisories) -> advisoryDenyVerdict etag DenyMissingScore Cvss (dicMinCvss params) arSeverity advisories
+    DenyIfKnownMalicious alignment -> FromAdvisories (AdvisoryAlignment FailDeny alignment) $ \case
+        Nothing -> const (CannotVet alignment NoDatabaseLoaded)
+        Just (etag, advisories) ->
+            affectedVerdict etag KnownMalicious NoKnownMaliciousAdvisory (keepAdvisories isMalicious advisories)
     DenyIfEpss params -> FromAdvisories (AdvisoryAlignment FailDeny (dieOnUnavailable params)) $ \case
         Nothing -> const (CannotVet (dieOnUnavailable params) NoDatabaseLoaded)
         Just (etag, advisories) -> advisoryDenyVerdict etag AbstainMissingScore Epss (dieMinEpss params) arEpss advisories
@@ -173,13 +178,20 @@ ageVerdict minAge age
 
 -- The score filter and the abstention no version changes are built once per read.
 advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> AdvisoryScore -> Double -> (AdvisoryRange -> Maybe Double) -> PackageAdvisories -> RuleEvidence -> RuleVerdict
-advisoryDenyVerdict etag missing score threshold scoreOf advisories = \ev ->
-    case ordNub (map arCveId (affecting scored (evVersion ev))) of
-        [] -> unaffected
-        affected : more -> Deny (Just etag) (AffectedBy score threshold (mkAdvisoryIds (affected :| more)))
+advisoryDenyVerdict etag missing score threshold scoreOf advisories =
+    affectedVerdict etag (AffectedBy score threshold) (NotAffectedAtThreshold score) scored
   where
     scored = keepAdvisories (scoreAtLeast missing threshold . scoreOf) advisories
-    unaffected = NoDecision (NotAffectedAtThreshold score)
+
+isMalicious :: AdvisoryRange -> Bool
+isMalicious = maybe False (not . T.null) . T.stripPrefix "MAL-" . arCveId
+
+-- Filtering shares parsed segments and happens once before the returned version function.
+affectedVerdict :: DbEtag -> (AdvisoryIds -> Reason) -> Reason -> PackageAdvisories -> RuleEvidence -> RuleVerdict
+affectedVerdict etag affectedReason absentReason advisories ev =
+    case ordNub (map arCveId (affecting advisories (evVersion ev))) of
+        [] -> NoDecision absentReason
+        affected : more -> Deny (Just etag) (affectedReason (mkAdvisoryIds (affected :| more)))
 
 -- A version still inside any advisory's affected range, an unfixed one included, must not fast-track.
 classifyRanges :: PackageAdvisories -> RuleEvidence -> RuleVerdict
@@ -371,8 +383,9 @@ decideFromRead name packageRead shared reaching =
     heldFor shared package (caught (readShared packageRead package)) >>= \case
         Left escape -> pure (Left escape)
         Right advisory -> do
-            health <- caught (evaluate (readHealth name packageRead advisory reaching))
-            caught (resolveRead packageRead advisory <$ reportSource (prReporter packageRead) (either (SourceUnavailable name . RuleThrew) id health))
+            let resolved = resolveRead packageRead advisory
+            health <- caught (evaluate (readHealth name advisory (resolved reaching)))
+            caught (resolved <$ reportSource (prReporter packageRead) (either (SourceUnavailable name . RuleThrew) id health))
   where
     package = evName reaching
 
@@ -396,15 +409,13 @@ resolveRead packageRead = \case
     alignment = prAlignment packageRead
 
 -- Whether the read let one rule consult the source: only a rule that could not vet says it did not.
-readHealth :: Text -> PackageRead -> AdvisoryRead -> RuleEvidence -> SourceHealth
-readHealth name packageRead advisory reaching = case advisory of
-    RowsRead rows -> case prVerdict packageRead rows reaching of
-        CannotVet _ why -> SourceUnavailable name why
-        Allow _ -> SourceAnswered name
-        Deny _ _ -> SourceAnswered name
-        NoDecision _ -> SourceAnswered name
-    PushIneligible why -> SourceUnavailable name why
+readHealth :: Text -> AdvisoryRead -> RuleEvaluation -> SourceHealth
+readHealth name advisory resolved = case advisory of
     ReadGivenUp fault -> SourceUnavailable name (rfDetail fault)
+    _ -> case resolved of
+        Decided (CannotVet _ why) -> SourceUnavailable name why
+        Unavailable _ _ why -> SourceUnavailable name why
+        Decided _ -> SourceAnswered name
 
 -- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default trail
 -- and an admission's skipped-check evidence both read it back.

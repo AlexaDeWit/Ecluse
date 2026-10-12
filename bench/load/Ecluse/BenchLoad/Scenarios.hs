@@ -6,6 +6,7 @@
 module Ecluse.BenchLoad.Scenarios (
     fixtures,
     checkFixtureCoverage,
+    scenariosForSelection,
     findScenario,
     runsUnder,
     checkedCounts,
@@ -13,6 +14,7 @@ module Ecluse.BenchLoad.Scenarios (
 
 import Data.Set qualified as Set
 
+import Ecluse.BenchLoad.Advisories (maliciousQualification)
 import Ecluse.BenchLoad.Contract (LoadScope (FullLoad), loadCoverageGaps)
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scenarioServiceTime), UpstreamFixture (fixtureEcosystem, fixtureScenarios))
@@ -39,7 +41,7 @@ findScenario :: Text -> Maybe Scenario
 findScenario name =
     selectScenario
         name
-        [ (fixtureEcosystem fixture, [(scenarioName s, s) | s <- fixtureScenarios fixture])
+        [ (fixtureEcosystem fixture, [(scenarioName s, s) | s <- fixtureScenarios fixture <> qualificationScenarios fixture])
         | fixture <- fixtures
         ]
 
@@ -57,3 +59,15 @@ checkedCounts shape =
         , runsUnder shape s
         , whichPass <- Loaded : [ConcurrencyOne | scenarioServiceTime s]
         ]
+
+-- | Keep historical default runs intact. Extra qualification rows require explicit selection.
+scenariosForSelection :: Maybe [Text] -> UpstreamFixture -> [Scenario]
+scenariosForSelection selected fixture = fixtureScenarios fixture <> maybe [] (const (qualificationScenarios fixture)) selected
+
+qualificationScenarios :: UpstreamFixture -> [Scenario]
+qualificationScenarios fixture =
+    [ maliciousQualification (fixtureEcosystem fixture) mixed scenario
+    | scenario <- fixtureScenarios fixture
+    , scenarioName scenario `elem` ["merge-cold", "index-cold"]
+    , mixed <- [False, True]
+    ]

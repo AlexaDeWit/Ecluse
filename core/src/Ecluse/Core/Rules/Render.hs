@@ -82,6 +82,8 @@ renderReason = \case
     NoDatabaseToRemediate -> "no advisory database is loaded"
     AffectedBy score threshold ids ->
         "affected by " <> listed ids <> " (" <> scoreName score <> " >= " <> show threshold <> ")"
+    KnownMalicious ids -> "affected by " <> listed ids <> " (known malicious)"
+    NoKnownMaliciousAdvisory -> "no known malicious advisory affects this version"
     NotAffectedAtThreshold score ->
         "no advisory at or above the " <> scoreName score <> " threshold affects this version"
     RuleUnable rule inability -> rule <> ": " <> renderInability inability
@@ -147,7 +149,7 @@ durationComponents = go durationLadder
 renderDurationPart :: (Text, Integer) -> Text
 renderDurationPart (unit, n) = show n <> " " <> unit <> (if n == 1 then "" else "s")
 
--- | Read the advisory identifiers from a scored denial's rendered message, or return none.
+-- | Read the advisory identifiers from a scored or MAL denial's rendered message, or return none.
 cveIdsInReason :: Text -> [Text]
 cveIdsInReason message
     | T.null afterThreshold = []

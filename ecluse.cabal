@@ -35,6 +35,9 @@ extra-source-files:
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
+  test/fixtures/osv/malicious/*.json
+  test/fixtures/osv/malicious/README.md
+  test/fixtures/osv/malicious/LICENSE
   test/unit/fixtures/epss/*.gz
   test/unit/fixtures/osv/*.zip
   json-stream/LICENSE
