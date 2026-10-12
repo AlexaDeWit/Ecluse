@@ -121,7 +121,7 @@ sampleNumber syntax = \case
 
 identifier :: Bool -> Text -> Bool
 identifier metric input = case T.uncons input of
-    Just (first, rest) -> initial first && T.all (\c -> initial c || isDigit c) rest
+    Just (initialChar, rest) -> initial initialChar && T.all (\c -> initial c || isDigit c) rest
     Nothing -> False
   where
     initial c = isAsciiLower c || isAsciiUpper c || c == '_' || (metric && c == ':')
