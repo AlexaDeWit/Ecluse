@@ -1212,6 +1212,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
+    Ecluse.BenchLoad.EvidenceSpec
     Ecluse.BenchLoad.ExpositionSpec
     Ecluse.BenchLoad.FloorsSpec
     Ecluse.BenchLoad.LatencySpec
@@ -1965,6 +1966,7 @@ library ecluse-bench-load
   exposed-modules:
     Ecluse.BenchLoad.Contract
     Ecluse.BenchLoad.BootLines
+    Ecluse.BenchLoad.Evidence
     Ecluse.BenchLoad.Exposition
     Ecluse.BenchLoad.Floors
     Ecluse.BenchLoad.Latency
