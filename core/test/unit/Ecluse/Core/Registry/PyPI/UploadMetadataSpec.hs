@@ -44,6 +44,11 @@ spec = describe "parseUploadMetadata" $ do
     it "rejects invalid UTF-8 and oversized metadata" $ do
         parse (base <> BS.pack [255]) `shouldSatisfy` isLeft
         parseUploadMetadata 4 name version base `shouldSatisfy` isLeft
+    it "decodes the specified legacy Description fold while preserving description-body pipes" $ do
+        fmap uploadFields (parse (base <> "Description: first\r\n       |second\r\n       | third\r\n"))
+            `shouldSatisfy` either (const False) (elem ("description", "first\r\nsecond\r\n third"))
+        fmap uploadFields (parse (base <> "\nfirst\n       |literal body pipe\n"))
+            `shouldSatisfy` either (const False) (elem ("description", "first\n       |literal body pipe\n"))
     it "rejects conflicting description representations" $
         parse (base <> "Description: first\n\nsecond\n") `shouldSatisfy` isLeft
   where

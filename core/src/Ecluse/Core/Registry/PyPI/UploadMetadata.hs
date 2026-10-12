@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Checked per-distribution Core Metadata for the PyPI upload protocol.
 module Ecluse.Core.Registry.PyPI.UploadMetadata (
@@ -31,7 +32,7 @@ parseUploadMetadata cap package version bytes = do
     when (cap <= 0 || BS.length bytes > cap) (bad "Core Metadata exceeds its byte bound")
     document <- first (const (ParseError "Core Metadata is not UTF-8")) (TE.decodeUtf8' bytes)
     when (T.any invalidControl document) (bad "Core Metadata contains a control character")
-    fields <- parseHeaders (T.splitOn "\n" document)
+    fields <- parseHeaders document
     checked <- traverse projectField fields
     let counts = Map.fromListWith (+) [(name, 1 :: Int) | (name, _) <- fields]
     for_ (Map.toList counts) $ \(name, count) ->
@@ -55,30 +56,40 @@ uploadFields (PyPIUploadMetadata fields) = fields
 invalidControl :: Char -> Bool
 invalidControl character = (character < ' ' && character /= '\n' && character /= '\r' && character /= '\t') || character == '\DEL'
 
-parseHeaders :: [Text] -> Either ParseError [(Text, Text)]
-parseHeaders = go 0 []
+parseHeaders :: Text -> Either ParseError [(Text, Text)]
+parseHeaders = go 0 "" []
   where
-    go _ held [] = Right (finishFields held)
-    go count held (rawLine : remaining)
-        | rawLine `elem` ["", "\r"] = finish held remaining
-        | count >= (65536 :: Int) = bad "Core Metadata header count exceeds its bound"
-        | T.length rawLine > 16384 = bad "Core Metadata header line exceeds its bound"
-        | otherwise = addLine (count + 1) held (fromMaybe rawLine (T.stripSuffix "\r" rawLine)) remaining
+    go count previousEnding held remaining
+        | T.null remaining = Right (finishFields held)
+        | otherwise =
+            let (rawLine, suffix) = T.breakOn "\n" remaining
+                rest = T.drop 1 suffix
+                (line, ending) = maybe (rawLine, "\n") (,"\r\n") (T.stripSuffix "\r" rawLine)
+             in if rawLine `elem` ["", "\r"]
+                    then finish held rest
+                    else do
+                        when (count >= (65536 :: Int)) (bad "Core Metadata header count exceeds its bound")
+                        when (T.length rawLine > 16384) (bad "Core Metadata header line exceeds its bound")
+                        when (T.null suffix && ending == "\r\n") (bad "bare carriage return in Core Metadata")
+                        addLine (count + 1) previousEnding ending held line rest
     finish held body
-        | null body || body == [""] = Right (finishFields held)
+        | T.null body = Right (finishFields held)
         | any ((== "description") . fst) held = bad "description appears in both header and body"
-        | otherwise = Right (finishFields held <> [("description", T.intercalate "\n" body)])
-    finishFields = map (second (T.intercalate "\n" . reverse)) . reverse
-    addLine count held line remaining
+        | otherwise = Right (finishFields held <> [("description", body)])
+    finishFields = map finishField . reverse
+    finishField (name, pieces) =
+        let value = T.concat (reverse pieces)
+         in (name, if name == "description" then T.replace "\n       |" "\n" (T.replace "\r\n       |" "\r\n" value) else value)
+    addLine count previousEnding nextEnding held line remaining
+        | T.any (== '\r') line = bad "bare carriage return in Core Metadata"
         | T.isPrefixOf " " line || T.isPrefixOf "\t" line = case held of
             [] -> bad "Core Metadata starts with a continuation"
-            (name, pieces) : rest -> go count ((name, line : pieces) : rest) remaining
+            (name, pieces) : rest -> go count nextEnding ((name, (previousEnding <> line) : pieces) : rest) remaining
         | otherwise = do
             let (name, suffix) = T.breakOn ":" line
             when (T.null name || T.null suffix || not (T.all headerChar name)) (bad "malformed Core Metadata header")
             let value = T.dropWhile (`elem` [' ', '\t']) (T.drop 1 suffix)
-            when (T.any (== '\r') value) (bad "bare carriage return in Core Metadata")
-            go count ((T.toLower name, [value]) : held) remaining
+            go count nextEnding ((T.toLower name, [value]) : held) remaining
 
 headerChar :: Char -> Bool
 headerChar character = isAsciiLower character || isAsciiUpper character || isDigit character || character == '-'

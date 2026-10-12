@@ -2,7 +2,6 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
-{-# LANGUAGE TupleSections #-}
 
 -- | Bounded in-memory Core Metadata extraction from verified Python distributions.
 module Ecluse.Core.Registry.PyPI.Archive (archiveMetadata, archiveMemoryBytes) where
@@ -11,16 +10,12 @@ import Codec.Archive.Zip.Conduit.Types (ZipEntry (..))
 import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.BZip.Internal qualified as BZipStream
-import Codec.Compression.GZip qualified as GZip
 import Codec.Compression.Lzma qualified as Lzma
+import Codec.Compression.Zlib.Internal qualified as GZipStream
 import Conduit
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (throwError)
 import Data.Bits (shiftR, (.&.))
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
-import Data.ByteString.Short qualified as SBS
-import Data.Conduit.Tar qualified as Tar
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -28,6 +23,8 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.PyPI.Archive.Path (checkPath, metadataPath)
+import Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar)
 import Ecluse.Core.Registry.PyPI.Project (DistributionKind (..), FileCoordinate (..), fileCoordinate)
 import Ecluse.Core.Security.Limits (Limits (..))
 import Ecluse.Core.Version (Version)
@@ -55,16 +52,31 @@ archiveMemoryBytes limits = toInteger (maxMirrorArtifactBytes limits) + 6 * toIn
 archiveDecoder :: Text -> Maybe (Maybe (ByteString -> ConduitT () ByteString TarDecode ()))
 archiveDecoder filename
     | any (`T.isSuffixOf` filename) [".whl", ".zip"] = Just Nothing
-    | any (`T.isSuffixOf` filename) [".tar.gz", ".tgz"] = Just (Just (lazyChunks GZip.decompress))
+    | any (`T.isSuffixOf` filename) [".tar.gz", ".tgz"] = Just (Just gzipChunks)
     | ".tar.bz2" `T.isSuffixOf` filename = Just (Just bzipChunks)
-    | ".tar.xz" `T.isSuffixOf` filename = Just (Just (lazyChunks (Lzma.decompressWith xzParams)))
+    | ".tar.xz" `T.isSuffixOf` filename = Just (Just xzChunks)
     | otherwise = Nothing
-  where
-    -- A hostile XZ dictionary must not allocate outside the archive traversal budget.
-    xzParams = Lzma.defaultDecompressParams{Lzma.decompressMemLimit = 64 * 1024 * 1024, Lzma.decompressAutoDecoder = False}
 
-lazyChunks :: (BSL.ByteString -> BSL.ByteString) -> ByteString -> ConduitT () ByteString TarDecode ()
-lazyChunks decoder = yieldMany . BSL.toChunks . decoder . BSL.fromStrict
+xzChunks :: ByteString -> ConduitT () ByteString TarDecode ()
+xzChunks bytes = liftIO (Lzma.decompressIO params) >>= go bytes
+  where
+    params = Lzma.defaultDecompressParams{Lzma.decompressMemLimit = 64 * 1024 * 1024, Lzma.decompressAutoDecoder = False}
+    go input = \case
+        Lzma.DecompressInputRequired supply -> liftIO (supply input) >>= go BS.empty
+        Lzma.DecompressOutputAvailable chunk next -> yield chunk >> liftIO next >>= go input
+        Lzma.DecompressStreamError _ -> lift (throwError (ParseError "malformed, truncated, or excessive-memory XZ archive"))
+        Lzma.DecompressStreamEnd rest ->
+            unless (BS.null rest && BS.null input) (lift (throwError (ParseError "XZ archive has trailing compressed bytes")))
+
+gzipChunks :: ByteString -> ConduitT () ByteString TarDecode ()
+gzipChunks bytes = go bytes (GZipStream.decompressIO GZipStream.gzipFormat GZipStream.defaultDecompressParams)
+  where
+    go input = \case
+        GZipStream.DecompressInputRequired supply -> liftIO (supply input) >>= go BS.empty
+        GZipStream.DecompressOutputAvailable chunk next -> yield chunk >> liftIO next >>= go input
+        GZipStream.DecompressStreamError _ -> lift (throwError (ParseError "malformed or truncated gzip archive"))
+        GZipStream.DecompressStreamEnd rest ->
+            unless (BS.null rest && BS.null input) (lift (throwError (ParseError "gzip archive has trailing compressed bytes")))
 
 bzipChunks :: ByteString -> ConduitT () ByteString TarDecode ()
 bzipChunks bytes = go bytes (BZipStream.decompressIO BZip.defaultDecompressParams)
@@ -86,23 +98,6 @@ data Scan = Scan
 
 emptyScan :: Scan
 emptyScan = Scan 0 0 0 Set.empty Nothing
-
-checkPath :: Text -> Either ParseError [Text]
-checkPath path = do
-    let parts = T.splitOn "/" (fromMaybe path (T.stripSuffix "/" path))
-    when (T.length path > 4096 || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') path) (bad "unsafe archive path")
-    when (any (`elem` ["", ".", ".."]) parts) (bad "unsafe archive path")
-    pure parts
-
-metadataPath :: PackageName -> Version -> DistributionKind -> [Text] -> Either ParseError Bool
-metadataPath package version kind parts = case (kind, parts) of
-    (Wheel, [root, "METADATA"]) | Just stem <- T.stripSuffix ".dist-info" root -> identity stem
-    (Sdist, [root, "PKG-INFO"]) -> identity root
-    _ -> Right False
-  where
-    identity stem = case fileCoordinate package (stem <> ".tar.gz") of
-        Just coordinate | fcVersion coordinate == version -> Right True
-        _ -> bad "archive metadata directory disagrees with admitted identity"
 
 startEntry :: Limits -> Text -> Scan -> Either ParseError Scan
 startEntry limits path scan = do
@@ -126,119 +121,6 @@ keepMetadata limits bytes scan
 
 finishScan :: Scan -> Either ParseError ByteString
 finishScan scan = maybe (bad "archive has no Core Metadata") Right (scanMetadata scan)
-
-type TarDecode = ExceptT ParseError IO
-
-data TarSelection = TarDiscard | TarMetadata | TarPax | TarLongName
-
-extractTar :: Limits -> PackageName -> Version -> ConduitT () ByteString TarDecode () -> IO (Either ParseError ByteString)
-extractTar limits package version inflated = do
-    total <- newIORef 0
-    result <-
-        runExceptT . runConduit $
-            inflated .| boundInflated limits total .| (Tar.untarChunksRaw >> checkTarTail) .| walk emptyScan Nothing TarDiscard [] 0 0
-    consumed <- readIORef total
-    pure $ do
-        (bytes, minimumSize) <- result
-        unless (consumed >= minimumSize) (bad "tar archive has no complete trailer")
-        pure bytes
-  where
-    walk scan pending selected chunks retained lastEnd =
-        await >>= \case
-            Nothing -> do
-                (finished, unfinished) <- liftEitherTar (flushTar limits scan pending selected chunks)
-                when (isJust unfinished) (lift (throwError (ParseError "orphan extended tar header")))
-                bytes <- liftEitherTar (finishScan finished)
-                pure (bytes, lastEnd + 1024)
-            Just (Tar.ChunkException _) -> lift (throwError (ParseError "malformed or truncated tar archive"))
-            Just (Tar.ChunkHeader header) -> do
-                (finished, override) <- liftEitherTar (flushTar limits scan pending selected chunks)
-                (next, selection) <- liftEitherTar (beginTar limits package version finished override header)
-                let size = toInteger (Tar.headerPayloadSize header)
-                    end = toInteger (Tar.headerPayloadOffset header) + size + (512 - size `mod` 512) `mod` 512
-                    pending' = case selection of TarPax -> override; TarLongName -> override; _ -> Nothing
-                walk next pending' selection [] 0 end
-            Just (Tar.ChunkPayload _ chunk) -> case selected of
-                TarDiscard -> walk scan pending selected [] 0 lastEnd
-                _ -> do
-                    let cap = case selected of TarMetadata -> maxMetadataBytes limits; _ -> 16384
-                    when (BS.length chunk > cap - retained) (lift (throwError (ParseError "tar metadata or extended header exceeds its bound")))
-                    walk scan pending selected (chunk : chunks) (retained + BS.length chunk) lastEnd
-
-liftEitherTar :: Either ParseError a -> ConduitT i o TarDecode a
-liftEitherTar = either (lift . throwError) pure
-
-boundInflated :: Limits -> IORef Integer -> ConduitT ByteString ByteString TarDecode ()
-boundInflated limits total = awaitForever $ \chunk -> do
-    seen <- liftIO (readIORef total)
-    let next = seen + toInteger (BS.length chunk)
-    when (next > toInteger (maxMirrorArtifactBytes limits)) (lift (throwError (ParseError "archive inflated bytes exceed their bound")))
-    liftIO (writeIORef total next)
-    yield chunk
-
-checkTarTail :: ConduitT ByteString Tar.TarChunk TarDecode ()
-checkTarTail = awaitForever $ \chunk ->
-    unless (BS.all (== 0) chunk) (lift (throwError (ParseError "tar archive has trailing nonzero bytes")))
-
-beginTar :: Limits -> PackageName -> Version -> Scan -> Maybe Text -> Tar.Header -> Either ParseError (Scan, TarSelection)
-beginTar limits package version scan pending header = do
-    let kind = Tar.headerFileType header
-        extended = case kind of Tar.FTOther code -> code == 120 || code == 76; _ -> False
-        size = toInteger (Tar.headerPayloadSize header)
-    unless (SBS.fromShort (Tar.headerMagicVersion header) `elem` [BS.replicate 8 0, "ustar\NUL00", "ustar  \NUL"]) (bad "unsupported tar header format")
-    when (size < 0 || size > toInteger (maxMirrorArtifactBytes limits)) (bad "tar entry size exceeds its bound")
-    when (scanCount scan >= maxArtifactCount limits) (bad "archive entry count exceeds its bound")
-    if extended
-        then do
-            when (isJust pending) (bad "ambiguous extended tar headers")
-            when (size > 16384) (bad "extended tar header exceeds its bound")
-            pure (scan{scanCount = scanCount scan + 1}, if Tar.headerLinkIndicator header == 120 then TarPax else TarLongName)
-        else do
-            base <- utf8 (tarPath header)
-            let path = fromMaybe base pending
-            next <- startEntry limits path scan
-            selected <- checkPath path >>= metadataPath package version Sdist
-            case kind of
-                Tar.FTNormal -> pure (next, if selected then TarMetadata else TarDiscard)
-                Tar.FTDirectory | size == 0 -> pure (next, TarDiscard)
-                _ -> bad "unsupported tar entry type or link"
-
-flushTar :: Limits -> Scan -> Maybe Text -> TarSelection -> [ByteString] -> Either ParseError (Scan, Maybe Text)
-flushTar limits scan pending selection chunks = case selection of
-    TarDiscard -> Right (scan, pending)
-    TarMetadata -> (,pending) <$> keepMetadata limits bytes scan
-    TarPax -> (scan,) <$> paxPath bytes
-    TarLongName -> do
-        path <- utf8 (BS.takeWhile (/= 0) bytes)
-        void (checkPath path)
-        pure (scan, Just path)
-  where
-    bytes = BS.concat (reverse chunks)
-
-tarPath :: Tar.Header -> ByteString
-tarPath header
-    | BS.null prefix = suffix
-    | otherwise = prefix <> "/" <> suffix
-  where
-    prefix = SBS.fromShort (Tar.headerFileNamePrefix header)
-    suffix = SBS.fromShort (Tar.headerFileNameSuffix header)
-
-paxPath :: ByteString -> Either ParseError (Maybe Text)
-paxPath = go Map.empty
-  where
-    go fields bytes
-        | BS.null bytes = traverse utf8 (Map.lookup "path" fields)
-        | otherwise = do
-            let (digits, separated) = BS.break (== 32) bytes
-            when (BS.null digits || BS.length digits > 6 || not (BS.all (\c -> c >= 48 && c <= 57) digits)) (bad "malformed pax record length")
-            let size = BS.foldl' (\n c -> n * 10 + fromIntegral c - 48) 0 digits
-            when (size <= BS.length digits + 3 || size > BS.length bytes || BS.null separated) (bad "truncated pax record")
-            let record = BS.take (size - BS.length digits - 1) (BS.drop 1 separated)
-                (key, value) = BS.break (== 61) record
-            unless (BS.isSuffixOf "\n" record && not (BS.null value)) (bad "malformed pax record")
-            when (Map.member key fields) (bad "duplicate pax attribute")
-            unless (key `elem` ["path", "mtime", "atime", "ctime", "uid", "gid", "uname", "gname", "comment", "charset"]) (bad "unsupported pax attribute")
-            go (Map.insert key (BS.take (BS.length value - 2) (BS.drop 1 value)) fields) (BS.drop size bytes)
 
 extractZip :: Limits -> PackageName -> Version -> DistributionKind -> ByteString -> IO (Either ParseError ByteString)
 extractZip limits package version kind bytes = case zipDirectory limits bytes of
@@ -276,17 +158,46 @@ extractZip limits package version kind bytes = case zipDirectory limits bytes of
 zipDirectory :: Limits -> ByteString -> Either ParseError [Text]
 zipDirectory limits bytes = do
     end <- findZipEnd bytes
-    let footer = BS.drop end bytes
+    (directoryEnd, count, size, offset) <- directoryBounds bytes end
+    when (count > toInteger (maxArtifactCount limits) || size > toInteger (maxMetadataBytes limits)) (bad "ZIP directory exceeds its bound")
+    unless (offset + size == directoryEnd) (bad "ZIP directory offset is inconsistent")
+    entries <- readDirectory bytes (fromInteger count) (BS.take (fromInteger size) (BS.drop (fromInteger offset) bytes))
+    let ordered = sortOn (\(start, _, _) -> start) entries
+    finalOffset <- foldM advance 0 ordered
+    unless (finalOffset == offset) (bad "ZIP local records do not fill the declared file area")
+    pure [name | (_, _, name) <- ordered]
+  where
+    advance expected (start, end, _)
+        | start == expected && end > start = Right end
+        | otherwise = bad "ZIP central offset does not identify the actual next local entry"
+
+directoryBounds :: ByteString -> Int -> Either ParseError (Integer, Integer, Integer, Integer)
+directoryBounds archive end = do
+    let footer = BS.drop end archive
         count = little 10 2 footer
         size = little 12 4 footer
         offset = little 16 4 footer
+        locator = BS.take 20 (BS.drop (end - 20) archive)
     unless (little 4 2 footer == 0 && little 6 2 footer == 0 && little 8 2 footer == count) (bad "multi-disk ZIP is unsupported")
-    when (count >= 65535 || count > toInteger (maxArtifactCount limits) || size > toInteger (maxMetadataBytes limits)) (bad "ZIP directory exceeds its bound")
-    unless (offset + size == toInteger end) (bad "ZIP directory offset is inconsistent")
-    entries <- readDirectory bytes (fromInteger count) (BS.take (fromInteger size) (BS.drop (fromInteger offset) bytes))
-    pure (map snd (sortOn fst entries))
+    if end >= 20 && BS.isPrefixOf "PK\x06\x07" locator
+        then do
+            unless (little 4 4 locator == 0 && little 16 4 locator == 1) (bad "multi-disk ZIP64 is unsupported")
+            let position = little 8 8 locator
+            when (position > toInteger end) (bad "ZIP64 end offset is outside its archive")
+            let record = BS.drop (fromInteger position) archive
+                recordSize = little 4 8 record
+                count64 = little 32 8 record
+                size64 = little 40 8 record
+                offset64 = little 48 8 record
+            unless (BS.length record >= 56 && BS.isPrefixOf "PK\x06\x06" record && recordSize >= 44 && recordSize <= 16384 && position + 12 + recordSize == toInteger (end - 20)) (bad "malformed ZIP64 end record")
+            unless (little 16 4 record == 0 && little 20 4 record == 0 && little 24 8 record == count64) (bad "inconsistent ZIP64 disk inventory")
+            unless ((count == 65535 || count == count64) && (size == 4294967295 || size == size64) && (offset == 4294967295 || offset == offset64)) (bad "ZIP end records disagree")
+            pure (position, count64, size64, offset64)
+        else do
+            when (count == 65535 || size == 4294967295 || offset == 4294967295) (bad "missing ZIP64 end record")
+            pure (toInteger end, count, size, offset)
 
-readDirectory :: ByteString -> Int -> ByteString -> Either ParseError [(Integer, Text)]
+readDirectory :: ByteString -> Int -> ByteString -> Either ParseError [(Integer, Integer, Text)]
 readDirectory archive count bytes
     | count == 0 = if BS.null bytes then Right [] else bad "ZIP directory count is inconsistent"
     | BS.length bytes < 46 || not (BS.isPrefixOf "PK\x01\x02" bytes) = bad "truncated ZIP directory"
@@ -300,36 +211,68 @@ readDirectory archive count bytes
         when (mode /= 0 && mode /= 32768 && mode /= 16384) (bad "ZIP contains a link or special file")
         name <- zipName (little 8 2 bytes) (BS.take nameSize (BS.drop 46 bytes))
         void (checkPath name)
-        checkLocalHeader archive bytes name
+        extra <- zip64Extra (BS.take extraSize (BS.drop (46 + nameSize) bytes))
+        (inflated, rest1) <- expanded 4294967295 (little 24 4 bytes) 8 extra
+        (compressed, rest2) <- expanded 4294967295 (little 20 4 bytes) 8 rest1
+        (offset, rest3) <- expanded 4294967295 (little 42 4 bytes) 8 rest2
+        (disk, _) <- expanded 65535 (little 34 2 bytes) 4 rest3
+        unless (disk == 0) (bad "multi-disk ZIP member is unsupported")
+        end <- checkLocalHeader archive bytes name offset compressed inflated
         remaining <- readDirectory archive (count - 1) (BS.drop total bytes)
-        pure ((little 42 4 bytes, name) : remaining)
+        pure ((offset, end, name) : remaining)
 
-checkLocalHeader :: ByteString -> ByteString -> Text -> Either ParseError ()
-checkLocalHeader archive central name = do
-    let offset = little 42 4 central
-        local = BS.drop (fromInteger offset) archive
+zip64Extra :: ByteString -> Either ParseError ByteString
+zip64Extra = go Nothing
+  where
+    go found bytes
+        | BS.null bytes = Right (fromMaybe BS.empty found)
+        | BS.length bytes < 4 = bad "truncated ZIP extra field"
+        | otherwise = do
+            let tag = little 0 2 bytes
+                size = fromInteger (little 2 2 bytes)
+                value = BS.take size (BS.drop 4 bytes)
+            when (size > BS.length bytes - 4) (bad "truncated ZIP extra field")
+            when (tag == 1 && isJust found) (bad "ambiguous ZIP64 extra field")
+            go (if tag == 1 then Just value else found) (BS.drop (size + 4) bytes)
+
+expanded :: Integer -> Integer -> Int -> ByteString -> Either ParseError (Integer, ByteString)
+expanded sentinel original width bytes
+    | original /= sentinel = Right (original, bytes)
+    | BS.length bytes < width = bad "missing ZIP64 size or offset"
+    | otherwise = Right (little 0 width bytes, BS.drop width bytes)
+
+checkLocalHeader :: ByteString -> ByteString -> Text -> Integer -> Integer -> Integer -> Either ParseError Integer
+checkLocalHeader archive central name offset compressed inflated = do
+    when (offset > toInteger (BS.length archive)) (bad "ZIP directory points outside local entries")
+    let local = BS.drop (fromInteger offset) archive
         flags = little 8 2 central
         nameSize = fromInteger (little 26 2 local)
-    when (offset > toInteger (BS.length archive) || BS.length local < 30 || not (BS.isPrefixOf "PK\x03\x04" local)) (bad "ZIP directory points outside local entries")
+        extraSize = fromInteger (little 28 2 local)
+        dataEnd = offset + 30 + toInteger nameSize + toInteger extraSize + compressed
+    when (BS.length local < 30 || not (BS.isPrefixOf "PK\x03\x04" local) || nameSize > 4096 || extraSize > 16384 || dataEnd > toInteger (BS.length archive)) (bad "invalid ZIP local entry extent")
     unless (little 6 2 local == flags && little 8 2 local == little 10 2 central) (bad "ZIP entry compression flags disagree")
     localName <- zipName flags (BS.take nameSize (BS.drop 30 local))
     unless (localName == name) (bad "ZIP directory names another local entry")
-    when (flags .&. 8 /= 0) (checkDescriptor archive central local)
-    when (flags .&. 8 == 0) $ do
-        unless (little 14 4 local == little 16 4 central) (bad "ZIP entry CRC declarations disagree")
-        for_ [(18, 20), (22, 24)] $ \(localOffset, centralOffset) ->
-            unless (little localOffset 4 local == 4294967295 || little localOffset 4 local == little centralOffset 4 central) (bad "ZIP entry size declarations disagree")
+    extra <- zip64Extra (BS.take extraSize (BS.drop (30 + nameSize) local))
+    if flags .&. 8 /= 0
+        then do
+            let width = if little 18 4 local == 4294967295 || little 22 4 local == 4294967295 || not (BS.null extra) then 8 else 4
+            descriptorSize <- checkDescriptor (BS.drop (fromInteger dataEnd) archive) (little 16 4 central) compressed inflated width
+            pure (dataEnd + descriptorSize)
+        else do
+            unless (little 14 4 local == little 16 4 central) (bad "ZIP entry CRC declarations disagree")
+            (localInflated, rest) <- expanded 4294967295 (little 22 4 local) 8 extra
+            (localCompressed, _) <- expanded 4294967295 (little 18 4 local) 8 rest
+            unless (localInflated == inflated && localCompressed == compressed) (bad "ZIP entry size declarations disagree")
+            pure dataEnd
 
-checkDescriptor :: ByteString -> ByteString -> ByteString -> Either ParseError ()
-checkDescriptor archive central local = do
-    let compressed = little 20 4 central
-        inflated = little 24 4 central
-        offset = little 42 4 central + 30 + little 26 2 local + little 28 2 local + compressed
-        raw = BS.drop (fromInteger offset) archive
-        descriptor = fromMaybe raw (BS.stripPrefix "PK\x07\x08" raw)
-        width = if little 18 4 local == 4294967295 || little 22 4 local == 4294967295 then 8 else 4
-    when (compressed == 4294967295 || inflated == 4294967295) (bad "ZIP64 central entries are unsupported")
-    unless (BS.length descriptor >= 4 + 2 * width && little 0 4 descriptor == little 16 4 central && little 4 width descriptor == compressed && little (4 + width) width descriptor == inflated) (bad "ZIP descriptor disagrees with central directory")
+checkDescriptor :: ByteString -> Integer -> Integer -> Integer -> Int -> Either ParseError Integer
+checkDescriptor raw crc compressed inflated width = case matching of
+    [size] -> Right size
+    _ -> bad "ZIP descriptor disagrees with central directory"
+  where
+    candidates = (0, raw) : [(4, BS.drop 4 raw) | BS.isPrefixOf "PK\x07\x08" raw]
+    matching = [toInteger (prefix + 4 + 2 * width) | (prefix, descriptor) <- candidates, BS.length descriptor >= 4 + 2 * width, little 0 4 descriptor == crc, little 4 width descriptor == compressed, little (4 + width) width descriptor == inflated]
 
 zipName :: Integer -> ByteString -> Either ParseError Text
 zipName flags bytes
