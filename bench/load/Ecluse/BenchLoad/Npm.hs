@@ -42,19 +42,18 @@ import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageNam
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
-        jobArtifactFilename,
-        jobArtifactUrl,
         jobPackage,
         jobTraceContext,
+        jobTriggerFilename,
         jobVersion
     ),
     MirrorQueue (receive),
     enqueue,
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Registry (BodyOutcome (UnreadStatus))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..))
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
+import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
@@ -78,7 +77,7 @@ import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsa
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
-import Ecluse.Test.Worker (admitAllPolicies)
+import Ecluse.Test.Worker (admitAllPolicies, workerSourceAt)
 
 -- | The npm load fixture covers metadata, artifact relays, cache churn, and mirror jobs.
 npmFixture :: UpstreamFixture
@@ -311,10 +310,10 @@ workerScenario =
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
                             , wrInjectTraceContext = id
-                            , wrPolicies = admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes)
+                            , wrPolicies = workerSourceAt artUrl (admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes))
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
-                    job = mirrorJob artUrl
+                    job = mirrorJob
                 k (Target Nothing (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter)))
     )
         { scenarioInProcess = True
@@ -348,23 +347,24 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
                 t1 <- getMonotonicTime
                 go deadline ((t1 - t0) : acc)
 
-mirrorJob :: Text -> MirrorJob
-mirrorJob url =
+mirrorJob :: MirrorJob
+mirrorJob =
     MirrorJob
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
-        , jobArtifactUrl = loopbackRegistryUrl url
-        , jobArtifactFilename = unsafeFilename (packageText <> "-1.0.0.tgz")
+        , jobTriggerFilename = Just (unsafeFilename (packageText <> "-1.0.0.tgz"))
         , jobTraceContext = Nothing
         }
 
 succeedingPublishClient :: IORef Int -> MirrorPublish
 succeedingPublishClient counter =
     MirrorPublish
-        { mpPrepareArtifact = \_ _ _ _ -> Right $ PreparedMirror $ \_ _ -> do
-            atomicModifyIORef' counter (\n -> (n + 1, ()))
-            pure (Right ())
-        , mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
+        { mpPrepareVersion = \name version doc -> do
+            (inventory, _) <- prepareNpmSource name version doc
+            pure $ PreparedMirrorVersion inventory $ \_ _ -> pure . Right $ PreparedMirrorUpload $ \_ -> do
+                atomicModifyIORef' counter (\n -> (n + 1, ()))
+                pure (Right ())
+        , mpProbeInventory = const (pure (Left MetadataAbsent))
         }
 
 jobHashes :: LByteString -> NonEmpty Hash

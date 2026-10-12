@@ -4,24 +4,42 @@
 
 module Ecluse.Core.QueueSpec (spec) where
 
+import Data.Text qualified as T
 import Test.Hspec
 
+import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
     DeliveryBudget (DeliveryBudget),
+    MirrorJob (jobTriggerFilename),
     QueueMessage (QueueMessage, msgJob, msgLease, msgReceipt, msgReceiveCount),
+    decodeJob,
     deliveryBudgetSpent,
     effectiveDeliveryBudget,
+    encodeJob,
     mkReceiptHandle,
  )
+import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Queue (sampleJob)
 
-{- | Tests for the contract module's delivery-budget verdicts. The buffered producer hand-off
-lives beside it in "Ecluse.Core.Queue.BufferSpec", the in-memory backend in
-"Ecluse.Core.Queue.MemorySpec".
--}
+-- | Version triggers, wire compatibility, and delivery-budget decisions.
 spec :: Spec
 spec = do
+    describe "whole-version queue compatibility" $ do
+        it "encodes v2 without an artifact location" $ do
+            let body = encodeJob sampleJob
+            body `shouldSatisfy` T.isInfixOf "\"schemaVersion\":2"
+            body `shouldSatisfy` (not . T.isInfixOf "artifactUrl")
+            decodeJob packageName mkRegistryUrl body `shouldBe` Right sampleJob
+        it "accepts a v2 version trigger without a filename or legacy URL validation" $
+            decodeJob packageName (const (Left "legacy URL validator consulted")) versionBody `shouldBe` Right sampleJob{jobTriggerFilename = Nothing}
+        it "validates and discards a legacy location while preserving the trigger" $
+            decodeJob packageName mkRegistryUrl legacyBody `shouldBe` Right sampleJob
+        it "still refuses an invalid legacy location" $
+            decodeJob packageName (const (Left "invalid legacy location")) legacyBody `shouldSatisfy` isLeft
+        it "refuses unsupported wire schemas" $
+            decodeJob packageName mkRegistryUrl (T.replace "\"schemaVersion\":2" "\"schemaVersion\":3" versionBody) `shouldSatisfy` isLeft
     describe "deliveryBudgetSpent -- the shared redelivery verdict" $ do
         it "grants every delivery below the budget" $
             map (deliveryBudgetSpent (DeliveryBudget 5) . deliveredTimes) [1, 2, 3, 4]
@@ -65,3 +83,12 @@ spec = do
     deliveredTimes :: Int -> QueueMessage
     deliveredTimes n =
         QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n, msgLease = Nothing}
+
+versionBody :: Text
+versionBody = "{\"schemaVersion\":2,\"ecosystem\":\"npm\",\"name\":\"thing\",\"version\":\"1.0.0\"}"
+
+legacyBody :: Text
+legacyBody = "{\"ecosystem\":\"npm\",\"name\":\"thing\",\"version\":\"1.0.0\",\"filename\":\"thing-1.0.0.tgz\",\"artifactUrl\":\"https://old.example/thing.tgz\"}"
+
+packageName :: Ecosystem -> Maybe Text -> Text -> Either Text PackageName
+packageName ecosystem scope name = Right (mkPackageName ecosystem (mkScope <$> scope) name)

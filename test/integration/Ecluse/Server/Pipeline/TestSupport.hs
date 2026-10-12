@@ -118,7 +118,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (
-    MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobVersion),
+    MirrorJob (jobPackage, jobTriggerFilename, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
  )
@@ -127,7 +127,6 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Path (unFilename)
@@ -725,8 +724,8 @@ admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
 
 -- A flat projection of a mirror job, for an order-stable equality assertion over
 -- the coordinates the queued worker consumes.
-jobShape :: MirrorJob -> (PackageName, Version, Text, Text)
-jobShape job = (jobPackage job, jobVersion job, registryUrlText (jobArtifactUrl job), unFilename (jobArtifactFilename job))
+jobShape :: MirrorJob -> (PackageName, Version, Maybe Text)
+jobShape job = (jobPackage job, jobVersion job, unFilename <$> jobTriggerFilename job)
 
 newFailingQueue :: IO MirrorQueue
 newFailingQueue = do

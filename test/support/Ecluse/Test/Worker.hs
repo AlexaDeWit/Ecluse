@@ -2,15 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Worker-test fixtures: the shared npm re-evaluation bundle, and a ready-made
-admit-everything policy over it. The worker re-runs current policy against a job's version
-before mirroring it, so any end-to-end worker test must supply per-ecosystem policies.
-'npmPolicyWith' is the one 'WorkerPolicy' wiring they share: npm's real by-URL request
-formation, the SHA-256 admission floor, and an open tarball-host gate, with the clock, byte
-cap, publish capability, resolver, and rules left to the caller.
+{- | Shared worker policy fixtures use production artifact request formation and admission floors.
+Source locations belong to the resolver, independently of version triggers.
 -}
 module Ecluse.Test.Worker (
     npmPolicyWith,
+    workerSourceAt,
     admitAllPolicies,
     admitAllPoliciesCapped,
     mirrorPoliciesUnder,
@@ -21,8 +18,8 @@ import Data.Time (UTCTime, getCurrentTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 
-import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
-import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artUrl), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -30,7 +27,8 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpEgressUrl, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Rules (admitRule)
@@ -57,6 +55,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
         , -- npm's own artifact capability, the record the composition root carries onto the
           -- bundle, so the fetch path forms requests as production does.
           wpArtifact = adapterArtifact npmAdapter
+        , wpEgressUrl = Right . loopbackRegistryUrl
         , wpPublish = publish
         , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
         , wpNow = clock
@@ -101,3 +100,15 @@ mirrorPoliciesCapped rules artifactMaxBytes publish currentDigests =
                         , artHashes = toList currentDigests
                         }
             }
+
+-- | Point a fixture's admitted artifact locations at its public stub instead of placing URLs in jobs.
+workerSourceAt :: Text -> WorkerPolicies -> WorkerPolicies
+workerSourceAt location = Map.map relocate
+  where
+    relocate policy = policy{wpResolveVersion = \name version -> relocateEvaluation location <$> wpResolveVersion policy name version}
+
+relocateEvaluation :: Text -> VersionEvaluation -> VersionEvaluation
+relocateEvaluation location (VersionPresent doc latest) =
+    let details = vdDetails doc
+     in VersionPresent doc{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artUrl = location}) (pkgArtifacts details)}} latest
+relocateEvaluation _ other = other

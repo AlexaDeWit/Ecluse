@@ -20,7 +20,7 @@ import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
-import Ecluse.Core.Package (Artifact (artSize), Hash, pkgEcosystem)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), pkgEcosystem)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
         AdmissionAdmit,
@@ -33,36 +33,40 @@ import Ecluse.Core.Package.Admission (
     admissionTransience,
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion))
+import Ecluse.Core.Package.Integrity (VersionIntegrity (..), classifyDigests, partitionByFloor)
+import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTraceContext, jobTriggerFilename, jobVersion))
 import Ecluse.Core.Registry (
-    BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
-    ParseError (ParseError),
-    PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
+    PublishFault (PublishFetch, PublishIntegrityMismatch, PublishRejected, PublishSourceUnavailable),
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
+    MetadataError (..),
     VersionDoc (vdDetails),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     versionTransience,
  )
+import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpPrepareArtifact, mpProbeMetadata),
-    PreparedMirror (publishPrepared),
-    PublishPlan (PublishPlan, ppLatest),
+    MirrorPublish (mpPrepareVersion, mpProbeInventory),
+    PreparedMirrorUpload,
+    PreparedMirrorVersion,
+    PublishPlan (PublishPlan),
+    pmvInventory,
+    pmvPrepareUpload,
+    publishPrepared,
  )
 import Ecluse.Core.Rules.Render (renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
-import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Path (Filename)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
-import Ecluse.Core.Version (Version, selectLatest)
+import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
-import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 import Ecluse.Core.Worker.Types
 
 {- | The terminal outcome of processing one mirror job. It decides whether the worker
@@ -159,22 +163,25 @@ mirrorUnlessPresent policy job =
     probeInventory policy job >>= \case
         Left outcome -> pure outcome
         Right inventory
-            | jobVersion job `elem` inventory -> do
+            | Map.member (renderVersion (jobVersion job)) (infoVersions inventory) -> do
                 logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
                 pure Succeeded
             | otherwise -> reevaluatePolicy policy job >>= either pure (publishAdmitted policy job inventory)
 
 {- An unreadable answer is not an empty store, so it reports a fault rather than let the write
 declare a tag chosen without the inventory. A 404 is a store holding this package not at all. -}
-probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome [Version])
+probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome PackageInfo)
 probeInventory policy job = do
-    probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
+    probed <- liftIO (mpProbeInventory (wpPublish policy) (jobPackage job))
     pure $ case probed of
-        Left fault -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
-        Right (SuccessBody _ (Left (ParseError detail))) -> Left (Retried BeforePublish (probeParseReason job detail))
-        Right (SuccessBody _ (Right versions)) -> Right versions
-        Right (UnreadStatus 404) -> Right []
-        Right (UnreadStatus code) -> Left (Retried BeforePublish (probeStatusReason job code))
+        Right inventory -> Right inventory
+        Left MetadataAbsent -> Right (PackageInfo (jobPackage job) mempty mempty [])
+        Left (MetadataFetch fault) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
+        Left (MetadataBoundExceeded limit) -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) (FetchBoundExceeded limit))
+        Left (MetadataAuthorisationFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
+        Left (MetadataHttpFailure status) -> Left (Retried BeforePublish (probeStatusReason job status))
+        Left MetadataUndecodable -> Left (Retried BeforePublish (probeParseReason job "invalid mirror metadata"))
+        Left (MetadataNameMismatch _) -> Left (Retried BeforePublish (probeParseReason job "mismatched package identity"))
 
 probeFaultReason :: MirrorJob -> FetchFault -> Text
 probeFaultReason job = \case
@@ -198,50 +205,71 @@ probeParseReason job detail =
         <> detail
         <> "); refusing to publish a release tag chosen without it"
 
--- Mirror upload preparation binds publication to the same snapshot the gate admitted.
+-- The complete version keeps its checked locations beside its adapter-owned upload preparation.
 data Readmitted = Readmitted
-    { raArtifact :: MirrorArtifact
+    { raPrepared :: PreparedMirrorVersion
+    , raLocations :: NonEmpty (ExpectedMirrorFile, RegistryUrl)
     , raUpstreamLatest :: Maybe Version
-    , raPrepared :: PreparedMirror
     }
 
-{- Re-check the fetch URL against the mount's tarball-host gate, because the queue payload is a
-trust boundary. Then re-run current policy through 'Ecluse.Core.Package.Admission.admitArtifact'. -}
 reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
-reevaluatePolicy policy job
-    | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
-        pure (Left (Dropped (artifactHostReason job)))
-    | otherwise =
-        liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
+reevaluatePolicy policy job =
+    liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
 
-artifactHostReason :: MirrorJob -> Text
-artifactHostReason job =
-    "the tarball-host policy refuses the artifact host of "
-        <> renderJob job
-        <> " ("
-        <> jobArtifactAuthority job
-        <> "); refusing to fetch or mirror it"
-
-{- A version the upstream no longer offers, or cannot describe, never reaches the rules. A present
-version also carries the upstream's own @latest@, read from the same metadata. -}
 admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
 admitEvaluation policy job evaluation = case evaluation of
-    VersionMetadataUnavailable ->
-        pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
-    VersionMissing ->
-        pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
-    VersionPresent doc upstreamLatest -> do
-        -- The back-fill path emits no per-decision audit line, so the audit-only advisory ETag
-        -- is not resolved for its context.
-        ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-        admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) (vdDetails doc))
-        case outcomeOfAdmission job admission of
-            Left outcome -> pure (Left outcome)
-            Right artifact -> case mpPrepareArtifact (wpPublish policy) (jobPackage job) (jobVersion job) doc artifact of
-                Left fault -> Left <$> outcomeOfPublish job (Left fault)
-                Right prepared -> pure (Right Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raPrepared = prepared})
+    VersionMetadataUnavailable -> pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
+    VersionMissing -> pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job)))
+    VersionPresent doc upstreamLatest -> case triggerFile policy job doc of
+        Nothing -> pure (Left (Dropped "the source inventory has no supported trigger artifact"))
+        Just trigger -> do
+            ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
+            admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) trigger (vdDetails doc))
+            case outcomeOfAdmission job admission of
+                Left outcome -> pure (Left outcome)
+                Right _ -> case supportedVersion policy job trigger doc of
+                    Left outcome -> pure (Left outcome)
+                    Right supported -> case mpPrepareVersion (wpPublish policy) (jobPackage job) (jobVersion job) supported of
+                        Left fault -> Left <$> outcomeOfPublish job (Left fault)
+                        Right prepared -> pure $ do
+                            locations <- traverse (admittedLocation policy job) (inventoryFiles (pmvInventory prepared))
+                            pure (Readmitted prepared locations upstreamLatest)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
+
+supportedVersion :: WorkerPolicy -> MirrorJob -> Filename -> VersionDoc -> Either JobOutcome VersionDoc
+supportedVersion policy job trigger doc = do
+    strong <- first (const (Dropped "no source artifact clears the integrity floor")) (partitionByFloor (wpMinIntegrity policy) artHashes (pkgArtifacts details))
+    let kept = filter (isRight . sourceLocation policy) (toList strong)
+    survivors <- maybeToRight (locationRefusal strong) (nonEmpty kept)
+    unless (any ((== unFilename trigger) . artFilename) survivors) $
+        Left (Dropped ("the current location policy refuses the requested artifact of " <> renderJob job))
+    pure doc{vdDetails = details{pkgArtifacts = survivors}}
+  where
+    details = vdDetails doc
+    locationRefusal (firstArtifact :| _) = fromLeft (Dropped "no supported artifact location") (sourceLocation policy firstArtifact)
+
+sourceLocation :: WorkerPolicy -> Artifact -> Either JobOutcome RegistryUrl
+sourceLocation policy artifact = do
+    unless (wpArtifactHostHonoured policy (hostPortAddress (artUrl artifact))) $
+        Left (Dropped ("the artifact-host policy refuses " <> authorityLabel (artUrl artifact)))
+    first (const (Dropped "the source artifact URL violates the egress policy")) (wpEgressUrl policy (artUrl artifact))
+
+triggerFile :: WorkerPolicy -> MirrorJob -> VersionDoc -> Maybe Filename
+triggerFile policy job doc = jobTriggerFilename job <|> (find supported (pkgArtifacts (vdDetails doc)) >>= mkFilename . artFilename)
+  where
+    supported artifact = classifyDigests (wpMinIntegrity policy) (artHashes artifact) == MeetsFloor && isRight (sourceLocation policy artifact)
+
+admittedLocation :: WorkerPolicy -> MirrorJob -> ExpectedMirrorFile -> Either JobOutcome (ExpectedMirrorFile, RegistryUrl)
+admittedLocation policy job file = do
+    case classifyDigests (wpMinIntegrity policy) (artHashes artifact) of
+        MeetsFloor -> Right ()
+        BelowFloor -> void (outcomeOfAdmission job AdmissionBelowFloor)
+        NoIntegrity -> void (outcomeOfAdmission job AdmissionIntegrityMissing)
+    location <- sourceLocation policy artifact
+    pure (file, location)
+  where
+    artifact = expectedArtifact file
 
 sourceUnavailableReason :: MirrorJob -> Text -> Text
 sourceUnavailableReason job detail =
@@ -313,54 +341,48 @@ mirrorLatest upstreamLatest inventory published =
 
 {- Fix the release tag before the write, over the post-write inventory, so no job makes its own
 version latest merely by finishing last. -}
-publishAdmitted :: WorkerPolicy -> MirrorJob -> [Version] -> Readmitted -> WorkerM JobOutcome
-publishAdmitted policy job inventory readmitted =
-    mirrorArtifact policy job plan (raPrepared readmitted) (raArtifact readmitted)
+publishAdmitted :: WorkerPolicy -> MirrorJob -> PackageInfo -> Readmitted -> WorkerM JobOutcome
+publishAdmitted policy job target readmitted = copyFiles (toList (raLocations readmitted))
   where
-    plan =
-        PublishPlan
-            { ppLatest = mirrorLatest (raUpstreamLatest readmitted) inventory (jobVersion job)
-            }
+    plan = PublishPlan (mirrorLatest (raUpstreamLatest readmitted) (map pkgVersion (Map.elems (infoVersions target))) (jobVersion job))
+    copyFiles [] = pure Succeeded
+    copyFiles ((file, location) : rest) =
+        mirrorArtifact policy job plan (raPrepared readmitted) file location >>= \case
+            Succeeded -> copyFiles rest
+            failed -> pure failed
 
-mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirror -> MirrorArtifact -> WorkerM JobOutcome
-mirrorArtifact policy job plan prepared admitted = do
-    logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
-    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) (jobArtifactUrl job)
+mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirrorVersion -> ExpectedMirrorFile -> RegistryUrl -> WorkerM JobOutcome
+mirrorArtifact policy job plan prepared file location = do
+    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) location
     case fetched of
-        -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and the realisation
-        -- half logs the reason at the queue handle.
-        Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason job) fault)
-        Right bytes -> publishIfIntact job plan prepared admitted bytes
+        Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason location) fault)
+        Right bytes -> case verifyMirrorBytes file bytes of
+            Left fault -> outcomeOfPublish job (Left fault)
+            Right verified -> do
+                upload <- liftIO (pmvPrepareUpload prepared file verified)
+                case upload of
+                    Left fault -> outcomeOfPublish job (Left fault)
+                    Right ready -> publishVerified job plan ready
 
--- The client's rendered exception would print the request path, query, and headers, so a
--- transport reason names only the authority and the cause.
-artifactFetchReason :: MirrorJob -> FetchFault -> Text
-artifactFetchReason job = \case
+artifactFetchReason :: RegistryUrl -> FetchFault -> Text
+artifactFetchReason location = \case
     FetchUrlUnformable urlErr -> "unformable artifact URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "artifact exceeded the response bound: " <> show limitErr
-    FetchTransport fault -> "artifact fetch from " <> jobArtifactAuthority job <> " failed: " <> show (tfCause fault)
+    FetchTransport fault -> "artifact fetch from " <> authorityLabel (registryUrlText location) <> " failed: " <> show (tfCause fault)
 
--- A tampered artifact must never reach the private upstream, which later serves it without the
--- rules, so the bytes are verified against the re-admitted digests before any publish.
-publishIfIntact :: MirrorJob -> PublishPlan -> PreparedMirror -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishIfIntact job plan prepared admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
-    IntegrityMismatch detail -> do
-        logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
-        pure (Dropped ("integrity mismatch: " <> detail))
-    IntegrityVerified -> publishVerified job plan prepared bytes
-
--- Publish already-verified bytes to the mirror target. The publish document is assembled from the
--- re-admitted descriptor, so no queue-payload text reaches the trusted-tier packument.
-publishVerified :: MirrorJob -> PublishPlan -> PreparedMirror -> ByteString -> WorkerM JobOutcome
-publishVerified job plan prepared bytes = do
+publishVerified :: MirrorJob -> PublishPlan -> PreparedMirrorUpload -> WorkerM JobOutcome
+publishVerified job plan prepared = do
     metrics <- asks wrMetrics
-    (result, seconds) <- timedSeconds (liftIO (publishPrepared prepared plan bytes))
+    (result, seconds) <- timedSeconds (liftIO (publishPrepared prepared plan))
     liftIO (wmpMirrorPublishDuration metrics seconds)
     outcomeOfPublish job result
 
 outcomeOfPublish :: MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
 outcomeOfPublish job = \case
     Right () -> Succeeded <$ logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
+    Left (PublishIntegrityMismatch detail) -> do
+        logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
+        pure (Dropped ("integrity mismatch: " <> detail))
     Left (PublishRejected err) -> pure (Retried AfterPublish ("registry rejected publish: " <> show err))
     Left (PublishSourceUnavailable detail) -> pure (SourceUnavailable (sourceUnavailableReason job detail))
     Left (PublishFetch fault) -> pure (outcomeOfFetchFault AfterPublish publishFaultReason fault)
@@ -372,8 +394,3 @@ publishFaultReason = \case
     FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
     FetchTransport fault -> "publish transport failure: " <> show fault
-
-{- The job's artifact location as a log-safe authority. The queue payload's URL can carry userinfo
-or a pre-signed query, so a log line names only the host and port the worker dials. -}
-jobArtifactAuthority :: MirrorJob -> Text
-jobArtifactAuthority = authorityLabel . registryUrlText . jobArtifactUrl

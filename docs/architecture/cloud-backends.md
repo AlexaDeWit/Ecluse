@@ -7,11 +7,17 @@ mount's store.
 
 ## Mirror queue
 
-Mirroring is demand-driven. A client pulls an artifact on the tarball path after a private-upstream
-miss. If that version passes the rules, the proxy enqueues a mirror job (package, version, artifact
-location, filename). It serves the client immediately and never waits for the mirror to finish.
-Metadata requests filter but never mirror, so Écluse mirrors only the versions a client fetches.
-The mount configuration resolves the publish target, which the message never names.
+Mirroring is demand-driven. An admitted artifact GET enqueues a version trigger with an optional
+filename. Schema version 2 carries no source URL. The worker resolves current paired metadata and
+derives the complete inventory and download locations from that read. A queued job does not freeze
+the earlier serve-time policy decision. Packument requests filter but never enqueue.
+
+New workers also decode version 1 jobs. They validate the legacy filename and URL, retain the
+filename as a demand hint, and discard the URL. Neither legacy field reduces version membership.
+
+Deploy dual-reading workers and the new read visibility support first, stop old workers, then
+deploy version 2 producers and enable PyPI mirroring. Old workers must not consume version 2 jobs.
+For rollback, stop producers and drain or quarantine version 2 messages before reverting workers.
 
 A separate worker receives jobs and, for each one:
 

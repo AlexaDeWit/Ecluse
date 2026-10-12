@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.ServedDocument (
 
     -- * Replaying a merge plan
     overlaySurvivors,
+    uniqueEntries,
+    validEntryKey,
     overlayObjectSurvivors,
     overlayObjectSources,
 
@@ -119,13 +121,15 @@ admittedIndex plan =
         ]
 
 usableEntry :: AdmittedEntry -> Bool
-usableEntry entry = validKey (admittedKey entry) && not (T.null (admittedFilename entry))
+usableEntry entry = validEntryKey (admittedKey entry) && not (T.null (admittedFilename entry))
 
+-- | Keep only keys that occur exactly once, so ambiguous source coordinates cannot select an entry.
 uniqueEntries :: (Ord key) => [(key, value)] -> Map key value
 uniqueEntries = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Just)
 
-validKey :: EntryKey -> Bool
-validKey = \case
+-- | Array coordinates cannot precede the first source entry.
+validEntryKey :: EntryKey -> Bool
+validEntryKey = \case
     ArrayEntry position -> position >= 0
     ObjectEntry _ -> True
     SingletonEntry -> True

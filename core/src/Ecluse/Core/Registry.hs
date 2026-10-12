@@ -129,4 +129,6 @@ data PublishFault
       PublishRejected PublishError
     | -- | Mirror upload preparation refused missing or inconsistent mirror upload data. Not retryable.
       PublishSourceUnavailable Text
+    | -- | Artifact bytes differ from the admitted strongest digest. Not retryable.
+      PublishIntegrityMismatch Text
     deriving stock (Eq, Show)

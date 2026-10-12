@@ -25,6 +25,7 @@ module Ecluse.Worker.Support.Runtime (
     withRuntimeWith,
     withRuntime,
     withQueueRuntime,
+    sourceAt,
     runWM,
     runWMWith,
 
@@ -42,12 +43,14 @@ module Ecluse.Worker.Support.Runtime (
     withUpstream,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Package (PackageInfo (PackageInfo))
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (ack, deadLetter, extendVisibility, receive),
@@ -57,17 +60,17 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Registry (
-    BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport),
     MirrorArtifact,
-    ParseError (ParseError),
     PublishFault,
  )
-import Ecluse.Core.Registry.Npm.Publish (mkNpmMirrorUploadData, npmPublishDocument)
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..), PublishPlan)
+import Ecluse.Core.Registry.Metadata (MetadataError (..))
+import Ecluse.Core.Registry.MirrorUpload (expectedDescriptor, uploadBytes)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, prepareNpmSource, prepareNpmUpload)
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..), PublishPlan)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker (
     WorkerHeartbeat,
     WorkerM,
@@ -77,10 +80,12 @@ import Ecluse.Core.Worker (
     runWorkerM,
  )
 import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Package (sampleDetails)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import Ecluse.Test.Worker (workerSourceAt)
 import Ecluse.Worker.Support.Fixtures (admitPolicies, tarballBytes, withPublish)
 
 -- | Capture what publication was handed: the verified bytes, the descriptor, and the plan.
@@ -101,47 +106,51 @@ emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPublications 
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
-        , mpPrepareArtifact = \name version doc artifact -> do
-            input <- mkNpmMirrorUploadData name version doc artifact
-            pure $ PreparedMirror $ \plan document -> do
-                atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPublications = npmPublishDocument plan input document : plPublications l, plPlans = plan : plPlans l}, ()))
-                pure outcome
+        { mpProbeInventory = const (pure (Left MetadataAbsent))
+        , mpPrepareVersion = \name version doc -> do
+            (inventory, metadata) <- prepareNpmSource name version doc
+            pure $ PreparedMirrorVersion inventory $ \file verified -> pure $ do
+                upload <- prepareNpmUpload inventory metadata file verified
+                pure $ PreparedMirrorUpload $ \plan -> do
+                    let document = uploadBytes upload
+                        artifact = expectedDescriptor file
+                    atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPublications = npmPublishDocument plan upload : plPublications l, plPlans = plan : plPlans l}, ()))
+                    pure outcome
         }
 
 -- | 'recordingPublish' whose inventory probe __reports__ the given versions present at the mirror target, for the dedup and release-tag cases.
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (SuccessBody 200 (Right versions))))
+        { mpProbeInventory = \name -> pure (Right (PackageInfo name (Map.fromList [(renderVersion version, sampleDetails name version) | version <- versions]) mempty []))
         }
 
 -- | 'recordingPublish' whose inventory probe reports a mirror outage as the typed 'FetchTransport' value, for the unreadable-inventory cases.
 probeUnreachablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreachablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
+        { mpProbeInventory = const (pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "simulated mirror outage")))))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a readable status with a body the version projection refuses.
 probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreadablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (SuccessBody 200 (Left (ParseError "not a packument")))))
+        { mpProbeInventory = const (pure (Left MetadataUndecodable))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (UnreadStatus 503)))
+        { mpProbeInventory = const (pure (Left (MetadataHttpFailure 503)))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.
 probeOverboundPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeOverboundPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1)))))
+        { mpProbeInventory = const (pure (Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.
@@ -278,3 +287,7 @@ enqueueAndReceive queue job = do
 -- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the body.
 withUpstream :: (Text -> IO a) -> IO a
 withUpstream body = withStub status200 (toLazy tarballBytes) (body . stubBaseUrl)
+
+-- | The current source read supplies fixture locations independently of the queued trigger.
+sourceAt :: Text -> WorkerRuntime -> WorkerRuntime
+sourceAt location runtime = runtime{wrPolicies = workerSourceAt location (wrPolicies runtime)}

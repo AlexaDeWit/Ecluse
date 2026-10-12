@@ -41,7 +41,7 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     newSqsQueue,
  )
 import Ecluse.Test.Contract.Queue (QueueDriver (..), leasedQueueContract, queueContract)
-import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
+import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Support (expectRightIO)
 
 -- | Run shared delivery contracts and SQS lease and fault assertions against ministack.
@@ -146,7 +146,6 @@ sampleJob =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
-        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
-        , jobArtifactFilename = unsafeFilename "left-pad-1.3.0.tgz"
+        , jobTriggerFilename = Just (unsafeFilename "left-pad-1.3.0.tgz")
         , jobTraceContext = Nothing
         }

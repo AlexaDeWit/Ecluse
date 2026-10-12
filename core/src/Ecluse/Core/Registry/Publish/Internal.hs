@@ -1,0 +1,136 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+{- | Bind complete mirror upload data to bounded registry reads and writes.
+Every request disables redirects, and credentials are minted for each exchange.
+-}
+module Ecluse.Core.Registry.Publish.Internal (
+    PublishPlan (..),
+    PreparedMirrorVersion (..),
+    pmvInventory,
+    pmvPrepareUpload,
+    PreparedMirrorUpload (..),
+    publishPrepared,
+    PublishCodec (..),
+    fetchVersionList,
+    MirrorTransport (..),
+    MirrorPublish (..),
+    newMirrorPublish,
+) where
+
+import Data.JsonStream.Parser qualified as J
+import Network.HTTP.Client (Manager, Request)
+
+import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Package (PackageInfo, PackageName)
+import Ecluse.Core.Registry (BodyOutcome, FetchFault, ParseError, PublishFault (PublishFetch), UrlFormationError)
+import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch)
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
+import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
+import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
+import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Request (sealRequest)
+import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Telemetry.Span (TracingPort)
+import Ecluse.Core.Version (Version)
+
+-- | The release tag the target must carry after publication.
+newtype PublishPlan = PublishPlan {ppLatest :: Version}
+    deriving stock (Eq, Show)
+
+-- | A complete source snapshot with adapter-owned per-file upload preparation.
+data PreparedMirrorVersion = PreparedMirrorVersion
+    { pmvInventoryValue :: MirrorInventory
+    , pmvPrepareUploadAction :: ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
+    }
+
+-- | Publication captures checked metadata and verified bytes, so a caller cannot replace the body.
+newtype PreparedMirrorUpload = PreparedMirrorUpload
+    { runPreparedUpload :: PublishPlan -> IO (Either PublishFault ())
+    }
+
+-- | The complete expected source inventory bound to this preparation capability.
+pmvInventory :: PreparedMirrorVersion -> MirrorInventory
+pmvInventory = pmvInventoryValue
+
+-- | Prepare one verified member without accepting replacement bytes.
+pmvPrepareUpload :: PreparedMirrorVersion -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
+pmvPrepareUpload = pmvPrepareUploadAction
+
+-- | Run the bound write with its captured verified body and required upload metadata.
+publishPrepared :: PreparedMirrorUpload -> PublishPlan -> IO (Either PublishFault ())
+publishPrepared = runPreparedUpload
+
+-- | The codec owns source and upload metadata while the worker owns whole-version orchestration.
+data PublishCodec = forall source metadata. PublishCodec
+    { pcPrepareSource :: PackageName -> Version -> VersionDoc -> Either PublishFault (MirrorInventory, source)
+    , pcPrepareUpload :: Limits -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
+    , pcTargetRead :: EcosystemRead
+    , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
+    , pcVersionListParser :: Maybe (Limits -> J.Parser VersionListItem)
+    -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
+    , pcPublishRequest :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request
+    , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
+    }
+
+-- | Process resources for the target's bounded exchanges.
+data MirrorTransport = MirrorTransport
+    { ptManager :: Manager
+    , ptMintCredential :: IO (Maybe ClientCredential)
+    , ptLimits :: Limits
+    , ptTracing :: TracingPort
+    }
+
+-- | A target-bound version reader and checked upload preparation capability.
+data MirrorPublish = MirrorPublish
+    { mpProbeInventory :: PackageName -> IO (Either MetadataError PackageInfo)
+    , mpPrepareVersion :: PackageName -> Version -> VersionDoc -> Either PublishFault PreparedMirrorVersion
+    }
+
+-- | The read and upload endpoints are explicit because native upload routes need not share the read root.
+newMirrorPublish :: MirrorTransport -> RegistryUrl -> RegistryUrl -> PublishCodec -> MirrorPublish
+newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcTargetRead, pcPublishRequest, pcPublishOutcome} =
+    MirrorPublish
+        { mpProbeInventory = probeInventory transport readTarget pcTargetRead
+        , mpPrepareVersion = \name version doc -> do
+            (inventory, source) <- pcPrepareSource name version doc
+            pure
+                PreparedMirrorVersion
+                    { pmvInventoryValue = inventory
+                    , pmvPrepareUploadAction = \file bytes ->
+                        fmap (PreparedMirrorUpload . publishUpload transport uploadTarget pcPublishRequest pcPublishOutcome)
+                            <$> pcPrepareUpload (ptLimits transport) inventory source file bytes
+                    }
+        }
+
+probeInventory :: MirrorTransport -> RegistryUrl -> EcosystemRead -> PackageName -> IO (Either MetadataError PackageInfo)
+probeInventory transport target reader name = do
+    credential <- ptMintCredential transport
+    fmap manifestInfo <$> fetchManifest reader (ptTracing transport) (originClient (ptLimits transport) (ptManager transport) target credential) name
+
+-- | Read bounded version identifiers for the protocol maintenance caller.
+fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
+fetchVersionList manager limits parser request =
+    fmap (fmap versions) <$> boundedJsonFetch manager (progressFloor limits) (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
+  where
+    versions streamed = streamValue streamed >>= finishVersionList
+
+publishUpload :: MirrorTransport -> RegistryUrl -> (Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request) -> (Int -> ByteString -> Either PublishFault ()) -> MirrorUploadData metadata -> PublishPlan -> IO (Either PublishFault ())
+publishUpload transport target request outcome upload plan = do
+    credential <- ptMintCredential transport
+    either
+        (pure . Left)
+        (writeUpload transport outcome . sealRequest)
+        (request (registryUrlText target) credential plan upload)
+
+writeUpload :: MirrorTransport -> (Int -> ByteString -> Either PublishFault ()) -> Request -> IO (Either PublishFault ())
+writeUpload transport outcome request =
+    boundedExchange (\status _ body -> (status, body)) (ptManager transport) (progressFloor (ptLimits transport)) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
+        <&> \case
+            Left fault -> Left (PublishFetch fault)
+            Right (status, body) -> outcome status body

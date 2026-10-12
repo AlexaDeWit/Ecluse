@@ -30,8 +30,8 @@ module Ecluse.Worker.Support.Fixtures (
     pkg,
     ver,
     otherVer,
-    jobWith,
-    pypiJobWith,
+    sampleMirrorJob,
+    pypiMirrorJob,
     sampleArtifact,
     sampleDetails,
     presentResolver,
@@ -86,11 +86,11 @@ import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), PreparedMirror (..))
+import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
 import Ecluse.Core.Rules (PreparedRule, prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowByIdentity, DenyByIdentity))
 import Ecluse.Core.Security (HostPort, Limits (maxMirrorArtifactBytes), defaultLimits)
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Transient),
@@ -207,26 +207,23 @@ to prove the worker judges presence per version, never per package.
 otherVer :: Version
 otherVer = mkVersion Npm "0.9.0"
 
-{- | A mirror job for the conventional @thing-1.0.0.tgz@ artifact at the given stub upstream.
+{- | A version trigger for the conventional @thing-1.0.0.tgz@ artifact.
 The digests the worker verifies against live on the policies' resolved snapshot, never on the job.
 -}
-jobWith :: Text -> MirrorJob
-jobWith url =
+sampleMirrorJob :: MirrorJob
+sampleMirrorJob =
     MirrorJob
         { jobPackage = pkg
         , jobVersion = ver
-        , -- The flag-gated loopback former: these suites point jobs at in-process
-          -- http stubs, which the production https-only former would refuse.
-          jobArtifactUrl = loopbackRegistryUrl url
-        , jobArtifactFilename = unsafeFilename "thing-1.0.0.tgz"
+        , jobTriggerFilename = Just (unsafeFilename "thing-1.0.0.tgz")
         , jobTraceContext = Nothing
         }
 
--- | 'jobWith' for the PyPI project of the same name, which a PyPI bundle decides.
-pypiJobWith :: Text -> MirrorJob
-pypiJobWith url = (jobWith url){jobPackage = Package.unscopedPyPI "thing", jobVersion = Package.pypiVersion "1.0.0"}
+-- | 'sampleMirrorJob' for the PyPI project of the same name, which a PyPI bundle decides.
+pypiMirrorJob :: MirrorJob
+pypiMirrorJob = sampleMirrorJob{jobPackage = Package.unscopedPyPI "thing", jobVersion = Package.pypiVersion "1.0.0"}
 
-{- | The artifact of a projected version snapshot. Its filename must match 'jobWith''s, and its
+{- | The artifact of a projected version snapshot. Its filename must match 'sampleMirrorJob''s, and its
 sha512 SRI must be over 'tarballBytes', because the tamper gate verifies against this artifact.
 -}
 sampleArtifact :: Artifact
@@ -285,8 +282,10 @@ recording double ('withPublish'), so any effectful use here fails loudly.
 unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
-        { mpProbeMetadata = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
-        , mpPrepareArtifact = \_ _ _ _ -> Right (PreparedMirror (\_ _ -> throwIO (TestContractEscape "unwiredPublish: publish consulted")))
+        { mpProbeInventory = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
+        , mpPrepareVersion = \name version doc -> do
+            (inventory, _) <- prepareNpmSource name version doc
+            pure (PreparedMirrorVersion inventory (\_ _ -> pure (Right (PreparedMirrorUpload (\_ -> throwIO (TestContractEscape "unwiredPublish: publish consulted"))))))
         }
 
 {- | The default admitting policy. The version resolves present and an always-admit rule

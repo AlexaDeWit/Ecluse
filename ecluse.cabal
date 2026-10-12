@@ -211,7 +211,10 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
+    Ecluse.Core.Registry.MirrorUpload
+    Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
+    Ecluse.Core.Registry.Publish.Internal
     Ecluse.Core.Registry.Sweep
     Ecluse.Core.Registry.Sweep.Candidates
     Ecluse.Core.Registry.Sweep.Deletion
@@ -730,6 +733,7 @@ library ecluse-test-support
     Ecluse.Test.Port
     Ecluse.Test.Queue
     Ecluse.Test.Registry
+    Ecluse.Test.Registry.Publish
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
@@ -1035,6 +1039,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.VersionWriterSpec
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
+    Ecluse.Core.Registry.MirrorUpload.InternalSpec
     Ecluse.Core.Registry.PublishSpec
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec

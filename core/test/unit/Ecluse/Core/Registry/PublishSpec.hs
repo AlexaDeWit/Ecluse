@@ -13,17 +13,20 @@ import Network.HTTP.Types.Status (status200, status302)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Core.BuildIdentity (userAgent)
-import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     PublishFault (PublishFetch),
     UrlFormationError (UnparseableUrl),
  )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
+import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, prepareNpmSource, prepareNpmUpload)
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpPrepareArtifact, mpProbeMetadata),
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PreparedMirror (publishPrepared),
+    MirrorPublish (mpProbeInventory),
+    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
     PublishCodec (..),
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
@@ -32,8 +35,10 @@ import Ecluse.Core.Registry.VersionList (VersionListItem (VersionListObject))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc, mirrorVersionDoc)
+import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (
     Captured (capPath),
     Stub,
@@ -54,10 +59,10 @@ spec = do
             -- presents a current token. The transport mints it per call and never caches it.
             withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
-                _ <- mpProbeMetadata publish isOdd
+                _ <- mpProbeInventory publish isOdd
                 captured <- lastCaptured stub
                 headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
-                _ <- mpProbeMetadata publish isOdd
+                _ <- mpProbeInventory publish isOdd
                 minted <- readIORef mints
                 minted `shouldBe` 2
 
@@ -72,8 +77,8 @@ spec = do
 
         it "reports an unformable probe URL as a FetchFault value, never thrown" $ do
             publish <- publishAt ""
-            outcome <- mpProbeMetadata publish isOdd
-            outcome `shouldSatisfy` isUrlUnformableFetch
+            outcome <- mpProbeInventory publish isOdd
+            outcome `shouldSatisfy` isProbeUrlFault
 
         it "reports an unformable publish URL as a PublishFault value, never thrown" $ do
             publish <- publishAt ""
@@ -82,8 +87,8 @@ spec = do
 
         it "reports a probe transport failure as a FetchTransport value, never thrown" $ do
             publish <- publishAt "http://127.0.0.1:1"
-            outcome <- mpProbeMetadata publish isOdd
-            outcome `shouldSatisfy` isTransportFetch
+            outcome <- mpProbeInventory publish isOdd
+            outcome `shouldSatisfy` isProbeTransportFault
 
         it "refuses an over-cap probe body fail-closed as a FetchBoundExceeded value" $
             -- The probe reads the mirror's answer bounded. A body past the budget comes
@@ -93,12 +98,13 @@ spec = do
                 let transport =
                         MirrorTransport
                             { ptManager = manager
-                            , ptMintToken = pure Nothing
+                            , ptMintCredential = pure Nothing
                             , ptLimits = defaultLimits{maxMetadataBytes = 16}
+                            , ptTracing = passthroughTracingPort
                             }
-                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- mpProbeMetadata publish isOdd
-                outcome `shouldBe` Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16)))
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                outcome <- mpProbeInventory publish isOdd
+                outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
 
         it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
             -- The write reads the target's answer through the same bounded exchange as the
@@ -108,16 +114,17 @@ spec = do
                 let transport =
                         MirrorTransport
                             { ptManager = manager
-                            , ptMintToken = pure Nothing
+                            , ptMintCredential = pure Nothing
                             , ptLimits = defaultLimits{maxMetadataBytes = 16}
+                            , ptTracing = passthroughTracingPort
                             }
-                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
+                    publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
                 outcome <- publishFixture publish
                 outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
         it "the probe request attaches the bearer at the single attach point with redirects disabled" $
-            case pcProbeRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd of
+            case pcProbeRequest npmPublishCodec "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) isOdd of
                 Left err -> fail ("expected a formed probe request, got " <> show err)
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
@@ -125,9 +132,12 @@ spec = do
 
         it "the publish request attaches the bearer with redirects disabled" $
             case npmPublishCodec of
-                PublishCodec{pcPrepareUploadData, pcPublishRequest} -> do
-                    input <- expectRight (pcPrepareUploadData isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
-                    request <- expectRight (pcPublishRequest "https://mirror.test" (Just (mkSecret "tok")) planV1 input "bytes")
+                PublishCodec{pcPrepareSource, pcPrepareUpload, pcPublishRequest} -> do
+                    (inventory, source) <- expectRight (pcPrepareSource isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact))
+                    let file :| _ = inventoryFiles inventory
+                    verified <- expectRight (verifyMirrorBytes file "")
+                    upload <- pcPrepareUpload defaultLimits inventory source file verified >>= expectRight
+                    request <- expectRight (pcPublishRequest "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) planV1 upload)
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
@@ -137,7 +147,7 @@ spec = do
             -- redirectCount of 10, so only the transport's re-seal stops the hop.
             withRoutedStub (redirectFrom "/probe") $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpProbeMetadata publish isOdd
+                _ <- mpProbeInventory publish isOdd
                 servedPaths stub `shouldReturn` ["/probe"]
 
         it "refuses to chase a redirect on the write leg, where the bearer rides" $
@@ -149,7 +159,7 @@ spec = do
         it "identifies the proxy on the wire, whatever headers the codec set" $
             withStub status200 "{}" $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpProbeMetadata publish isOdd
+                _ <- mpProbeInventory publish isOdd
                 captured <- lastCaptured stub
                 headerValue "User-Agent" captured `shouldBe` Just userAgent
 
@@ -159,11 +169,13 @@ unsealedCodec :: PublishCodec
 unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
-        , pcVersionListParser = const (pure VersionListObject)
-        , pcPrepareUploadData = \_ _ _ _ -> Right ()
-        , pcPublishRequest = \targetUrl _token _plan () _bytes ->
+        , pcVersionListParser = Just (const (pure VersionListObject))
+        , pcTargetRead = npmRead{erRequest = \targetUrl _ _ -> unsealed (targetUrl <> "/probe")}
+        , pcPrepareSource = prepareNpmSource
+        , pcPrepareUpload = \_ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
+        , pcPublishRequest = \targetUrl _token _plan _upload ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
-        , pcPublishOutcome = const (Right ())
+        , pcPublishOutcome = \_ _ -> Right ()
         }
   where
     unsealed url = maybe (Left (UnparseableUrl url)) Right (Client.parseRequest (toString url))
@@ -172,9 +184,18 @@ planV1 :: PublishPlan
 planV1 = PublishPlan{ppLatest = v1_0_0}
 
 publishFixture :: MirrorPublish -> IO (Either PublishFault ())
-publishFixture publish = do
-    prepared <- expectRight (mpPrepareArtifact publish isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) dummyArtifact)
-    publishPrepared prepared planV1 "bytes"
+publishFixture publish =
+    publishOnlyFile publish (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact) planV1 ""
+
+isProbeUrlFault :: Either MetadataError a -> Bool
+isProbeUrlFault = \case
+    Left (MetadataFetch fault) -> isUrlUnformableFetch (Left fault)
+    _ -> False
+
+isProbeTransportFault :: Either MetadataError a -> Bool
+isProbeTransportFault = \case
+    Left (MetadataFetch fault) -> isTransportFetch (Left fault)
+    _ -> False
 
 unsealedPublishAt :: Stub -> IO MirrorPublish
 unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)
@@ -197,9 +218,9 @@ mintCountingPublish stub = do
     mints <- newIORef (0 :: Int)
     let mint = do
             atomicModifyIORef' mints (\n -> (n + 1, ()))
-            pure (Just (mkSecret "minted-token"))
-        transport = MirrorTransport{ptManager = manager, ptMintToken = mint, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec, mints)
+            pure (Just (bareCredential (mkSecret "minted-token")))
+        transport = MirrorTransport{ptManager = manager, ptMintCredential = mint, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec, mints)
 
 -- The anonymous marriage of npm's codec against an arbitrary target URL.
 publishAt :: Text -> IO MirrorPublish
@@ -209,5 +230,5 @@ publishAt = publishWith npmPublishCodec
 publishWith :: PublishCodec -> Text -> IO MirrorPublish
 publishWith codec targetUrl = do
     manager <- Client.newManager Client.defaultManagerSettings
-    let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) codec)
+    let transport = MirrorTransport{ptManager = manager, ptMintCredential = pure Nothing, ptLimits = defaultLimits, ptTracing = passthroughTracingPort}
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) (loopbackRegistryUrl targetUrl) codec)

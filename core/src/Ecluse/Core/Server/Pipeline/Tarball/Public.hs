@@ -33,7 +33,7 @@ import Ecluse.Core.Package.Admission (
     admitArtifactWithEvidence,
  )
 import Ecluse.Core.Queue (
-    MirrorJob (MirrorJob, jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
+    MirrorJob (MirrorJob, jobPackage, jobTraceContext, jobTriggerFilename, jobVersion),
     RemoteSpanContext,
     enqueue,
  )
@@ -48,7 +48,6 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules.Render (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (Limits (progressFloor), Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
-import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -234,16 +233,13 @@ relayResponder replies respond =
 
 enqueueMirror :: ArtifactRequest response -> Artifact -> IO ()
 enqueueMirror ctx artifact =
-    case pdEgressUrl (arDeps ctx) (artUrl artifact) of
-        Left _ -> mpMirrorEnqueueFailure (srMetrics (arRuntime ctx))
-        Right egressUrl ->
-            void . spanMirrorEnqueue (srTracing (arRuntime ctx)) (arPackage ctx) (arVersion ctx) (artUrl artifact) enqueueErrorDetail $
-                enqueueJob ctx egressUrl
+    void . spanMirrorEnqueue (srTracing (arRuntime ctx)) (arPackage ctx) (arVersion ctx) (artUrl artifact) enqueueErrorDetail $
+        enqueueJob ctx
 
 -- Count the hand-off outcome and hand it back, never propagating it. The composition root's
 -- buffer callbacks count drops and backend delivery failures behind the hand-off.
-enqueueJob :: ArtifactRequest response -> RegistryUrl -> Maybe RemoteSpanContext -> IO (Either TransportFault ())
-enqueueJob ctx egressUrl traceContext = do
+enqueueJob :: ArtifactRequest response -> Maybe RemoteSpanContext -> IO (Either TransportFault ())
+enqueueJob ctx traceContext = do
     let metrics = srMetrics (arRuntime ctx)
     enqueued <-
         enqueue
@@ -251,8 +247,7 @@ enqueueJob ctx egressUrl traceContext = do
             MirrorJob
                 { jobPackage = arPackage ctx
                 , jobVersion = arVersion ctx
-                , jobArtifactUrl = egressUrl
-                , jobArtifactFilename = arFile ctx
+                , jobTriggerFilename = Just (arFile ctx)
                 , -- The enqueueing span's trace context, captured by the span bracket, so
                   -- the worker's per-job span links back across the hop.
                   jobTraceContext = traceContext

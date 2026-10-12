@@ -33,7 +33,7 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     mirrorJobPackage,
  )
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
-import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
+import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 
 -- | An unscoped npm job fixture.
@@ -42,8 +42,7 @@ npmJob =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "lodash"
         , jobVersion = mkVersion Npm "4.17.21"
-        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
-        , jobArtifactFilename = unsafeFilename "lodash-4.17.21.tgz"
+        , jobTriggerFilename = Just (unsafeFilename "lodash-4.17.21.tgz")
         , -- A populated trace-context carrier, so the round-trip proves the W3C
           -- traceparent/tracestate survive the wire mapping.
           jobTraceContext =
@@ -60,8 +59,7 @@ scopedJob =
     MirrorJob
         { jobPackage = mkPackageName Npm (Just (mkScope "babel")) "core"
         , jobVersion = mkVersion Npm "7.24.0"
-        , jobArtifactUrl = unsafeRegistryUrl "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
-        , jobArtifactFilename = unsafeFilename "core-7.24.0.tgz"
+        , jobTriggerFilename = Just (unsafeFilename "core-7.24.0.tgz")
         , -- The absent-carrier case (tracing off at enqueue), so both arms round-trip.
           jobTraceContext = Nothing
         }
@@ -72,8 +70,7 @@ pypiJob =
     MirrorJob
         { jobPackage = mkPackageName PyPI Nothing "Flask"
         , jobVersion = mkVersion PyPI "3.0.2"
-        , jobArtifactUrl = unsafeRegistryUrl "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
-        , jobArtifactFilename = unsafeFilename "flask-3.0.2.tar.gz"
+        , jobTriggerFilename = Just (unsafeFilename "flask-3.0.2.tar.gz")
         , jobTraceContext = Nothing
         }
 

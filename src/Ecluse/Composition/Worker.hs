@@ -2,11 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's worker bundle construction: the per-ecosystem 'WorkerPolicies' the
-mirror worker dispatches every job through.
-
-Only the composition root consumes the adapter registry, so the worker receives plain handles.
-Each bundle reuses its mount's __own__ 'PackumentDeps', so ingest cannot diverge from serve.
+{- | Bind worker capabilities to each mount's source, policy, and mirror target.
+The composition root owns adapter lookup and credential binding.
 -}
 module Ecluse.Composition.Worker (
     workerPoliciesFor,
@@ -16,7 +13,7 @@ module Ecluse.Composition.Worker (
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl))
-import Ecluse.Core.Credential (mintSecret)
+import Ecluse.Core.Credential (bareCredential, mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead), AdapterPublish (publishCodec))
@@ -24,7 +21,7 @@ import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (anonymousOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
-    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
+    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), thgPublicHostPort)
@@ -33,6 +30,7 @@ import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
     pdArtifact,
+    pdEgressUrl,
     pdFirstParty,
     pdLimits,
     pdMetadata,
@@ -61,19 +59,21 @@ workerPoliciesFor env bindings targets artifactMaxBytes =
         , let prefixHead :| _ = bindingPrefix binding
         , let deps = bindingPackumentDeps binding
         , Just eco <- [parseEcosystem prefixHead]
-        , Just publish <- [mirrorPublishFor env deps targetsByEcosystem eco]
+        , Just publish <- [mirrorPublishFor env deps targetsByEcosystem artifactMaxBytes eco]
         ]
   where
     targetsByEcosystem = Map.fromList [(ptEcosystem target, target) | target <- targets]
 
 {- Marry one ecosystem's mirror write to the shared publish transport. 'Nothing' when it
 resolves no publish target or no adapter, so the caller wires no half-publish bundle. -}
-mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Ecosystem -> Maybe MirrorPublish
-mirrorPublishFor env deps targets eco = do
+mirrorPublishFor :: Env -> PackumentDeps -> Map.Map Ecosystem PublishTarget -> Int -> Ecosystem -> Maybe MirrorPublish
+mirrorPublishFor env deps targets artifactMaxBytes eco = do
     target <- Map.lookup eco targets
     adapter <- adapterFor eco
     publish <- adapterPublish adapter
-    pure (newMirrorPublish (mirrorTransportFor env deps target) (ptMirrorUrl target) (publishCodec publish))
+    let transport = mirrorTransportFor env deps target
+        bounded = transport{ptLimits = (ptLimits transport){maxMirrorArtifactBytes = artifactMaxBytes}}
+    pure (newMirrorPublish bounded (ptMirrorUrl target) (ptMirrorUrl target) (publishCodec publish))
 
 {- | The shared mirror-write transport for one mount. The presence probe reads under the mount's
 own 'pdLimits': a larger mirror packument would overrun the default and defeat duplicate suppression.
@@ -82,8 +82,9 @@ mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
 mirrorTransportFor env deps target =
     MirrorTransport
         { ptManager = envPrivateManager env
-        , ptMintToken = Just <$> mintSecret (ptCredentials target)
+        , ptMintCredential = Just . bareCredential <$> mintSecret (ptCredentials target)
         , ptLimits = pdLimits deps
+        , ptTracing = tracingPortOf (envTelemetry env)
         }
 
 {- Build one mount's worker bundle. The metadata client is anonymous, so no client credential reaches
@@ -104,6 +105,7 @@ workerPolicyFor env deps publish artifactMaxBytes =
         , -- The mount's own artifact capability, the adapter record the serve deps
           -- carry, so the worker fetches a job's bytes exactly as the serve path would.
           wpArtifact = pdArtifact deps
+        , wpEgressUrl = pdEgressUrl deps
         , wpPublish = publish
         , wpArtifactLimits = (pdLimits deps){maxMirrorArtifactBytes = artifactMaxBytes}
         , wpNow = pdNow deps

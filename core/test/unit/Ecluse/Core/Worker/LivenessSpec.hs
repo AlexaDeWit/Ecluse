@@ -8,7 +8,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
-import Ecluse.Core.Registry.Publish (MirrorPublish (mpPrepareArtifact), PreparedMirror (..))
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (mpPrepareVersion), PreparedMirrorUpload (..), PreparedMirrorVersion (..), pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Worker (
     Liveness (Liveness, liveHealthy, liveLastPoll),
     alwaysLive,
@@ -48,18 +48,28 @@ spec = do
                 let base = recordingPublish logRef (Right ())
                     snapshotOnPublish =
                         base
-                            { mpPrepareArtifact = \p v doc art -> do
-                                prepared <- mpPrepareArtifact base p v doc art
-                                pure $ PreparedMirror $ \plan bytes -> do
-                                    lastPoll heartbeat >>= \snap -> modifyIORef' seen (snap :)
-                                    publishPrepared prepared plan bytes
+                            { mpPrepareVersion = \p v doc -> do
+                                prepared <- mpPrepareVersion base p v doc
+                                pure
+                                    prepared
+                                        { pmvPrepareUploadAction = \file verified ->
+                                            pmvPrepareUpload prepared file verified
+                                                <&> fmap
+                                                    ( \upload ->
+                                                        PreparedMirrorUpload
+                                                            ( \plan -> do
+                                                                lastPoll heartbeat >>= \snap -> modifyIORef' seen (snap :)
+                                                                publishPrepared upload plan
+                                                            )
+                                                    )
+                                        }
                             }
                 queue <- newTestMemoryQueue
                 withWiredRuntimeHeartbeat heartbeat queue (withPublish snapshotOnPublish admitPolicies) noopWorkerMetricsPort $ \runtime -> do
-                    traverse_ (enqueue_ queue) (replicate 3 (jobWith url))
+                    traverse_ (enqueue_ queue) (replicate 3 sampleMirrorJob)
                     messages <- receive_ queue
                     length messages `shouldBe` 3
-                    runWM runtime (processBatch messages)
+                    runWM (sourceAt url runtime) (processBatch messages)
                     snapshots <- reverse <$> readIORef seen
                     length snapshots `shouldBe` 3
                     drop 1 snapshots `shouldSatisfy` all isJust

@@ -29,11 +29,11 @@ import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (timeout)
 
-import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
+import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing), newMirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -42,6 +42,7 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Poll (runUntil)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Wai (localhost)
 import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped, mirrorPoliciesUnder)
 
@@ -102,12 +103,13 @@ newPublishAt mirrorUrl = do
     let transport =
             MirrorTransport
                 { ptManager = manager
-                , ptMintToken = pure (Just (mkSecret "test-token"))
+                , ptMintCredential = pure (Just (bareCredential (mkSecret "test-token")))
                 , -- The mount's plan-resolved response bound on the probe (production
                   -- threads 'pdLimits'). The default here, since no override is set.
                   ptLimits = defaultLimits
+                , ptTracing = passthroughTracingPort
                 }
-    pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) npmPublishCodec)
+    pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) (loopbackRegistryUrl mirrorUrl) npmPublishCodec)
 
 -- | An 'Env' over handle doubles and a real (no-TLS) manager, carrying only the given queue.
 newQueueEnv :: MirrorQueue -> IO Env

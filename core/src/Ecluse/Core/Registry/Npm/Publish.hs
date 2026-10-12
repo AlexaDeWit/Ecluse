@@ -6,8 +6,9 @@
 The checked mirror upload data keeps publication fields paired with the admitted tarball.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
-    NpmMirrorUploadData,
-    mkNpmMirrorUploadData,
+    NpmUploadMetadata,
+    prepareNpmSource,
+    prepareNpmUpload,
     npmPublishCodec,
     publishRequest,
     npmPublishDocument,
@@ -28,69 +29,69 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Request)
 
-import Ecluse.Core.Credential (ClientCredential, Secret, bareCredential)
+import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, Scope, hashAlg, hashValue, pkgEcosystem, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgEcosystem, pkgNamespace, renderPackageName)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
-    MirrorArtifact (maFilename, maHashes, maSize),
+    MirrorArtifact (maFilename, maHashes),
     PublishError (PublishError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     UrlFormationError,
     firstHashValue,
     isSuccessStatus,
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw))
+import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
+import Ecluse.Core.Registry.MirrorUpload
+import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
+import Ecluse.Core.Registry.Npm.Metadata (npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | A complete npm tarball inventory with its paired source publication fields.
-data NpmMirrorUploadData = NpmMirrorUploadData
-    { nmudName :: PackageName
-    , nmudVersion :: Version
-    , nmudArtifact :: MirrorArtifact
-    , nmudFields :: KeyMap Value
-    }
+-- | Supported npm publication fields after source-registry bookkeeping is removed.
+newtype NpmUploadMetadata = NpmUploadMetadata (KeyMap Value)
     deriving stock (Eq, Show)
 
--- | Refuse a mismatched identity, incomplete npm inventory, or missing source metadata before fetching bytes.
-mkNpmMirrorUploadData :: PackageName -> Version -> VersionDoc -> MirrorArtifact -> Either PublishFault NpmMirrorUploadData
-mkNpmMirrorUploadData name version doc admitted = do
-    unless (pkgEcosystem name == Npm && pkgName details == name && pkgVersion details == version) $
-        Left (PublishSourceUnavailable "the admitted snapshot belongs to another package or version")
-    case pkgArtifacts details of
-        artifact :| []
-            | artFilename artifact == unFilename (maFilename admitted)
-            , artHashes artifact == toList (maHashes admitted)
-            , artSize artifact == maSize admitted ->
-                pure ()
-        _ -> Left (PublishSourceUnavailable "the admitted descriptor does not cover the complete npm inventory")
+-- | Preserve the paired source fields and refuse an npm inventory with more than one physical tarball.
+prepareNpmSource :: PackageName -> Version -> VersionDoc -> Either PublishFault (MirrorInventory, NpmUploadMetadata)
+prepareNpmSource name version doc = do
+    unless (pkgEcosystem name == Npm) (Left (PublishSourceUnavailable "the mirror snapshot is not npm"))
     raw <- maybeToRight (PublishSourceUnavailable "the resolver carried no source version object") (vdRaw doc)
-    fields <- authoredFields raw
-    pure (NpmMirrorUploadData name version admitted fields)
-  where
-    details = vdDetails doc
+    fields <- case snd npmCached raw of
+        Just (Object objectFields) -> Right objectFields
+        _ -> Left (PublishSourceUnavailable "the source version object is not an npm object")
+    inventory <- checkedMirrorInventory name version doc (NpmMirrorRead fields)
+    case inventoryFiles inventory of
+        _ :| [] -> pure ()
+        _ -> Left (PublishSourceUnavailable "the npm inventory contains more than one physical tarball")
+    pure (inventory, NpmUploadMetadata (authoredFields fields))
 
--- | Probe an abbreviated packument and publish verified bytes with their strongest SRI alternatives.
+-- | Bind npm source fields to this verified member of the complete version inventory.
+prepareNpmUpload :: MirrorInventory -> NpmUploadMetadata -> ExpectedMirrorFile -> VerifiedArtifactBytes -> Either PublishFault (MirrorUploadData NpmUploadMetadata)
+prepareNpmUpload inventory metadata file verified = checkedMirrorUploadData inventory file verified metadata
+
+-- | npm uses its ordinary bounded metadata reader and one immutable tarball upload per version.
 npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
-        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
-        , pcVersionListParser = Project.versionListParser
-        , pcPrepareUploadData = mkNpmMirrorUploadData
+        { pcPrepareSource = prepareNpmSource
+        , pcPrepareUpload = \_ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
+        , pcTargetRead = npmRead
+        , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
+        , pcVersionListParser = Just Project.versionListParser
         , pcPublishRequest = npmPublishRequestFor
-        , pcPublishOutcome = classifyPublish
+        , pcPublishOutcome = \status _ -> classifyPublish status
         }
 
-npmPublishRequestFor :: Text -> Maybe Secret -> PublishPlan -> NpmMirrorUploadData -> ByteString -> Either PublishFault Request
-npmPublishRequestFor targetUrl token plan uploadData bytes =
+npmPublishRequestFor :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData NpmUploadMetadata -> Either PublishFault Request
+npmPublishRequestFor targetUrl credential plan uploadData =
     first (PublishFetch . FetchUrlUnformable) $
-        publishRequest targetUrl (bareCredential <$> token) (nmudName uploadData) (npmPublishDocument plan uploadData bytes)
+        publishRequest targetUrl credential (inventoryPackage (uploadInventory uploadData)) (npmPublishDocument plan uploadData)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do
@@ -117,8 +118,8 @@ publishRequest baseUrl credential name document = do
     jsonPutRequest credential url document
 
 -- | Preserve source metadata fields while replacing identity, attachment controls, and verified distribution facts.
-npmPublishDocument :: PublishPlan -> NpmMirrorUploadData -> ByteString -> ByteString
-npmPublishDocument plan uploadData tarball =
+npmPublishDocument :: PublishPlan -> MirrorUploadData NpmUploadMetadata -> ByteString
+npmPublishDocument plan uploadData =
     toStrict . Aeson.encode $
         object
             [ "_id" .= rendered
@@ -128,20 +129,18 @@ npmPublishDocument plan uploadData tarball =
             , "_attachments" .= object [Key.fromText filename .= attachmentObject tarball]
             ]
   where
-    artifact = nmudArtifact uploadData
+    artifact = expectedDescriptor (uploadFile uploadData)
+    tarball = uploadBytes uploadData
     filename = unFilename (maFilename artifact)
-    authored = nmudFields uploadData
+    NpmUploadMetadata authored = uploadMetadata uploadData
     dist = distObject filename (strongestSriValue artifact) (firstHashValue SHA1 artifact) (objectAt "dist" authored)
     manifest = versionManifestObject rendered versionText dist authored
-    versionText = renderVersion (nmudVersion uploadData)
-    rendered = renderPackageName (nmudName uploadData)
+    versionText = renderVersion (inventoryVersion (uploadInventory uploadData))
+    rendered = renderPackageName (inventoryPackage (uploadInventory uploadData))
 
 -- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
-authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)
-authoredFields doc = case snd npmCached doc of
-    Just (Object o) -> Right (KeyMap.filterWithKey (\k _ -> k == "_hasShrinkwrap" || not (T.isPrefixOf "_" (Key.toText k))) o)
-    Just _ -> Left (PublishSourceUnavailable "the carried version object is not a JSON object")
-    Nothing -> Left (PublishSourceUnavailable "the carried version object is not an npm document")
+authoredFields :: KeyMap Value -> KeyMap Value
+authoredFields = KeyMap.filterWithKey (\keyName _ -> keyName == "_hasShrinkwrap" || not (T.isPrefixOf "_" (Key.toText keyName)))
 
 objectAt :: Key.Key -> KeyMap Value -> KeyMap Value
 objectAt slot o = case KeyMap.lookup slot o of

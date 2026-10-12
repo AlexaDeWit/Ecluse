@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror worker's vocabulary: the 'WorkerRuntime' the composition root assembles, the
-per-ecosystem 'WorkerPolicy' bundles a job is re-evaluated against, and the 'WorkerM' reader
-the loop runs in.
-
-The mirror write is not a runtime slot. It rides each ecosystem's bundle, so a job publishes
-only through its own ecosystem's capability. The loop is in "Ecluse.Core.Worker.Loop".
+{- | Worker capabilities bound to one mounted ecosystem and its current policy.
+The supervised loop owns receipts and records progress through this runtime.
 -}
 module Ecluse.Core.Worker.Types (
     -- * The runtime and its policy bundles
@@ -40,6 +36,7 @@ import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -80,9 +77,11 @@ data WorkerPolicy = WorkerPolicy
     , wpMinIntegrity :: MinIntegrity
     -- ^ The mount's public-integrity floor, re-applied through the shared admission gate.
     , wpArtifactHostHonoured :: Maybe HostPort -> Bool
-    {- ^ The mount's tarball-host gate, re-checked on the job's fetch URL. An unextractable
-    authority ('Nothing') is refused, because the queue payload is a trust boundary.
+    {- ^ The mount's tarball-host gate, applied to each source artifact location.
+    An unextractable authority ('Nothing') is refused.
     -}
+    , wpEgressUrl :: Text -> Either Text RegistryUrl
+    -- ^ The same URL validation policy used by the mounted serving path.
     , wpArtifact :: AdapterArtifact
     -- ^ The mount ecosystem's artifact capability. A job's @GET@ rides its by-URL member.
     , wpPublish :: MirrorPublish
