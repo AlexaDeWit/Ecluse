@@ -40,6 +40,10 @@ data StubRoute
       Mirror
     | -- | The native PyPI upload/read fixture.
       PyPIMirror
+    | -- | Native PyPI repositories behind the deterministic AWS control plane.
+      PyPICodeArtifactData
+    | -- | The AWS API host resolved on the isolated fixture network.
+      PyPICodeArtifactControl
     deriving stock (Eq, Show, Enum, Bounded)
 
 -- | Every name the stub answers to: its network aliases, and the names its certificate carries.
@@ -59,6 +63,8 @@ stubHost = \case
     PrivateCache -> "private-cache"
     Mirror -> "mirror"
     PyPIMirror -> "pypi-mirror"
+    PyPICodeArtifactData -> "contract-domain-123456789012.d.codeartifact.us-east-1.amazonaws.com"
+    PyPICodeArtifactControl -> "codeartifact.us-east-1.amazonaws.com"
 
 -- | A fault the stub holds on its routes. It holds one at a time.
 data StubFault
@@ -68,6 +74,8 @@ data StubFault
       PrivateCacheWritesRefused
     | -- | Forward PyPI writes to the host fixture, optionally holding public unavailable.
       PyPIMirrorBackend Int Bool
+    | -- | Route native PyPI stores and the AWS API to one host fixture.
+      PyPICodeArtifactBackend Int
     deriving stock (Eq, Show)
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
@@ -91,13 +99,19 @@ serverBlock fault route =
     , "    access_log /var/log/nginx/access.log stub_read;"
     ]
         <> maybe [] (`faultLines` route) fault
-        <> case (fault, route) of
-            (Just (PyPIMirrorBackend port _), PyPIMirror) ->
-                [ "    client_max_body_size " <> show nativeUploadLimit <> ";"
-                , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
-                , "}"
-                ]
-            _ -> routeLines route <> ["}"]
+        <> (case (fault, route) of
+                (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
+                (Just (PyPICodeArtifactBackend port), PyPICodeArtifactData) -> forwarded 16777216 port
+                (Just (PyPICodeArtifactBackend port), PyPICodeArtifactControl) -> forwarded 16777216 port
+                _ -> routeLines route
+            )
+        <> ["}"]
+
+forwarded :: Int -> Int -> [Text]
+forwarded limit port =
+    [ "    client_max_body_size " <> show limit <> ";"
+    , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
+    ]
 
 -- nginx evaluates these before it picks a location, so a fault covers its whole route.
 faultLines :: StubFault -> StubRoute -> [Text]
@@ -105,6 +119,7 @@ faultLines = \case
     PublicUpstreamsDown -> \route -> [closeUnanswered | isPublic route]
     PrivateCacheWritesRefused -> \route -> [refuseWrites | route == PrivateCache]
     PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    PyPICodeArtifactBackend _ -> const []
   where
     closeUnanswered = "    return " <> show unansweredStatus <> ";"
     refuseWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
@@ -122,6 +137,8 @@ isPublic = \case
     PrivateCache -> False
     Mirror -> False
     PyPIMirror -> False
+    PyPICodeArtifactData -> False
+    PyPICodeArtifactControl -> False
 
 routeLines :: StubRoute -> [Text]
 routeLines = \case
@@ -177,6 +194,9 @@ routeLines = \case
         , "        proxy_set_header X-Forwarded-For $remote_addr;"
         , "    }"
         ]
+
+    PyPICodeArtifactData -> ["    location / { return 503; }"]
+    PyPICodeArtifactControl -> ["    location / { return 503; }"]
 
 -- | Count started workers so a reload can wait for the previous generation to retire.
 startedWorkers :: Text -> Int

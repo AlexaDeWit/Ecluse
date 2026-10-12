@@ -41,7 +41,7 @@ recoveryScenarios RecoveryFixture{..} stores@StoreOps{..} clients@ClientOps{..} 
             version = packageVersion recoveryRefused
         refused <- withDeletesRefused plane (runSweep plane Apply (IdentityPolicy [name]))
         sweepAudit refused
-            `shouldSatisfy` any (T.isInfixOf (refusedDeleteTarget <> ": " <> name <> "@" <> version <> ": the backend refused the delete, HTTP 503"))
+            `shouldSatisfy` any (T.isInfixOf (refusedDeleteTarget <> ": " <> name <> "@" <> version <> ": " <> refusedDeleteDiagnostic))
         storeVersions proxy name `shouldReturn` []
         storeVersions cache name `shouldReturn` [version]
         storeArtifact cache name version >>= (`shouldSatisfy` servedBytes)

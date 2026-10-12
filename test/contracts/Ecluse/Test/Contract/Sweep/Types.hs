@@ -92,6 +92,7 @@ data RecoveryOps plane store = RecoveryOps
     , withDeletesRefused :: forall a. plane -> IO a -> IO a
     , directPublisher :: store -> IO store
     , refusedDeleteTarget :: Text
+    , refusedDeleteDiagnostic :: Text
     }
 
 -- | Independently scheduled roles expose publication evidence through the worker's own log.
@@ -122,7 +123,8 @@ data IdentityFixture = IdentityFixture
     , identityPreviewVersion :: Text
     , identityListingPrefix :: Text
     , identityAbsentPrefix :: Text
-    , identityConsentKey :: Text
+    , identityConsentDiagnostic :: Text
+    , identityConsentEvents :: [Text]
     , identityMirrorDiagnostic :: Text
     , identityCacheDiagnostic :: Text
     }
