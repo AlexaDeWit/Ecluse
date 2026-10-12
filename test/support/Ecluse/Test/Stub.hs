@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Loopback HTTP responses and independent request captures.
 module Ecluse.Test.Stub (
     Captured (..),
     Stub (..),
@@ -12,6 +13,7 @@ module Ecluse.Test.Stub (
     withStub,
     withStubHeaders,
     withRoutedStub,
+    withRoutedStubIO,
     stubConfig,
     headerValue,
 ) where
@@ -37,9 +39,7 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Wai (localhost)
 
-{- | What the stub captured from one request it served: enough to assert the method,
-path, and headers Écluse sent.
--}
+-- | The method, path, headers and body received at the HTTP boundary.
 data Captured = Captured
     { capMethod :: ByteString
     , capPath :: ByteString
@@ -48,9 +48,7 @@ data Captured = Captured
     }
     deriving stock (Eq, Show)
 
-{- | A running stub: the ephemeral 'Port' it listens on and every 'Captured' request it
-has served, most recent first.
--}
+-- | An ephemeral socket and its captures, most recent first.
 data Stub = Stub
     { stubPort :: Port
     , stubCaptured :: IORef [Captured]
@@ -60,9 +58,7 @@ data Stub = Stub
 stubBaseUrl :: Stub -> Text
 stubBaseUrl stub = "http://127.0.0.1:" <> show (stubPort stub)
 
-{- | The base URL of a running stub by the @localhost@ DNS name. The serve path's
-internal-range block matches an IP literal, so a gated fetch must address the stub by name.
--}
+-- | A DNS-name URL for cases whose egress guard refuses an IP literal.
 stubLocalhostUrl :: Stub -> Text
 stubLocalhostUrl stub = localhost (stubPort stub)
 
@@ -76,24 +72,22 @@ lastCaptured stub =
 allCaptured :: Stub -> IO [Captured]
 allCaptured stub = reverse <$> readIORef (stubCaptured stub)
 
-{- | Run an action against a stub that records each request and answers every one with a fixed
-status and body. It binds a free port for the action's duration, so tests never collide on a port.
--}
+-- | Record requests and answer with a fixed status and body during the socket lifetime.
 withStub :: Status -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []
 
-{- | 'withStub' with extra response headers. Set @Content-Encoding: gzip@ and the @http-client@ body
-reader decompresses, so a test can assert the bounded read bounds /decompressed/ size, not wire size.
--}
+-- | Add response headers, including content encoding for decompressed-body bounds.
 withStubHeaders :: Status -> [Header] -> LBS.ByteString -> (Stub -> IO a) -> IO a
 withStubHeaders status extraHeaders body =
     withRoutedStub (const (status, extraHeaders, body))
 
-{- | 'withStub' answering each request from what it captured, so a test can drive a sequence of
-different calls against one origin. The reply is chosen after the request is recorded.
--}
+-- | Choose a response from the captured request after recording it.
 withRoutedStub :: (Captured -> (Status, [Header], LBS.ByteString)) -> (Stub -> IO a) -> IO a
-withRoutedStub reply action = do
+withRoutedStub reply = withRoutedStubIO (pure . reply)
+
+-- | Route with mutable server state while retaining the same capture and socket lifetime.
+withRoutedStubIO :: (Captured -> IO (Status, [Header], LBS.ByteString)) -> (Stub -> IO a) -> IO a
+withRoutedStubIO reply action = do
     captured <- newIORef []
     let app :: Application
         app waiReq respond = do
@@ -105,15 +99,13 @@ withRoutedStub reply action = do
                         , capHeaders = requestHeaders waiReq
                         , capBody = LBS.toStrict bodyBytes
                         }
-                (status, extraHeaders, body) = reply cap
             atomicModifyIORef' captured (\seen -> (cap : seen, ()))
+            (status, extraHeaders, body) <- reply cap
             respond (responseLBS status extraHeaders body)
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
 
-{- | An origin pointed at a stub, anonymous, sharing a no-TLS manager. The caller supplies the
-egress former: a stub speaks plain HTTP, and only a @dev-http-egress@ build can witness one.
--}
+-- | Build an anonymous origin using the caller's development HTTP egress witness.
 stubConfig :: (Text -> RegistryUrl) -> Stub -> IO OriginClient
 stubConfig egressUrl stub = do
     manager <- newManager defaultManagerSettings
