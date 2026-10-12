@@ -1580,9 +1580,12 @@ test-suite ecluse-smoke
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
 
--- Four fixed suites share the real-image providers and concrete contract declarations.
+-- E2E providers need the development-only loopback constructor.
+-- Their suites and metadata tools follow the same flag in release builds.
 library ecluse-e2e-test-support
   import:             shared
+  if !flag(dev-http-egress)
+    buildable: False
   hs-source-dirs:     test/e2e
   exposed-modules:
     Ecluse.E2E.Catalogue
@@ -1640,6 +1643,8 @@ library ecluse-e2e-test-support
 
 test-suite ecluse-e2e-npm-serving
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-npm-serving
@@ -1649,6 +1654,8 @@ test-suite ecluse-e2e-npm-serving
 
 test-suite ecluse-e2e-npm-writes
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-npm-writes
@@ -1658,6 +1665,8 @@ test-suite ecluse-e2e-npm-writes
 
 test-suite ecluse-e2e-pypi
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-pypi
@@ -1667,6 +1676,8 @@ test-suite ecluse-e2e-pypi
 
 test-suite ecluse-e2e-shared-system
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:   test/e2e-shared-system
@@ -1676,6 +1687,8 @@ test-suite ecluse-e2e-shared-system
 
 executable ecluse-e2e-manifest
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/e2e-manifest
   build-depends:
@@ -1691,6 +1704,8 @@ executable ecluse-integration-manifest
 
 executable ecluse-e2e-audit
   import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
   main-is:         Main.hs
   hs-source-dirs:   test/tools/e2e-audit
   build-depends:
