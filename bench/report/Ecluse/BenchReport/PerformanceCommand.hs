@@ -16,7 +16,7 @@ import Ecluse.BenchLoad.Floors (passKey)
 import Ecluse.BenchLoad.Pod (parsePodShape)
 import Ecluse.BenchReport.Performance
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Test.Contract.Manifest (digest, failRunner, jsonLine, writeJsonFile)
+import Ecluse.Test.Contract.Manifest (digest, failRunner, jsonLine, readPlanIdentity, writeJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (identityPlanDigest))
 import Ecluse.Test.Corpus (corpusLabel, corpusPackages, cpName, pypiCorpusPackages)
@@ -99,6 +99,10 @@ verifyRequest request = do
     compiled <- either failRunner pure (compileObligation (poKind obligation) (poSubject obligation) (poConditions obligation))
     unless (compiled == obligation) (failRunner "performance obligation differs from compiled requirements")
     unless (identityPlanDigest (requestIdentity request) == digest (jsonLine obligation)) (failRunner "performance plan digest mismatch")
+    expected <- readPlanIdentity False (digest (jsonLine obligation))
+    unless (requestIdentity request == expected) (failRunner "performance request identity differs from the current execution")
+    attempt <- lookupEnv "ECLTEST_ATTEMPT" >>= maybe (failRunner "missing required execution identity: ECLTEST_ATTEMPT") (pure . toText)
+    unless (requestAttempt request == attempt && not (T.null attempt)) (failRunner "performance request attempt differs from the current execution")
 
 finishAudit :: PerformanceRequest -> PerformanceReceipt -> IO ()
 finishAudit request receipt =

@@ -7,6 +7,7 @@ module Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.Map.Strict qualified as Map
+import System.Exit (ExitCode (ExitSuccess))
 
 import Ecluse.Acceptance
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
