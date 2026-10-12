@@ -177,7 +177,7 @@ artifactSpec = describe "the served distribution file" $ do
 sidecarSpec :: Spec
 sidecarSpec = describe "the metadata companion" $ do
     for_ [methodGet, methodHead] $ \method ->
-        it (caseLabel ("integration/pypi/native-022/" <> decodeUtf8 method) (toText (("relays metadata under " <> decodeUtf8 method <> " without advisory or policy reads") :: String))) $
+        it (caseLabel ("integration/pypi/native-022/" <> T.toLower (decodeUtf8 method)) (toText (("relays metadata under " <> decodeUtf8 method <> " without advisory or policy reads") :: String))) $
             withPyPIProxyOver publicIndex publicPypiDeps $ \proxy -> do
                 let app = proxyWithDeps proxy (withMirrorPlan (MirrorOnAdmit (loopbackRegistryUrl "http://localhost:1")) . (\deps -> deps{pdRules = [], pdAdvisoryEtag = fail "sidecar read advisories"}))
                 response <- requestAt method (sdistPath <> ".metadata") Wai.defaultRequest app
@@ -336,7 +336,7 @@ sidecarCollisionSpec = describe "companions keep the winning source" $ do
 
     for_ [status404, status503] $ \privateStatus ->
         for_ [methodGet, methodHead] $ \method ->
-            it (caseLabel ("integration/pypi/native-040/" <> show (statusCode privateStatus) <> "/" <> decodeUtf8 method) (toText (("does not replace an advertised private companion after HTTP " <> show (statusCode privateStatus) <> " under " <> decodeUtf8 method) :: String))) $
+            it (caseLabel ("integration/pypi/native-040/" <> show (statusCode privateStatus) <> "/" <> T.toLower (decodeUtf8 method)) (toText (("does not replace an advertised private companion after HTTP " <> show (statusCode privateStatus) <> " under " <> decodeUtf8 method) :: String))) $
                 withCollision (privateCollisionIndex id) (companionResponse privateStatus) $ \proxy -> do
                     index <- getIndex (proxyApp proxy)
                     mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [privateMetadataDigest, privateMetadataDigest]
