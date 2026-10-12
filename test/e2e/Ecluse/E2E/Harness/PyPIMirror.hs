@@ -53,6 +53,7 @@ import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.E2E.Harness.Docker (withStubFault)
 import Ecluse.E2E.Harness.Stub (StubFault (PyPIMirrorBackend), StubRoute (PyPIMirror, PyPIPublic), nativeUploadLimit, stubUrl)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Exposition (Sample (..), parseExpositionStrict)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)
 import System.FilePath ((</>))
@@ -308,20 +309,12 @@ publicWorkCounters proxy = do
     request <- Http.parseRequest ("http://" <> toString (T.strip (decodeUtf8 address :: Text)) <> ":9464/metrics")
     response <- Http.httpLbs request (e2eManager proxy)
     unless (statusCode (Http.responseStatus response) == 200) (fail "product metrics scrape failed")
-    samples <- traverse sample (filter (not . T.isPrefixOf "#") (T.lines (decodeUtf8 (Http.responseBody response))))
+    samples <- either (fail . toString) pure (parseExpositionStrict (decodeUtf8 (Http.responseBody response)))
     pure
         PublicWorkCounters
-            { pwcRuleEvaluations = sum [value | Just (name, value) <- samples, "ecluse_rule_eval_duration" `T.isPrefixOf` name, "_count" `T.isSuffixOf` name]
-            , pwcMirrorEnqueues = sum [value | Just (name, value) <- samples, name `elem` ["ecluse_mirror_enqueued", "ecluse_mirror_enqueued_total"]]
+            { pwcRuleEvaluations = sum [value | Sample name _ value <- samples, "ecluse_rule_eval_duration" `T.isPrefixOf` name, "_count" `T.isSuffixOf` name]
+            , pwcMirrorEnqueues = sum [value | Sample name _ value <- samples, name `elem` ["ecluse_mirror_enqueued", "ecluse_mirror_enqueued_total"]]
             }
-  where
-    sample line
-        | T.null (T.strip line) = pure Nothing
-        | otherwise = case T.words line of
-            [labelledName, value] -> case readMaybe (toString value) of
-                Just number -> pure (Just (T.takeWhile (/= '{') labelledName, number))
-                Nothing -> fail "metrics scrape contains a non-numeric sample"
-            _ -> fail "metrics scrape contains an unsupported sample shape"
 
 -- | Await every original artifact of one fixture project, independently of its listed version name.
 awaitProjectFiles :: NativeTarget -> [Distribution] -> Text -> IO Bool

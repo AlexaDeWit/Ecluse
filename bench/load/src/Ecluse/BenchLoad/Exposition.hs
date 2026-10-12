@@ -3,11 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The proxy's Prometheus scrape, read as samples. The harness waits for an advisory database to
-be installed, samples the admission gauges during a window, and reads the metadata cache outcomes
-and rule failures across it. A line it cannot read is skipped, so a series added later never
-breaks a report.
--}
+-- | Advisory readiness, admission gauges, and cache outcomes from the proxy's Prometheus scrape.
 module Ecluse.BenchLoad.Exposition (
     -- * Samples
     Sample (..),
@@ -39,63 +35,9 @@ import Data.Universe.Class qualified as Universe
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AdvisoryDatabaseAgeSeconds, AssembledCacheRequests, MetadataCacheRequests, RuleEffectfulFailures, SingleVersionCacheRequests), metricName)
 import Ecluse.Core.Telemetry.Metrics (CacheResult (Collapsed, Hit, Miss), CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheResult, LCacheStore, LEcosystem), renderLabel)
+import Ecluse.Test.Exposition (Sample (..), parseExposition)
 
--- | One exposition line: the metric name, its labels, and its value.
-data Sample = Sample
-    { sampleName :: Text
-    , sampleLabels :: [(Text, Text)]
-    , sampleValue :: Double
-    }
-    deriving stock (Eq, Show)
-
--- | Parse a text exposition, skipping comments, blank lines, and lines it cannot read.
-parseExposition :: Text -> [Sample]
-parseExposition = mapMaybe sampleLine . lines
-
-sampleLine :: Text -> Maybe Sample
-sampleLine line
-    | T.null stripped || "#" `T.isPrefixOf` stripped = Nothing
-    | otherwise = do
-        let (name, rest) = T.break (\c -> c == '{' || c == ' ') stripped
-        guard (not (T.null name))
-        (labels, afterLabels) <- case T.uncons rest of
-            Just ('{', inner) -> labelSet inner []
-            _ -> Just ([], rest)
-        valueText <- listToMaybe (words afterLabels)
-        Sample name labels <$> sampleNumber valueText
-  where
-    stripped = T.strip line
-
--- Labels are @key="value"@ pairs, where a value escapes backslash, quote, and newline.
-labelSet :: Text -> [(Text, Text)] -> Maybe ([(Text, Text)], Text)
-labelSet input acc = case T.uncons (T.dropWhile (\c -> c == ',' || c == ' ') input) of
-    Just ('}', rest) -> Just (reverse acc, rest)
-    Just _ -> do
-        let (key, afterKey) = T.breakOn "=\"" (T.dropWhile (\c -> c == ',' || c == ' ') input)
-        guard (not (T.null key) && not (T.null afterKey))
-        (value, rest) <- quoted (T.drop 2 afterKey) ""
-        labelSet rest ((T.strip key, value) : acc)
-    Nothing -> Nothing
-
-quoted :: Text -> Text -> Maybe (Text, Text)
-quoted input acc = case T.uncons input of
-    Just ('"', rest) -> Just (acc, rest)
-    Just ('\\', rest) -> case T.uncons rest of
-        Just ('n', more) -> quoted more (T.snoc acc '\n')
-        Just (c, more) -> quoted more (T.snoc acc c)
-        Nothing -> Nothing
-    Just (c, rest) -> quoted rest (T.snoc acc c)
-    Nothing -> Nothing
-
-sampleNumber :: Text -> Maybe Double
-sampleNumber = \case
-    "+Inf" -> Just (1 / 0)
-    "-Inf" -> Just (negate (1 / 0))
-    other -> readMaybe (toString other)
-
-{- | The sum over every series of one metric whose labels include all the given pairs. 'Nothing'
-when no series matches, which keeps an absent metric apart from a zero one.
--}
+-- | Sum matching series. An absent series stays distinct from a zero value.
 seriesTotal :: Text -> [(Text, Text)] -> [Sample] -> Maybe Double
 seriesTotal name wanted samples = case matching of
     [] -> Nothing
