@@ -49,21 +49,21 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
-import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpFirstParty, wpMirrorState, wpPublish, wpRules),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpFirstParty, wpMirrorState, wpPublish, wpRules),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Mirror.State
-import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
+import Ecluse.Test.Package (hexSha256Of, npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
@@ -283,6 +283,43 @@ spec = do
                     writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
                     writeIORef (mfRejectFile fixture) Nothing
                     runManaged fixture `shouldReturn` Succeeded
+                    allCaptured moved `shouldReturn` []
+
+        it "recovers missing files from newly admitted locations when the original source disappears" $
+            withStub status404 "unavailable" $ \original ->
+                withStub status200 (toLazy tarballBytes) $ \moved -> do
+                    fixture <- managedFixture (stubBaseUrl original) False
+                    runManaged fixture >>= (`shouldSatisfy` isRetried)
+                    changed <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                    runManaged fixture `shouldReturn` Succeeded
+                    readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                    length <$> allCaptured moved `shouldReturn` 3
+
+        it "refuses a moved source whose current identity conflicts with the retained files" $
+            withStub status404 "unavailable" $ \original ->
+                withStub status200 (toLazy tarballBytes) $ \moved -> do
+                    fixture <- managedFixture (stubBaseUrl original) False
+                    runManaged fixture >>= (`shouldSatisfy` isRetried)
+                    incoming <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
+                    let details = inventoryDetails incoming
+                        files = fmap (\file -> file{artHashes = [unsafeHash SHA256 (hexSha256Of "changed bytes")]}) (pkgArtifacts details)
+                    changed <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "changed identity"))
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                    runManaged fixture >>= (`shouldSatisfy` isDropped)
+                    allCaptured moved `shouldReturn` []
+
+        it "does not revive an old source when current admission refuses every moved location" $
+            withStub status404 "unavailable" $ \original ->
+                withStub status200 (toLazy tarballBytes) $ \moved -> do
+                    fixture <- managedFixture (stubBaseUrl original) False
+                    runManaged fixture >>= (`shouldSatisfy` isRetried)
+                    changed <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                    before <- allCaptured original
+                    let policy = (mfPolicy fixture){wpArtifactHostHonoured = (== hostPortAddress (stubBaseUrl original))}
+                    runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isDropped)
+                    allCaptured original `shouldReturn` before
                     allCaptured moved `shouldReturn` []
 
         it "preserves missing historic files when the new public snapshot omits them" $

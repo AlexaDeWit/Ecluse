@@ -43,7 +43,9 @@ repeated publication. Existing receipt, retry and terminal-fault rules still gov
 A project record retains each physical filename's first admitted source entry once. Separate
 fragment coordinates prevent later admissions from colliding with earlier array positions.
 Conditional updates union new identities and refuse conflicting bytes or declarations. A source
-URL change does not change immutable byte identity. Native archive upload metadata stays transient.
+URL change does not change immutable byte identity. After an original-location fetch failure, the
+worker can use a freshly admitted location with the same recorded file identity. It verifies the
+bytes against the retained identity. Native archive upload metadata stays transient.
 
 The project envelope follows the latest successfully committed source admission. File verification
 and companion updates leave it unchanged. Fully managed listings restore that envelope. Listings
