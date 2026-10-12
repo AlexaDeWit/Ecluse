@@ -8,7 +8,6 @@ module Ecluse.Test.Contract.PackageStore.PyPI (pypiStoreDriver, readPyPIStoreMan
 import Data.Aeson (Value (Object, String), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (sortOn)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
