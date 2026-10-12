@@ -13,23 +13,23 @@ import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetr
 import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 import Ecluse.Test.Contract.Phase (PhaseRecorder)
 import Ecluse.Test.Contract.Telemetry
 import Ecluse.Test.Poll (pollUntil)
 
 -- | npm traffic and configuration acquisition for the canonical read telemetry scenarios.
-npmReadTelemetryFamily :: ConcreteFixture -> FamilyFixture ReadTelemetryDriver
+npmReadTelemetryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture ReadTelemetryDriver
 npmReadTelemetryFamily fixture = concreteFamily fixture $ \recorder action plane ->
     action (npmReadDriver recorder plane)
 
 -- | pip traffic uses the same four required service telemetry scenarios.
-pypiReadTelemetryFamily :: ConcreteFixture -> FamilyFixture ReadTelemetryDriver
+pypiReadTelemetryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture ReadTelemetryDriver
 pypiReadTelemetryFamily fixture = concreteFamily fixture $ \recorder action plane ->
     action (pypiReadDriver recorder plane)
 
 -- | npm supplies worker and private-fetch observations to the common write telemetry laws.
-npmMirrorTelemetryFamily :: ConcreteFixture -> FamilyFixture MirrorTelemetryFixture
+npmMirrorTelemetryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture MirrorTelemetryFixture
 npmMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action ->
     timedFixtureWith recorder (withE2EWith (telemetryConfig EnabledTelemetry)) $ \e2e ->
         action

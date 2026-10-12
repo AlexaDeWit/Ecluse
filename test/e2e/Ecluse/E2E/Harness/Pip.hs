@@ -9,6 +9,7 @@ module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipInstallIn,
     pipInstalled,
+    pipInstalledTree,
     pipInstallsWheel,
 
     -- * The served index
@@ -29,6 +30,7 @@ import Ecluse.E2E.Harness.Client (runClient, withClientDir)
 import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
+import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
@@ -87,6 +89,10 @@ pipInstallsWheel e2e advertised =
 -- | Whether a wheel's @.dist-info@ directory landed in the project's install target.
 pipInstalled :: PipProject -> Text -> IO Bool
 pipInstalled proj distInfo = doesDirectoryExist (ppDir proj </> targetDir </> toString distInfo)
+
+-- | Observe all installation output, including unexpected distributions and partial files.
+pipInstalledTree :: PipProject -> IO InstalledTree
+pipInstalledTree proj = snapshotTree (ppDir proj) [targetDir]
 
 -- | Read advertised @(filename, sha256)@ pairs through the proxy, failing if the mount refuses.
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]

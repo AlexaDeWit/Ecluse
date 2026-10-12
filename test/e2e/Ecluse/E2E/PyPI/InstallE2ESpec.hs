@@ -12,6 +12,7 @@ import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiSdistFile, pypiVersion, pypiWheelFile, pypiYankReason, pypiYankedDistInfo, pypiYankedVersion, pypiYankedWheelFile)
@@ -22,8 +23,8 @@ import Ecluse.Test.Contract.Serving (ServingResponse (..), artifactDigestCase)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | Drive the product image with a real pip client and local stores.
-nativeInstallationContract :: ConcreteFixture -> DeclaredGroup
-nativeInstallationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
+nativeInstallationContract :: ConcreteFixture Group -> DeclaredGroup
+nativeInstallationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder =

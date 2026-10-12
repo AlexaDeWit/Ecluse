@@ -16,7 +16,7 @@ import Ecluse.E2E.TelemetryE2ESpec (pypiReadTelemetryFamily)
 import Ecluse.Test.Contract.Ecosystem
 
 -- | Missing write drivers retain their required laws as named failures.
-pypiDriver :: EcosystemDriver () () () () ()
+pypiDriver :: EcosystemDriver Bool () () () () ()
 pypiDriver =
     EcosystemDriver
         { ecosystemName = "pypi"

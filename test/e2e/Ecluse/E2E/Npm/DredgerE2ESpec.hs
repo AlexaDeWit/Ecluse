@@ -33,6 +33,7 @@ import Ecluse.E2E.Fixtures.Npm (
  )
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.Test.Contract.Ecosystem (FamilyMetadata)
 import Ecluse.Test.Contract.Sweep (listed)
 import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
@@ -40,7 +41,7 @@ import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
 -- | Preserve four independent store lifetimes under the canonical Dredger composition.
-npmSweepDriver :: ConcreteFixture -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
+npmSweepDriver :: ConcreteFixture FamilyMetadata -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
 npmSweepDriver fixture recorder =
     SweepDriver
         { withIdentitySweep = acquire withSeededStore

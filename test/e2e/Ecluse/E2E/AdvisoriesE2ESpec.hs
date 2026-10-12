@@ -31,7 +31,7 @@ import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiWheelFor)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 import Ecluse.Test.Contract.Install.Advisory
 import Ecluse.Test.Json (asObject, objectAt, textAt)
 import Ecluse.Test.Package (hexSha256Of)
@@ -46,12 +46,12 @@ withPublishedAdvisories ecosystem exportBase action plane = do
     action plane
 
 -- | npm compiles its independent native export before exposing advisory operations.
-npmAdvisoryFamily :: ConcreteFixture -> FamilyFixture AdvisoryScenarioDriver
+npmAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
 npmAdvisoryFamily fixture = concreteFamily fixture $ \recorder action ->
     timedFixtureWith recorder (withPublishedAdvisories Npm npmAdvisoryExportBase) (action . npmAdvisoryDriver)
 
 -- | PyPI uses the same scenarios after Pilot compiles its native OSV export.
-pypiAdvisoryFamily :: ConcreteFixture -> FamilyFixture AdvisoryScenarioDriver
+pypiAdvisoryFamily :: ConcreteFixture FamilyMetadata -> FamilyFixture AdvisoryScenarioDriver
 pypiAdvisoryFamily fixture = concreteFamily fixture $ \recorder action ->
     timedFixtureWith recorder (withPublishedAdvisories PyPI pypiAdvisoryExportBase) (action . pypiAdvisoryDriver)
 

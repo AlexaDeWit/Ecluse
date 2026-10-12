@@ -19,7 +19,7 @@ import Ecluse.E2E.TelemetryE2ESpec (npmMirrorTelemetryFamily, npmReadTelemetryFa
 import Ecluse.Test.Contract.Ecosystem
 
 -- | Lower-tier serving evidence and real-client operations form one completion definition.
-npmDriver :: EcosystemDriver (Set Resolved) Value GlobalDataPlane E2E NpmProject
+npmDriver :: EcosystemDriver (Maybe Text) (Set Resolved) Value GlobalDataPlane E2E NpmProject
 npmDriver =
     EcosystemDriver
         { ecosystemName = "npm"
@@ -29,7 +29,7 @@ npmDriver =
         , ecosystemAdvisories = Available (npmAdvisoryFamily npmPilotFixture)
         , ecosystemMirroring = Available (npmMirrorFamily npmMirrorFixture)
         , ecosystemPublication = Available (npmPublicationFamily npmPublicationFixture)
-        , ecosystemDredger = Available (fixtureGroup npmDredgerFixture, npmSweepDriver npmDredgerFixture)
+        , ecosystemDredger = Available (fixtureMetadata npmDredgerFixture, npmSweepDriver npmDredgerFixture)
         , ecosystemTelemetry = Available (npmReadTelemetryFamily npmTelemetryFixture, Available (npmMirrorTelemetryFamily npmMirrorTelemetryFixture))
         , ecosystemNativeExtensions = [nativeInstallationContract npmRegistryFixture]
         }

@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Concrete topology acquisition and case declarations for E2E contracts.
+-- | Concrete E2E acquisition, canonical schedules, and native registrations.
 module Ecluse.E2E.Fixtures.Contracts (
     ConcreteFixture (..),
     concreteFamily,
@@ -33,22 +33,22 @@ import Ecluse.E2E.Harness (
     withDataPlane,
     withGlobalDataPlane,
  )
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture (..))
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture (..), FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Types
 
 -- | Each acquisition owns the complete data plane for one lifecycle.
-data ConcreteFixture = ConcreteFixture
-    { fixtureGroup :: Group
+data ConcreteFixture metadata = ConcreteFixture
+    { fixtureMetadata :: metadata
     , withFixture :: (GlobalDataPlane -> IO ()) -> IO ()
     }
 
 -- | npm reads and mirror effects through Verdaccio and the in-memory queue.
-npmRegistryFixture :: ConcreteFixture
+npmRegistryFixture :: ConcreteFixture Group
 npmRegistryFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
-        , fixtureGroup =
+        , fixtureMetadata =
             Group
                 { groupId = "npm/install"
                 , groupContractId = "npm/install"
@@ -74,98 +74,59 @@ npmRegistryFixture =
         }
 
 -- | Fresh public and mirror-only npm installs through Verdaccio.
-npmMirrorFixture :: ConcreteFixture
+npmMirrorFixture :: ConcreteFixture FamilyMetadata
 npmMirrorFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
-        , fixtureGroup =
-            Group
-                { groupId = "npm/mirror"
-                , groupContractId = "npm/mirror"
-                , groupProfileId = "npm/registry"
-                , groupTier = E2E
-                , groupPartition = "npm"
-                , groupCases =
-                    [ Case "npm/mirror/dependency-graph" ["npm/mirror"]
-                    , Case "npm/mirror/module-exports" ["npm/mirror"]
-                    , Case "npm/mirror/linked-executable" ["npm/mirror"]
-                    , Case "npm/mirror/origin-evidence" ["npm/mirror"]
-                    , Case "npm/mirror/installed-tree" ["npm/mirror"]
-                    , Case "npm/mirror/empty-store-control" ["npm/mirror"]
-                    ]
-                , groupCapabilities = ["read", "mirror", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , groupResources = ["proxy", "nginx", "verdaccio"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "npm/mirror"
+                , familyProfile = "npm/registry"
+                , familyCapabilities = ["read", "mirror", "client-install"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+                , familyResources = ["proxy", "nginx", "verdaccio"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | First-party npm publication through the declared Verdaccio target.
-npmPublicationFixture :: ConcreteFixture
+npmPublicationFixture :: ConcreteFixture FamilyMetadata
 npmPublicationFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
-        , fixtureGroup =
-            Group
-                { groupId = "npm/publish"
-                , groupContractId = "npm/publish"
-                , groupProfileId = "npm/registry"
-                , groupTier = E2E
-                , groupPartition = "npm"
-                , groupCases =
-                    [ Case "npm/publish/publish-install" ["npm/publish"]
-                    , Case "npm/publish/scope-refusal" ["npm/publish"]
-                    ]
-                , groupCapabilities = ["read", "publication", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , groupResources = ["proxy", "nginx", "verdaccio"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "npm/publish"
+                , familyProfile = "npm/registry"
+                , familyCapabilities = ["read", "publication", "client-install"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+                , familyResources = ["proxy", "nginx", "verdaccio"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | npm maintenance with Verdaccio stores and the advisory and queue emulators.
-npmDredgerFixture :: ConcreteFixture
+npmDredgerFixture :: ConcreteFixture FamilyMetadata
 npmDredgerFixture =
     ConcreteFixture
         { withFixture = withDataPlane dredgerTopology
-        , fixtureGroup =
-            Group
-                { groupId = "npm/dredger"
-                , groupContractId = "npm/dredger"
-                , groupProfileId = "npm/maintenance"
-                , groupTier = E2E
-                , groupPartition = "npm"
-                , groupCases =
-                    [ Case "npm/dredger/inventory" ["npm/dredger"]
-                    , Case "npm/dredger/admission-only" ["npm/dredger"]
-                    , Case "npm/dredger/denied-versions" ["npm/dredger"]
-                    , Case "npm/dredger/dry-run" ["npm/dredger"]
-                    , Case "npm/dredger/consent-refusal" ["npm/dredger"]
-                    , Case "npm/dredger/first-party" ["npm/dredger"]
-                    , Case "npm/dredger/two-stores" ["npm/dredger"]
-                    , Case "npm/dredger/advisory-revocation" ["npm/dredger"]
-                    , Case "npm/dredger/denied-install" ["npm/dredger"]
-                    , Case "npm/dredger/delete-recovery" ["npm/dredger"]
-                    , Case "npm/dredger/refill" ["npm/dredger"]
-                    , Case "npm/dredger/missing-source" ["npm/dredger"]
-                    , Case "npm/dredger/late-copy" ["npm/dredger"]
-                    , Case "npm/dredger/old-worker" ["npm/dredger"]
-                    , Case "npm/dredger/old-dredger-refill" ["npm/dredger"]
-                    , Case "npm/dredger/old-dredger-loss" ["npm/dredger"]
-                    ]
-                , groupCapabilities = ["read", "mirror", "maintenance", "advisories"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , groupResources = ["proxy", "nginx", "verdaccio", "ministack"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "npm/dredger"
+                , familyProfile = "npm/maintenance"
+                , familyCapabilities = ["read", "mirror", "maintenance", "advisories"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+                , familyResources = ["proxy", "nginx", "verdaccio", "ministack"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | Wheel-only pip installations through a public PyPI mount.
-pypiPublicFixture :: ConcreteFixture
+pypiPublicFixture :: ConcreteFixture Group
 pypiPublicFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiTopology
-        , fixtureGroup =
+        , fixtureMetadata =
             Group
                 { groupId = "pypi/install"
                 , groupContractId = "pypi/install"
@@ -187,60 +148,43 @@ pypiPublicFixture =
         }
 
 -- | Pilot advisory publication and pip policy observations through a PyPI mount.
-pypiPilotFixture :: ConcreteFixture
+pypiPilotFixture :: ConcreteFixture FamilyMetadata
 pypiPilotFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiAdvisoryTopology
-        , fixtureGroup =
-            Group
-                { groupId = "pypi/advisories"
-                , groupContractId = "pypi/advisories"
-                , groupProfileId = "pypi/advisories"
-                , groupTier = E2E
-                , groupPartition = "pypi"
-                , groupCases =
-                    [ Case "pypi/advisories/exact-fix" ["pypi/advisories"]
-                    , Case "pypi/advisories/deny-cve" ["pypi/advisories"]
-                    , Case "pypi/advisories/deny-epss" ["pypi/advisories"]
-                    ]
-                , groupCapabilities = ["read", "advisories", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
-                , groupResources = ["proxy", "nginx", "ministack"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "pypi/advisories"
+                , familyProfile = "pypi/advisories"
+                , familyCapabilities = ["read", "advisories", "client-install"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
+                , familyResources = ["proxy", "nginx", "ministack"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | npm traffic with per-case collector and exporter configurations.
-npmTelemetryFixture :: ConcreteFixture
+npmTelemetryFixture :: ConcreteFixture FamilyMetadata
 npmTelemetryFixture =
     ConcreteFixture
         { withFixture = withGlobalDataPlane
-        , fixtureGroup =
-            Group
-                { groupId = "npm/telemetry-read"
-                , groupContractId = "npm/telemetry-read"
-                , groupProfileId = "npm/telemetry"
-                , groupTier = E2E
-                , groupPartition = "npm"
-                , groupCases =
-                    [ Case "npm/telemetry/signals" ["npm/telemetry-read"]
-                    , Case "npm/telemetry/disabled" ["npm/telemetry-read"]
-                    , Case "npm/telemetry/export-failure" ["npm/telemetry-read"]
-                    , Case "npm/telemetry/datadog" ["npm/telemetry-read"]
-                    ]
-                , groupCapabilities = ["read", "mirror", "telemetry", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
-                , groupResources = ["proxy", "nginx", "verdaccio", "collector"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "npm/telemetry-read"
+                , familyProfile = "npm/telemetry"
+                , familyCapabilities = ["read", "mirror", "telemetry", "client-install"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+                , familyResources = ["proxy", "nginx", "verdaccio", "collector"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | Alternating npm and pip clients behind one proxy.
-mixedRegistryFixture :: ConcreteFixture
+mixedRegistryFixture :: ConcreteFixture Group
 mixedRegistryFixture =
     ConcreteFixture
         { withFixture = withDataPlane mixedTopology
-        , fixtureGroup =
+        , fixtureMetadata =
             Group
                 { groupId = "mixed"
                 , groupContractId = "mixed"
@@ -258,98 +202,95 @@ mixedRegistryFixture =
         }
 
 -- | npm read contracts have no private copy that can bypass public admission.
-npmInstallationFixture :: ConcreteFixture
+npmInstallationFixture :: ConcreteFixture FamilyMetadata
 npmInstallationFixture =
     ConcreteFixture
-        (installationGroup "npm" "npm/read" ["npm", "node"])
+        (installationMetadata "npm" "npm/read" ["npm", "node"])
         (withDataPlane npmTopology{topologyStore = False})
 
 -- | PyPI uses the same required read scenarios with a real pip client.
-pypiInstallationFixture :: ConcreteFixture
+pypiInstallationFixture :: ConcreteFixture FamilyMetadata
 pypiInstallationFixture =
     ConcreteFixture
-        (installationGroup "pypi" "pypi/read" ["python3", "pip"])
+        (installationMetadata "pypi" "pypi/read" ["python3", "pip"])
         (withDataPlane pypiTopology)
 
-installationGroup :: Text -> Text -> [Text] -> Group
-installationGroup ecosystem profile tools =
-    Group
-        { groupId = ecosystem <> "/installation"
-        , groupContractId = ecosystem <> "/installation"
-        , groupProfileId = profile
-        , groupTier = E2E
-        , groupPartition = ecosystem
-        , groupCases = [Case (ecosystem <> "/installation/" <> name) [ecosystem <> "/installation"] | name <- ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"]]
-        , groupCapabilities = ["read", "client-install"]
-        , groupPrerequisites = ["docker", "image", "openssl", "tar"] <> tools
-        , groupResources = ["proxy", "nginx"]
-        , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+installationMetadata :: Text -> Text -> [Text] -> FamilyMetadata
+installationMetadata ecosystem profile tools =
+    FamilyMetadata
+        { familyId = ecosystem <> "/installation"
+        , familyProfile = profile
+        , familyCapabilities = ["read", "client-install"]
+        , familyPrerequisites = ["docker", "image", "openssl", "tar"] <> tools
+        , familyResources = ["proxy", "nginx"]
+        , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
         }
 
 -- | PyPI read traffic exercises telemetry without a mirror target.
-pypiTelemetryFixture :: ConcreteFixture
+pypiTelemetryFixture :: ConcreteFixture FamilyMetadata
 pypiTelemetryFixture =
     ConcreteFixture
         { withFixture = withDataPlane pypiTopology
-        , fixtureGroup =
-            Group
-                { groupId = "pypi/telemetry"
-                , groupContractId = "pypi/telemetry"
-                , groupProfileId = "pypi/telemetry"
-                , groupTier = E2E
-                , groupPartition = "pypi"
-                , groupCases = [Case ("pypi/telemetry/" <> name) ["pypi/telemetry"] | name <- ["signals", "disabled", "export-failure", "datadog"]]
-                , groupCapabilities = ["read", "telemetry", "client-install"]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
-                , groupResources = ["proxy", "nginx", "collector"]
-                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "pypi/telemetry"
+                , familyProfile = "pypi/telemetry"
+                , familyCapabilities = ["read", "telemetry", "client-install"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
+                , familyResources = ["proxy", "nginx", "collector"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
         }
 
 -- | Worker and private-fetch telemetry retains its own mutable mirror lifetime.
-npmMirrorTelemetryFixture :: ConcreteFixture
+npmMirrorTelemetryFixture :: ConcreteFixture FamilyMetadata
 npmMirrorTelemetryFixture =
     npmTelemetryFixture
-        { fixtureGroup =
-            (fixtureGroup npmTelemetryFixture)
-                { groupId = "npm/telemetry-write"
-                , groupContractId = "npm/telemetry-write"
-                , groupCases = [Case ("npm/telemetry/" <> name) ["npm/telemetry-write"] | name <- ["domain-spans", "private-fetch"]]
+        { fixtureMetadata =
+            (fixtureMetadata npmTelemetryFixture)
+                { familyId = "npm/telemetry-write"
                 }
         }
 
 -- | npm's public advisory proof avoids trusted-private reads masking the policy.
-npmPilotFixture :: ConcreteFixture
+npmPilotFixture :: ConcreteFixture FamilyMetadata
 npmPilotFixture =
     ConcreteFixture
         { withFixture = withDataPlane npmTopology{topologyStore = False, topologyAws = True}
-        , fixtureGroup =
-            (fixtureGroup pypiPilotFixture)
-                { groupId = "npm/advisories"
-                , groupContractId = "npm/advisories"
-                , groupProfileId = "npm/advisories"
-                , groupPartition = "npm"
-                , groupCases = [Case ("npm/advisories/" <> name) ["npm/advisories"] | name <- ["deny-cve", "deny-epss", "exact-fix"]]
-                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+        , fixtureMetadata =
+            (fixtureMetadata pypiPilotFixture)
+                { familyId = "npm/advisories"
+                , familyProfile = "npm/advisories"
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
                 }
         }
 
 -- | PEP 440 canonicalisation remains explicit beside the common advisory laws.
-pypiAdvisoryNativeFixture :: ConcreteFixture
+pypiAdvisoryNativeFixture :: ConcreteFixture Group
 pypiAdvisoryNativeFixture =
-    pypiPilotFixture
-        { fixtureGroup =
-            (fixtureGroup pypiPilotFixture)
+    ConcreteFixture
+        { withFixture = withFixture pypiPilotFixture
+        , fixtureMetadata =
+            Group
                 { groupId = "pypi/advisory-native"
                 , groupContractId = "pypi/advisory-native"
+                , groupProfileId = familyProfile metadata
+                , groupTier = E2E
+                , groupPartition = "pypi"
                 , groupCases = [Case "pypi/advisories/canonical-fix" ["pypi/advisory-native"]]
+                , groupCapabilities = familyCapabilities metadata
+                , groupPrerequisites = familyPrerequisites metadata
+                , groupResources = familyResources metadata
+                , groupIsolation = familyIsolation metadata
                 }
         }
+  where
+    metadata = fixtureMetadata pypiPilotFixture
 
 -- | Acquire native observations inside the canonical family's measured data-plane lifetime.
-concreteFamily :: ConcreteFixture -> (PhaseRecorder -> (a -> IO ()) -> GlobalDataPlane -> IO ()) -> FamilyFixture a
+concreteFamily :: ConcreteFixture FamilyMetadata -> (PhaseRecorder -> (a -> IO ()) -> GlobalDataPlane -> IO ()) -> FamilyFixture a
 concreteFamily fixture acquire =
     FamilyFixture
-        { familyGroup = fixtureGroup fixture
+        { familyMetadata = fixtureMetadata fixture
         , familyAcquire = \recorder action -> timedFixture recorder (withFixture fixture) (acquire recorder action)
         }

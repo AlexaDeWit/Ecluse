@@ -20,10 +20,11 @@ import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
 import Ecluse.Test.Contract.Phase (timedFixture)
 import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 
 -- | Retain the native fixed-version control alongside the common advisory scenarios.
-nativeAdvisoryContract :: ConcreteFixture -> DeclaredGroup
-nativeAdvisoryContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder ->
+nativeAdvisoryContract :: ConcreteFixture Group -> DeclaredGroup
+nativeAdvisoryContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder ->
     aroundAll (timedFixture recorder (withFixture fixture)) $
         aroundAllWith (timedFixtureWith recorder (withPublishedAdvisories PyPI pypiAdvisoryExportBase)) $
             it (caseLabel "pypi/advisories/canonical-fix" "admits a canonicalised advisory fix and preserves refusal controls") $ \plane -> do

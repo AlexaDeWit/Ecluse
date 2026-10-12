@@ -28,16 +28,43 @@ spec = describe "canonical ecosystem composition" $ do
         validateDeclaredGroups (missingCatalogue declarations) "example" declarations
     it "constructs available canonical cases without acquiring their provider" $ do
         acquired <- newIORef False
-        let metadata = nativeGroup{groupId = "example/installation", groupContractId = "example/installation"}
+        let metadata = FamilyMetadata "example/installation" "example/installation" [] [] [] []
             fixture = FamilyFixture metadata $ \_ _ -> do
                 writeIORef acquired True
                 expectationFailure "discovery acquired the provider"
+            driver :: EcosystemDriver Bool () () () () ()
             driver = unavailableDriver{ecosystemInstallation = Available fixture}
         recorder <- newPhaseRecorder
         forM_ (fullEcosystemContract driver) $ \declaration -> do
             registered <- allCaseIds (declaredAction declaration recorder)
             registered `shouldMatchList` map caseId (groupCases $ declaredGroup declaration)
         readIORef acquired `shouldReturn` False
+    it "retains the fixture schedule when composition creates canonical cases" $ do
+        let metadata = FamilyMetadata "example/installation" "example/client" ["read"] ["client"] ["registry"] ["serial-cases"]
+            driver :: EcosystemDriver Bool () () () () ()
+            driver = unavailableDriver{ecosystemInstallation = Available (unacquired metadata)}
+            groups = map declaredGroup (fullEcosystemContract driver)
+        find ((== "example/installation") . groupId) groups
+            `shouldBe` Just
+                ( Group
+                    "example/installation"
+                    "example/installation"
+                    "example/client"
+                    E2E
+                    "example"
+                    [Case ("example/installation/" <> law) ["example/installation"] | law <- ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"]]
+                    ["read"]
+                    ["client"]
+                    ["registry"]
+                    ["serial-cases"]
+                )
+    it "keeps completion ownership beside each explicit provider" $ do
+        let readFixture = unacquired (FamilyMetadata "example/read-signals" "example/telemetry" [] [] [] [])
+            writeFixture = unacquired (FamilyMetadata "example/write-signals" "example/telemetry" [] [] [] [])
+            driver = unavailableDriver{ecosystemTelemetry = Available (readFixture, Available writeFixture)}
+            evidence = completionEvidence (ecosystemCompletion FullEcosystem driver)
+        [evidenceGroup item | item <- evidence, evidenceFamily item == "telemetry", evidenceLaw item == "signals"] `shouldBe` ["example/read-signals"]
+        [evidenceGroup item | item <- evidence, evidenceFamily item == "telemetry", evidenceLaw item == "domain-spans"] `shouldBe` ["example/write-signals"]
     it "registers missing capabilities as ordinary failed cases and continues through the remaining groups" $ do
         observed <- newIORef (0 :: Int)
         let native = DeclaredGroup nativeGroup $
@@ -63,7 +90,7 @@ spec = describe "canonical ecosystem composition" $ do
         length full `shouldBe` 8
         concatMap (map caseId . groupCases . declaredGroup) foundation `shouldSatisfy` notElem "example/mirror/dependency-graph"
 
-unavailableDriver :: EcosystemDriver () () () () ()
+unavailableDriver :: EcosystemDriver Bool () () () () ()
 unavailableDriver = EcosystemDriver "example" absent absent absent absent absent absent absent absent []
   where
     absent = Unavailable (MissingCapability "the production adapter has no operation")
@@ -73,3 +100,6 @@ missingCatalogue declarations = Catalogue ["example"] (missingCapabilityProfiles
 
 nativeGroup :: Group
 nativeGroup = Group "example/native" "native" "example/native" E2E "example" [Case "example/native" ["example/native"]] [] [] [] []
+
+unacquired :: FamilyMetadata -> FamilyFixture a
+unacquired metadata = FamilyFixture metadata (\_ _ -> expectationFailure "discovery acquired the provider")

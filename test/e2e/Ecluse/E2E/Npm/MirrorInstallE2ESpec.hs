@@ -10,7 +10,7 @@ module Ecluse.E2E.Npm.MirrorInstallE2ESpec (npmMirrorFamily) where
 import Data.Aeson (Value)
 import Data.Set qualified as Set
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
-import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
@@ -28,7 +28,7 @@ import Ecluse.E2E.Harness
 import Ecluse.Test.Contract.Mirror
 
 -- | Supply native observations and independent expectations to the canonical mirror contract.
-npmMirrorFamily :: ConcreteFixture -> (MirrorFixture (Set Resolved) Value, FamilyFixture (MirrorDriver (Set Resolved) Value))
+npmMirrorFamily :: ConcreteFixture FamilyMetadata -> (MirrorFixture (Set Resolved) Value, FamilyFixture (MirrorDriver (Set Resolved) Value))
 npmMirrorFamily fixture =
     ( MirrorFixture
         { mirrorExpectedGraph = expectedGraph

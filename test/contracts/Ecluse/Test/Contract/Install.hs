@@ -23,6 +23,7 @@ import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Serving (ServingResponse, artifactDigestCase, artifactHeadCase)
+import Ecluse.Test.InstalledTree (InstalledTree)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -40,21 +41,21 @@ data InstallDriver observation = InstallDriver
     }
 
 -- | Native operations for the same admission and artifact scenarios on each ecosystem.
-data InstallationDriver = InstallationDriver
-    { installationAccepted :: IO (ClientResult, Bool)
-    , installationDenied :: IO (ClientResult, Bool)
+data InstallationDriver observation = InstallationDriver
+    { installationAccepted :: InstallDriver observation
+    , installationDenied :: InstallDriver (observation, InstalledTree)
     , installationArtifact :: IO (Text, ServingResponse)
     , installationDigest :: ByteString -> Text
     , installationHead :: IO ServingResponse
     }
 
 -- | Require a fresh installation, refusal without files, and intact artifact representations.
-installationContract :: Text -> SpecWith InstallationDriver
+installationContract :: (Eq observation, Show observation) => Text -> SpecWith (InstallationDriver observation)
 installationContract prefix = do
     it (label "accepted-install" "installs the admitted release into a fresh client directory") $ \driver ->
-        installsObserved (InstallDriver (installationAccepted driver) True)
+        installsObserved (installationAccepted driver)
     it (label "default-denial" "refuses an unadmitted release without installing files") $ \driver ->
-        refusesObserved (InstallDriver (installationDenied driver) False)
+        refusesObserved (installationDenied driver)
     it (label "artifact-integrity" "serves bytes matching the digest advertised in metadata") $ \driver -> do
         (digest, response) <- installationArtifact driver
         artifactDigestCase (installationDigest driver) digest response
