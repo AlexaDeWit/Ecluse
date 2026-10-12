@@ -215,6 +215,7 @@ decodeNativeFile fields file = do
     filename = decodeUtf8 (fileName file)
     bytes = LBS.toStrict (fileContent file)
     wheel = ".whl" `T.isSuffixOf` filename
+    field :: ByteString -> Either Text Text
     field key = case [decodeUtf8 value | (name, value) <- fields, name == key] of
         [value] -> Right value
         _ -> Left ("missing or repeated native field: " <> decodeUtf8 key)
