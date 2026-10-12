@@ -21,13 +21,14 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (lookup)
+import Data.List (lookup, sort)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Parse (FileInfo (..), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
 
+import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
@@ -53,6 +54,7 @@ newWorkerFixture payloadBytes = do
     wheel <- zipBytes [("example-1.dist-info/METADATA", metadata), ("example/data", payload)]
     sourceZip <- zipBytes [("example-1/PKG-INFO", metadata), ("example-1/data", payload)]
     sourceTar <- LBS.toStrict . GZip.compress <$> tarBytes [("example-1/PKG-INFO", metadata), ("example-1/data", payload)]
+    checkUploadOracle fixtureTrigger wheel
     let files = Map.fromList [(fixtureTrigger, wheel), ("example-1-py2-none-any.whl", wheel), ("example-1.zip", sourceZip), ("example-1.tar.gz", sourceTar)]
     WorkerFixture files <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
 
@@ -128,17 +130,38 @@ decodeUpload fixture request bytes = case parseContentType <$> lookup hContentTy
                     | let filename = decodeUtf8 (fileName file)
                     , let content = LBS.toStrict (fileContent file)
                     , Map.lookup filename (wfFiles fixture) == Just content
-                    , all (\(key, value) -> lookup key fields == Just value) (uploadFields filename content) ->
+                    , matchesUploadFields filename content fields ->
                         Just (filename, content)
                 _ -> Nothing
     _ -> pure Nothing
 
-uploadFields :: Text -> ByteString -> [(ByteString, ByteString)]
-uploadFields filename bytes =
+matchesUploadFields :: Text -> ByteString -> [(ByteString, ByteString)] -> Bool
+matchesUploadFields filename bytes fields = sort fields == sort (expectedUploadFields filename bytes)
+
+checkUploadOracle :: Text -> ByteString -> IO ()
+checkUploadOracle filename bytes = do
+    let fields = expectedUploadFields filename bytes
+        accepted = matchesUploadFields filename bytes
+        altered =
+            [("unexpected", "value") : fields]
+                <> concat
+                    [ [ filter ((/= name) . fst) fields
+                      , map (\(key, value) -> (key, if key == name then "changed" else value)) fields
+                      , field : fields
+                      ]
+                    | field@(name, _) <- fields
+                    ]
+    unless (accepted (reverse fields) && not (any accepted altered)) $
+        benchFail "PyPI upload oracle accepted missing, changed, duplicated or unexpected metadata fields"
+
+expectedUploadFields :: Text -> ByteString -> [(ByteString, ByteString)]
+expectedUploadFields filename bytes =
     [ (":action", "file_upload")
     , ("protocol_version", "1")
     , ("name", "example")
     , ("version", "1")
+    , ("metadata_version", "2.4")
+    , ("description", "Description.\n")
     , ("sha256_digest", encodeUtf8 (hexSha256Of bytes))
     , ("filetype", if wheel then "bdist_wheel" else "sdist")
     , ("pyversion", if filename == fixtureTrigger then "py3" else if wheel then "py2" else "source")
