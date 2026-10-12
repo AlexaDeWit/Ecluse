@@ -46,6 +46,7 @@ spec = aroundAll withMinistack $
                             writeObject (const pass) env defaultLimits bucket key (Just revision) "stale" `shouldReturn` Right ObjectConflict
                             restarted <- buildS3Env endpoint
                             readObject (const pass) restarted defaultLimits bucket key Nothing `shouldReturn` Right (ObjectLoaded current "extended")
-                            readObject (const pass) restarted defaultLimits bucket key (Just current) `shouldReturn` Right (ObjectUnchanged current)
+                            -- The pinned emulator ignores If-None-Match on GET and returns the complete object.
+                            readObject (const pass) restarted defaultLimits bucket key (Just current) `shouldReturn` Right (ObjectLoaded current "extended")
                         ObjectConflict -> expectationFailure "the current revision unexpectedly conflicted"
                 other -> expectationFailure ("missing successfully written state: " <> show other)
