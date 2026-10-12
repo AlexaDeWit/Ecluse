@@ -169,7 +169,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             base <- depsFor port
             let source = servingRuleDeps (DbEtag "mal-generation") (fakeCveLookup [("leftpad", AdvisoryRange "MAL-pipeline" Nothing Nothing Unbounded Nothing)])
             rules <- prepare source (atDefaultPrecedence (Rules.DenyIfKnownMalicious Rules.FailDeny) : allowPolicy)
-            let deps = base{pdRules = rules}
+            let deps = withPrivateBaseUrl Nothing base{pdRules = rules}
             metadata <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus metadata) `shouldBe` 403
             (_, logged) <- captureJsonLog $ \logEnv -> do
