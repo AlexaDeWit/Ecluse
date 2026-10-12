@@ -136,6 +136,7 @@ pypiHttp =
         , "integration.serving.pypi.public-integrity"
         , "integration.serving.pypi.trusted-integrity"
         , "integration.serving.pypi.artifact-integrity"
+        , "integration.serving.pypi.artifact-head"
         , "integration.serving.pypi.conditional-coherence"
         ]
 
@@ -247,6 +248,7 @@ npmMetadataHttp =
         , "integration.serving.npm.public-integrity"
         , "integration.serving.npm.trusted-integrity"
         , "integration.serving.npm.artifact-integrity"
+        , "integration.serving.npm.artifact-head"
         , "integration.serving.npm.conditional-coherence"
         ]
 

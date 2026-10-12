@@ -13,6 +13,7 @@ module Ecluse.Test.Contract.Result (
     makePlan,
     auditReports,
     auditFullReport,
+    auditPartitionReport,
     auditSelection,
 ) where
 
@@ -169,6 +170,14 @@ auditReports expected plan reports =
     reportProblems report =
         ["unknown shard: " <> reportShard report | reportShard report `notElem` planPartitions plan]
             <> auditReportGroups expected (filter ((== reportShard report) . groupPartition) groups) report
+
+-- | A cross-tier audit verifies a submitted partition against its original complete plan.
+auditPartitionReport :: ExecutionIdentity -> Plan -> Report -> [Text]
+auditPartitionReport expected plan report =
+    auditPlan expected plan
+        <> ["unknown shard: " <> reportShard report | reportShard report `notElem` planPartitions plan]
+        <> ["completion report cannot be a repeat" | reportRepeat report]
+        <> auditReportGroups expected (filter ((== reportShard report) . groupPartition) (catalogueGroups $ planCatalogue plan)) report
 
 -- | A single primary report must cover the complete plan, regardless of partition assignments.
 auditFullReport :: ExecutionIdentity -> Plan -> Report -> [Text]

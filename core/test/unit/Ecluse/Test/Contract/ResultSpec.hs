@@ -32,6 +32,18 @@ spec = do
             auditReports executionIdentity moved [report{reportShard = "moved", reportSelectedGroups = [scenarioGroup{groupPartition = "moved"}]}] `shouldBe` []
         it "does not accept a modified partition manifest" $
             auditReports executionIdentity plan{planPartitions = []} [report] `shouldSatisfy` (not . null)
+    describe "auditPartitionReport" $ do
+        it "audits one partition against the original complete plan" $
+            auditPartitionReport executionIdentity fullPlan report `shouldBe` []
+        it "rejects a repeated partition as primary completion evidence" $
+            auditPartitionReport executionIdentity fullPlan report{reportRepeat = True} `shouldSatisfy` (not . null)
+        it "rejects omitted cases within the submitted partition" $
+            auditPartitionReport executionIdentity fullPlan report{reportCases = []} `shouldSatisfy` (not . null)
+        it "rejects an unknown partition" $
+            auditPartitionReport executionIdentity fullPlan report{reportShard = "unknown"} `shouldSatisfy` (not . null)
+        forM_ identityChanges $ \changed ->
+            it ("rejects partition identity mismatch " <> show changed) $
+                auditPartitionReport executionIdentity fullPlan report{reportIdentity = changed} `shouldSatisfy` (not . null)
     describe "auditFullReport" $ do
         it "accepts the whole plan without per-partition reports" $
             auditFullReport executionIdentity fullPlan completeReport `shouldBe` []

@@ -6,6 +6,7 @@
 module Ecluse.Test.Contract.Manifest (
     writePlan,
     auditFiles,
+    auditCompletionFiles,
     readIdentity,
     jsonLine,
     digest,
@@ -19,6 +20,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
 
+import Ecluse.Test.Contract.Completion (Completion, auditCompletion)
 import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Types
 
@@ -35,6 +37,20 @@ auditFiles compiled path reportPaths = do
     unless (null faults) $ failRunner $ T.unlines faults
     putTextLn "Every required group and case passed with matching execution identities."
 
+-- | Keep each tier's compiled plan and image identity while auditing one logical completion.
+auditCompletionFiles :: Completion -> [(Plan, FilePath, [FilePath])] -> IO ()
+auditCompletionFiles completion inputs = do
+    executions <- forM inputs $ \(compiled, path, reportPaths) -> do
+        bytes <- BS.readFile path
+        plan <- decodeFileBytes bytes
+        unless (plan == compiled) $ failRunner "downloaded plan differs from the compiled catalogue"
+        expected <- readIdentityFields False True (usesProductImage plan) (digest bytes)
+        reports <- traverse (BS.readFile >=> decodeFileBytes) reportPaths
+        pure (expected, plan, reports)
+    let faults = auditCompletion completion executions
+    unless (null faults) $ failRunner $ T.unlines faults
+    putTextLn "Every required completion law passed in its declared tier and execution."
+
 loadAuditPlan :: Plan -> FilePath -> IO (Plan, ExecutionIdentity)
 loadAuditPlan compiled path = do
     bytes <- BS.readFile path
@@ -45,7 +61,10 @@ loadAuditPlan compiled path = do
 
 -- | Bind evidence to the immutable preparation identities.
 readIdentity :: Bool -> Bool -> Text -> IO ExecutionIdentity
-readIdentity forceRequired imageRequired planDigest = do
+readIdentity = readIdentityFields True
+
+readIdentityFields :: Bool -> Bool -> Bool -> Text -> IO ExecutionIdentity
+readIdentityFields checkDeclaredDigest forceRequired imageRequired planDigest = do
     explicit <- (== Just "1") <$> lookupEnv "ECLTEST_REQUIRED"
     ci <- (== Just "true") <$> lookupEnv "CI"
     let required = forceRequired || explicit || ci
@@ -56,11 +75,19 @@ readIdentity forceRequired imageRequired planDigest = do
                 _ -> pure fallback
     source <- field "ECLTEST_SOURCE" "local"
     image <- if imageRequired then field "ECLTEST_IMAGE_ID" "local" else pure "not-applicable"
-    architecture <- field "ECLTEST_ARCHITECTURE" "local"
+    architecture <- normaliseArchitecture <$> field "ECLTEST_ARCHITECTURE" "local"
     runId <- field "ECLTEST_RUN_ID" "local"
-    declaredDigest <- field "ECLTEST_PLAN_DIGEST" planDigest
+    declaredDigest <- if checkDeclaredDigest then field "ECLTEST_PLAN_DIGEST" planDigest else pure planDigest
     unless (declaredDigest == planDigest) $ failRunner "plan digest differs from the compiled catalogue"
     pure $ ExecutionIdentity source image architecture planDigest runId
+
+normaliseArchitecture :: Text -> Text
+normaliseArchitecture = \case
+    "x86_64" -> "amd64"
+    "X64" -> "amd64"
+    "aarch64" -> "arm64"
+    "ARM64" -> "arm64"
+    architecture -> architecture
 
 -- | Canonical JSON artifact bytes include a final newline.
 jsonLine :: (ToJSON a) => a -> ByteString
