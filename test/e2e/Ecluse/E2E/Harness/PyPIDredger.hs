@@ -26,6 +26,7 @@ module Ecluse.E2E.Harness.PyPIDredger (
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Types (status401, statusCode)
 import Network.Wai (Application, pathInfo, requestHeaders, requestMethod, responseLBS)
@@ -99,8 +100,9 @@ authorised application request respond
 
 cacheApplication :: [Distribution] -> NativeTarget -> NativeTarget -> Application
 cacheApplication distributions mirror cache request respond = do
+    let segments = filter (not . T.null) (pathInfo request)
     remote <- targetFiles mirror
-    case pathInfo request of
+    case segments of
         ["simple", project, filename]
             | requestMethod request == "GET"
             , Map.member filename remote ->
@@ -108,7 +110,7 @@ cacheApplication distributions mirror cache request respond = do
                     atomically (modifyTVar' (ntFiles cache) (Map.union (Map.restrictKeys remote (fromList [distributionFilename d | d <- distributions, distributionProject d == project, distributionVersion d == distributionVersion selected]))))
         _ -> pass
     cachedFiles <- targetFiles cache
-    case pathInfo request of
+    case segments of
         ["simple", _] | requestMethod request `elem` ["GET", "HEAD"] -> do
             combined <- newTVarIO (Map.union cachedFiles remote)
             nativeApplication (targetConfig "cache") distributions cache{ntFiles = combined} request respond

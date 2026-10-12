@@ -21,11 +21,13 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision), VerifiedCompanionBytes (VerifiedCompanionBytes))
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTriggerFilename, jobVersion), MirrorQueue (enqueue))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (AllowByIdentity))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny), Rule (AllowByIdentity, DenyByIdentity, DenyIfCve))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
@@ -222,6 +224,57 @@ spec = describe "managed PyPI mirror reads" $ do
         withManagedProxy view False (nativeWith True "private" status200 [1, 2, 3]) (nativeWith True "public" status200 [1, 2, 3]) $ \app ->
             for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status403
 
+    for_
+        [ ("without an admitted public version", [DenyByIdentity "demo@1"])
+        , ("with an admitted public sibling", [DenyByIdentity "demo@1", AllowByIdentity "demo"])
+        ]
+        $ \(label, policy) ->
+            it ("serves the sibling of a denied missing version " <> label) $ do
+                inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+                record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+                view <- testView (pure (Right (StateLoaded revision record)))
+                rules <- prepare inertRuleDeps (map atDefaultPrecedence policy)
+                queue <- newTestMemoryQueue
+                withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) view False (projectVersions sourceEnvelope ["2.0"]) (projectVersions sourceEnvelope ["1.0", "2.0"]) $ \app -> do
+                    response <- getPath "/pypi/simple/demo/" app
+                    simpleStatus response `shouldBe` status200
+                    fmap (KeyMap.lookup "versions") (responseEnvelope response) `shouldBe` Right (Just (fromListValue [String "2"]))
+                    sibling <- getPath "/pypi/simple/demo/demo-2.0-1-py3-none-any.whl" app
+                    simpleStatus sibling `shouldBe` status200
+                    simpleBody sibling `shouldBe` "wheel"
+                    denied <- getPath artifactPath app
+                    simpleStatus denied `shouldBe` status403
+
+    for_
+        [ ("absent public metadata", [DenyByIdentity "demo@1"], native status404 [])
+        , ("unavailable public metadata", [DenyByIdentity "demo@1"], native status503 [])
+        , ("malformed public metadata", [DenyByIdentity "demo@1"], native status200 [])
+        , ("default denial", [], native status200 [1, 2])
+        , ("undecidable policy", [DenyIfCve (DenyIfCveParams 8 FailDeny)], native status200 [1, 2])
+        , ("admitted incomplete inventory", [AllowByIdentity "demo"], native status200 [1])
+        ]
+        $ \(label, policy, public) ->
+            it ("keeps missing recorded versions unavailable with " <> label) $ do
+                inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+                record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+                view <- testView (pure (Right (StateLoaded revision record)))
+                rules <- prepare inertRuleDeps (map atDefaultPrecedence policy)
+                queue <- newTestMemoryQueue
+                withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) view False (projectVersions sourceEnvelope ["2.0"]) public $ \app -> do
+                    response <- getPath "/pypi/simple/demo/" app
+                    simpleStatus response `shouldBe` status503
+
+    it "requires integrity-admitted evidence before a named denial releases mirror coverage" $ do
+        inventory <- mirrorSample [1, 2] False "https://public.test/" "source"
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        view <- testView (pure (Right (StateLoaded revision record)))
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "demo@1")]
+        integrityFloor <- expectRight (mkMinIntegrity SHA512)
+        queue <- newTestMemoryQueue
+        withManagedProxyOver (queue, \deps -> deps{pdRules = rules, pdMinIntegrity = integrityFloor}) view False (projectVersions sourceEnvelope ["2.0"]) (native status200 [1, 2]) $ \app -> do
+            response <- getPath "/pypi/simple/demo/" app
+            simpleStatus response `shouldBe` status503
+
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
   where
@@ -239,16 +292,23 @@ responseEnvelope response = do
         _ -> Left "expected project object"
 
 projectWithEnvelope :: Object -> Bool -> Application
-projectWithEnvelope envelope extraVersion request respond = do
-    inventory <- mirrorSample [1, 2] False (selfBaseUrl request <> "/files/") "native"
-    let files = case inventoryReadData inventory of
-            PyPIMirrorRead document -> map snd (simpleFiles document)
-            NpmMirrorRead _ -> []
-        extra = do
-            Object fields <- maybeToList (listToMaybe files)
-            pure (Object (KeyMap.insert "filename" (String "demo-2.0-1-py3-none-any.whl") fields))
-        body = Object (KeyMap.insert "files" (fromListValue (files <> if extraVersion then extra else [])) envelope)
-    respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode body))
+projectWithEnvelope envelope extraVersion = projectVersions envelope (["1.0"] <> ["2.0" | extraVersion])
+
+projectVersions :: Object -> [Text] -> Application
+projectVersions envelope versions request respond = case dropWhileEnd T.null (pathInfo request) of
+    ["simple", _] -> do
+        inventory <- mirrorSample [1, 2] False (selfBaseUrl request <> "/files/") "native"
+        let files = case inventoryReadData inventory of
+                PyPIMirrorRead document -> map snd (simpleFiles document)
+                NpmMirrorRead _ -> []
+            versioned = [Object (KeyMap.mapWithKey (versionField version) fields) | version <- versions, Object fields <- files]
+            body = Object (KeyMap.insert "files" (fromListValue versioned) envelope)
+        respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode body))
+    _ -> respond (responseLBS status200 [] "wheel")
+  where
+    versionField version key (String value)
+        | key `elem` ["filename", "url"] = String (T.replace "demo-1.0-" ("demo-" <> version <> "-") value)
+    versionField _ _ value = value
 
 native :: Status -> [Int] -> Application
 native = nativeWith False "wheel"
