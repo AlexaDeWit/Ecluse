@@ -405,6 +405,7 @@ tasks:
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/ci-runner-policy.test.sh
       - bash scripts/package-store-conformance.test.sh
+      - bash scripts/performance-receipt.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/e2e.test.sh
       - bash scripts/e2e-completion.test.sh

@@ -884,6 +884,9 @@ architecture other than the calibration's, the run still holds every leg to its 
 both architectures in the report and in a warning. Allocation can differ between architectures, so a
 leg close to its budget can read differently there. The job is not part of `task check` or
 `task gate`.
+The CI job writes native row outcomes after measurement and audits one receipt per ecosystem.
+The receipt binds the reviewed four-leg requirements, report and corpus bytes, process result,
+run attempt, and recorded build conditions. A missing or failed row keeps the allocation job red.
 
 ## Benchmarks (non-gating)
 
@@ -896,9 +899,17 @@ The load test alone stores reviewed minimums, its [success floors](#success-floo
 
 | Workflow | Measurement | Downloadable report files |
 |---|---|---|
-| [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, and `against-main.md` off `main` |
-| [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, and `against-main.md` off `main` |
-| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, per pod shape or for the GC-thrash probe, and `against-main.md` for a pod shape off `main` |
+| [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt`, per-ecosystem receipts, and `against-main.md` off `main` |
+| [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Allocation and time for each [allocation leg](#allocation-budgets-perf-allocation-gating) over live registry documents, with no budget | `perf-acceptance-report.md`, native observations, per-ecosystem receipts or an unavailable diagnostic, and `against-main.md` off `main` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI successes, latency, memory, and collector cost through a proxy process under each pod shape, with separate ecosystem sections and baseline sources | `bench-load-results.md`, native observations and per-ecosystem receipts for complete runs, a diagnostic record for selected or GC-thrash runs, and `against-main.md` off `main` |
+
+Each workflow makes its per-ecosystem receipts after the native measurement process exits.
+The receipt audits actual row outcomes against independent obligations and hashes its source files.
+It records the process result, run attempt, compiler, optimisation, profiling and relevant run settings.
+This postprocess step does not change the measured workload, sampling or verdict.
+A selected load dispatch and the GC-thrash probe write diagnostic-only records.
+They keep their native verdicts but make no full read-load completion claim.
+Live upstream unavailability also writes a diagnostic-only record and keeps the live workflow's warning verdict.
 
 Read a red result according to its measurement:
 

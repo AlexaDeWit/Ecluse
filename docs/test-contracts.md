@@ -202,6 +202,14 @@ PyPI currently reports `MissingLoadScenario MirrorWorker "worker-mirroring"` for
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
 Their pass floors require calibration, while the existing floors and measured settings stay fixed.
 
+The allocation, live acceptance, benchmark and regular load workflows produce per-ecosystem
+performance receipts after native measurement. Each receipt binds actual observations and
+their outcomes to independent requirements, recorded conditions, run identity and artifact hashes.
+The allocation receipts gate inside `ci.yml`. The timed workflows retain their current cadence.
+Selected load runs and the GC-thrash probe write diagnostic-only records.
+They remain usable without claiming the missing full read-load rows.
+Live upstream unavailability also records a diagnostic result without a completion claim.
+
 ## Supported and deferred profiles
 
 | Profile or capability | State and obligation |

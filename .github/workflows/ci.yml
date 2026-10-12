@@ -129,16 +129,29 @@ jobs:
       # The harness links the shipped RTS options, so every run measures under the same
       # runtime. pipefail keeps the harness exit code through tee.
       - name: Hold each leg's allocation to its budget
+        id: measure
+        env:
+          ECLUSE_PERFORMANCE_OBSERVATIONS: perf-allocation-observations.json
         run: |
           set -eo pipefail
+          rm -f perf-allocation-report.md perf-allocation-observations.json
           nix develop .#ci --command task perf-allocation 2>&1 | tee perf-allocation-report.md
+
+      - name: Audit per-ecosystem allocation receipts
+        if: always()
+        env:
+          PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
+        run: nix develop .#ci --command bash scripts/performance-receipt.sh allocation
 
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-allocation-report-${{ runner.arch }}-${{ github.sha }}
-          path: perf-allocation-report.md
+          path: |
+            perf-allocation-report.md
+            perf-allocation-observations.json
+            scratchpad/performance/allocation/
           if-no-files-found: warn
 
   coverage:
