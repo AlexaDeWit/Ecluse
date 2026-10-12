@@ -32,8 +32,8 @@ pypiSweepClientOps =
         , clientInstallIn = installIn
         , clientInstalledVersion = installedVersion
         , clientPublish = publish
-        , clientArtifact = \store name version -> get store ("simple/" <> name <> "/" <> pypiWheelFor name version)
-        , clientMetadataStatus = \store name -> fst <$> get store ("simple/" <> name <> "/")
+        , clientArtifact = \store name version -> fetchStorePath store ("simple/" <> name <> "/" <> pypiWheelFor name version)
+        , clientMetadataStatus = \store name -> fst <$> fetchStorePath store ("simple/" <> name <> "/")
         }
 
 withProject :: PyPISweepStore -> (PipProject -> IO a) -> IO a
@@ -75,8 +75,8 @@ installedVersion project name = do
         [] -> pure Nothing
         _ -> fail "pip left more than one installed version for the fixture project"
 
-get :: PyPISweepStore -> Text -> IO (Int, LByteString)
-get store path = do
+fetchStorePath :: PyPISweepStore -> Text -> IO (Int, LByteString)
+fetchStorePath store path = do
     base <- Http.parseRequest (toString (pssReadUrl store <> path))
     response <- Http.httpLbs (Http.applyBasicAuth "aws" "fixture-token" base) (e2eManager (pssProxy store))
     pure (statusCode (Http.responseStatus response), Http.responseBody response)

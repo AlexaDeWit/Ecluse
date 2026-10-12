@@ -193,7 +193,7 @@ sharedMirrorDriver plane target distributions config =
                 withE2EWith
                     config{ecArgs = ["proxy", "--no-worker"]}
                     ( \proxy -> do
-                        reachable <- publicReachable proxy
+                        reachable <- publicProjectReachable proxy
                         (observed, _) <- pipObserveGraph proxy mirrorRoot mirrorVersion mirrorExecutable
                         ((native, platform), (_, opposite)) <- either (fail . toString) pure mirrorArchitectures
                         selected <- observeTarget proxy native platform
@@ -221,7 +221,7 @@ sharedMirrorDriver plane target distributions config =
                     withE2EWith
                         nativeMirrorConfig{ecArgs = ["proxy", "--no-worker"]}
                         ( \proxy -> do
-                            reachable <- publicReachable proxy
+                            reachable <- publicProjectReachable proxy
                             ((_, platform), _) <- either (fail . toString) pure mirrorArchitectures
                             attempted <- pipInstallForPlatform proxy mirrorRoot mirrorVersion platform
                             ptiTree attempted `shouldBe` Map.empty
@@ -232,7 +232,7 @@ sharedMirrorDriver plane target distributions config =
 
 observeOffline :: GlobalDataPlane -> [Distribution] -> E2E -> IO (OfflinePhase PythonGraph Value)
 observeOffline plane distributions proxy = do
-    reachable <- publicReachable proxy
+    reachable <- publicProjectReachable proxy
     start <- length <$> stubReadsNow plane
     counters <- publicWorkCounters proxy
     (observed, report) <- pipObserveGraph proxy mirrorRoot mirrorVersion mirrorExecutable
@@ -273,5 +273,5 @@ observedVersions target distributions = do
         | project <- [mirrorRoot, mirrorDependency]
         ]
 
-publicReachable :: E2E -> IO Bool
-publicReachable proxy = (== 200) <$> proxyStatus proxy ("/pypi/simple/" <> pypiProject)
+publicProjectReachable :: E2E -> IO Bool
+publicProjectReachable proxy = (== 200) <$> proxyStatus proxy ("/pypi/simple/" <> pypiProject)
