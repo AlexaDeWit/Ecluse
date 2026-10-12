@@ -814,6 +814,8 @@ library ecluse-test-contracts
   hs-source-dirs:  test/contracts
   exposed-modules:
     Ecluse.Test.Contract.Advisory
+    Ecluse.Test.Contract.Artifact.Identity
+    Ecluse.Test.Contract.Artifact.Attempt
     Ecluse.Test.Contract.Binding
     Ecluse.Test.Contract.Catalogue
     Ecluse.Test.Contract.Completion
@@ -872,6 +874,7 @@ library ecluse-test-contracts
     , ram               ^>=0.22
     , text              ^>=2.1
     , time              ^>=1.12
+    , unliftio          ^>=0.2.25
     , universe-base     ^>=1.1
     , zlib              ^>=0.7
 
@@ -924,6 +927,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
+    Ecluse.Test.Contract.Artifact.IdentitySpec
+    Ecluse.Test.Contract.Artifact.AttemptSpec
     Ecluse.Test.Contract.BindingSpec
     Ecluse.Test.Contract.CatalogueSpec
     Ecluse.Test.Contract.CompletionSpec
@@ -1253,6 +1258,8 @@ test-suite ecluse-unit
     Ecluse.BenchReport.AgainstMain.LoadSpec
     Ecluse.BenchReport.AgainstMainSpec
     Ecluse.BenchReport.MarkdownSpec
+    Ecluse.BenchReport.PerformanceReceiptSpec
+    Ecluse.BenchReport.PerformanceCommandSpec
     Ecluse.BenchReport.PerformanceSpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
@@ -1788,7 +1795,8 @@ executable ecluse-completion-npm-audit
   if !flag(dev-http-egress)
     buildable: False
   main-is:         Main.hs
-  hs-source-dirs:   test/tools/completion-npm-audit
+  hs-source-dirs:   test/tools/completion-npm-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
@@ -1800,12 +1808,20 @@ executable ecluse-completion-pypi-audit
   if !flag(dev-http-egress)
     buildable: False
   main-is:         Main.hs
-  hs-source-dirs:   test/tools/completion-pypi-audit
+  hs-source-dirs:   test/tools/completion-pypi-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
   build-depends:
     , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , ecluse:ecluse-e2e-test-support
     , text           ^>=2.1
+
+executable ecluse-artifact
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/artifact
+  build-depends:
+    , ecluse:ecluse-test-contracts
 
 executable ecluse-e2e-manifest
   import:          shared
@@ -1987,12 +2003,8 @@ library ecluse-bench-load
     , aeson >=2.2 && <2.4
     , universe-base ^>=1.1
 
--- The pure rendering behind the benchmark run summaries: the work-per-request report from
--- the tasty-bench CSV, and the comparison of a bench, acceptance, or load report with the
--- latest run on main. An internal sublibrary, following the ecluse-bench-load pattern, so
--- the gating unit suite exercises the parsing and rendering. No HTTP and no egress former,
--- so unlike bench-load it needs no dev-http-egress gating. It stays out of the shipped
--- library closure.
+-- Native report rendering and typed receipt assembly stay outside the shipped library.
+-- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
@@ -2004,29 +2016,27 @@ library ecluse-bench-report
     Ecluse.BenchReport.AgainstMain.Load
     Ecluse.BenchReport.Markdown
     Ecluse.BenchReport.Performance
+    Ecluse.BenchReport.PerformanceCommand
+    Ecluse.BenchReport.PerformanceReceipt
   build-depends:
     , aeson >=2.2 && <2.4
     , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , ecluse:ecluse-bench-load
+    , bytestring ^>=0.12
+    , directory ^>=1.3
+    , filepath ^>=1.4 || ^>=1.5
+    , unliftio ^>=0.2.25
     , containers  ^>=0.7
     , text        ^>=2.1
 
--- The file-reading shell over ecluse-bench-report. CI runs it after the benchmarks to turn
--- bench-results.csv, plus the teed console output, into the run summary, and after each
--- benchmark workflow off main to render the comparison with main. It appends to
--- $GITHUB_STEP_SUMMARY itself, like the load and acceptance harnesses.
+-- Task invokes report rendering, measurement declarations and fixed receipt commands.
 executable bench-report
   import:         shared
   main-is:        Main.hs
   hs-source-dirs: bench/report
-  other-modules: Ecluse.BenchReport.PerformanceCommand
   build-depends:
-    , ecluse:ecluse-test-contracts
-    , ecluse:ecluse-test-support
-    , ecluse:ecluse-core
-    , ecluse:ecluse-bench-load
-    , aeson >=2.2 && <2.4
-    , bytestring ^>=0.12
-    , containers ^>=0.7
     , ecluse:ecluse-bench-report
     , filepath  ^>=1.4 || ^>=1.5
     , text      ^>=2.1
