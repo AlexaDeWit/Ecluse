@@ -38,11 +38,11 @@ spec = describe "loadEvidence" $ do
         audit native{npConditions = Map.insert "floorEnforcementReasons" "SettingsDiffer" (npConditions native)} `shouldContain` ["load floors were not held: load-foundation/ecosystem-pypi"]
   where
     emitted enforcement = expectRight (eitherDecode (encode (loadEvidence conditions enforcement [] [(key, Right healthy)])))
-    audit native = auditPerformanceReceipts identity "1" [obligation] [makePerformanceReceipt request artifacts native]
-    request = PerformanceRequest identity "1" obligation [] NativePassed (Map.fromList [("floorEnforcement", "held"), ("floorEnforcementReasons", "")])
+    audit native = auditPerformanceReceipts runIdentity "1" [obligation] [makePerformanceReceipt request artifacts native]
+    request = PerformanceRequest runIdentity "1" obligation [] NativePassed (Map.fromList [("floorEnforcement", "held"), ("floorEnforcementReasons", "")])
     obligation = PerformanceObligation "load-foundation" "ecosystem-pypi" ["pypi/index-cold/loaded"] conditions
     conditions = Map.singleton "durationSeconds" "30"
-    identity = ExecutionIdentity "source" "not-applicable" "arm64" "plan" "run"
+    runIdentity = ExecutionIdentity "source" "not-applicable" "arm64" "plan" "run"
     artifacts = Map.singleton "load-observations.json" (T.replicate 64 "a")
     healthy = RunEvidence "pypi/index-cold" [("", 10)] 0 (Just CleanShutdown) False
 
