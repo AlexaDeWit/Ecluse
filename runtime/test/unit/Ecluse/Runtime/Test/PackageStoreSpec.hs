@@ -48,29 +48,35 @@ spec = do
         it "keeps both format profiles under one backend and one fixed job" $ do
             map profileBackends (catalogueProfiles codeArtifactCatalogue) `shouldBe` [["codeartifact"], ["codeartifact"]]
             ordNub (map groupPartition (catalogueGroups codeArtifactCatalogue)) `shouldBe` ["package-store-codeartifact"]
-    describe "PyPI integrity negative controls" $
-        for_ corruptions $ \(label, corrupt) ->
-            it label $ psdWithSession codeArtifactPyPIDriver $ \session -> do
-                reached <- newIORef False
-                let original = pssOperations session
-                    altered =
-                        original
-                            { psoRead = \version -> do
-                                result <- psoRead original version
-                                case result of
-                                    Right (Just release) -> do
-                                        writeIORef reached True
-                                        pure (Right (Just (corrupt release)))
-                                    _ -> pure result
-                            }
-                packageStoreIntegrityLaw codeArtifactPyPIDriver session{pssOperations = altered}
-                    `shouldThrow` (const True :: HUnitFailure -> Bool)
-                readIORef reached `shouldReturn` True
+    for_ [("npm", codeArtifactDriver), ("PyPI", codeArtifactPyPIDriver)] $ \(ecosystem, driver) ->
+        describe (ecosystem <> " integrity negative controls") $
+            for_ corruptions $ \(label, corrupt) ->
+                it label (integrityNegativeControl driver corrupt)
+    describe "PyPI multi-file integrity" $
+        it "rejects a read that loses two files" $
+            integrityNegativeControl codeArtifactPyPIDriver (\release -> release{psrArtifacts = NE.head (psrArtifacts release) :| []})
+
+integrityNegativeControl :: FullPackageStoreDriver -> (PackageStoreRelease -> PackageStoreRelease) -> Expectation
+integrityNegativeControl driver corrupt = psdWithSession driver $ \session -> do
+    reached <- newIORef False
+    let original = pssOperations session
+        altered =
+            original
+                { psoRead = \version -> do
+                    result <- psoRead original version
+                    case result of
+                        Right (Just release) -> do
+                            writeIORef reached True
+                            pure (Right (Just (corrupt release)))
+                        _ -> pure result
+                }
+    packageStoreIntegrityLaw driver session{pssOperations = altered}
+        `shouldThrow` (const True :: HUnitFailure -> Bool)
+    readIORef reached `shouldReturn` True
 
 corruptions :: [(String, PackageStoreRelease -> PackageStoreRelease)]
 corruptions =
-    [ ("rejects a read that loses two files", \release -> release{psrArtifacts = NE.head (psrArtifacts release) :| []})
-    , ("rejects altered stored bytes", changeFirst (\artifact -> artifact{psaBytes = "changed bytes"}))
+    [ ("rejects altered stored bytes", changeFirst (\artifact -> artifact{psaBytes = "changed bytes"}))
     , ("rejects an altered stored digest", changeFirst (\artifact -> artifact{psaDigest = "changed digest"}))
     , ("rejects altered consumer metadata", \release -> release{psrMetadata = Map.map (const ">=99") (psrMetadata release)})
     ]
