@@ -7,6 +7,7 @@ module Ecluse.Test.Contract.UnitReportSpec (spec) where
 
 import Data.Aeson (eitherDecodeStrict')
 import Data.ByteString qualified as BS
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (ExitFailure))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -43,6 +44,15 @@ spec = describe "unit execution receipts" $ do
             case actual of
                 Left reason -> expectationFailure reason
                 Right receipt -> auditSelection [scenarioGroup] (reportGroups receipt) (reportCases receipt) `shouldBe` []
+    it "forwards successful native examples without writing a receipt" $
+        withSystemTempDirectory "unit-receipt" $ \directory -> do
+            events <- newIORef (0 :: Int)
+            let path = directory </> "report.json"
+                delegate _ = pure $ \_ -> modifyIORef' events (+ 1)
+            format <- wrapUnitFormatter path executionIdentity "primary" [scenarioGroup] delegate Format.defaultFormatConfig
+            format (Format.ItemDone ([], "a native example") passedItem)
+            readIORef events `shouldReturn` 1
+            doesFileExist path `shouldReturn` False
     it "persists a pending case before rejecting the incomplete receipt" $
         withSystemTempDirectory "unit-receipt" $ \directory -> do
             let path = directory </> "report.json"

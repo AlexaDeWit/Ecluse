@@ -65,13 +65,18 @@ wrapUnitFormatter path runIdentity suite groups formatter formatConfig = do
     pure $ \event -> do
         display event
         case event of
-            Format.ItemDone (_, label) item -> do
+            Format.ItemDone (_, label) item ->
                 case labelCaseId label >>= owner of
-                    Just scenarioGroup -> captureResult scenarioGroup outcomes event
+                    Just scenarioGroup -> do
+                        captureResult scenarioGroup outcomes event
+                        void $ persist outcomes failedOutside
                     Nothing -> case Format.itemResult item of
-                        Format.Failure _ _ -> writeIORef failedOutside True
+                        Format.Failure _ _ -> do
+                            alreadyFailed <- readIORef failedOutside
+                            unless alreadyFailed $ do
+                                writeIORef failedOutside True
+                                void $ persist outcomes failedOutside
                         _ -> pure ()
-                void $ persist outcomes failedOutside
             Format.Done _ -> do
                 report <- persist outcomes failedOutside
                 let faults = auditSelection groups (reportGroups report) (reportCases report)
