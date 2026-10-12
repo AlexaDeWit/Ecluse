@@ -154,6 +154,11 @@ spec = describe "extractTar" $ do
         alias <- link True "example-1/PKG-INFO" "metadata.txt"
         target <- regular "example-1/metadata.txt" metadata
         extract defaultLimits [extended, alias, target] `shouldReturn` Left (ParseError "non-file tar entry carries a payload")
+    it "refuses a FIFO after valid metadata" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        path <- expectRight (Tar.toTarPath False "example-1/pipe")
+        let pipeEntry = Tar.simpleEntry path Tar.NamedPipe
+        extract defaultLimits [info, pipeEntry] `shouldReturn` Left (ParseError "unsupported tar device or framing extension")
     it "accepts exact entry, path-depth, and inflated-byte ceilings" $ do
         info <- regular "example-1/PKG-INFO" metadata
         let bytes = BSL.toStrict (Tar.write [info])
