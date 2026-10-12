@@ -196,7 +196,6 @@ withBridgeApplication application action =
         -- Warp's test helpers always bind loopback, even when setHost names another address.
         race (Warp.runSettingsSocket settings sock application) (readMVar ready >> action port) >>= \case
             Right result -> pure result
-            -- An early listener exit invalidates the fixture's dependent observations.
             Left () -> throwIO (TestContractEscape "bridge fixture server stopped before its action finished")
 
 -- | A random identifier for concurrently acquired resources across processes.
