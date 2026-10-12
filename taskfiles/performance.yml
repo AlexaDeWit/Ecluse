@@ -209,4 +209,3 @@ tasks:
       - task --exit-code performance:invalidate
       - task: reporter
       - '"$(cabal list-bin exe:bench-report)" receipt-load-foundation "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
-
