@@ -766,8 +766,8 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-The active plan registers 90 E2E cases. It retains all 49 prior observations, including the Dredger cases.
-It adds 15 green-foundation observations and 26 named PyPI missing-capability cases.
+Both ecosystems run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
+Native cases retain protocol-specific observations beside the shared laws.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 

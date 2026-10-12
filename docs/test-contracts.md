@@ -305,32 +305,19 @@ Its result does not claim live AWS service coverage.
 Read each suite's declaration list to see the contracts and concrete fixtures it runs.
 The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
 
-| Subject entrypoint | Composition | Active cases |
+| Subject entrypoint | Composition | Concrete coverage |
 |---|---|---|
-| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | 46: former serving and write cases, six moved telemetry cases, four shared installation laws, and three advisory laws. |
-| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | 43: the 17 existing cases and 26 named missing-capability cases below. |
-| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | 1: the mixed-client case. |
+| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | Serving, installation, advisory, mirroring, publication, Dredger and telemetry laws. |
+| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | The same required families, with native wheel, sdist, multipart and CodeArtifact fixtures. |
+| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | The mixed-client case. |
 
-The active plan registers 90 E2E cases in 18 groups, including 43 PyPI cases in nine groups.
-It retains all 49 prior observations and the 15 observations added by the green foundation.
-The historical green foundation ran 64 E2E cases before the 26 missing-capability cases were activated.
-Six telemetry IDs gain an `npm/` prefix, and the PyPI canonical-fix case moves to its native advisory group.
-The old count is not a completion target.
-
-The four missing groups register ordinary failed examples without fixture acquisition.
-All 17 existing PyPI cases still execute, including read telemetry and native extensions after missing write cases.
-
-| Missing group | Required family | Case IDs |
-|---|---|---|
-| `pypi/missing/mirroring` | mirroring | `pypi/mirror/dependency-graph`, `pypi/mirror/module-exports`, `pypi/mirror/linked-executable`, `pypi/mirror/origin-evidence`, `pypi/mirror/installed-tree`, `pypi/mirror/empty-store-control` |
-| `pypi/missing/publication` | publication | `pypi/publish/publish-install`, `pypi/publish/scope-refusal` |
-| `pypi/missing/dredger` | dredger | `pypi/dredger/inventory`, `pypi/dredger/admission-only`, `pypi/dredger/denied-versions`, `pypi/dredger/dry-run`, `pypi/dredger/consent-refusal`, `pypi/dredger/first-party`, `pypi/dredger/two-stores`, `pypi/dredger/advisory-revocation`, `pypi/dredger/denied-install`, `pypi/dredger/delete-recovery`, `pypi/dredger/refill`, `pypi/dredger/missing-source`, `pypi/dredger/late-copy`, `pypi/dredger/old-worker`, `pypi/dredger/old-dredger-refill`, `pypi/dredger/old-dredger-loss` |
-| `pypi/missing/telemetry-write` | telemetry | `pypi/telemetry/domain-spans`, `pypi/telemetry/private-fetch` |
-
+Both ecosystem drivers bind concrete providers for every required family.
+PyPI mirror evidence includes whole-version copies, restart recovery, cross-target installation and retained metadata.
+Native cases also cover partial copies, public outages and exact installed files, including executable scripts.
 Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
-The write telemetry group supplies the two missing laws in the required `telemetry` family.
-Failures distinguish an absent adapter publisher from an advertised publisher whose test driver is unbound.
-The completion audit reports these failed laws under `FullEcosystem`.
+The write telemetry group supplies `pypi/telemetry/domain-spans` and `pypi/telemetry/private-fetch`.
+Both completion audits use `FullEcosystem` and require actual execution reports.
+An absent or unbound driver still produces a named failure under the shared contract.
 
 [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
 The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
