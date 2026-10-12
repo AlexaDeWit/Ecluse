@@ -71,7 +71,7 @@ installedVersion project name = do
     let candidates = [ppDir project </> "site" </> entry </> "METADATA" | entry <- entries, (T.replace "-" "_" name <> "-") `T.isPrefixOf` toText entry, ".dist-info" `T.isSuffixOf` toText entry]
     files <- filterM doesFileExist candidates
     case files of
-        [path] -> listToMaybe . mapMaybe (T.stripPrefix "Version: ") . T.lines <$> readFileText path
+        [path] -> listToMaybe . mapMaybe (T.stripPrefix "Version: ") . T.lines . decodeUtf8 <$> readFileBS path
         [] -> pure Nothing
         _ -> fail "pip left more than one installed version for the fixture project"
 
