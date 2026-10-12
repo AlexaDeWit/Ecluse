@@ -17,7 +17,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
-import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), retainVerifiedIdentity)
+import Ecluse.Core.Mirror.State.Internal (CompanionRef (..), StateRevision (..), VerifiedCompanionBytes (..), retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.MirrorUpload
@@ -177,7 +177,12 @@ spec = describe "durable mirror expectations" $ do
         unverifiedVersion <- getVersion record
         checkMirrorCompletion unverifiedVersion [targetFile] `shouldBe` MirrorIncomplete (MissingMirrorProof (mirrorFilename 1) :| [])
         verified <- expectRight (verifyMirrorBytes file "wheel")
+        retainVerifiedIdentity (mkVersion PyPI "2") verified record `shouldBe` Left (StateInvalid "missing expected version")
+        anotherInventory <- mirrorSample [2] False "https://first.test/" "other"
+        anotherRecord <- expectRight (extendProjectRecord defaultLimits target anotherInventory Nothing)
+        retainVerifiedIdentity mirrorVersion verified anotherRecord `shouldBe` Left (StateFileConflict (mirrorFilename 1))
         updated <- expectRight (retainVerifiedIdentity mirrorVersion verified record)
+        retainVerifiedIdentity mirrorVersion verified updated `shouldBe` Right updated
         verifiedVersion <- getVersion updated
         checkMirrorCompletion verifiedVersion [targetFile] `shouldBe` MirrorComplete
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [sha512]}] `shouldBe` MirrorComplete
@@ -318,6 +323,98 @@ spec = describe "durable mirror expectations" $ do
         recordEnvelope record `shouldBe` committed
         version <- getVersion record
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2]
+
+    it "refuses a retained reference for a different version, file or declaration" $ do
+        inventory <- mirrorSample [1] True "https://first.test/" "original"
+        otherInventory <- mirrorSample [2] True "https://first.test/" "original"
+        changedInventory <- mirrorSample [1] True "https://other.test/" "original"
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        let file :| _ = inventoryFiles inventory
+            otherFile :| _ = inventoryFiles otherInventory
+            changedFile :| _ = inventoryFiles changedInventory
+        verified@(VerifiedCompanionBytes _ reference _) <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
+        other@(VerifiedCompanionBytes _ otherReference _) <- expectRight (verifyCompanionBytes defaultLimits otherFile "metadata")
+        changed@(VerifiedCompanionBytes _ changedReference _) <- expectRight (verifyCompanionBytes defaultLimits changedFile "metadata")
+        retainCompanionReference (mkVersion PyPI "2") verified reference record `shouldBe` Left StateMissingCompanion
+        retainCompanionReference mirrorVersion other otherReference record `shouldBe` Left StateMissingCompanion
+        retainCompanionReference mirrorVersion changed changedReference record `shouldBe` Left (StateCompanionConflict (mirrorFilename 1))
+        retained <- expectRight (retainCompanionReference mirrorVersion verified reference record)
+        retainCompanionReference mirrorVersion verified reference retained `shouldBe` Right retained
+        replacement@(VerifiedCompanionBytes _ replacementReference _) <- expectRight (verifyCompanionBytes defaultLimits file "different")
+        retainCompanionReference mirrorVersion verified replacementReference retained `shouldBe` Left (StateCompanionConflict (mirrorFilename 1))
+        retainCompanionReference mirrorVersion replacement replacementReference retained `shouldBe` Left (StateCompanionConflict (mirrorFilename 1))
+        version <- getVersion retained
+        Map.lookup (mirrorFilename 1) (versionCompanions version) `shouldBe` Just (CompanionRetained reference)
+        checkMirrorCompletion version [expectedArtifact file] `shouldBe` MirrorComplete
+
+    it "verifies supported companion digests and retains unknown declarations without inventing a digest rule" $ do
+        original <- mirrorSample [1] True "https://first.test/" "original"
+        let details = inventoryDetails original
+        for_ [Map.singleton "sha256" (hexSha256Of "metadata"), Map.singleton "future-hash" "opaque"] $ \digests -> do
+            let artifacts = fmap (\artifact -> artifact{artCoreMetadata = Just (MetadataDigests digests)}) (pkgArtifacts details)
+            inventory <- expectRight (restoreMirrorInventory details{pkgArtifacts = artifacts} (mirrorSource artifacts "original"))
+            let file :| _ = inventoryFiles inventory
+            verified@(VerifiedCompanionBytes _ reference _) <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
+            companionBody verified `shouldBe` "metadata"
+            companionDigest reference `shouldBe` hexSha256Of "metadata"
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            retained <- expectRight (retainCompanionReference mirrorVersion verified reference record)
+            encoded <- expectRight (encodeProjectRecord defaultLimits retained)
+            chargedDecodeProjectRecord (const pass) defaultLimits target mirrorPackage encoded `shouldReturn` Right retained
+            verifyRetainedCompanion reference "Metadata" `shouldBe` Left (StateInvalid "retained companion identity mismatch")
+            let CompanionRef digest size = reference
+            verifyRetainedCompanion (CompanionRef digest (size + 1)) "metadata" `shouldBe` Left (StateInvalid "retained companion identity mismatch")
+
+    for_ [(Right StateConflict, StateRetryExhausted), (Left (StateInvalid "write refused"), StateInvalid "write refused")] $ \(writeResult, expectedFault) ->
+        it ("keeps the committed inventory when conditional writes exhaust retries: " <> show expectedFault) $ do
+            original <- mirrorSample [1] False "https://first.test/" "original"
+            addition <- mirrorSample [1, 2] False "https://first.test/" "original"
+            record <- expectRight (extendProjectRecord defaultLimits target original Nothing)
+            reads <- newIORef (0 :: Int)
+            writes <- newIORef (0 :: Int)
+            let revision = StateRevision target mirrorPackage "committed"
+                store =
+                    inertState
+                        { msReadProject = \_ name expected -> do
+                            name `shouldBe` mirrorPackage
+                            expected `shouldBe` Nothing
+                            modifyIORef' reads (+ 1)
+                            pure (Right (StateLoaded revision record))
+                        , msWriteProject = \_ name expected attempted -> do
+                            name `shouldBe` mirrorPackage
+                            expected `shouldBe` Just revision
+                            version <- getVersion attempted
+                            Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2]
+                            modifyIORef' writes (+ 1)
+                            pure writeResult
+                        }
+            recordExpectedInventory defaultLimits (const pass) target store addition `shouldReturn` Left expectedFault
+            readIORef reads `shouldReturn` 8
+            readIORef writes `shouldReturn` 8
+            msReadProject store (const pass) mirrorPackage Nothing `shouldReturn` Right (StateLoaded revision record)
+
+    it "stops an update on read uncertainty without writing a smaller inventory" $ do
+        inventory <- mirrorSample [1] False "https://first.test/" "original"
+        let revision = StateRevision target mirrorPackage "unavailable"
+        for_ [(Left (StateInvalid "unreadable"), StateInvalid "unreadable"), (Right (StateUnchanged revision), StateRevisionMismatch)] $ \(readResult, expectedFault) -> do
+            let store =
+                    inertState
+                        { msReadProject = \_ _ _ -> pure readResult
+                        , msWriteProject = \_ _ _ _ -> fail "must not write after an uncertain read"
+                        }
+            recordExpectedInventory defaultLimits (const pass) target store inventory `shouldReturn` Left expectedFault
+
+    it "does not reference a companion when its durable write fails" $ do
+        inventory <- mirrorSample [1] True "https://first.test/" "original"
+        let file :| _ = inventoryFiles inventory
+        verified <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
+        let store =
+                inertState
+                    { msRetainCompanion = \_ _ -> pure (Left (StateInvalid "companion write refused"))
+                    , msReadProject = \_ _ _ -> fail "must not update a record before durable companion storage"
+                    }
+        retainProjectCompanion defaultLimits (const pass) store mirrorPackage mirrorVersion verified
+            `shouldReturn` Left (StateInvalid "companion write refused")
 
 target :: StateTarget
 target = stateTarget "https://private.test/simple"
