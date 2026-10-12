@@ -115,7 +115,7 @@ import Ecluse.Test.Wai (freePort)
 serveProxyFlag :: String
 serveProxyFlag = "--serve-proxy"
 
--- | 'Nothing' leaves each bound to the proxy's boot-time calculation.
+-- | Scenario settings. 'Nothing' preserves each setting's existing default.
 data ProxySettings = ProxySettings
     { psEcosystem :: Ecosystem
     , psCacheTtlSeconds :: Int
@@ -124,6 +124,8 @@ data ProxySettings = ProxySettings
     , psMaxResponseBytes :: Maybe Int
     , psServeMaxInFlight :: Maybe Int
     , psPublicConnections :: Maybe Int
+    , psPublicHost :: Maybe Text
+    -- ^ An override for the public leg only. 'Nothing' preserves the fixture's hostname.
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
@@ -134,7 +136,7 @@ data ProxySettings = ProxySettings
 
 -- | Settings for one mount with the given cache TTL, every bound left to the boot.
 proxySettings :: Ecosystem -> Int -> ProxySettings
-proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
@@ -340,12 +342,11 @@ proxyEnvironment :: ProxySettings -> PodShape -> Int -> FilePath -> (Int, Int, I
 proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort) publicPort privatePort base =
     filter (inherited . fst) base <> map (bimap toString toString) (fixed <> pinned)
   where
-    -- The proxy reads its whole configuration from here, so nothing of the harness's own leaks in.
     inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "AWS_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
-    -- Managed mirrors need distinct hostnames for public reads and mirror writes.
     upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://" <> upstreamHost leg <> ":" <> show p)
     upstreamHost leg
+        | leg == "PUBLIC_UPSTREAM", Just host <- psPublicHost settings = host
         | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
         | otherwise = "localhost"
     fixed =

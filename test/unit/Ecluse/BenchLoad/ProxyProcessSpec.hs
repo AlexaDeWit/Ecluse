@@ -171,6 +171,13 @@ environmentSpec = describe "proxyEnvironment" $ do
         case loadConfig environment Nothing of
             Left errors -> expectationFailure (toString (unlines (map renderConfigError errors)))
             Right config -> void (expectPlanFor (BootMirrorPipeline ServeAndMirror) environment Nothing config noCeiling)
+    it "overrides only the public hostname with or without durable state" $
+        for_ [Nothing, Just 9003] $ \statePort -> do
+            let pinned = (proxySettings PyPI 3600){psPublicHost = Just "127.0.0.2", psMirrorStatePort = statePort}
+                environment = proxyEnvironment pinned Unlimited 3 "/tmp/proxy" (8080, 8081, 8082) 9001 (Just 9002) []
+            lookup "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://127.0.0.2:9001"
+            lookup "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" environment `shouldBe` Just "https://localhost:9002"
+            lookup "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" environment `shouldBe` ("https://localhost:9002" <$ statePort)
     it "derives GHC capabilities from the cgroup under a limited shape, and overrides the count when unlimited" $ do
         lookup "ECLUSE_RUNTIME__CORES" podEnvironment `shouldBe` Nothing
         lookup "ECLUSE_RUNTIME__CORES" (environmentFor Unlimited) `shouldBe` Just "3"

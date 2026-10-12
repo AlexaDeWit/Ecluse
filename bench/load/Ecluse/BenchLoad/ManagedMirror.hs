@@ -65,7 +65,7 @@ boot mode knobs use = do
             ( \privatePort _ -> do
                 input <- makeReadFixtureFor (stateTarget ("https://localhost:" <> show privatePort)) 1000
                 writeIORef fixture (Just input)
-                pure (\settings -> settings{psCacheTtlSeconds = longCacheTtl, psMirrorStatePort = statePort <$ guard (mode /= Native)})
+                pure (\settings -> settings{psCacheTtlSeconds = longCacheTtl, psPublicHost = Just "127.0.0.1", psMirrorStatePort = statePort <$ guard (mode /= Native)})
             )
             (privateApp latency fixture counts)
             (publicApp latency counts)
