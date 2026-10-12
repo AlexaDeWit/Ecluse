@@ -63,6 +63,8 @@ checkMeasurement measured = do
         residual = max 0 (toInteger (releasedLive measured) - toInteger (baselineLive measured))
     retained `shouldSatisfy` (> 0)
     retained `shouldSatisfy` (<= toInteger (retainedCharge measured))
+    -- The release sample counts warmup payload already present in the first baseline.
+    toInteger (heldLive measured) - toInteger (releasedLive measured) `shouldSatisfy` (<= toInteger (retainedCharge measured))
     residual `shouldSatisfy` (<= 16 * 1024)
     10 * residual `shouldSatisfy` (<= retained)
 
