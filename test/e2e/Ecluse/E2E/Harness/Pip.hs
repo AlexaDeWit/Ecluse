@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | pip clients for end-to-end scenarios. Each project pins one release to the digest the mount's own index
-advertised, so pip's hash-checking mode refuses any byte that is not the one the client was promised.
--}
+-- | Isolated pip clients for digest checks, dependency installs, and platform selection.
 module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipInstallIn,
     pipResolveIn,
     pipInstalled,
     pipInstallsWheel,
+    pipInstallGraph,
+    pipDownloadPlatform,
 
     -- * The served index
     advertisedFiles,
@@ -19,17 +19,19 @@ module Ecluse.E2E.Harness.Pip (
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
-import System.Directory (doesDirectoryExist)
+import Data.Text qualified as T
+import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
-import Test.Hspec (Expectation, expectationFailure)
+import Test.Hspec (Expectation, expectationFailure, shouldReturn)
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
+import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet, shouldSucceedThroughProxy)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
+import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
@@ -161,3 +163,66 @@ requirementsFile = "requirements.txt"
 
 targetDir :: FilePath
 targetDir = "site"
+
+-- | Install a root and its dependencies into a new empty virtual environment, preserving every installed byte.
+pipInstallGraph :: E2E -> Text -> Text -> IO InstalledTree
+pipInstallGraph proxy project version = withPipProject proxy project version "" $ \client -> do
+    let virtualenv = ppDir client </> "venv"
+        python = virtualenv </> "bin" </> "python"
+        run executable arguments = runClient (ppDir client) (ppEnv client) executable arguments >>= shouldSucceedThroughProxy proxy
+    void $ run "python3" ["-m", "venv", "--without-pip", virtualenv]
+    location <- run python ["-c", "import sysconfig; print(sysconfig.get_path('purelib'))"]
+    let site = toString (T.strip (crStdout location))
+    listDirectory site `shouldReturn` []
+    void $
+        run
+            "python3"
+            [ "-m"
+            , "pip"
+            , "--isolated"
+            , "--python"
+            , python
+            , "install"
+            , "--no-cache-dir"
+            , "--no-compile"
+            , "--disable-pip-version-check"
+            , "--no-input"
+            , "--only-binary=:all:"
+            , "--index-url"
+            , toString (ppIndex client)
+            , toString (project <> "==" <> version)
+            ]
+    roots <- listDirectory site
+    snapshotTree site roots
+
+-- | Let pip select a different platform wheel with an empty download directory and cache disabled.
+pipDownloadPlatform :: E2E -> Text -> Text -> IO [(FilePath, ByteString)]
+pipDownloadPlatform proxy project version = withPipProject proxy project version "" $ \client -> do
+    let destination = ppDir client </> "download"
+    void $
+        runClient
+            (ppDir client)
+            (ppEnv client)
+            "python3"
+            [ "-m"
+            , "pip"
+            , "--isolated"
+            , "download"
+            , "--no-cache-dir"
+            , "--disable-pip-version-check"
+            , "--no-input"
+            , "--no-deps"
+            , "--platform"
+            , "win_amd64"
+            , "--python-version"
+            , "3.12"
+            , "--only-binary=:all:"
+            , "--index-url"
+            , toString (ppIndex client)
+            , "--dest"
+            , destination
+            , toString (project <> "==" <> version)
+            ]
+            >>= shouldSucceedThroughProxy proxy
+    files <- listDirectory destination
+    forM files $ \file -> (file,) <$> readFileBS (destination </> file)

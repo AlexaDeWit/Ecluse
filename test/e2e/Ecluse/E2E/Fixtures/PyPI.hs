@@ -17,6 +17,7 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiWheelFor,
     pypiDistInfoFor,
     buildPyPIFixtures,
+    buildWheelWithMetadata,
 ) where
 
 import Data.Aeson (Value (Bool, Object, String), object, (.=))
@@ -103,7 +104,11 @@ buildWheel :: FilePath -> FilePath -> IO ()
 buildWheel = buildWheelFor pypiProject pypiVersion metadataFile
 
 buildWheelFor :: Text -> Text -> Text -> FilePath -> FilePath -> IO ()
-buildWheelFor project version metadata work wheelPath = do
+buildWheelFor project version metadata = buildWheelWithMetadata project version metadata "py3-none-any"
+
+-- | Build a wheel with per-file metadata and the declared compatibility tag.
+buildWheelWithMetadata :: Text -> Text -> Text -> Text -> FilePath -> FilePath -> IO ()
+buildWheelWithMetadata project version metadata tag work wheelPath = do
     let escaped = T.replace "-" "_" project
         distInfo = pypiDistInfoFor project version
         moduleDir = work </> toString escaped
@@ -113,7 +118,7 @@ buildWheelFor project version metadata work wheelPath = do
     writeFileText (moduleDir </> "__init__.py") ("VERSION = \"" <> version <> "\"\n")
     writeFileText (metadataDir </> "METADATA") metadata
     writeFileText (wheelPath <> ".metadata") metadata
-    writeFileText (metadataDir </> "WHEEL") wheelMetadataFile
+    writeFileText (metadataDir </> "WHEEL") (wheelMetadataFile tag)
     writeFileText (metadataDir </> "RECORD") (recordFileFor project version)
     runProcess_ . setWorkingDir work $
         proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escaped, toString distInfo]
@@ -139,13 +144,13 @@ metadataFileFor project version =
         , "Summary: An Ecluse end-to-end fixture distribution"
         ]
 
-wheelMetadataFile :: Text
-wheelMetadataFile =
+wheelMetadataFile :: Text -> Text
+wheelMetadataFile tag =
     T.unlines
         [ "Wheel-Version: 1.0"
         , "Generator: ecluse-e2e"
         , "Root-Is-Purelib: true"
-        , "Tag: py3-none-any"
+        , "Tag: " <> tag
         ]
 
 -- pip reads RECORD to write its own install manifest and checks no digest in it, so the
