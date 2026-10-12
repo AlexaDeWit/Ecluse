@@ -66,6 +66,7 @@ Its write credential does not grant callers private read access.
 
 Run `ecluse proxy` for an embedded worker.
 For separate fleets, run `ecluse proxy --no-worker` and `ecluse mirror` with the same mounts, rules and SQS queue.
+Both fleets must use the same `mirrorState.url` bucket and prefix and the same mirror-target identity.
 The in-memory queue cannot connect separate processes. Split roles refuse that configuration.
 The proxy needs mirror-state reads and prefix listing. The worker also needs conditional writes.
 Scope state access to its bucket and prefix independently from advisory access.
@@ -98,7 +99,9 @@ Review existing public-derived copies before adding a declaration, because Dredg
 
 An admitted distribution GET triggers a job for the whole supported version, not only the client's wheel.
 The worker copies every admitted wheel and source distribution and retains declared metadata companions.
-It records expected identities before upload and proves current target bytes before acknowledging completion.
+It records expected identities before upload and verifies distribution bytes before sending them.
+Completion checks current target inventory identities and digests against retained verified upload evidence, and verifies retained companions.
+This check does not fetch every target distribution again.
 A duplicate upload response alone does not prove completion.
 [PyPI protocol support](@/docs/protocol-support.md#supported-registries) defines retained fields and companion declarations.
 
