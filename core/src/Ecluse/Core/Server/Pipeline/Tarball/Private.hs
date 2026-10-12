@@ -20,7 +20,7 @@ import Network.HTTP.Types (status403, status404, status503, statusCode)
 import Network.Wai (ResponseReceived)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion)
+import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion, versionFiles)
 import Ecluse.Core.Package (
     Artifact (artFilename, artUrl),
     PackageDetails (pkgArtifacts),
@@ -169,6 +169,7 @@ byIndexedLocation ticket ctx token privateBase privateHostPort = do
                         Nothing -> pure (ordinary resolved)
                         Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) resolved) of
                             Left _ -> pure (PrivateIncomplete expected)
+                            Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure (PrivateMissing MissAbsent)
                             Right restored -> pure (maybe PrivateUnavailable (PrivateRequest True) (restored >>= requestForDetails . vdDetails))
             _ -> pure (ordinary resolved)
   where

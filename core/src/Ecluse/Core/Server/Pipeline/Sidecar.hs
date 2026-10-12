@@ -19,7 +19,7 @@ import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (tryAny)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion)
+import Ecluse.Core.Mirror.State (MirrorVersion, recordVersion, versionFiles)
 import Ecluse.Core.Package (Artifact (..), CoreMetadata (..), PackageDetails (pkgArtifacts), PackageInfo (PackageInfo), PackageName)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, partitionByFloor)
 import Ecluse.Core.Registry (isAuthorisationFailure)
@@ -64,8 +64,8 @@ serveSidecar mode replies name version file request respond = do
         then admittedRead ctx (privateSelection ctx token) (servePrivate ctx)
         else liftIO (respond (tarballError replies status401 [] (mkRefusal Nothing unauthorisedMessage)))
 
--- A surviving private version owns a companion absence as well as a fetchable companion.
-data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | Unavailable | Refused | Missing OriginMiss | CompanionAbsent
+-- A recorded private file owns its companion absence after the complete mirror proof.
+data Selection = Selected HTTP.Request | Retained ByteString | Incomplete MirrorVersion | NewPublicFile | Rejected ServeDecision | Unavailable | Refused | Missing OriginMiss | CompanionAbsent
 
 admittedRead :: ArtifactRequest response -> (MemoryTicket -> Handler Selection) -> (Selection -> Handler ResponseReceived) -> Handler ResponseReceived
 admittedRead ctx readSelection answer =
@@ -94,6 +94,7 @@ privateSelection ctx token ticket = case pdPrivateBaseUrl deps of
                                 Nothing -> pure (ordinary result)
                                 Just expected -> case mirrorVersionView (arVersion ctx) record (either (const Nothing) (either (const Nothing) vrVersion) result) of
                                     Left _ -> pure (Incomplete expected)
+                                    Right _ | Map.notMember (unFilename (arFile ctx)) (versionFiles expected) -> pure NewPublicFile
                                     Right restored -> case restored >>= selectSidecar (pdMinTrustedIntegrity deps) (tarballHostHonoured TrustedOrigin deps privateHost . hostPortAddress . artUrl) (unFilename (arFile ctx)) . vdDetails of
                                         Nothing -> pure CompanionAbsent
                                         Just _ -> either (const Unavailable) Retained <$> liftIO (readMirrorCompanion mirror ticket record (arVersion ctx) (unFilename (arFile ctx)))
@@ -152,7 +153,9 @@ servePrivate :: ArtifactRequest response -> Selection -> Handler ResponseReceive
 servePrivate ctx = \case
     Retained bytes -> serveRetained ctx bytes
     Unavailable -> answerError ctx upstreamUnavailable
-    Incomplete expected -> admittedRead ctx (const (publicSelectionCovered ctx expected)) (servePublic ctx)
+    Incomplete expected -> admittedRead ctx (const (publicSelectionAdmitted ctx (Just expected))) (servePublic ctx)
+    NewPublicFile -> admittedRead ctx (const (publicSelectionAdmitted ctx Nothing)) (servePublic ctx)
+    Rejected decision -> answerError ctx decision
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> refusePrivate ctx
     Missing miss -> fallback ctx miss
@@ -175,6 +178,8 @@ servePublic ctx = \case
     Retained _ -> answerError ctx upstreamUnavailable
     Unavailable -> answerError ctx upstreamUnavailable
     Incomplete _ -> answerError ctx upstreamUnavailable
+    NewPublicFile -> answerError ctx upstreamUnavailable
+    Rejected decision -> answerError ctx decision
     CompanionAbsent -> answerError ctx versionAbsent
     Refused -> answerError ctx upstreamUnavailable
     Missing MissAbsent -> answerError ctx versionAbsent
@@ -217,22 +222,23 @@ serveRetained ctx bytes = liftIO $ arRespond ctx $ case evaluateETag (arValidato
     etag = mkStrongETag (hash bytes :: Digest SHA256)
     headers fresh = [etagHeader fresh, (hContentLength, show (BS.length bytes))]
 
-publicSelectionCovered :: ArtifactRequest response -> MirrorVersion -> Handler Selection
-publicSelectionCovered ctx expected = do
+publicSelectionAdmitted :: ArtifactRequest response -> Maybe MirrorVersion -> Handler Selection
+publicSelectionAdmitted ctx expected = do
     result <- tryAny (preparePublicMetadata (arRuntime ctx) deps (arPackage ctx) (arVersion ctx) >>= liftIO . executePrepared)
     case result of
         Right (Right readVersion) | Just doc <- vrVersion readVersion -> do
             let info = PackageInfo (arPackage ctx) (Map.singleton (versionRaw (arVersion ctx)) (vdDetails doc)) Map.empty []
-            if publicMirrorCoverage (Map.singleton (versionRaw (arVersion ctx)) expected) info
+            if maybe True (\mirror -> publicMirrorCoverage (Map.singleton (versionRaw (arVersion ctx)) mirror) info) expected
                 then do
                     evaluation <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
                     decide <- liftIO (newEvaluator evaluation (pdRules deps))
                     decision <- liftIO (decide (completeEvidence (vdDetails doc)))
-                    pure $
-                        if serveDecisionOf (completeEvidence (vdDetails doc)) decision == Admit
-                            then selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion
-                            else Unavailable
+                    pure $ case serveDecisionOf (completeEvidence (vdDetails doc)) decision of
+                        Admit -> selectRequest ctx UntrustedOrigin (pdMinIntegrity deps) publicHost Nothing readVersion
+                        denied -> if isJust expected then Unavailable else Rejected denied
                 else pure Unavailable
+        Right (Right _) | isNothing expected -> pure (Missing MissAbsent)
+        Right (Left err) | isNothing expected -> pure (Missing (fromMaybe MissUnresolved (privateMetadataMiss err)))
         _ -> pure Unavailable
   where
     deps = arDeps ctx
