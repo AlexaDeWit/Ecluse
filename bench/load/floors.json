@@ -1,7 +1,7 @@
 {
   "_note": "Success floors for the load test (bench/load). floors holds, per pod shape and scenario, the fewest successes the scenario may have in its loaded pass and, where it joins that pass, in its concurrency-one pass. A run held to the floors fails on a count below its floor, on a scenario without a floor, and on a floor that names no scenario. A ramp holds every step to its floor, and a paired scenario both of its loads. A run is held only when it matches calibration: on GitHub Actions under runnerOs and runnerArch, at operatingPoint, under a pod shape that floors holds, and while its npm fixture injects at most npmInjectedLatency.ceilingMs of upstream latency. In operatingPoint, null leaves a bound to the proxy's computed default, null scenarios means every scenario, and patternOverrides names the BENCH_PATTERN_* variables set. runs lists every run a floor came from, each with the commit it measured. npmInjectedLatency.highestMs holds, per pod shape, the highest upstream latency the npm fixture injected in those runs. docs/testing.md, Success floors, has the recalibration procedure.",
   "calibration": {
-    "rule": "Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them. The first ten listed runs retain the previous calibration for every unchanged floor. The next ten dispatched runs recalibrate only npm/tarball-ceiling at concurrency one, after its service pass changed from four connections to one. No loaded-pass or other scenario floor is recalibrated by those ten dispatched runs. The final nine dispatched runs add only the PyPI wheel-ceiling loaded and concurrency-one floors, and the PyPI herd, warm-under-cold and ramp loaded floors. Each pod shape has three observations on 4528093eb2834801f1a099713834ed4743426ff7. Every earlier floor retains its prior calibration.",
+    "rule": "Each floor is half the lowest count of successes over the calibration runs for its scenario, pass, and pod shape, rounded down, and at least 1. A scenario with several loads takes the lowest count of any of them. The first ten listed runs retain the previous calibration for every unchanged floor. The next ten dispatched runs recalibrate only npm/tarball-ceiling at concurrency one, after its service pass changed from four connections to one. No loaded-pass or other scenario floor is recalibrated by those ten dispatched runs. The next nine dispatched runs add only the PyPI wheel-ceiling loaded and concurrency-one floors, and the PyPI herd, warm-under-cold and ramp loaded floors. Each pod shape has three observations on 4528093eb2834801f1a099713834ed4743426ff7. Every earlier floor retains its prior calibration. The final six dispatched runs add loaded and concurrency-one floors only for PyPI mirror-native-baseline, mirror-managed-warm, mirror-managed-revision and worker-mirroring. The mirror scenarios run under all four pod shapes, and worker-mirroring runs under unlimited only. Each applicable scenario has three observations per pod shape across 48166311b42f035e2a8ea96ead28f35886b4d713 and 30ca5206bbb5402c144a29f8857b029a0f54353a. These six runs change no earlier floor.",
     "runner": "ubuntu-26.04-arm",
     "runnerOs": "Linux",
     "runnerArch": "ARM64",
@@ -34,7 +34,13 @@
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200654848", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200658446", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
       { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200664633", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
-      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200668442", "commit": "4528093eb2834801f1a099713834ed4743426ff7" }
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38200668442", "commit": "4528093eb2834801f1a099713834ed4743426ff7" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38239869524", "commit": "48166311b42f035e2a8ea96ead28f35886b4d713" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247813334", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247818451", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247824220", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247829156", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" },
+      { "url": "https://github.com/AlexaDeWit/Ecluse/actions/runs/38247834023", "commit": "30ca5206bbb5402c144a29f8857b029a0f54353a" }
     ],
     "operatingPoint": {
       "durationSeconds": 30,
@@ -51,8 +57,8 @@
     },
     "npmInjectedLatency": {
       "rule": "The ceiling is 1.5 times the lowest of the pod shapes' highest latencies, rounded up to 10 ms. A latency-bound floor first breaches near twice the highest latency of its own pod shape, so the pod shape with the lowest one binds.",
-      "highestMs": { "unlimited": 141, "2cpu-1gib": 151, "4cpu-1gib": 177, "4cpu-2gib": 203 },
-      "ceilingMs": 220
+      "highestMs": { "unlimited": 153, "2cpu-1gib": 151, "4cpu-1gib": 177, "4cpu-2gib": 203 },
+      "ceilingMs": 230
     }
   },
   "floors": {
@@ -100,6 +106,10 @@
       "pypi/herd": { "loaded": 50 },
       "pypi/warm-under-cold": { "loaded": 865 },
       "pypi/ramp": { "loaded": 1694 },
+      "pypi/mirror-native-baseline": { "loaded": 953, "concurrencyOne": 398 },
+      "pypi/mirror-managed-warm": { "loaded": 459, "concurrencyOne": 183 },
+      "pypi/mirror-managed-revision": { "loaded": 43, "concurrencyOne": 39 },
+      "pypi/worker-mirroring": { "loaded": 107, "concurrencyOne": 106 },
       "pypi/pattern-hot-set-control": { "loaded": 24 },
       "pypi/pattern-cold-install": { "loaded": 1 },
       "pypi/pattern-ci-fleet": { "loaded": 6 },
@@ -152,6 +162,9 @@
       "pypi/herd": { "loaded": 40 },
       "pypi/warm-under-cold": { "loaded": 509 },
       "pypi/ramp": { "loaded": 988 },
+      "pypi/mirror-native-baseline": { "loaded": 664, "concurrencyOne": 394 },
+      "pypi/mirror-managed-warm": { "loaded": 204, "concurrencyOne": 179 },
+      "pypi/mirror-managed-revision": { "loaded": 38, "concurrencyOne": 40 },
       "pypi/pattern-hot-set-control": { "loaded": 24 },
       "pypi/pattern-cold-install": { "loaded": 1 },
       "pypi/pattern-ci-fleet": { "loaded": 6 },
@@ -204,6 +217,9 @@
       "pypi/herd": { "loaded": 50 },
       "pypi/warm-under-cold": { "loaded": 1085 },
       "pypi/ramp": { "loaded": 1801 },
+      "pypi/mirror-native-baseline": { "loaded": 1194, "concurrencyOne": 407 },
+      "pypi/mirror-managed-warm": { "loaded": 263, "concurrencyOne": 190 },
+      "pypi/mirror-managed-revision": { "loaded": 42, "concurrencyOne": 44 },
       "pypi/pattern-hot-set-control": { "loaded": 24 },
       "pypi/pattern-cold-install": { "loaded": 1 },
       "pypi/pattern-ci-fleet": { "loaded": 6 },
@@ -256,6 +272,9 @@
       "pypi/herd": { "loaded": 50 },
       "pypi/warm-under-cold": { "loaded": 1142 },
       "pypi/ramp": { "loaded": 1853 },
+      "pypi/mirror-native-baseline": { "loaded": 1213, "concurrencyOne": 391 },
+      "pypi/mirror-managed-warm": { "loaded": 581, "concurrencyOne": 183 },
+      "pypi/mirror-managed-revision": { "loaded": 43, "concurrencyOne": 41 },
       "pypi/pattern-hot-set-control": { "loaded": 24 },
       "pypi/pattern-cold-install": { "loaded": 1 },
       "pypi/pattern-ci-fleet": { "loaded": 6 },
