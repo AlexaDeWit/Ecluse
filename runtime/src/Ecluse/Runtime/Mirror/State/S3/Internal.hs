@@ -157,20 +157,22 @@ readObject charge env limits bucket key revision = boundedCall $ do
         response <- sendBounded charge 0 False env limits (BoundedGet revision request) (Proxy :: Proxy S3.GetObject)
         case response of
             Left err -> pure (Left err)
+            Right received | received ^. S3L.getObjectResponse_httpStatus == 304 -> pure (Right unchanged)
             Right received -> do
                 for_ (received ^. S3L.getObjectResponse_contentLength) $ \size ->
                     when (size > fromIntegral cap) (throwIO (ObjectLimit cap))
                 chunks <- AWS.sinkBody (received ^. S3L.getObjectResponse_body) (byteCap cap .| C.sinkList)
-                pure (Right (received ^. S3L.getObjectResponse_eTag, BS.concat chunks))
+                pure (Right (ObjectLoaded <$> objectRevision (received ^. S3L.getObjectResponse_eTag) <*> pure (BS.concat chunks)))
     case result of
-        Right (etag, bytes) -> pure $ ObjectLoaded <$> objectRevision etag <*> pure bytes
+        Right loaded -> pure loaded
         Left err
-            | serviceStatus err == Just 304 -> pure $ maybe (Left ObjectNoRevision) (Right . ObjectUnchanged) revision
+            | serviceStatus err == Just 304 -> pure unchanged
             | serviceStatus err == Just 404 && serviceCode err == Just "NoSuchKey" -> pure (Right ObjectAbsent)
             | serviceStatus err == Just 403 -> absenceFallback charge env limits bucket key
             | otherwise -> pure (Left (ObjectTransport (classifyAwsTransport err)))
   where
     cap = maxMetadataBytes limits
+    unchanged = maybe (Left ObjectNoRevision) (Right . ObjectUnchanged) revision
     request = S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key)
 
 -- | A failed or uncertain write returns to the caller for reread and union before another attempt.
