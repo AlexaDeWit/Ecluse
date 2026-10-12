@@ -12,7 +12,7 @@ import Conduit (yield, yieldMany)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
-import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Registry (ParseError (..))
 import Numeric (showOct)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -49,9 +49,17 @@ spec = describe "extractTar" $ do
         extract defaultLimits [info, target, alias] `shouldReturn` Right metadata
     it "rejects escapes, dangling targets, cycles, and excessive link depth" $ do
         info <- regular "example-1/PKG-INFO" metadata
-        for_ ["../../outside", "/outside", "C:/outside", "missing"] $ \target -> do
-            alias <- link True "example-1/alias" target
-            extract defaultLimits [info, alias] >>= (`shouldSatisfy` isLeft)
+        aliasEntry <- link True "example-1/alias" "placeholder"
+        let bytes = BSL.toStrict (Tar.write [aliasEntry, info])
+        for_
+            [ ("../../outside", "tar link escapes its archive")
+            , ("/outside", "unsafe tar link target")
+            , ("C:/outside", "unsafe tar link target")
+            , ("missing", "tar link target is absent")
+            ]
+            $ \(target, reason) -> do
+                let header = linkTargetHeader target (BS.take 512 bytes)
+                readChunks defaultLimits [header <> BS.drop 512 bytes] `shouldReturn` Left (ParseError reason)
         a <- link True "example-1/a" "b"
         b <- link True "example-1/b" "a"
         extract defaultLimits [info, a, b] >>= (`shouldSatisfy` isLeft)
@@ -106,9 +114,16 @@ pax code bytes = do
     pure (Tar.simpleEntry path (Tar.OtherEntryType code bytes (BSL.length bytes)))
 
 zeroSizeHeader :: ByteString -> ByteString
-zeroSizeHeader header = BS.take 148 changed <> checksum <> BS.drop 156 changed
+zeroSizeHeader header = checksumHeader (BS.take 124 header <> "00000000000\NUL" <> BS.drop 136 header)
+
+-- The native link constructor rejects absolute targets before the extractor can inspect them.
+linkTargetHeader :: ByteString -> ByteString -> ByteString
+linkTargetHeader target header = checksumHeader (BS.take 157 header <> target <> BS.replicate (100 - BS.length target) 0 <> BS.drop 257 header)
+
+checksumHeader :: ByteString -> ByteString
+checksumHeader header = BS.take 148 changed <> checksum <> BS.drop 156 changed
   where
-    changed = BS.take 124 header <> "00000000000\NUL" <> BS.take 12 (BS.drop 136 header) <> BS.replicate 8 32 <> BS.drop 156 header
+    changed = BS.take 148 header <> BS.replicate 8 32 <> BS.drop 156 header
     digits = toText (showOct (BS.foldl' (\total byte -> total + fromIntegral byte) (0 :: Integer) changed) "")
     checksum = encodeUtf8 (T.replicate (6 - T.length digits) "0" <> digits) <> "\NUL "
 

@@ -11,11 +11,11 @@ import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.GZip qualified as GZip
-import Control.Exception (AsyncException (ThreadKilled))
+import Control.Concurrent.MVar qualified as MVar
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
-import UnliftIO.Async (waitCatch, withAsync)
+import UnliftIO.Async (AsyncCancelled (..), cancel, race_, wait, waitCatch, withAsync)
 import UnliftIO.Exception (throwIO)
 import "lzma" Codec.Compression.Lzma qualified as Lzma
 
@@ -161,11 +161,15 @@ spec = describe "archiveMetadata" $ do
         archiveMetadata defaultLimits stop (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes `shouldThrow` (== ChargeStopped)
     it "propagates cancellation from a workspace reservation" $ do
         bytes <- zipBytes [("example-1.dist-info/METADATA", metadata <> BS.replicate 65536 65)]
-        let stop requested = when (requested > 200000) (throwIO ThreadKilled)
+        ready <- MVar.newEmptyMVar
+        blocked <- MVar.newEmptyMVar
+        let stop requested = when (requested > 200000) (MVar.putMVar ready () >> MVar.takeMVar blocked)
         withAsync (archiveMetadata defaultLimits stop (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") "example-1-py3-none-any.whl" bytes) $ \worker -> do
+            race_ (MVar.takeMVar ready) (wait worker)
+            cancel worker
             result <- waitCatch worker
             case result of
-                Left fault -> (fromException fault :: Maybe AsyncException) `shouldBe` Just ThreadKilled
+                Left fault -> (fromException fault :: Maybe AsyncCancelled) `shouldBe` Just AsyncCancelled
                 Right _ -> expectationFailure "archive cancellation did not propagate"
     it "refuses an unsupported suffix and an inconsistent filename" $ do
         extract defaultLimits "example-1.egg" "archive" >>= (`shouldSatisfy` isLeft)
