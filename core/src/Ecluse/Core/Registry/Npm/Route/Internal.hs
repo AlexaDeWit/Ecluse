@@ -47,6 +47,7 @@ import Network.HTTP.Types (
     status401,
     status403,
     status404,
+    status405,
     status500,
     status501,
     status502,
@@ -377,7 +378,9 @@ npmPublishContract =
 npmPublishReplies :: PublishReplies NpmPublishResponse
 npmPublishReplies =
     PublishReplies
-        { publishRelayed = variableResponse
+        { publishAllowedMethods = "GET, HEAD"
+        , publishDisabledReply = \headers _ -> publishError npmPublishReplies status405 headers "publishing is not enabled on this proxy (no publication target is configured); publish directly to the registry you intend to publish to"
+        , publishRelayed = variableResponse
         , publishError = \status headers message ->
             variableResponse status headers (encodeBody npmErrorCodec (NpmError message))
         }
@@ -409,7 +412,7 @@ buildPublish _method = \case
         Just
             ( RunPipeline
                 (publishError npmPublishReplies status500 [] "internal server error")
-                (servePublish npmPublishReplies name)
+                (servePublish npmPublishReplies (Just name))
             )
     _ -> Nothing
 

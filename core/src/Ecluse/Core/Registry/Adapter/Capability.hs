@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
 
     -- * Publish
     AdapterPublish (..),
+    PublishRequestBody (..),
 
     -- * Names
     ProjectName,
@@ -32,6 +33,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
+    ParseError,
     PublishRelayResponse,
     RegistryResponse,
     UrlFormationError,
@@ -43,6 +45,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Registry.ServedDocument (RenderRefused)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (Version)
@@ -82,16 +85,18 @@ data AdapterArtifact = AdapterArtifact
     -}
     }
 
-{- | The ecosystem's publish capability. The composition root marries its codec to the shared
-publish transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
--}
+-- | Original request bytes and their declared media type, retained under byte admission.
+data PublishRequestBody = PublishRequestBody
+    { publishBodyBytes :: ByteString
+    , publishBodyContentType :: Maybe ByteString
+    }
+
+-- | Native relay, identity validation, and mirror publication for one ecosystem.
 data AdapterPublish = AdapterPublish
-    { publishRelay :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
+    { publishRelay :: OriginClient -> PackageName -> PublishRequestBody -> IO (Either FetchFault PublishRelayResponse)
     -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
-    , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Every name a publish body claims, @[]@ when none is readable. The anti-shadowing guard
-    refuses one that disagrees with the URL-path name.
-    -}
+    , publishDeclaredNames :: Limits -> PublishRequestBody -> IO (Either ParseError [Text])
+    -- ^ All readable identity claims, or a malformed-document refusal.
     , publishCodec :: PublishCodec
     {- ^ Document assembly, request formation, the probe, and the status semantics. The manager,
     credential mint, and fault classification are the transport's.
