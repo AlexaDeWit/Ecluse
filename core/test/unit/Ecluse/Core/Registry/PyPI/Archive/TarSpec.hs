@@ -86,13 +86,18 @@ spec = describe "extractTar" $ do
         inherited <- regular "another-placeholder" "global content"
         deleteGlobal <- pax 'g' (paxRecord "path=\n")
         ordinary <- regular "example-1/ordinary.txt" "ordinary content"
-        extract defaultLimits [global, local, info, inherited, deleteGlobal, ordinary] `shouldReturn` Right metadata
+        alias <- link True "example-1/global-alias" "global.txt"
+        extract defaultLimits [global, local, info, inherited, deleteGlobal, ordinary, alias] `shouldReturn` Right metadata
+        extract defaultLimits [global, local, info, deleteGlobal, ordinary, alias] `shouldReturn` Left (ParseError "tar link target is absent")
     it "lets an empty local PAX value suppress a global path for one entry" $ do
         global <- pax 'g' (paxRecord "path=example-1/inherited.txt\n")
         local <- pax 'x' (paxRecord "path=\n")
         info <- regular "example-1/PKG-INFO" metadata
         inherited <- regular "placeholder" "data"
-        extract defaultLimits [global, local, info, inherited] `shouldReturn` Right metadata
+        deleteGlobal <- pax 'g' (paxRecord "path=\n")
+        alias <- link True "example-1/inherited-alias" "inherited.txt"
+        extract defaultLimits [global, local, info, inherited, deleteGlobal, alias] `shouldReturn` Right metadata
+        extract defaultLimits [global, local, info, deleteGlobal, alias] `shouldReturn` Left (ParseError "tar link target is absent")
     it "reads GNU long-name and long-link records" $ do
         longName <- pax 'L' "example-1/PKG-INFO\NUL"
         longLink <- pax 'K' "metadata.txt\NUL"
