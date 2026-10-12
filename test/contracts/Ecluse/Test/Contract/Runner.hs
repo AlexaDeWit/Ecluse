@@ -122,7 +122,7 @@ executeGroup options prerequisites (DeclaredGroup scenarioGroup action) = Except
         unavailable <- prerequisites scenarioGroup
         case unavailable of
             Just reason -> pure $ Left reason
-            Nothing -> Right <$> runSpec options scenarioGroup results (action recorder)
+            Nothing -> runSpec options scenarioGroup results (action recorder)
     end <- getCurrentTime
     observed <- reverse <$> readIORef results
     timings <- readPhaseTimings recorder
@@ -155,7 +155,7 @@ missingStatus :: Status -> Status
 missingStatus Passed = Failed
 missingStatus status = status
 
-runSpec :: RunSettings -> Group -> IORef [CaseResult] -> Spec -> IO Bool
+runSpec :: RunSettings -> Group -> IORef [CaseResult] -> Spec -> IO (Either Text Bool)
 runSpec options scenarioGroup results spec = do
     let configuration =
             Hspec.defaultConfig
@@ -172,9 +172,12 @@ runSpec options scenarioGroup results spec = do
                         captureResult scenarioGroup results event
                 }
     (configured, forest) <- Hspec.evalSpec configuration spec
-    result <- Hspec.runSpecForest forest configured
-    observed <- readIORef results
-    pure $ Hspec.specResultSuccess result && all ((== Passed) . crStatus) observed
+    if all null forest
+        then pure $ Left "group specification contains no examples"
+        else do
+            result <- Hspec.runSpecForest forest configured
+            observed <- readIORef results
+            pure $ Right $ Hspec.specResultSuccess result && all ((== Passed) . crStatus) observed
 
 captureResult :: Group -> IORef [CaseResult] -> Format.Event -> IO ()
 captureResult scenarioGroup results = \case
