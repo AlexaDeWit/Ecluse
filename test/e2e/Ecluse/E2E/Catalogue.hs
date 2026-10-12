@@ -12,6 +12,7 @@ import Data.Universe.Class (universe)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.E2E.Harness.Availability (e2ePrerequisites)
+import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerProfile)
 import Ecluse.E2E.Requirements (obligations)
 import Ecluse.E2E.Suites.Npm qualified as Npm
 import Ecluse.E2E.Suites.PyPI qualified as PyPI
@@ -36,6 +37,10 @@ profiles =
     , Profile "npm/registry" ["npm"] ["verdaccio", "memory"] ["read", "mirror", "publication", "client-install"]
     , Profile "npm/maintenance" ["npm"] ["verdaccio", "sqs", "s3"] ["read", "mirror", "maintenance", "advisories"]
     , Profile "npm/advisories" ["npm"] ["http", "s3"] ["read", "advisories", "client-install"]
+    , Profile "pypi/write" ["pypi"] ["http", "sqs", "s3"] ["read", "mirror", "client-install", "telemetry"]
+    , Profile "pypi/publication" ["pypi"] ["http"] ["read", "publication", "client-install"]
+    , Profile "pypi/write-telemetry" ["pypi"] ["http", "sqs", "s3", "collector"] ["read", "mirror", "client-install", "telemetry"]
+    , pypiDredgerProfile
     , Profile "pypi/read" ["pypi"] ["http"] ["read", "client-install"]
     , Profile "pypi/advisories" ["pypi"] ["http", "s3"] ["read", "advisories", "client-install"]
     , Profile "mixed/registry" ["npm", "pypi"] ["verdaccio", "memory"] ["read", "mirror", "client-install"]

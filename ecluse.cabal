@@ -1687,6 +1687,18 @@ library ecluse-e2e-test-support
     buildable: False
   hs-source-dirs:     test/e2e
   exposed-modules:
+    Ecluse.E2E.Fixtures.PyPI.Mirror
+    Ecluse.E2E.Fixtures.PyPI.Dredger
+    Ecluse.E2E.Harness.PyPIMirror
+    Ecluse.E2E.Harness.CodeArtifact
+    Ecluse.E2E.Harness.PyPIDredger
+    Ecluse.E2E.Harness.PyPIDredger.Client
+    Ecluse.E2E.Harness.Sweep
+    Ecluse.E2E.PyPI.MirrorInstallE2ESpec
+    Ecluse.E2E.PyPI.PublishE2ESpec
+    Ecluse.E2E.PyPI.DredgerE2ESpec
+    Ecluse.E2E.PyPI.MirrorEvidence
+    Ecluse.E2E.PyPI.TelemetryE2ESpec
     Ecluse.E2E.Catalogue
     Ecluse.E2E.Requirements
     Ecluse.E2E.Fixtures.Contracts
@@ -1724,6 +1736,11 @@ library ecluse-e2e-test-support
     Ecluse.E2E.TelemetryE2ESpec
 
   build-depends:
+    , amazonka ^>=2.0
+    , ecluse:ecluse-runtime
+    , wai ^>=3.2
+    , wai-extra ^>=3.1
+    , warp ^>=3.4
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12
     , containers     ^>=0.7

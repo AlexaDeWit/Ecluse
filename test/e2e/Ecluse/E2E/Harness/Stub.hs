@@ -99,12 +99,12 @@ serverBlock fault route =
     , "    access_log /var/log/nginx/access.log stub_read;"
     ]
         <> maybe [] (`faultLines` route) fault
-        <> (case (fault, route) of
+        <> ( case (fault, route) of
                 (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
                 (Just (PyPICodeArtifactBackend port), PyPICodeArtifactData) -> forwarded 16777216 port
                 (Just (PyPICodeArtifactBackend port), PyPICodeArtifactControl) -> forwarded 16777216 port
                 _ -> routeLines route
-            )
+           )
         <> ["}"]
 
 forwarded :: Int -> Int -> [Text]
@@ -194,7 +194,6 @@ routeLines = \case
         , "        proxy_set_header X-Forwarded-For $remote_addr;"
         , "    }"
         ]
-
     PyPICodeArtifactData -> ["    location / { return 503; }"]
     PyPICodeArtifactControl -> ["    location / { return 503; }"]
 

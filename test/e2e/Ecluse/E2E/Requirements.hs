@@ -5,6 +5,7 @@
 -- | Reviewed E2E obligations remain independent of concrete registrations and providers.
 module Ecluse.E2E.Requirements (obligations) where
 
+import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerObligation)
 import Ecluse.Test.Contract.Types
 
 -- | Required cases preserve the original examples and their negative controls.
@@ -23,7 +24,7 @@ obligations =
         "npm/mirror"
         Supported
         ["read", "mirror", "client-install"]
-        ["npm/mirror/dependency-graph", "npm/mirror/module-exports", "npm/mirror/linked-executable", "npm/mirror/origin-evidence", "npm/mirror/installed-tree", "npm/mirror/empty-store-control"]
+        ["npm/mirror/cross-target-install", "npm/mirror/dependency-graph", "npm/mirror/module-exports", "npm/mirror/linked-executable", "npm/mirror/origin-evidence", "npm/mirror/installed-tree", "npm/mirror/empty-store-control"]
     , Obligation
         "npm/publish"
         "npm/registry"
@@ -108,7 +109,41 @@ obligations =
         Supported
         ["read", "telemetry", "client-install"]
         ["pypi/telemetry/signals", "pypi/telemetry/disabled", "pypi/telemetry/export-failure", "pypi/telemetry/datadog"]
-    , Obligation "pypi/mirror" "pypi/write" "mirror" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/765") ["mirror"] []
-    , Obligation "pypi/publication" "pypi/write" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1133") ["publication"] []
+    , Obligation
+        "pypi/mirror"
+        "pypi/write"
+        "pypi/mirror"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/mirror/cross-target-install", "pypi/mirror/dependency-graph", "pypi/mirror/module-exports", "pypi/mirror/linked-executable", "pypi/mirror/origin-evidence", "pypi/mirror/installed-tree", "pypi/mirror/empty-store-control"]
+    , Obligation
+        "pypi/mirror-native"
+        "pypi/write"
+        "pypi/mirror-native"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/mirror-native/read-roundtrip", "pypi/mirror-native/lost-reply", "pypi/mirror-native/interruption"]
+    , Obligation
+        "pypi/publish"
+        "pypi/publication"
+        "pypi/publish"
+        Supported
+        ["read", "publication", "client-install"]
+        ["pypi/publish/publish-install", "pypi/publish/scope-refusal"]
+    , Obligation
+        "pypi/publish-native"
+        "pypi/publication"
+        "pypi/publish-native"
+        Supported
+        ["read", "publication", "client-install"]
+        ["pypi/publish-native/conflicting-names", "pypi/publish-native/unconfigured"]
+    , Obligation
+        "pypi/telemetry-write"
+        "pypi/write-telemetry"
+        "pypi/telemetry-write"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/telemetry/domain-spans", "pypi/telemetry/private-fetch"]
+    , pypiDredgerObligation
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]
