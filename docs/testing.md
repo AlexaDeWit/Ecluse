@@ -760,7 +760,9 @@ Each ecosystem job also audits its report against the core unit, runtime unit an
 plans and reports from the same workflow attempt. The audit checks compiled plans, required laws,
 execution status, source, architecture, run identity, and the E2E image identity where it applies.
 The existing change classifier alone permits a documentation-only omission.
-The audit runs after failed or cancelled subjects and rejects missing artifacts or execution results.
+The audit runs after failed subjects and rejects missing artifacts or execution results.
+Cancellation stops an obsolete workflow's pending subject and completeness audit jobs.
+The terminal gate still checks every required job result.
 It compares the source revision, architecture, image identity, plan digest, groups, and case IDs.
 Changing a subject's direct declaration list does not change the full contract's required families.
 No timing improvement is claimed until comparable runs measure it.
