@@ -29,7 +29,7 @@ import Data.Text qualified as T
 
 import System.Directory (createDirectoryIfMissing, renameFile)
 import System.FilePath (takeDirectory)
-import System.IO (IOMode (ReadMode), withBinaryFile)
+import System.IO (withBinaryFile)
 import UnliftIO.Exception (evaluate)
 
 import Ecluse.Test.Contract.Completion (Completion, auditCompletion)

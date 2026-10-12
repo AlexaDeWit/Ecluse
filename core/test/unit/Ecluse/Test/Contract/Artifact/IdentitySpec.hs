@@ -42,23 +42,24 @@ spec = do
                 BS.writeFile (root </> "plan.json") "stale"
                 beginPreparation root `shouldThrow` (== ExitFailure 1)
         it "writes a typed identity and rejects changed distributed bytes" $
-            withSystemTempDirectory "artifact" $ \root -> withEnvOverrides environment $ do
-                beginPreparation root
-                BS.writeFile (root </> "plan.json") "plan\n"
-                BS.writeFile (root </> "docker-image.tar") "archive\n"
-                finishPreparation root ("sha256:" <> sha)
+            withPreparation $ \root -> do
                 verified <- verifyPreparation root Nothing
                 identityPlanDigest verified `shouldBe` digest "plan\n"
                 doesFileExist (root </> "identity.env") `shouldReturn` True
-                removeFile (root </> "docker-image.tar")
-                verifyPlan root `shouldReturn` verified
-                BS.writeFile (root </> "docker-image.tar") "archive\n"
                 finishPreparation root ("sha256:" <> sha) `shouldThrow` (== ExitFailure 1)
                 BS.writeFile (root </> "plan.json") "changed\n"
                 verifyPreparation root Nothing `shouldThrow` (== ExitFailure 1)
                 BS.writeFile (root </> "plan.json") "plan\n"
                 BS.writeFile (root </> "docker-image.tar") "changed\n"
                 verifyPreparation root Nothing `shouldThrow` (== ExitFailure 1)
+        it "rejects changed plan bytes without downloading the image archive" $
+            withPreparation $ \root -> do
+                expected <- verifyPreparation root Nothing
+                removeFile (root </> "docker-image.tar")
+                verifyPlan root `shouldReturn` expected
+                verifyPreparation root Nothing `shouldThrow` anyIOException
+                BS.writeFile (root </> "plan.json") "changed\n"
+                verifyPlan root `shouldThrow` (== ExitFailure 1)
         it "hashes a streamed file as the exact artifact bytes" $
             withSystemTempDirectory "artifact" $ \root -> do
                 let bytes = BS.replicate 1000000 42
@@ -79,3 +80,11 @@ prepared = PreparedIdentity 1 execution sha
 
 environment :: [(String, String)]
 environment = [("ECLTEST_SOURCE", "source"), ("ECLTEST_ARCHITECTURE", "aarch64"), ("ECLTEST_RUN_ID", "run")]
+
+withPreparation :: (FilePath -> IO ()) -> IO ()
+withPreparation action = withSystemTempDirectory "artifact" $ \root -> withEnvOverrides environment $ do
+    beginPreparation root
+    BS.writeFile (root </> "plan.json") "plan\n"
+    BS.writeFile (root </> "docker-image.tar") "archive\n"
+    finishPreparation root ("sha256:" <> sha)
+    action root
