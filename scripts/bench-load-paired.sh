@@ -97,6 +97,25 @@ delegate() {
   printf '%s\n' '+cpu +memory +pids' | sudo tee "$paired_cgroup/cgroup.subtree_control" >/dev/null
 }
 
+join_harness() {
+  local target_pid=$BASHPID membership
+  printf 'pid=%s\n' "$target_pid" > "$1"
+  printf '%s\n' "$target_pid" | sudo tee "$paired_cgroup/harness/cgroup.procs" >/dev/null
+  membership=$(cat "/proc/$target_pid/cgroup")
+  printf '%s\n' "$membership" >> "$1"
+  if [[ $membership != "0::${paired_cgroup#/sys/fs/cgroup}/harness" ]]; then
+    printf 'Unexpected cgroup for launcher PID %s: %s\n' "$target_pid" "$membership" >&2
+    return 1
+  fi
+}
+
+preflight() {
+  [[ -z $(cat "$paired_cgroup/harness/cgroup.procs") ]]
+  (join_harness "$paired_root/provenance/cgroup-preflight.txt")
+  cat "$paired_root/provenance/cgroup-preflight.txt"
+  [[ -z $(cat "$paired_cgroup/harness/cgroup.procs") ]]
+}
+
 settings() {
   local name
   while IFS='=' read -r name _; do
@@ -129,7 +148,7 @@ run_native() {
   printf '\n' >> "$destination/command.txt"
   date --iso-8601=ns > "$destination/started.txt"
   (
-    printf '%s\n' "$BASHPID" > "$paired_cgroup/harness/cgroup.procs"
+    join_harness "$destination/launcher-membership.txt"
     cd "$paired_root/$side"
     exec timeout --signal=TERM --kill-after=30s "$limit" "$paired_root/builds/$side/bench-load" "$@"
   ) > "$destination/stdout.txt" 2> "$destination/stderr.txt" &
@@ -170,6 +189,7 @@ case "${1:-}" in
   build) build "${2:?Expected A or B}" ;;
   seal) seal ;;
   delegate) delegate ;;
+  preflight) preflight ;;
   children) children ;;
   child)
     settings
@@ -185,5 +205,5 @@ case "${1:-}" in
     [[ ${3:-} =~ ^[1-4]$ ]]
     run_native "$2" "grid/$3-$2" 75m
     ;;
-  *) echo 'usage: bench-load-paired.sh {prepare|build A/B|seal|delegate|children|grid A/B 1-4}' >&2; exit 2 ;;
+  *) echo 'usage: bench-load-paired.sh {prepare|build A/B|seal|delegate|preflight|children|grid A/B 1-4}' >&2; exit 2 ;;
 esac

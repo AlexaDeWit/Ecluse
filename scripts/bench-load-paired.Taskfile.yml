@@ -14,6 +14,7 @@ tasks:
     dir: '{{.TASKFILE_DIR}}/..'
     cmds:
       - bash scripts/bench-load-paired.sh delegate
+      - bash scripts/bench-load-paired.sh preflight
   children:
     desc: Run ABBA BAAB for both native scenarios and concurrency-one controls
     dir: '{{.TASKFILE_DIR}}/..'
