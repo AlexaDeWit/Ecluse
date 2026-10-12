@@ -20,8 +20,7 @@ import Amazonka.Types qualified as Types
 import Conduit (ConduitT, MonadResource, ResourceT, await, runResourceT, sealConduitT, yield, ($$++), (.|))
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
-import Data.Proxy (Proxy (..))
-import Lens.Micro ((%~), (&), (?~), (^.))
+import Lens.Micro ((%~), (?~), (^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (withRunInIO)
@@ -88,7 +87,7 @@ instance AWS.AWSRequest BoundedList where
 
 data RawResponse = RawResponse AWS.Service (Types.ClientResponse Types.ClientBody)
 
-captureResponse :: (MonadResource m, AWS.AWSResponse a ~ RawResponse) => (LByteString -> IO LByteString) -> AWS.Service -> Proxy a -> Types.ClientResponse Types.ClientBody -> m (Either AWS.Error (Types.ClientResponse RawResponse))
+captureResponse :: (MonadResource m) => (LByteString -> IO LByteString) -> AWS.Service -> Proxy a -> Types.ClientResponse Types.ClientBody -> m (Either AWS.Error (Types.ClientResponse RawResponse))
 captureResponse _ service _ response = pure (Right (RawResponse service response <$ response))
 
 newtype ObjectLimit = ObjectLimit Int
@@ -202,8 +201,10 @@ absenceFallback charge env limits bucket key = do
     request =
         BoundedList
             ( S3.newListObjectsV2 (S3.BucketName bucket)
-                & S3L.listObjectsV2_prefix ?~ key
-                & S3L.listObjectsV2_maxKeys ?~ 1
+                & S3L.listObjectsV2_prefix
+                ?~ key
+                    & S3L.listObjectsV2_maxKeys
+                ?~ 1
             )
 
 objectRevision :: Maybe S3.ETag -> Either ObjectFault ByteString

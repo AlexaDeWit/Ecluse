@@ -18,7 +18,6 @@ module Ecluse.Core.Server.MirrorView (
 import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
 import Data.Text.Encoding qualified as TE

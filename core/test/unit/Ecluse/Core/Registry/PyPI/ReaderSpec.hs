@@ -7,7 +7,8 @@ the one place a selected read departs from that parser: the rest of a file its n
 -}
 module Ecluse.Core.Registry.PyPI.ReaderSpec (spec) where
 
-import Data.Aeson (Value (Object, String), decodeStrict)
+import Data.Aeson (Value (Object, String), decodeStrict, encode, object, toJSON, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
@@ -24,13 +25,14 @@ import Ecluse.Core.Registry.PyPI.Document (packedSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIPacked, projectPyPIStream)
 import Ecluse.Core.Registry.PyPI.Project (fcVersionKey, fileCoordinate)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiWalk)
-import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (FileField), PyPIRead (..))
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (EnvelopeField, FileField), PyPIRead (..))
 import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, keepsFile)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (..), defaultLimits)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genSimpleIndexBytes, releaseKeys)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIPackedChunks)
 import Ecluse.Test.Registry.PyPI.Streaming (pypiFields)
 
@@ -40,6 +42,24 @@ spec = describe "pypiWalk" $ do
     packedParitySpec
     rejectedFileSpec
     repairSpec
+
+    it "matches the worker oracle with the full project envelope and only the selected version files" $ do
+        let metadata = object ["api-version" .= ("1.1" :: Text), "_last-serial" .= (42 :: Int), "tracks" .= (["https://upstream.test/simple/thing/"] :: [Text])]
+            status = object ["status" .= ("active" :: Text)]
+            locations = toJSON (["https://alternate.test/simple/thing/"] :: [Text])
+            fields = [("meta", metadata), ("project-status", status), ("alternate-locations", locations)]
+            body = toStrict (encode (simpleIndexWith "thing" (fields <> [("versions", toJSON (["1.2.3", "2"] :: [Text]))]) (filesNamed ["thing-1.2.3.tar.gz", "thing-2.tar.gz"])))
+            reading = Reading 64 (MirrorRead thing "1.2.3") Nothing True
+            bound = MetadataBodyLimit (BS.length body)
+        for_ [1, BS.length body `div` 2, BS.length body - 1] $ \cut -> do
+            let chunks = [BS.take cut body, BS.drop cut body]
+                actual = walked reading bound chunks
+            actual `shouldBe` reference reading bound chunks
+            case actual of
+                Right (_, Right emittedFields) -> do
+                    for_ fields $ \(key, value) -> emittedFields `shouldContain` [EnvelopeField (Key.toText key) value]
+                    length [() | FileField _ (Just _) <- emittedFields] `shouldBe` 1
+                other -> expectationFailure ("worker read did not complete: " <> show other)
 
 packedParitySpec :: Spec
 packedParitySpec = modifyMaxSuccess (const 2000) $

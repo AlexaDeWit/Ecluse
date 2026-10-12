@@ -33,6 +33,7 @@ pypiFields depth mode
     topField _ = mempty
     fullOnly parser = case mode of
         FullRead -> parser
+        MirrorRead{} -> parser
         SelectedRead{} -> mempty
     objectOrScalar budget fields
         | budget <= 0 = retainedValue 0
@@ -49,9 +50,9 @@ pypiFields depth mode
         | otherwise = case mode of
             FullRead -> Just <$> retainedObjectOr Null fileFields
             SelectedRead name wanted -> selectedFile (depth - 3) name wanted
-    versions = case mode of
-        SelectedRead{} -> mempty
-        FullRead ->
+            MirrorRead name wanted -> selectedFile (depth - 3) name wanted
+    versions =
+        fullOnly $
             J.arrayFound (VersionsShape True) IgnoredField (version <$> J.indexedArrayOf (scalar (depth - 2)))
                 <|> (VersionsShape True <$ J.jNull)
                 <|> pure (VersionsShape False)

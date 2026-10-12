@@ -21,7 +21,7 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (lookup, sort)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)

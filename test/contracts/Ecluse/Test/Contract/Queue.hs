@@ -32,17 +32,17 @@ queueContract contractGroup =
 
 -- | Check payload and acknowledgement evidence. Broken-driver tests exercise this same law.
 queuePayloadLaw :: QueueDriver -> Expectation
-queuePayloadLaw driver = do
-    expectRightIO (enqueue (queueHandle driver) sampleJob)
-    messages <- awaitDelivery driver
-    map msgJob messages `shouldBe` [sampleJob]
-    map (jobPackage . msgJob) messages `shouldBe` [jobPackage sampleJob]
-    map (jobVersion . msgJob) messages `shouldBe` [jobVersion sampleJob]
-    map (jobTriggerFilename . msgJob) messages `shouldBe` [jobTriggerFilename sampleJob]
-    map (jobArtifactFilename . msgJob) messages `shouldBe` [jobArtifactFilename sampleJob]
-    map (jobTraceContext . msgJob) messages `shouldBe` [jobTraceContext sampleJob]
-    traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) messages
-    expectRightIO (receive (queueHandle driver)) `shouldReturn` []
+queuePayloadLaw driver =
+    for_ [sampleJob, sampleJob{jobTriggerFilename = Nothing}] $ \payload -> do
+        expectRightIO (enqueue (queueHandle driver) payload)
+        messages <- awaitDelivery driver
+        map msgJob messages `shouldBe` [payload]
+        map (jobPackage . msgJob) messages `shouldBe` [jobPackage payload]
+        map (jobVersion . msgJob) messages `shouldBe` [jobVersion payload]
+        map (jobTriggerFilename . msgJob) messages `shouldBe` [jobTriggerFilename payload]
+        map (jobTraceContext . msgJob) messages `shouldBe` [jobTraceContext payload]
+        traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) messages
+        expectRightIO (receive (queueHandle driver)) `shouldReturn` []
 
 -- | A destructive receive provides neither redelivery nor an increasing delivery count.
 ephemeralQueueContract :: Text -> SpecWith QueueDriver

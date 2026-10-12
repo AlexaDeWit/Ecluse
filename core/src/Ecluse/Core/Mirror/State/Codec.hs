@@ -15,7 +15,6 @@ module Ecluse.Core.Mirror.State.Codec (
 ) where
 
 import Control.Exception (evaluate)
-import Control.Monad.State.Strict (evalState, state)
 import Data.Aeson (Value (..), encode, object, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, parseEither, withObject)

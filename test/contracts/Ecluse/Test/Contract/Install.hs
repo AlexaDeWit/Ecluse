@@ -165,10 +165,10 @@ crossTargetInstallCase graph (sourceExpected, mirrorExpected) (source, mirrored)
         (ArchitectureIndependent, ArchitectureIndependent) -> do
             targetExpectedArtifacts sourceExpected `shouldMatchList` targetExpectedArtifacts mirrorExpected
             isNothing refused `shouldBe` True
-        (ArchitectureSpecific first, ArchitectureSpecific second) -> do
-            first `shouldNotBe` ""
-            second `shouldNotBe` first
-            second `shouldNotBe` ""
+        (ArchitectureSpecific sourceArchitecture, ArchitectureSpecific mirrorArchitecture) -> do
+            sourceArchitecture `shouldNotBe` ""
+            mirrorArchitecture `shouldNotBe` sourceArchitecture
+            mirrorArchitecture `shouldNotBe` ""
             targetExpectedMarkers sourceExpected `shouldSatisfy` (not . null)
             targetExpectedMarkers mirrorExpected `shouldSatisfy` (not . null)
             case refused of

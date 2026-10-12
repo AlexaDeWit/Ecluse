@@ -15,7 +15,7 @@ module Ecluse.Core.Worker.Job (
 ) where
 
 import Control.Monad (foldM)
-import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError)
+import Control.Monad.Except (throwError)
 import Data.Map.Strict qualified as Map
 import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls)
 import UnliftIO (withRunInIO)
