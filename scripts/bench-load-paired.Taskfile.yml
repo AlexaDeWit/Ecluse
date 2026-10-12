@@ -20,6 +20,16 @@ tasks:
     dir: '{{.TASKFILE_DIR}}/..'
     cmds:
       - bash scripts/bench-load-paired.sh children
+  observer-plan:
+    desc: Print the balanced sampler on/off order without running measurements
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash scripts/bench-load-paired.sh observer-plan
+  observer-control:
+    desc: Compare sampler on/off for both revisions, shapes and loaded scenarios
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash scripts/bench-load-paired.sh observer-control
   grid:
     desc: Run one complete native grid with an archived binary
     dir: '{{.TASKFILE_DIR}}/..'
@@ -34,6 +44,8 @@ tasks:
     desc: Check the diagnostic scripts and workflow without building Haskell
     dir: '{{.TASKFILE_DIR}}/..'
     cmds:
-      - bash -n scripts/bench-load-paired.sh scripts/bench-load-sample.sh
-      - shellcheck scripts/bench-load-paired.sh scripts/bench-load-sample.sh
+      - bash -n scripts/bench-load-paired.sh scripts/bench-load-sample.sh scripts/bench-load-paired.test.sh
+      - shellcheck scripts/bench-load-paired.sh scripts/bench-load-sample.sh scripts/bench-load-paired.test.sh
+      - bash scripts/bench-load-paired.test.sh
       - actionlint .github/workflows/bench-load.yml
+      - yq -e '.on.workflow_dispatch.inputs | length <= 10' .github/workflows/bench-load.yml

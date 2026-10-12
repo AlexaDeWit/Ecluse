@@ -42,7 +42,8 @@ prepare() {
   cat > "$paired_root/provenance/limits.txt" <<'EOF'
 Diagnostic only. A and B are unmodified native executables.
 Direct children omit parent floors and preceding grid workloads.
-The sampler reads actual cgroup members every two seconds, outside the harness leaf.
+With the sampler on, it reads actual cgroup members every two seconds outside the harness leaf.
+With the sampler off, external process, affinity, pressure and mapped-file observations are unavailable.
 Process CPU and cgroup CPU samples do not share the exact native RTS window.
 Sampler rusage and its own process counters expose observer cost.
 Native JSON retains proxy RTS CPU, GC CPU, allocation, GC counts and admission samples.
@@ -117,14 +118,18 @@ preflight() {
 }
 
 settings() {
-  local name
+  local name shape=${1:-2cpu-1gib}
+  case "$shape" in
+    2cpu-1gib | 4cpu-2gib) ;;
+    *) echo 'Expected pod shape 2cpu-1gib or 4cpu-2gib.' >&2; return 2 ;;
+  esac
   while IFS='=' read -r name _; do
     case "$name" in
       BENCH_LOAD_* | BENCH_PATTERN_* | GHCRTS | ECLUSE_PERFORMANCE_OBSERVATIONS) unset "$name" ;;
     esac
   done < <(env)
   export NO_COLOR=true GHCRTS='-T -N3'
-  export BENCH_LOAD_CGROUP="$paired_cgroup" BENCH_LOAD_POD=2cpu-1gib
+  export BENCH_LOAD_CGROUP="$paired_cgroup" BENCH_LOAD_POD="$shape"
   export BENCH_LOAD_PROBE_RTT=0 BENCH_LOAD_UPSTREAM_LATENCY_MS=5
   export BENCH_LOAD_DURATION_SECONDS=30 BENCH_LOAD_CONCURRENCY=100
   export BENCH_LOAD_PAYLOAD_BYTES=363520 BENCH_LOAD_CACHE_MAX_ENTRIES=3
@@ -132,15 +137,20 @@ settings() {
 }
 
 run_native() {
-  local side=$1 label=$2 limit=$3
-  shift 3
-  local destination="$paired_root/results/$label" child sampler status=0 sample_status=0
+  local side=$1 label=$2 limit=$3 sampler_state=$4
+  shift 4
+  local destination="$paired_root/results/$label" child sampler status=0 sample_status=unavailable
+  [[ $sampler_state == on || $sampler_state == off ]]
   [[ -f "$paired_root/provenance/both-built.txt" && ! -e "$destination" ]]
   [[ -w "$paired_cgroup/harness/cgroup.procs" ]]
   [[ -z $(cat "$paired_cgroup/harness/cgroup.procs") ]]
   [[ -z $(find "$paired_cgroup" -mindepth 1 -maxdepth 1 -type d -name 'proxy-*' -print -quit) ]]
   sha256sum --check "$paired_root/builds/$side/binary.sha256"
   mkdir -p "$destination"
+  printf '%s\n' "$sampler_state" > "$destination/sampler-state.txt"
+  if [[ $sampler_state == off ]]; then
+    printf '%s\n' 'Unavailable: external process CPU, affinity, pressure, cgroup samples, mapped files and sampler rusage. The sampler is disabled. Native JSON and launcher membership remain available.' > "$destination/sampler-observations.txt"
+  fi
   export ECLUSE_PERFORMANCE_OBSERVATIONS="$destination/native-observations.json"
   environment > "$destination/environment.txt"
   printf '%s\0' "$paired_root/builds/$side/bench-load" "$@" > "$destination/argv.nul"
@@ -154,16 +164,21 @@ run_native() {
   ) > "$destination/stdout.txt" 2> "$destination/stderr.txt" &
   child=$!
   printf '%s\n' "$child" > "$destination/timeout-pid.txt"
-  /usr/bin/time -v -o "$destination/sampler-rusage.txt" bash "$paired_repo/scripts/bench-load-sample.sh" "$paired_cgroup" "$destination" &
-  sampler=$!
+  if [[ $sampler_state == on ]]; then
+    /usr/bin/time -v -o "$destination/sampler-rusage.txt" bash "$paired_repo/scripts/bench-load-sample.sh" "$paired_cgroup" "$destination" &
+    sampler=$!
+  fi
   wait "$child" || status=$?
   printf '%s\n' "$status" > "$destination/exit.txt"
   date --iso-8601=ns > "$destination/ended.txt"
-  touch "$destination/stop-sampler"
-  wait "$sampler" || sample_status=$?
+  if [[ $sampler_state == on ]]; then
+    touch "$destination/stop-sampler"
+    sample_status=0
+    wait "$sampler" || sample_status=$?
+  fi
   printf '%s\n' "$sample_status" > "$destination/sampler-exit.txt"
   printf '%s: native exit %s, sampler exit %s\n' "$label" "$status" "$sample_status"
-  [[ $status == 0 && $sample_status == 0 ]]
+  [[ $status == 0 && ( $sampler_state == off || $sample_status == 0 ) ]]
 }
 
 children() {
@@ -177,10 +192,48 @@ children() {
         ordinal=$((ordinal + 1))
         arguments=("$scenario")
         if [[ $pass == concurrency-one ]]; then arguments=(--service-time "$scenario"); fi
-        bash "$paired_repo/scripts/bench-load-paired.sh" child "$side" "children/${scenario//\//-}/$pass/$ordinal-$side" "${arguments[@]}" || failed=1
+        bash "$paired_repo/scripts/bench-load-paired.sh" child "$side" "children/${scenario//\//-}/$pass/$ordinal-$side" 2cpu-1gib on "${arguments[@]}" || failed=1
       done
     done
   done
+  return "$failed"
+}
+
+observer_plan() {
+  local shape scenario block token side sampler_state ordinal
+  printf 'shape\tscenario\tordinal\tside\tsampler\n'
+  for shape in 2cpu-1gib 4cpu-2gib; do
+    for scenario in pypi/wheel-hot-path npm/tarball-ceiling; do
+      ordinal=0
+      for block in 1 2; do
+        for token in A:on B:on B:off A:off A:off B:off B:on A:on; do
+          side=${token%:*}
+          sampler_state=${token#*:}
+          if [[ $block == 2 ]]; then
+            if [[ $sampler_state == on ]]; then sampler_state=off; else sampler_state=on; fi
+          fi
+          ordinal=$((ordinal + 1))
+          printf '%s\t%s\t%02d\t%s\t%s\n' "$shape" "$scenario" "$ordinal" "$side" "$sampler_state"
+        done
+      done
+    done
+  done
+}
+
+observer_control() {
+  local output="$paired_root/results/observer-control" shape scenario ordinal side sampler_state status failed=0 label
+  [[ ! -e "$output" ]]
+  mkdir -p "$output"
+  observer_plan > "$output/plan.tsv"
+  printf 'shape\tscenario\tordinal\tside\tsampler\tdispatch_exit\n' > "$output/outcomes.tsv"
+  while IFS=$'\t' read -r shape scenario ordinal side sampler_state; do
+    [[ $shape != shape ]] || continue
+    label="observer-control/$shape/${scenario//\//-}/$ordinal-$side-$sampler_state"
+    status=0
+    bash "$paired_repo/scripts/bench-load-paired.sh" child "$side" "$label" "$shape" "$sampler_state" "$scenario" || status=$?
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$shape" "$scenario" "$ordinal" "$side" "$sampler_state" "$status" >> "$output/outcomes.tsv"
+    if [[ $status != 0 ]]; then failed=1; fi
+  done < "$output/plan.tsv"
   return "$failed"
 }
 
@@ -191,19 +244,23 @@ case "${1:-}" in
   delegate) delegate ;;
   preflight) preflight ;;
   children) children ;;
+  observer-plan) observer_plan ;;
+  observer-control) observer_control ;;
   child)
-    settings
     shift
     child_side=$1
     child_label=$2
-    shift 2
-    run_native "$child_side" "$child_label" 5m "$@"
+    child_shape=$3
+    child_sampler=$4
+    shift 4
+    settings "$child_shape"
+    run_native "$child_side" "$child_label" 5m "$child_sampler" "$@"
     ;;
   grid)
     settings
     revision "${2:?Expected A or B}" >/dev/null
     [[ ${3:-} =~ ^[1-4]$ ]]
-    run_native "$2" "grid/$3-$2" 75m
+    run_native "$2" "grid/$3-$2" 75m on
     ;;
-  *) echo 'usage: bench-load-paired.sh {prepare|build A/B|seal|delegate|preflight|children|grid A/B 1-4}' >&2; exit 2 ;;
+  *) echo 'usage: bench-load-paired.sh {prepare|build A/B|seal|delegate|preflight|children|observer-plan|observer-control|grid A/B 1-4}' >&2; exit 2 ;;
 esac

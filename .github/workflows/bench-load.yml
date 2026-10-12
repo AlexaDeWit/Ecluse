@@ -12,6 +12,10 @@ on:
         description: "After paired direct children, run four complete grids on the same runner"
         type: boolean
         default: true
+      paired-observer-control:
+        description: "Diagnostic only: sampler on/off for frozen A/B under 2cpu-1gib and 4cpu-2gib, without full grids"
+        type: boolean
+        default: false
       pod-shape:
         description: "Proxy CPU-time quota and memory limit (2cpu means two CPUs' worth of time), or thrash for the GC-thrash probe"
         type: choice
@@ -76,7 +80,7 @@ env:
 
 jobs:
   bench-load:
-    if: ${{ !inputs.paired-arm-diagnostic }}
+    if: ${{ !inputs.paired-arm-diagnostic && !inputs.paired-observer-control }}
     name: Load test (${{ matrix.pod-shape }}, inform-only)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
@@ -180,7 +184,7 @@ jobs:
 
   paired-arm-diagnostic:
     name: Frozen ARM64 comparison (diagnostic only)
-    if: ${{ inputs.paired-arm-diagnostic }}
+    if: ${{ inputs.paired-arm-diagnostic || inputs.paired-observer-control }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 360
     steps:
@@ -222,24 +226,36 @@ jobs:
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml delegate
 
       - name: Compare native children in ABBA BAAB order
-        if: ${{ !cancelled() && steps.delegate.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && !inputs.paired-observer-control }}
         id: children
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml children
 
       - name: Upload direct child evidence before the grids
-        if: always()
+        if: ${{ always() && !inputs.paired-observer-control }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: paired-arm-children-${{ github.run_id }}-${{ github.run_attempt }}
           path: scratchpad/paired-arm-load/results/children/
           if-no-files-found: warn
 
+      - name: Compare sampler on/off across both pod shapes
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-observer-control }}
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml observer-control
+
+      - name: Upload observer control evidence
+        if: ${{ always() && inputs.paired-observer-control }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-observer-control-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/observer-control/
+          if-no-files-found: warn
+
       - name: Full grid 1 (A)
-        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid && !inputs.paired-observer-control }}
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=A ORDINAL=1
 
       - name: Upload full grid 1
-        if: ${{ always() && inputs.paired-full-grid }}
+        if: ${{ always() && inputs.paired-full-grid && !inputs.paired-observer-control }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: paired-arm-grid-1-A-${{ github.run_id }}-${{ github.run_attempt }}
@@ -247,11 +263,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Full grid 2 (B)
-        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid && !inputs.paired-observer-control }}
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=B ORDINAL=2
 
       - name: Upload full grid 2
-        if: ${{ always() && inputs.paired-full-grid }}
+        if: ${{ always() && inputs.paired-full-grid && !inputs.paired-observer-control }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: paired-arm-grid-2-B-${{ github.run_id }}-${{ github.run_attempt }}
@@ -259,11 +275,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Full grid 3 (B)
-        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid && !inputs.paired-observer-control }}
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=B ORDINAL=3
 
       - name: Upload full grid 3
-        if: ${{ always() && inputs.paired-full-grid }}
+        if: ${{ always() && inputs.paired-full-grid && !inputs.paired-observer-control }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: paired-arm-grid-3-B-${{ github.run_id }}-${{ github.run_attempt }}
@@ -271,11 +287,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Full grid 4 (A)
-        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid && !inputs.paired-observer-control }}
         run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=A ORDINAL=4
 
       - name: Upload full grid 4
-        if: ${{ always() && inputs.paired-full-grid }}
+        if: ${{ always() && inputs.paired-full-grid && !inputs.paired-observer-control }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: paired-arm-grid-4-A-${{ github.run_id }}-${{ github.run_attempt }}
