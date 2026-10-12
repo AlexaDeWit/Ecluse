@@ -98,13 +98,13 @@ encodeTraceContext rsc =
         , "tracestate" .= rscTracestate rsc
         ]
 
-{- | Decode a queue message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
-the name, the filename, and the artifact URL each go back through their own gate.
+{- | Decode identities and trigger filenames. Validate and discard legacy artifact URLs.
+Schema 2 carries no URL: the worker resolves locations from current paired metadata.
 -}
 decodeJob ::
     -- | Read a wire namespace and base name through the ecosystem's own grammar.
     (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
-    -- | Re-form the artifact URL's validated https egress witness.
+    -- | Validate a legacy artifact URL before discarding it.
     (Text -> Either Text RegistryUrl) ->
     Text ->
     Either Text MirrorJob

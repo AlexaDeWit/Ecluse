@@ -56,13 +56,13 @@ secret and minimise its TTL. Dredger needs a different action set: reads and del
 publication. The [operator permission table](https://ecluse-proxy.com/docs/dredger/#permissions)
 owns those action and resource scopes.
 
-The mirror queue is part of the same trust boundary. A job is unauthenticated and directs the
-worker to fetch-and-publish, so anyone who can enqueue can make the worker write the trusted
-store. Scope its IAM too: only the serve role enqueues, and only the worker consumes. The worker
-narrows what a forged or stale job can do. It re-forms the artifact URL into its https-only
-`RegistryUrl` witness at wire decode, and re-checks the fetch host against the tarball-host gate
-at ingest. It re-decides the version through the shared admission gate. The fetched bytes must
-match the digest of the artifact that gate re-admits before any publish.
+The mirror queue is part of the same trust boundary. Anyone who can enqueue can request mirror
+work. Scope its IAM: only the serve role enqueues, and only the worker consumes.
+
+Schema 2 carries no artifact URL. Legacy decoding validates the old URL and discards it.
+The worker resolves source locations from current paired metadata and checks HTTPS authority and
+permitted hosts before fetching. It re-decides the version through the shared admission gate before
+new mirror writes. Each fetched file must match its re-admitted digest before publication.
 
 **Registry separation is defence-in-depth and auditability, not the perimeter.** The
 three-registry topology
