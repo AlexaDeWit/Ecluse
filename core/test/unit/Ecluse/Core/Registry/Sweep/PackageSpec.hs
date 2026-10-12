@@ -7,6 +7,8 @@ A mutable store exposes removals and first-party protection.
 -}
 module Ecluse.Core.Registry.Sweep.PackageSpec (spec) where
 
+import Data.Aeson (Value (Bool), encode)
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
@@ -26,6 +28,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     pkgEcosystem,
  )
+import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factDeleteCeiling),
     StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
@@ -37,7 +40,7 @@ import Ecluse.Core.Registry.Maintenance (
     protocolFault,
     storeRefusal,
  )
-import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
+import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestInfo))
 import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
@@ -72,13 +75,17 @@ import Ecluse.Core.Rules.Types (
     mkEvalContext,
     revocationRules,
  )
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
-import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
+import Ecluse.Test.Package (leftPadName, npmVersion, pypiVersion, requestsName, sampleManifest)
+import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, exposure, inertRuleDeps, servingRuleDeps, withAdvisoryFreshness)
-import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import Ecluse.Test.Snapshot (digestOf)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
 epoch :: UTCTime
@@ -96,6 +103,8 @@ spec = do
     expirySpec
     generationCapSpec
     revocationSpec
+    canonicalMetadataSpec
+    nativeIdentitySpec
 
 -- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 -- because the store may hold the only surviving copy.
@@ -666,6 +675,50 @@ revocationSpec = describe "the rules that apply at revocation" $ do
   where
     requestsProject = mkPackageName PyPI Nothing "requests"
     walkDeps = advisoryDepsFor ["left-pad", "requests"] (pure AdvisoryFresh)
+
+canonicalMetadataSpec :: Spec
+canonicalMetadataSpec = describe "native PyPI versions and canonical metadata" $
+    for_ [Nothing, Just "1.0.0", Just "2.0.0"] $ \manifestVersion ->
+        it ("uses matching metadata for a yank denial, manifest version " <> show manifestVersion) $ do
+            storedManifest <- traverse yankedPyPIManifest manifestVersion
+            for_ storedManifest $ \snapshot ->
+                Map.keys (infoVersions (manifestInfo snapshot))
+                    `shouldBe` [if manifestVersion == Just "1.0.0" then "1" else "2"]
+            let nativeVersion = pypiVersion "1.0.0"
+                removed = manifestVersion == Just "1.0.0"
+            (recorded, remaining) <- revocationStep inertRuleDeps [atDefaultPrecedence DenyIfYanked] requestsName nativeVersion storedManifest
+            recResults recorded `shouldReturn` [SweepExamined, if removed then SweepDeleted else SweepKept]
+            remaining `shouldBe` [nativeVersion | not removed]
+
+nativeIdentitySpec :: Spec
+nativeIdentitySpec = describe "native PyPI identity with and without metadata" $
+    for_ [False, True] $ \hasMetadata ->
+        for_ ["requests@1.0.0", "requests@1"] $ \identityText -> do
+            it ("keeps exact identity denials, metadata=" <> show hasMetadata <> ", identity=" <> toString identityText) $ do
+                storedManifest <- if hasMetadata then Just <$> yankedPyPIManifest "1.0.0" else pure Nothing
+                let nativeVersion = pypiVersion "1.0.0"
+                    removed = identityText == "requests@1.0.0"
+                (recorded, remaining) <- revocationStep inertRuleDeps [atDefaultPrecedence (DenyByIdentity identityText)] requestsName nativeVersion storedManifest
+                recResults recorded `shouldReturn` [SweepExamined, if removed then SweepDeleted else SweepKept]
+                remaining `shouldBe` [nativeVersion | not removed]
+
+            it ("keeps exact identity allow overrides, metadata=" <> show hasMetadata <> ", identity=" <> toString identityText) $ do
+                storedManifest <- if hasMetadata then Just <$> yankedPyPIManifest "1.0.0" else pure Nothing
+                let nativeVersion = pypiVersion "1.0.0"
+                    kept = identityText == "requests@1.0.0"
+                    policy =
+                        [ PrecededRule 1000 AdmissionAndRevocation (AllowByIdentity identityText)
+                        , atDefaultPrecedence (DenyByIdentity "requests")
+                        ]
+                (recorded, remaining) <- revocationStep inertRuleDeps policy requestsName nativeVersion storedManifest
+                recResults recorded `shouldReturn` [SweepExamined, if kept then SweepKept else SweepDeleted]
+                remaining `shouldBe` [nativeVersion | kept]
+
+yankedPyPIManifest :: Text -> IO Manifest
+yankedPyPIManifest rawVersion = do
+    let body = toStrict (encode (simpleIndex "requests" [withFileKeys [("yanked", Bool True)] (simpleFile ("requests-" <> rawVersion <> "-py3-none-any.whl"))]))
+    (info, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+    pure (Manifest info (fst pypiSimpleCached document) (BS.length body) (digestOf body))
 
 -- A rule at its default precedence, limited to admission as @appliesTo: [admission]@ resolves it.
 limitedToAdmission :: Rule -> PrecededRule

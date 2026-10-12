@@ -27,7 +27,8 @@ module Ecluse.Core.Server.Metadata (
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoName, infoVersions), PackageName, pkgEcosystem)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Exchange (withinServeCap)
 import Ecluse.Core.Registry.Metadata (
@@ -53,7 +54,7 @@ import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Core.Version (Version, renderVersion, renderVersionKey, versionKeyIn)
 
 -- Private reads re-authorise the caller at the upstream, so only anonymous public metadata
 -- resolves through the shared cache, keyed by the origin's Source.
@@ -192,9 +193,15 @@ loggingFailure wiring name action = do
     whenLeft_ result (cwLogFailure wiring name)
     pure result
 
--- | Find a version by its ecosystem-rendered key in a package snapshot.
+-- | Prefer an exact version key, then associate PyPI spellings through the canonical key.
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
-selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
+selectVersion version info =
+    Map.lookup (renderVersion version) versions <|> do
+        guard (pkgEcosystem (infoName info) == PyPI)
+        key <- versionKeyIn PyPI version
+        Map.lookup (renderVersionKey key) versions
+  where
+    versions = infoVersions info
 
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =

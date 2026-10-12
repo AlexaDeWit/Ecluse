@@ -3,8 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Metadata caching and failure observations across full and selective reads.
-Failures remain uncached and retain their typed cause. A version read pairs its typed view with
-the raw object of the one body it came from, on every path of the hybrid.
+Failures remain uncached. A selected read pairs typed facts with the same response's source fields.
 -}
 module Ecluse.Core.Server.MetadataSpec (spec) where
 
@@ -47,7 +46,7 @@ import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, pub
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
-import Ecluse.Test.Package (npmVersion, unscopedNpm)
+import Ecluse.Test.Package (npmVersion, pypiVersion, requestsName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
@@ -55,6 +54,7 @@ import Ecluse.Test.Snapshot (digestOf, readDetails)
 -- | Selected reads use the chosen provider without hydrating a full document.
 spec :: Spec
 spec = do
+    selectVersionSpec
     -- Every case here drives the read functions directly, so neither origin is ever dialled:
     -- only the posture its builder fixes is under test.
     manager <- runIO (newManager defaultManagerSettings)
@@ -347,6 +347,36 @@ spec = do
             map isUnreachable results `shouldBe` replicate 8 True
             readIORef fetches `shouldReturn` 1
             readIORef failureLogs `shouldReturn` 1
+
+selectVersionSpec :: Spec
+selectVersionSpec = describe "selectVersion" $ do
+    it "associates a native PyPI version with its canonical manifest entry" $ do
+        let info = manifestInfo (sampleManifest requestsName [pypiVersion "1"])
+        selectVersion (pypiVersion "1.0.0") info `shouldBe` Map.lookup "1" (infoVersions info)
+        fmap pkgVersion (selectVersion (pypiVersion "1.0.0") info) `shouldBe` Just (pypiVersion "1")
+
+    it "prefers an exact PyPI entry when both spellings exist" $ do
+        let info = manifestInfo (sampleManifest requestsName (map pypiVersion ["1", "1.0.0"]))
+        fmap pkgVersion (selectVersion (pypiVersion "1.0.0") info) `shouldBe` Just (pypiVersion "1.0.0")
+
+    for_ ["2.0.0", "not-a-version", "1.0.0+local"] $ \rawVersion ->
+        it ("leaves an unmatched PyPI version unavailable: " <> toString rawVersion) $ do
+            let info = manifestInfo (sampleManifest requestsName [pypiVersion "1"])
+            selectVersion (pypiVersion rawVersion) info `shouldBe` Nothing
+
+    it "keeps exact lookup for an unparseable PyPI spelling" $ do
+        let version = pypiVersion "nightly"
+            info = manifestInfo (sampleManifest requestsName [version])
+        fmap pkgVersion (selectVersion version info) `shouldBe` Just version
+
+    it "leaves a version unavailable when the PyPI manifest has no releases" $ do
+        let info = manifestInfo (sampleManifest requestsName [])
+        selectVersion (pypiVersion "1.0.0") info `shouldBe` Nothing
+
+    it "leaves npm spellings exact" $ do
+        let info = manifest name ["1"]
+        selectVersion (npmVersion "1.0.0") info `shouldBe` Nothing
+        fmap pkgVersion (selectVersion (npmVersion "1") info) `shouldBe` Just (npmVersion "1")
 
 httpFailures :: [(MetadataError, Metric.Cause)]
 httpFailures =

@@ -32,6 +32,10 @@ can never determine the required fact. Boot refuses every blocked entry in an ac
 resolved policy, with the adapter's reason and the configuration remedy.
 This configuration check does not change the engine's treatment of evidence.
 
+Dredger keeps the store listing's exact package and version identity when it adds manifest facts.
+PyPI metadata association also accepts the canonical PEP 440 key.
+The native deletion identifier and exact identity-rule matching stay unchanged.
+
 A `Rule` is closed `Eq`/`Show` data with no evaluation. `verdictSource` is the single dispatch
 over it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
 security boundary: untrusted config can only name a built-in constructor, never supply an
