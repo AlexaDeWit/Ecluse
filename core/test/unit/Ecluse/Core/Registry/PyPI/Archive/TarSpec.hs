@@ -99,15 +99,15 @@ spec = describe "extractTar" $ do
         extract defaultLimits [global, localHeader, info, inherited, deleteGlobal, alias] `shouldReturn` Right metadata
         extract defaultLimits [global, localHeader, info, deleteGlobal, alias] `shouldReturn` Left (ParseError "tar link target is absent")
     it "reads GNU long-name and long-link records" $ do
-        longName <- pax 'L' "example-1/PKG-INFO\NUL"
-        longLink <- pax 'K' "metadata.txt\NUL"
+        let longName = Tar.longLinkEntry "example-1/PKG-INFO"
+            longLink = Tar.longSymLinkEntry "metadata.txt"
         alias <- link True "placeholder" "unused"
         target <- regular "example-1/metadata.txt" metadata
         extract defaultLimits [longName, longLink, alias, target] `shouldReturn` Right metadata
     it "rejects orphan and conflicting extended headers" $ do
         info <- regular "example-1/PKG-INFO" metadata
         extended <- pax 'x' (paxRecord "path=example-1/data\n")
-        longName <- pax 'L' "example-1/data\NUL"
+        let longName = Tar.longLinkEntry "example-1/data"
         extract defaultLimits [info, extended] `shouldReturn` Left (ParseError "orphan extended tar header")
         extract defaultLimits [extended, longName, info] `shouldReturn` Left (ParseError "ambiguous extended tar headers")
     for_
