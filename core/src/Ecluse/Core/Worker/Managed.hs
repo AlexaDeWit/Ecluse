@@ -17,6 +17,7 @@ import Data.Aeson (Value (Object))
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Codec (projectRecordWorkWeight)
 import Ecluse.Core.Mirror.State.Internal (retainVerifiedIdentity)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
@@ -76,7 +77,7 @@ verifyCompanions charge progress binding version = go (Map.elems (versionCompani
 chargeRecord :: WorkerStateBudget -> Limits -> Either MirrorStateFault ProjectMirrorRecord -> IO (Either MirrorStateFault ProjectMirrorRecord)
 chargeRecord budget limits result = case result of
     Left fault -> pure (Left fault)
-    Right record -> case projectRecordWeight limits record of
+    Right record -> case projectRecordWorkWeight limits record of
         Left fault -> pure (Left fault)
         Right bytes -> do
             wsbRecords budget (fromInteger (min (toInteger (maxBound :: Int)) (3 * toInteger bytes)))

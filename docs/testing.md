@@ -78,6 +78,18 @@ flag (`-with-rtsopts=-T`) in its `ghc-options`. It runs outside coverage too. No
 WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `task check` includes
 it via `cabal-checks`.
 
+Managed state has an isolated retained-graph check in `Mirror.State.WeightResidencySpec`.
+Each child decodes the unchanged 1000-version record, consumes its full derived rendering,
+and retains only the record through a stable pointer. This forces expected descriptors,
+opaque parsed versions, verified hashes, companion references, and source fields independently
+of the weigher. Post-GC live growth must fit the record charge alone. Release uses the same
+16 KiB and one-tenth limits as the other retained probes. Smaller adversarial controls cover
+repeated descriptors and hashes, verified identities, companions, long versions, and text backing aliases.
+These controls extend the decoded graph directly where a wire round trip would remove aliases.
+The cold, warm, and replacement probes retain their separate combined lifetime checks.
+The state-only charge is not an admission allowance. Update, worker, encoding and inventory
+reservations retain their conservative selected-release accounting.
+
 Metadata probes use a fresh child process for each corpus package and retained shape.
 They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
 The complete corpus must include a capture above the previous 3,687,514-byte maximum.

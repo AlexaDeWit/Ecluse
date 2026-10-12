@@ -170,6 +170,12 @@ allowance covers parsed ordering keys. Shared allocations count repeatedly. This
 accounting, not exact heap residency. A release above the aggregate budget is served without retention
 or eviction, and occupancy reports the charged weights. Cached absences keep their smaller charge.
 
+Managed mirror records use a separate retained-graph charge. It includes expected descriptors,
+verified digests, companion references, and the full backing allocations of source strings and keys.
+The view owns revision bytes and charges their length and cache key before retention.
+PyPI fragment structure has its own allowance. Other fragment shapes retain the selected-entry allowance.
+Work reservations for decoding, updates, workers and encoding remain independent of this cache charge.
+
 Selected-version and assembled stores share one byte bound and one entry bound. Neither store
 reserves a static share. Under pressure, the inserting store evicts its least-recently used entries
 until the aggregate fits or its eviction floor stops it. The shipped floors are zero.

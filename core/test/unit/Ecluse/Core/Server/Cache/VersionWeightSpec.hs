@@ -7,7 +7,7 @@ Cache integration checks live in the parent cache spec.
 -}
 module Ecluse.Core.Server.Cache.VersionWeightSpec (spec) where
 
-import Data.Aeson (Value (Number), object, toJSON, (.=))
+import Data.Aeson (Value (Number, String), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -29,6 +29,13 @@ import Ecluse.Test.Snapshot (untaggedRead)
 
 spec :: Spec
 spec = describe "selected-release accounting" $ do
+    it "preserves the selected-release arithmetic independently of mirror retention" $ do
+        weight baseline `shouldBe` 18775
+        weighVersion ((untaggedRead (Just baseline)){vrUpstreamLatest = Just v1_0_0}) `shouldBe` 18908
+        weighVersion (carrying (String "abc")) `shouldBe` 18812
+        weight baseline{pkgVersion = mkVersion PyPI (T.copy (T.intercalate "." (replicate 200 "1")))} `shouldBe` 120033
+        weight baseline{pkgArtifacts = oneArtifact{artUrl = T.take 1 (T.replicate 65536 "x")} :| []} `shouldBe` 84277
+
     it "keeps a cached absence smaller than a present release" $ do
         weighVersion (untaggedRead Nothing) `shouldBe` 1024
         weighVersion (untaggedRead (Just baseline)) `shouldSatisfy` (> weighVersion (untaggedRead Nothing))

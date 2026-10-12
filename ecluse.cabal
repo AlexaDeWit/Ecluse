@@ -132,6 +132,7 @@ library ecluse-core
     Ecluse.Core.Mirror.State
     Ecluse.Core.Mirror.State.Internal
     Ecluse.Core.Mirror.State.Codec
+    Ecluse.Core.Mirror.State.Weight
     Ecluse.Core.Registry.PyPI.Archive
     Ecluse.Core.Registry.PyPI.Archive.Path
     Ecluse.Core.Registry.PyPI.Archive.BZip
@@ -278,6 +279,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Cache.Types
     Ecluse.Core.Server.Cache.VersionWeight
+    Ecluse.Core.Server.Cache.VersionWeight.Fields
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Brake
@@ -985,6 +987,8 @@ test-suite ecluse-core-unit
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
     Ecluse.Core.Mirror.StateSpec
+    Ecluse.Core.Mirror.State.WeightSpec
+    Ecluse.Core.Mirror.State.CodecSpec
     Ecluse.Core.Registry.PyPI.ArchiveSpec
     Ecluse.Core.Registry.PyPI.Archive.PathSpec
     Ecluse.Core.Registry.PyPI.Archive.BZipSpec
@@ -1604,6 +1608,7 @@ test-suite ecluse-residency
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.MirrorViewResidencySpec
+    Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
 

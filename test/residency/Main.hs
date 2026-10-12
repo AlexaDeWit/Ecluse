@@ -8,6 +8,7 @@ Explicit imports keep integration fixtures from registering unrelated examples.
 module Main (main) where
 
 import Data.JsonStream.LexerResidencySpec qualified as LexerResidencySpec
+import Ecluse.Core.Mirror.State.WeightResidencySpec qualified as StateWeightResidencySpec
 import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Registry.MetadataResidencySpec qualified as MetadataResidencySpec
 import Ecluse.Core.Registry.Npm.ReaderResidencySpec qualified as NpmReaderResidencySpec
@@ -23,6 +24,7 @@ import Test.Hspec (hspec)
 main :: IO ()
 main =
     Environment.getArgs >>= \case
+        ["--mirror-state-probe", mode, path] -> StateWeightResidencySpec.probeMain mode path
         ["--archive-probe", mode, path] -> ArchiveResidencySpec.probeMain mode path
         ["--mirror-read-probe", phase, directory] -> MirrorViewResidencySpec.probeMain phase directory
         ["--metadata-probe", shape, path] -> childMain probe shape path
@@ -33,6 +35,7 @@ main =
         ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
         ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path
         _ -> hspec $ do
+            StateWeightResidencySpec.spec
             ArchiveResidencySpec.spec
             MirrorViewResidencySpec.spec
             LexerResidencySpec.spec

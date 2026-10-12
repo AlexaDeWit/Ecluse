@@ -8,6 +8,7 @@ does not bound active input, parser, policy, merge, or output memory.
 -}
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
+    expandWireBytesInteger,
     chargeForResident,
     mirrorJobEstimatedBytes,
     bufferedChunkCharge,
@@ -20,7 +21,14 @@ import Data.ByteString qualified as BS
 This factor is independent of source-byte regression envelopes and active-work admission.
 -}
 expandWireBytes :: Int -> Int
-expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
+expandWireBytes = expandWireCharge
+
+-- | Expand retained-state terms before their final saturating conversion to Int.
+expandWireBytesInteger :: Integer -> Integer
+expandWireBytesInteger = expandWireCharge
+
+expandWireCharge :: (Integral a) => a -> a
+expandWireCharge wireBytes = wireBytes * fromIntegral residentRatioNumerator `div` fromIntegral residentRatioDenominator
 
 -- | The smallest compact charge that 'expandWireBytes' expands to at least the given heap bytes.
 chargeForResident :: Int -> Int

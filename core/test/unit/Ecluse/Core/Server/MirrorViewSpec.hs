@@ -8,6 +8,8 @@ module Ecluse.Core.Server.MirrorViewSpec (spec) where
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.ByteString.Internal qualified as BSI
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
@@ -88,6 +90,19 @@ spec = do
             runRead view `shouldReturn` Right (Just (revision, record))
             runRead view `shouldReturn` Right (Just (revision, record))
             readIORef requests `shouldReturn` [Nothing, Just revision]
+
+        it "owns a retained revision without changing its bytes" $ do
+            record <- sampleRecord
+            let original = BS.take 4 (BS.replicate 65536 97)
+            view <- viewWith (\_ _ -> pure (Right (StateLoaded (rev original) record)))
+            result <- runRead view >>= expectRight
+            case result of
+                Just (StateRevision _ _ owned, _) -> do
+                    owned `shouldBe` original
+                    let (oldBacking, _, _) = BSI.toForeignPtr original
+                        (newBacking, _, _) = BSI.toForeignPtr owned
+                    newBacking `shouldNotBe` oldBacking
+                Nothing -> expectationFailure "loaded state disappeared"
 
         it "rejects stale cached state during an outage despite a smaller current public inventory" $ do
             record <- sampleRecord

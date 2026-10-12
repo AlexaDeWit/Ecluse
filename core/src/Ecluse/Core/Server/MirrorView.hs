@@ -8,6 +8,7 @@ module Ecluse.Core.Server.MirrorView (
     MirrorRetention,
     newMirrorView,
     newMirrorRetention,
+    mirrorRetentionWeight,
     validateMirrorProject,
     mirrorProjectViews,
     mirrorVersionView,
@@ -18,14 +19,18 @@ module Ecluse.Core.Server.MirrorView (
 import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.ByteString.Short qualified as SBS
 import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
 import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime)
 import Data.Traversable (for)
-import UnliftIO (tryAny)
+import UnliftIO (evaluate, tryAny)
 
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
+import Ecluse.Core.Mirror.State.Internal (StateRevision (..), targetKey)
 import Ecluse.Core.Package (Artifact (..), PackageDetails (..), PackageInfo (..), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.CachedDocument (pypiPacked, pypiSimpleCached, weighCachedDoc)
@@ -38,7 +43,8 @@ import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Cache.Backend (Recency (RefreshRecency), RetentionOperations (..))
 import Ecluse.Core.Server.Cache.Backend.Local (LocalPool, newPooledRetention)
-import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), StoreBudget, fullKey)
+import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), StoreBudget, cacheKeyIdentity, fullKey)
+import Ecluse.Core.Server.Cache.VersionWeight.Fields (nameWeight, textWeight)
 import Ecluse.Core.Snapshot (digestBytes, digestFromContext)
 import Ecluse.Core.Version (Version)
 
@@ -75,10 +81,25 @@ validateMirrorProject (MirrorView limits target store cache) ticket name = do
                 | otherwise -> case projectRecordWeight limits record of
                     Left fault -> pure (Left fault)
                     Right weight -> do
-                        charge ticket weight
-                        roInsert cache (const pass) pass key (revision, record, weight + 256)
-                        pure (Right (Just (revision, record)))
+                        let StateRevision revisionTarget revisionName bytes = revision
+                            retained = mirrorRetentionWeight key revision weight
+                        charge ticket retained
+                        owned <- evaluate (StateRevision revisionTarget revisionName (BS.copy bytes))
+                        roInsert cache (const pass) pass key (owned, record, retained)
+                        pure (Right (Just (owned, record)))
     pure (fromRight (Left (StateInvalid "mirror state read failed")) attempted)
+
+-- | The revision bytes must be owned. Saturated entries remain uncacheable.
+mirrorRetentionWeight :: CacheKey -> StateRevision -> Int -> Int
+mirrorRetentionWeight key (StateRevision target name bytes) recordWeight =
+    saturatingStateCharge
+        ( toInteger recordWeight
+            + 256
+            + toInteger (BS.length bytes)
+            + toInteger (SBS.length (cacheKeyIdentity key))
+            + textWeight (targetKey target)
+            + nameWeight name
+        )
 
 -- | Keep unmanaged packed input separate. All restored entries receive fresh project-wide coordinates.
 mirrorProjectViews :: StateRevision -> ProjectMirrorRecord -> Maybe Manifest -> Either MirrorStateFault (Maybe Manifest, Maybe Manifest, Map Text MirrorVersion)

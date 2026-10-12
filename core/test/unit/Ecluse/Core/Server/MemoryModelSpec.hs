@@ -11,10 +11,15 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Server.MemoryModel (chargeForResident, expandWireBytes)
+import Ecluse.Core.Server.MemoryModel (chargeForResident, expandWireBytes, expandWireBytesInteger)
 
 spec :: Spec
 spec = describe "chargeForResident" $ do
+    it "preserves ordinary expansion while retaining overflow-sized state terms" $ do
+        expandWireBytes 331 `shouldBe` 2482
+        expandWireBytesInteger 331 `shouldBe` 2482
+        expandWireBytesInteger (toInteger (maxBound :: Int)) `shouldSatisfy` (> toInteger (maxBound :: Int))
+
     it "charges the fewest compact bytes whose expansion covers the heap bytes" $
         hedgehog $ do
             resident <- forAll (Gen.int (Range.linear 0 (256 * 1024 * 1024)))

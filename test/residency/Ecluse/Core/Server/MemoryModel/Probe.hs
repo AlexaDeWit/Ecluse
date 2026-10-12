@@ -7,6 +7,9 @@ process of the residency executable. A forced preparation renders its shape, so 
 high-water counters include that work.
 -}
 module Ecluse.Core.Server.MemoryModel.Probe (
+    HeapSample (..),
+    sample,
+    forceShown,
     Shape (..),
     Measurement (..),
     packages,
@@ -172,6 +175,7 @@ data SingleListing = SingleListing
 instance ToJSON SingleListing
 instance FromJSON SingleListing
 
+-- | Scalar counters avoid retaining the RTS statistics graph across collections.
 data HeapSample = HeapSample
     { live :: !Word64
     , sampleAllocated :: !Word64
@@ -432,8 +436,7 @@ measureRetained prepareShape = do
             , preparationMaxLive = samplePeakLive held
             }
 
--- Full RTSStats records must die before the next collection measures a small retained root. A dead
--- object with a finalizer, such as a closed file handle, stays live until its finalizer thread runs.
+-- | Drop full RTSStats before another collection. Yield so closed handles can finish finalisation.
 {-# NOINLINE sample #-}
 sample :: IO HeapSample
 sample = do
@@ -495,6 +498,7 @@ captureSource = fmap (\record -> (residencyMetadata record, residencyUpstream re
 noResidencyCorpus :: IO a
 noResidencyCorpus = fail "no metadata residency record"
 
+-- | Consume the complete derived rendering, including opaque fields, without retaining its output.
 forceShown :: (Show a) => a -> IO Int
 forceShown value = evaluate (length (show value :: String))
 

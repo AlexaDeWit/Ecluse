@@ -88,7 +88,7 @@ updateRecord limits charge inputWeight store name change = go (8 :: Int) StateRe
             Right (StateUnchanged _) -> pure (Left StateRevisionMismatch)
             Right StateAbsent -> apply attempts Nothing Nothing
             Right (StateLoaded revision record) -> apply attempts (Just revision) (Just record)
-    apply attempts revision previous = case traverse (projectRecordWeight limits) previous of
+    apply attempts revision previous = case traverse (projectRecordWorkWeight limits) previous of
         Left fault -> pure (Left fault)
         Right retained -> do
             charge (saturatingStateCharge (2 * (toInteger inputWeight + maybe 0 toInteger retained) + 4096))

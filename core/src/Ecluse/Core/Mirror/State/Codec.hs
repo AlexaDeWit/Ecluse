@@ -6,6 +6,7 @@
 module Ecluse.Core.Mirror.State.Codec (
     encodeProjectRecord,
     projectRecordWeight,
+    projectRecordWorkWeight,
     chargedDecodeProjectRecord,
     chargedEncodeProjectRecord,
     stateExchangeCharge,
@@ -25,6 +26,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Mirror.State.Internal
+import Ecluse.Core.Mirror.State.Weight (retainedRecordWeight)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.CachedDocument (estimateValueBytes, npmCached, pypiSimpleCached)
@@ -101,9 +103,13 @@ checkDimensions limits bytes = do
         traverse_ (checkArtifactCount limits) [a, f, s, c, h]
         pure updated
 
--- | Count retained fields without encoding. Referenced companion objects are charged only when read.
+-- | Charge the durable graph separately from active-work reservations.
 projectRecordWeight :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault Int
-projectRecordWeight limits record = do
+projectRecordWeight limits record = checkRecord limits 0 record $> saturatingStateCharge (retainedRecordWeight record)
+
+-- | Preserve the conservative selected-release allowance for update, worker and encoding overlap.
+projectRecordWorkWeight :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault Int
+projectRecordWorkWeight limits record = do
     checkRecord limits 0 record
     pure . saturatingStateCharge $
         4096
@@ -165,7 +171,7 @@ domainDecodeCharge value = 4096 + 8 * toInteger (estimateValueBytes value) + sum
 
 -- | Reserve retained input, encoded output and validation overlap before creating the encoding tree.
 chargedEncodeProjectRecord :: StateCharge -> Limits -> ProjectMirrorRecord -> IO (Either MirrorStateFault ByteString)
-chargedEncodeProjectRecord charge limits record = case projectRecordWeight limits record of
+chargedEncodeProjectRecord charge limits record = case projectRecordWorkWeight limits record of
     Left fault -> pure (Left fault)
     Right retained -> do
         charge (saturatingStateCharge (4 * toInteger retained + 32768))
