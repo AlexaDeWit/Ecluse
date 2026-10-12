@@ -476,9 +476,9 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 20 complete lifecycle groups and 341 unique examples.
+The integration runner registers 20 complete lifecycle groups and 346 unique examples.
 Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 318 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The other 323 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
 The PyPI cases retain source authority, companion integrity, credential confinement, and private mirror observations.
 Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
@@ -501,7 +501,7 @@ The old wrapper remains as a native source reference, but the runner does not sc
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
 | `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
-| `integration/mirror-view` | `native-001` to `native-016` (22) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
+| `integration/mirror-view` | `native-001` to `native-018` (27) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
