@@ -14,7 +14,6 @@ import Data.Time (nominalDay)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Handler.Warp (testWithApplication)
-import System.IO (stderr)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (benchNow)

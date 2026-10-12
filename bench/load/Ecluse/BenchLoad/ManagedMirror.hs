@@ -18,7 +18,6 @@ import Network.HTTP.Types (hContentType, status200, status304, status404)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application, pathInfo, rawPathInfo, requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
-import System.IO (stderr)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (fetchChecked, httpTarget, longCacheTtl, withProxyPortsConfigured)

@@ -661,15 +661,3 @@ withPublicArtifactWithheld plane name version =
   where
     served = artifactFile (gdpWorkDir plane </> "html") name version
     withheld = served <> ".withheld"
-
--- | Poll logs every 250 ms until the predicate holds or @attempts@ expires.
-awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
-awaitContainerLog cname matches attempts =
-    pollUntil attempts 250000 id (matches <$> containerLogs cname)
-
--- | Read combined container logs, returning empty text when Docker cannot supply them.
-containerLogs :: String -> IO Text
-containerLogs cname =
-    handleAny (\_ -> pure "") $ do
-        (_, out, err) <- readProcess (proc "docker" ["logs", cname])
-        pure (decodeUtf8 (LBS.toStrict out) <> decodeUtf8 (LBS.toStrict err))
