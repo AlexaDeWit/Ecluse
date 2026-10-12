@@ -21,6 +21,7 @@ import "lzma" Codec.Compression.Lzma qualified as Lzma
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Security.Limits (Limits (..), defaultLimits)
 import Ecluse.Core.Version (mkVersion)
@@ -119,6 +120,44 @@ spec = describe "archiveMetadata" $ do
     it "rejects a central offset redirected into another member's payload" $ do
         extract defaultLimits "example-1-py3-none-any.whl" embeddedHeaderControl `shouldReturn` Right metadata
         extract defaultLimits "example-1-py3-none-any.whl" redirectedHeaderArchive >>= (`shouldSatisfy` isLeft)
+    it "checks local declarations against the central directory before reading metadata" $ do
+        extract defaultLimits "example-1-py3-none-any.whl" embeddedHeaderControl `shouldReturn` Right metadata
+        for_
+            [ (4, "\x40\x00", "unsupported ZIP encryption flags or version")
+            , (6, "\x01\x00", "ZIP entry compression flags disagree")
+            , (8, "\x08\x00", "ZIP entry compression flags disagree")
+            , (30, "X", "ZIP directory names another local entry")
+            , (14, BS.replicate 4 0, "ZIP entry CRC declarations disagree")
+            , (22, "\x3e\x00\x00\x00", "ZIP entry size declarations disagree")
+            ]
+            $ \(offset, replacement, reason) ->
+                extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes offset replacement embeddedHeaderControl)
+                    `shouldReturn` Left (ParseError reason)
+    it "checks payload CRC after agreeing local and central declarations" $ do
+        BS.take 8 (BS.drop 58 embeddedHeaderControl) `shouldBe` "Metadata"
+        extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes 58 "X" embeddedHeaderControl)
+            `shouldReturn` Left (ParseError "ZIP entry integrity check failed")
+    it "refuses ZIP links and multi-disk members with otherwise intact framing" $ do
+        let (prefix, directory) = BS.breakSubstring "PK\x01\x02" embeddedHeaderControl
+            offset = BS.length prefix
+        BS.take 4 directory `shouldBe` "PK\x01\x02"
+        extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes (offset + 40) "\x00\xa0" embeddedHeaderControl)
+            `shouldReturn` Left (ParseError "ZIP contains a link or special file")
+        extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes (offset + 34) "\x01\x00" embeddedHeaderControl)
+            `shouldReturn` Left (ParseError "multi-disk ZIP member is unsupported")
+    it "refuses a ZIP64 data descriptor whose CRC disagrees with its directory" $ do
+        bytes <- zip64Bytes [("example-1.dist-info/METADATA", metadata)]
+        let (prefix, directory) = BS.breakSubstring "PK\x01\x02" bytes
+            descriptor = BS.length prefix - 24
+        BS.take 4 directory `shouldBe` "PK\x01\x02"
+        BS.take 4 (BS.drop descriptor bytes) `shouldBe` "PK\x07\x08"
+        extract defaultLimits "example-1-py3-none-any.whl" bytes `shouldReturn` Right metadata
+        extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes (descriptor + 4) (BS.replicate 4 0) bytes)
+            `shouldReturn` Left (ParseError "ZIP descriptor disagrees with central directory")
+    it "checks integrity for unrelated members after metadata extraction" $ do
+        BS.take 6 (BS.drop 161 embeddedHeaderControl) `shouldBe` "prefix"
+        extract defaultLimits "example-1-py3-none-any.whl" (replaceArchiveBytes 161 "X" embeddedHeaderControl)
+            `shouldReturn` Left (ParseError "ZIP entry integrity check failed")
     it "charges a tiny ZIP independently of configured metadata ceilings" $ do
         bytes <- zipBytes [("example-1.dist-info/METADATA", metadata)]
         small <- observedCharge defaultLimits{maxMetadataBytes = 1024 * 1024} "example-1-py3-none-any.whl" bytes
@@ -202,3 +241,6 @@ observedCharge limits filename bytes = do
     result <- archiveMetadata limits charge (mkPackageName PyPI Nothing "example") (mkVersion PyPI "1") filename bytes
     void (expectRight result)
     readIORef peak
+
+replaceArchiveBytes :: Int -> ByteString -> ByteString -> ByteString
+replaceArchiveBytes offset replacement bytes = BS.take offset bytes <> replacement <> BS.drop (offset + BS.length replacement) bytes
