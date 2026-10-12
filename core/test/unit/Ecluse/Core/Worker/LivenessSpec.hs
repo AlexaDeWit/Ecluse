@@ -52,8 +52,8 @@ spec = do
                                 prepared <- mpPrepareVersion base p v doc
                                 pure
                                     prepared
-                                        { pmvPrepareUploadAction = \file verified ->
-                                            pmvPrepareUpload prepared file verified
+                                        { pmvPrepareUploadAction = \pay file verified ->
+                                            pmvPrepareUpload prepared pay file verified
                                                 <&> fmap
                                                     ( \upload ->
                                                         PreparedMirrorUpload

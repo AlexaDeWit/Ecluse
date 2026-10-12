@@ -14,6 +14,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
@@ -21,7 +22,7 @@ import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shou
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
-import Ecluse.Core.Package (Artifact (artFilename), HashAlg (SHA1, SHA256, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), mkHash, mkSriHashes)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize), HashAlg (SHA1, SHA256, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (..), mkHash, mkSriHashes)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
@@ -35,6 +36,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, pr
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
+    PublishCodec (pcNativeComplete),
     PublishPlan (PublishPlan, ppLatest),
     newMirrorPublish,
  )
@@ -68,6 +70,7 @@ spec = do
     integritySpec
     fieldRewriteSpec
     checkedUploadDataSpec
+    nativeCompletionSpec
 
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
@@ -321,6 +324,24 @@ checkedUploadDataSpec = describe "checked mirror upload data" $ do
         check (changed (\d -> d{pkgVersion = mkVersion Npm "2.0.0"})) `shouldSatisfy` isSourceRefusal
     it "refuses to publish one selected artifact from a larger inventory" $
         check (changed (\d -> d{pkgArtifacts = fmap (\a -> a{artFilename = "another.tgz"}) (pkgArtifacts d) <> pkgArtifacts d})) `shouldSatisfy` isSourceRefusal
+
+nativeCompletionSpec :: Spec
+nativeCompletionSpec = describe "native atomic npm completion" $ do
+    let details = vdDetails (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc sizedArtifact)
+        inventory = PackageInfo isOdd (Map.singleton "1.0.0" details) mempty []
+        complete = pcNativeComplete npmPublishCodec isOdd v1_0_0
+        changed update = inventory{infoVersions = Map.singleton "1.0.0" (update details)}
+    it "proves one supported native artifact without a source snapshot" $
+        complete inventory `shouldBe` True
+    it "refuses missing versions and mismatched package identity" $ do
+        complete inventory{infoVersions = mempty} `shouldBe` False
+        complete inventory{infoName = unscopedNpm "other"} `shouldBe` False
+    it "refuses multiple artifacts and mismatched version facts" $ do
+        complete (changed (\d -> d{pkgArtifacts = pkgArtifacts d <> pkgArtifacts d})) `shouldBe` False
+        complete (changed (\d -> d{pkgVersion = mkVersion Npm "2.0.0"})) `shouldBe` False
+    it "refuses malformed filenames, absent digests and negative sizes" $
+        for_ [\a -> a{artFilename = "other-1.0.0.tgz"}, \a -> a{artHashes = []}, \a -> a{artSize = Just (-1)}] $ \update ->
+            complete (changed (\d -> d{pkgArtifacts = fmap update (pkgArtifacts d)})) `shouldBe` False
 
 isSourceRefusal :: Either PublishFault a -> Bool
 isSourceRefusal = \case

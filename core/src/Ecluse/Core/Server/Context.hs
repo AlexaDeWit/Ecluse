@@ -49,7 +49,7 @@ import Network.Wai (ResponseReceived)
 import Network.Wai qualified as Wai
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Credential (ClientCredential, Secret)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
@@ -195,12 +195,14 @@ data PublishDeps = PublishDeps
     {- ^ Whether this package may publish here, refused before any upstream write: the same
     first-party predicate the serve path reads as 'pdFirstParty'.
     -}
-    , pubStaticToken :: Maybe Secret
+    , pubStaticCredential :: Maybe ClientCredential
     -- ^ Replaces the authenticated edge token on publishes. Requires 'pubInboundToken' at boot.
     , pubInboundToken :: Maybe Secret
     {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),
     the same gate the read paths apply. 'Nothing' leaves the edge open.
     -}
+    , pubMaxRequestBytes :: Int
+    -- ^ The configured per-mount request cap, covered by the shared aggregate budget.
     , pubLimits :: Limits
     -- ^ Separate client request and registry response bounds for publication.
     , pubBodyBudget :: ByteAdmission

@@ -152,6 +152,30 @@ spec = do
                 writeIORef (mfSource fixture) VersionMetadataUnavailable
                 runManaged fixture `shouldReturn` Succeeded
 
+        it "verifies a pre-existing SHA-256 target without republishing SHA-512 source files" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                initial <- managedInventory url False [1, 2, 3]
+                let details = inventoryDetails initial
+                    files = fmap (\file -> file{artHashes = [unsafeHash SHA512 trueSha512Hex]}) (pkgArtifacts details)
+                changed <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "sha512 source"))
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                writeIORef (mfTarget fixture) (toList (pkgArtifacts details))
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` []
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                runManaged fixture `shouldReturn` Succeeded
+
+        it "refuses conflicting target bytes without repeated publication" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                initial <- managedInventory url False [1, 2, 3]
+                let changed file = file{artHashes = [unsafeHash SHA256 "0000000000000000000000000000000000000000000000000000000000000000"]}
+                writeIORef (mfTarget fixture) (map changed (toList (pkgArtifacts (inventoryDetails initial))))
+                runManaged fixture >>= (`shouldSatisfy` isDropped)
+                runManaged fixture >>= (`shouldSatisfy` isDropped)
+                readIORef (mfUploads fixture) `shouldReturn` []
+
         it "rereads and unions a conflicting state update before any upload" $
             withUpstream $ \url -> do
                 fixture <- managedFixture url False
@@ -680,7 +704,7 @@ spec = do
         for_ [("digestless", \details -> details{pkgArtifacts = fmap (\file -> file{artHashes = []}) (pkgArtifacts details)}), ("multiple files", \details -> details{pkgArtifacts = pkgArtifacts details <> fmap (\file -> file{artFilename = "another.tgz"}) (pkgArtifacts details)})] $ \(label, change) ->
             it ("does not acknowledge " <> label <> " native npm inventory during public outage")
                 $ withRuntimeRegistry
-                    (\logRef -> (recordingPublish logRef (Right ())){mpProbeInventory = \name -> pure (Right (PackageInfo name (Map.singleton (renderVersion ver) (change (sampleDetails name ver))) mempty []))})
+                    (\logRef -> (recordingPublish logRef (Right ())){mpProbeInventory = \_ name -> pure (Right (PackageInfo name (Map.singleton (renderVersion ver) (change (sampleDetails name ver))) mempty []))})
                     (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule])
                     noopWorkerMetricsPort
                 $ \runtime queue logRef -> do

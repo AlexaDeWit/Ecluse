@@ -89,6 +89,7 @@ import Data.Yaml (decodeEither')
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket)
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
+import Ecluse.Config.Mirror (validateMirrorSettings)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
 import Ecluse.Config.Target (resolveStoreBackend, vetPrivateRepository, vetTargetTag)
@@ -131,6 +132,7 @@ loadConfig envVars mBytes = do
     active <- declaredMounts overridesAst
     let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
     globalPolicy <- resolveGlobalPolicy overridesAst
+    validateMirrorSettings appConfig
     mounts <- case (publicUrlErrors appConfig, resolveMounts defaultAst overridesAst globalPolicy appConfig) of
         ([], resolved) -> resolved
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
@@ -243,6 +245,10 @@ resolveMirrored policy eco privateUpstream mirrorTarget mcfg = do
                         MirrorTarget
                             { mtUrl = meUrl mirrorTarget
                             , mtBackend = backend
+                            , mtUploadUrl = fromMaybe (meUrl mirrorTarget) (meUploadUrl mirrorTarget)
+                            , mtUsername = case sbMint backend of
+                                MintCodeArtifact{} -> Just "aws"
+                                MintStatic{} -> meUsername mirrorTarget
                             }
                     }
 

@@ -1,4 +1,4 @@
-packages: .
+packages: . vendor/lzma-managed
 
 -- Hackage amazonka 2.0 excludes GHC 9.10 and containers 0.7. Pin the upstream
 -- revision with flake.nix amazonkaRev. checks.amazonka-lockstep enforces equality.

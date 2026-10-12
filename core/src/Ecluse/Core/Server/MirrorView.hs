@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), expectedTargetMatchesWith)
 import Ecluse.Core.Registry.PyPI.Document (packedSimple, simpleDocument, simpleEnvelope, simpleFiles, urlHole)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge)
+import Ecluse.Core.Server.Admission.Meter (MemoryTicket, charge, newChargeRegion)
 import Ecluse.Core.Server.Cache.Backend (Recency (RefreshRecency), RetentionOperations (..))
 import Ecluse.Core.Server.Cache.Backend.Local (LocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), StoreBudget, fullKey)
@@ -62,13 +62,12 @@ validateMirrorProject (MirrorView limits target store cache) ticket name = do
     attempted <- tryAny $ do
         held <- roLookup cache (const pass) RefreshRecency key
         for_ held (\(_, _, weight) -> charge ticket weight)
-        msReadProject store (charge ticket) name (fmap (\(revision, _, _) -> revision) held) >>= \case
+        stateCharge <- newChargeRegion (charge ticket)
+        msReadProject store stateCharge name (fmap (\(revision, _, _) -> revision) held) >>= \case
             Left fault -> pure (Left fault)
             Right StateAbsent -> pure (Right Nothing)
             Right (StateUnchanged revision) -> case held of
-                Just (previous, record, weight) | revision == previous -> do
-                    charge ticket weight
-                    pure (Right (Just (revision, record)))
+                Just (previous, record, _) | revision == previous -> pure (Right (Just (revision, record)))
                 _ -> pure (Left StateRevisionMismatch)
             Right (StateLoaded revision record)
                 | recordTarget record /= target || recordPackage record /= name -> pure (Left StateIdentityMismatch)
@@ -162,6 +161,7 @@ readMirrorCompanion :: MirrorView -> MemoryTicket -> ProjectMirrorRecord -> Vers
 readMirrorCompanion (MirrorView _ _ store _) ticket record version filename =
     case recordVersion version record >>= Map.lookup filename . versionCompanions of
         Just (CompanionRetained reference) -> do
-            attempted <- tryAny (msReadCompanion store (charge ticket) reference)
+            stateCharge <- newChargeRegion (charge ticket)
+            attempted <- tryAny (msReadCompanion store stateCharge reference)
             pure (either (const (Left StateMissingCompanion)) (>>= verifyRetainedCompanion reference) attempted)
         _ -> pure (Left StateMissingCompanion)

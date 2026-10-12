@@ -18,11 +18,13 @@ import UnliftIO.Exception (finally, throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), newStateCharge, stateTarget)
-import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), stateTarget)
+import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (CompanionRef (..))
 import Ecluse.Core.Package (HashAlg (SHA256), mkHash, mkPackageName)
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
+import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 import Ecluse.Test.Package (hexSha256Of)
@@ -33,21 +35,21 @@ spec = describe "conditional mirror metadata storage" $ do
     it "pays each streamed chunk before the server releases the next chunk" $ do
         release <- newEmptyMVar
         payments <- newIORef ([] :: [Int])
-        charge <- newStateCharge $ \cost -> do
+        charge <- newChargeRegion $ \cost -> do
             paid <- atomicModifyIORef' payments (\previous -> let updated = cost : previous in (updated, sum updated))
-            when (paid == stateExchangeCharge + stateWireChunkCharge 1) (putMVar release True)
+            when (paid == stateExchangeCharge + bufferedChunkCharge 1) (putMVar release True)
         withS3 (gatedChunks release) $ \env ->
             ( timeout paymentWaitMicros (readObject charge env limits{maxMetadataBytes = 2} "records" "key" Nothing)
                 `shouldReturn` Just (Right (ObjectLoaded "\"one\"" "ab"))
             )
                 `finally` void (tryPutMVar release False)
-        reverse <$> readIORef payments `shouldReturn` [stateExchangeCharge, stateWireChunkCharge 1, stateWireChunkCharge 1]
+        reverse <$> readIORef payments `shouldReturn` [stateExchangeCharge 1 1]
 
     it "propagates refused chunk payment without returning a decoded project" $ do
         release <- newEmptyMVar
         paid <- newIORef (0 :: Int)
         let refused = TestContractEscape "state chunk payment refused"
-        charge <- newStateCharge $ \cost -> do
+        charge <- newChargeRegion $ \cost -> do
             previous <- readIORef paid
             if previous == 0 then writeIORef paid cost else throwIO refused
         withS3 (gatedChunks release) $ \env -> do
@@ -63,7 +65,7 @@ spec = describe "conditional mirror metadata storage" $ do
         entered <- newEmptyMVar
         blocked <- newEmptyMVar
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge $ \cost -> do
+        charge <- newChargeRegion $ \cost -> do
             previous <- readIORef paid
             if previous == 0 then writeIORef paid cost else putMVar entered () >> takeMVar blocked
         withS3 (gatedChunks release) $ \env ->
@@ -80,7 +82,7 @@ spec = describe "conditional mirror metadata storage" $ do
     it "keeps admission pauses outside the upstream progress window" $ do
         floorSpec <- expectRight (mkProgressFloor 1 0.05 1)
         payments <- newIORef ([] :: [Int])
-        charge <- newStateCharge $ \cost -> do
+        charge <- newChargeRegion $ \cost -> do
             modifyIORef' payments (cost :)
             threadDelay 100_000
         withS3 (reply status200 [(hETag, "\"one\"")] "record") $ \env ->
@@ -90,7 +92,7 @@ spec = describe "conditional mirror metadata storage" $ do
     it "charges repeated conditional exchanges by high-water size rather than transfer count" $ do
         requests <- newIORef (0 :: Int)
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         withS3
             ( \request respond -> do
                 modifyIORef' requests (+ 1)
@@ -105,7 +107,7 @@ spec = describe "conditional mirror metadata storage" $ do
 
     it "charges error and fallback-list bodies without reserving their maximum size" $ do
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         withS3 (listingReply emptyList) $ \env ->
             readObject charge env defaultLimits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
         total <- readIORef paid
@@ -114,7 +116,7 @@ spec = describe "conditional mirror metadata storage" $ do
 
     it "keeps a conditional 304 charge independent of the metadata limit" $ do
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         withS3 (reply status304 [] "") $ \env ->
             readObject charge env defaultLimits "records" "key" (Just "\"one\"") `shouldReturn` Right (ObjectUnchanged "\"one\"")
         readIORef paid `shouldReturn` stateExchangeCharge
@@ -122,7 +124,7 @@ spec = describe "conditional mirror metadata storage" $ do
     it "charges retained companion bytes proportionally before returning them" $ do
         digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         withS3 (reply status200 [(hETag, "\"one\"")] "metadata") $ \env -> do
             let store = mirrorStateForEnv defaultLimits "records" "state" (stateTarget "https://private.test") env
             msReadCompanion store charge (CompanionRef digest 8) `shouldReturn` Right "metadata"

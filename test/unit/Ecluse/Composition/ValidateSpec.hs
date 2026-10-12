@@ -14,6 +14,7 @@ import Ecluse.Composition.BootError (
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MinProgressBytesNotPositive,
+        MirrorStateRequired,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
         MissingAdapter,
@@ -24,7 +25,8 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
-        StoreTagConflict
+        StoreTagConflict,
+        UploadConfigurationRequired
     ),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
@@ -36,28 +38,31 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     publicGateEnv,
+    pypiMirrorEnv,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
     withoutPrivateUpstreamUrl,
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter), registryRoleOf)
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
     vetBoot,
+    vetMirrorCapabilities,
  )
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
-    AppConfig (cfgMounts),
-    Config,
+    AppConfig (cfgMirrorState, cfgMounts),
+    Config (configApp),
     FirstParty (FirstPartyNpmScopes),
+    MirrorEndpoint (meUploadUrl, meUsername),
     MountConfig (mntMirrorTarget),
     StoreTag (TagRegistry),
     mountPolicy,
  )
-import Ecluse.Core.Credential (unSecret)
+import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
@@ -68,12 +73,39 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
 spec = do
+    mirrorCapabilitiesSpec
     ruleBlocksSpec
     clearedSpec
     refusalSpec
     advisoryStoreSpec
     firstPartyAuthoritySpec
     privatePublicationSpec
+
+mirrorCapabilitiesSpec :: Spec
+mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
+    it "requires durable state on a producer without requiring a writer endpoint" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = withoutWriteSettings (configApp config)
+        capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
+        capabilityResult (BootMirrorPipeline ServeOnly) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired PyPI]
+    it "requires native write settings in embedded and standalone workers" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        for_ [ServeAndMirror, MirrorOnly] $ \role ->
+            capabilityResult (BootMirrorPipeline role) app
+                `shouldBe` Left
+                    [ MirrorStateRequired PyPI
+                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.uploadUrl"
+                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.username"
+                    ]
+    it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role -> capabilityResult role app `shouldBe` Right ()
+  where
+    withoutWriteSettings app = app{cfgMounts = Map.adjust stripWriter PyPI (cfgMounts app)}
+    stripWriter mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Nothing, meUsername = Nothing}) (mntMirrorTarget mount)}
+    capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
 
 ruleBlocksSpec :: Spec
 ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
@@ -230,7 +262,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
                 vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
-                fmap unSecret (vpubStaticToken publication) `shouldBe` Just "publish-write-token"
+                fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
         plan <- expectVetted MirrorWriter staticEnvVars

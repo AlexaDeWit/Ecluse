@@ -82,13 +82,18 @@ trigger, content, and credential from the mirror write.
   declared name that disagrees is a `403` before any relay, under the same `PackageName` equality
   the route uses. An absent name is no claim. The guard reads names only and never decodes the
   base64 `_attachments`.
+PyPI publication uses the same guard with native multipart name declarations. Pathless uploads
+require one consistent canonical project identity. Framing and name checks run after edge
+authentication within the mount's request bound. The relay preserves the incoming body and exact
+Content-Type, including its boundary. It does not rebuild the client's distribution.
+
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
   the private upstream, so the operator aggregates the publication target into that read path. A
   publication target on the private upstream's own registry also serves reads, but Dredger refuses
   that setup, because its deletions would reach first-party packages that exist only there.
-- **Opt-in.** The path exists only when `mounts.npm.publicationTarget` is declared. Otherwise
-  a `PUT /{pkg}` is `405 Method Not Allowed`.
+- **Opt-in.** A mount needs `publicationTarget` before it relays a client upload. Otherwise
+  npm PUT and PyPI multipart POST answer `405 Method Not Allowed`.
 
 ```mermaid
 sequenceDiagram
@@ -349,7 +354,7 @@ Adapters must establish these contracts before their metadata reaches assembly:
 - Use an equivalent key for other shapes. npm uses its version-map key. A singleton key is valid only for a source with one artifact entry.
 - Bind the typed and compact views to the same source digest. Incremental hashing covers the complete decompressed source, including omitted fields.
 - Pair a selected npm version with its retained publication fields from the same response. Those views stay paired through caching and mirroring. Mirror publication refuses a missing source representation instead of recreating one from the policy model.
-- PyPI retains only typed selected files because it has no mirror write capability. Both read modes consume the complete successful source inside the HTTP response lifetime.
+- Ordinary PyPI selected reads retain typed files. Worker-only selected reads also retain their exact supported source entries and project envelope. Both modes consume the complete response inside its HTTP lifetime.
 - Preserve keys through admission and use the shared selector before rendering. Selective reads must retain the full decoder's entry keys.
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.
@@ -472,7 +477,7 @@ supplies.
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
 imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
 the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
-one backend per store, never a cell per pair. npm and PyPI ship in this build, PyPI for reads only. Their stores
+one backend per store, never a cell per pair. npm and PyPI ship read and native publication capabilities in this build. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
 
 ### Incremental npm extraction

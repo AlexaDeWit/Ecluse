@@ -38,7 +38,7 @@ import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
+import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageDetails (pkgVersion), PackageInfo (..), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
@@ -52,9 +52,10 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
+import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
 import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
 import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
@@ -290,9 +291,10 @@ workerScenario :: Scenario
 workerScenario =
     ( scenario
         "worker-mirroring"
-        "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop in the harness process. The presence probe reports absent, so every job exercises the complete pipeline."
+        "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop in the harness process. The initial presence probe reports absent and the final probe confirms the write, so every job exercises the complete pipeline."
         $ \knobs k -> do
             counter <- newIORef (0 :: Int)
+            publish <- succeedingPublishClient counter
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
@@ -310,7 +312,7 @@ workerScenario =
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
                             , wrInjectTraceContext = id
-                            , wrPolicies = workerSourceAt artUrl (admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes))
+                            , wrPolicies = workerSourceAt artUrl (admitAllPolicies publish (jobHashes bytes))
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
                     job = mirrorJob
@@ -356,16 +358,21 @@ mirrorJob =
         , jobTraceContext = Nothing
         }
 
-succeedingPublishClient :: IORef Int -> MirrorPublish
-succeedingPublishClient counter =
-    MirrorPublish
-        { mpPrepareVersion = \name version doc -> do
-            (inventory, _) <- prepareNpmSource name version doc
-            pure $ PreparedMirrorVersion inventory $ \_ _ -> pure . Right $ PreparedMirrorUpload $ \_ -> do
-                atomicModifyIORef' counter (\n -> (n + 1, ()))
-                pure (Right ())
-        , mpProbeInventory = const (pure (Left MetadataAbsent))
-        }
+succeedingPublishClient :: IORef Int -> IO MirrorPublish
+succeedingPublishClient counter = do
+    committed <- newIORef Nothing
+    pure
+        MirrorPublish
+            { mpPrepareVersion = \name version doc -> do
+                (inventory, _) <- prepareNpmSource name version doc
+                pure $ PreparedMirrorVersion inventory $ \_ _ _ -> pure . Right $ PreparedMirrorUpload $ \_ -> do
+                    atomicModifyIORef' counter (\n -> (n + 1, ()))
+                    let details = inventoryDetails inventory
+                    writeIORef committed (Just (PackageInfo name (Map.singleton (renderVersion (pkgVersion details)) details) mempty []))
+                    pure (Right ())
+            , mpNativeComplete = \_ _ _ -> False
+            , mpProbeInventory = \_ _ -> maybe (Left MetadataAbsent) Right <$> atomicModifyIORef' committed (Nothing,)
+            }
 
 jobHashes :: LByteString -> NonEmpty Hash
 jobHashes bytes = unsafeHash SRI (sriSha512OfLazy bytes) :| [unsafeHash SHA1 (hexSha1OfLazy bytes)]

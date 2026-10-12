@@ -106,6 +106,8 @@ spec = do
             , tdPublishConfigured = False
             , tdPublishDesired = 0
             , tdRequestFinal = 26214400
+            , tdLargestRequest = 26214400
+            , tdDefaultRequestUsed = True
             , tdRequestComputed = 26214400
             , tdDepthDesired = 0
             , tdMemoryBacked = False
@@ -116,4 +118,4 @@ spec = do
 
     allPins :: OverridePins
     allPins =
-        OverridePins{opCache = Just 1, opAdmission = Just 2, opResponse = Just 3, opRequest = Just 4, opDepth = Just 5, opArtifact = Just 6}
+        OverridePins{opCache = Just 1, opAdmission = Just 2, opResponse = Just 3, opRequest = Just 4, opMountRequest = Nothing, opDepth = Just 5, opArtifact = Just 6}

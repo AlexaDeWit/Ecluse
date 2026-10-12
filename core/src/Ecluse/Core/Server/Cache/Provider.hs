@@ -6,6 +6,7 @@ module Ecluse.Core.Server.Cache.Provider (
     CacheProvider,
     cacheProvider,
     localCacheProvider,
+    localCacheProviderWithPool,
     providerFull,
     providerVersion,
     providerAssembled,
@@ -15,7 +16,7 @@ import Data.ByteString qualified as BS
 
 import Ecluse.Core.Registry.Metadata (VersionRead)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionBackend, RetentionOperations, retentionBackend, supportsFullRetention)
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
+import Ecluse.Core.Server.Cache.Backend.Local (LocalPool, newLocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
@@ -58,6 +59,11 @@ cacheProvider storage full version assembled =
 localCacheProvider :: CacheConfig -> IO CacheProvider
 localCacheProvider config = do
     pool <- newLocalPool (cacheMaxEntries config) (cacheMaxBytes config)
+    localCacheProviderWithPool pool config
+
+-- | Share the existing retention bounds with another source-only metadata store.
+localCacheProviderWithPool :: LocalPool -> CacheConfig -> IO CacheProvider
+localCacheProviderWithPool pool config = do
     version <- newPooledRetention pool (cacheTtl config) (cacheVersionBudget config) weighVersion
     assembled <- newPooledRetention pool (cacheTtl config) (cacheAssembledBudget config) weighAssembled
     pure (cacheProvider LocalStorage Nothing (Just version) (Just assembled))

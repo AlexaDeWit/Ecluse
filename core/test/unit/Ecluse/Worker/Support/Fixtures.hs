@@ -283,10 +283,10 @@ unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
         { mpNativeComplete = \_ _ _ -> False
-        , mpProbeInventory = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
+        , mpProbeInventory = \_ -> const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
         , mpPrepareVersion = \name version doc -> do
             (inventory, _) <- prepareNpmSource name version doc
-            pure (PreparedMirrorVersion inventory (\_ _ -> pure (Right (PreparedMirrorUpload (\_ -> throwIO (TestContractEscape "unwiredPublish: publish consulted"))))))
+            pure (PreparedMirrorVersion inventory (\_ _ _ -> pure (Right (PreparedMirrorUpload (\_ -> throwIO (TestContractEscape "unwiredPublish: publish consulted"))))))
         }
 
 {- | The default admitting policy. The version resolves present and an always-admit rule

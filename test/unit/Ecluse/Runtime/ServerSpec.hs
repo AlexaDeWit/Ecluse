@@ -108,10 +108,7 @@ mountAt :: NonEmpty Text -> MountRouter -> MountBinding
 mountAt prefix router =
     publishMountAt prefix router Nothing
 
-{- | A test mount binding like 'mountAt' but with the given (optional) first-party
-publish dependencies. 'Nothing' leaves a @PUT \/{pkg}@ the @405@ opt-out. 'Just'
-turns on the publish path: the scope guard and the relay.
--}
+-- | Optional publication dependencies select the guard and relay or the disabled response.
 publishMountAt :: NonEmpty Text -> MountRouter -> Maybe PublishDeps -> MountBinding
 publishMountAt prefix router publishDeps =
     MountBinding
@@ -128,31 +125,22 @@ closed port) and no publish target, resolved as the composition root resolves it
 npmApp :: IO Application
 npmApp = application (mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, for the
-prefix-strip dispatch and npm routing-table assertions.
--}
+-- | An unreachable target distinguishes a refused publish from one that reached the relay.
 npmMountApp :: IO Application
 npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) npmRouter]) <$> newTestEnv
 
-{- | The 'application' under a single @\/npm@ mount with the publish path __enabled__: one
-allowed scope, @\@acme@, and an __unconnectable__ publication target. An in-scope publish
-then reaches the relay and fails with @502@, while an out-of-scope publish stops at the
-guard with @403@, which proves the guard fires before any upstream write.
--}
+-- | An unreachable publish target distinguishes relay attempts from local guard refusals.
 publishMountApp :: IO Application
 publishMountApp = publishAppWith basePublishDeps
 
-{- | The base publish dependencies these tests build on: an @\@acme@ scope allow-list and
-an unconnectable publication target, so an in-scope publish reaches the relay and fails
-with @502@. It takes the body-byte budget because 'publishAppWith' allocates one
-admission per application.
--}
+-- | Allow the fixture scope while keeping the target unreachable.
 basePublishDeps :: ByteAdmission -> PublishDeps
 basePublishDeps bodyBudget =
     PublishDeps
         { pubTargetUrl = loopbackRegistryUrl "http://127.0.0.1:1" -- an unconnectable port
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
-        , pubStaticToken = Nothing
+        , pubStaticCredential = Nothing
+        , pubMaxRequestBytes = maxPublishRequestBytes defaultLimits
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
         , pubBodyBudget = bodyBudget
@@ -371,9 +359,7 @@ spec = do
                 -- the relay rather than refusing it at the scope check.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
 
-            -- The body-name agreement leg of the anti-shadowing guard: a relay would otherwise
-            -- write a name the scope guard never authorised. The 403 rather than the unconnectable
-            -- target's 502 proves the relay never ran.
+            -- The unreachable target would answer 502, so 403 proves the guard stopped the relay.
             it "refuses an in-scope publish whose body _id / name disagree with the URL with 403, before any relay" $
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@victim/target\",\"name\":\"@victim/target\",\"versions\":{}}" `shouldRespondWith` 403
 
@@ -481,10 +467,7 @@ newtype RelayContractEscape = RelayContractEscape Text
 
 instance Exception RelayContractEscape
 
-{- | Drive 'perimeterGuard' over a recording respond and observation channel. Returns
-the statuses answered (in order), the classified causes observed, and the guard's own
-outcome. A rethrow arrives as 'Left'.
--}
+-- | Record statuses and classified causes alongside the guard result, including rethrows.
 driveGuard :: ((Response -> IO ResponseReceived) -> IO ResponseReceived) -> IO ([Int], [RequestFaultCause], Either SomeException ())
 driveGuard handler = do
     responses <- newIORef []
@@ -529,11 +512,7 @@ data AbortLaunch = AbortLaunch
 
 instance Exception AbortLaunch
 
-{- | Pin the 'runWarp' drain wiring: it must hand the application builder the live
-'DrainSignal', not the inert 'neverDraining' a bare 'mkServerConfig' carries. Every other
-draining spec sets 'scDrain' by hand, so this is the only one exercising 'runWarp''s
-allocate-then-build path.
--}
+-- | Exercise the live drain signal allocated by runWarp instead of an injected fixture signal.
 runWarpDrainWiringSpec :: Spec
 runWarpDrainWiringSpec = describe "runWarp -- graceful-drain wiring (issue #841)" $
     it "hands the application builder the live drain, not the inert neverDraining" $ do

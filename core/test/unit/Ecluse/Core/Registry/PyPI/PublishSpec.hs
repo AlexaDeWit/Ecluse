@@ -49,7 +49,7 @@ spec = do
                 version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
                 let file = NE.head (inventoryFiles (pmvInventory version))
                 verified <- expectRight (verifyMirrorBytes file bytes)
-                prepared <- pmvPrepareUpload version file verified >>= expectRight
+                prepared <- pmvPrepareUpload version (const (pure ())) file verified >>= expectRight
                 publishPrepared prepared (PublishPlan (pypiVersion "1")) `shouldReturn` Right ()
                 captured <- lastCaptured stub
                 capMethod captured `shouldBe` "POST"

@@ -23,6 +23,7 @@ import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Lens.Micro ((^?))
@@ -31,7 +32,8 @@ import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgEcosystem, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package (Artifact (..), HashAlg (SHA1, SRI), PackageDetails (..), PackageInfo (..), PackageName, Scope, hashAlg, hashValue, pkgEcosystem, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
@@ -46,10 +48,11 @@ import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw))
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
-import Ecluse.Core.Registry.Npm.Metadata (npmRead)
+import Ecluse.Core.Registry.Npm.Metadata (npmChargeFactors, npmRead)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
@@ -83,13 +86,28 @@ npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
         { pcPrepareSource = prepareNpmSource
-        , pcPrepareUpload = \_ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
+        , pcPrepareUpload = \_ _ inventory metadata file bytes -> pure (prepareNpmUpload inventory metadata file bytes)
+        , pcNativeComplete = nativeNpmComplete
         , pcTargetRead = npmRead
+        , pcTargetReadPermille = cfFullReadPermille npmChargeFactors
         , pcProbeRequest = \targetUrl credential -> metadataRequest targetUrl credential Abbreviated
         , pcVersionListParser = Just Project.versionListParser
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = \status _ -> classifyPublish status
         }
+
+nativeNpmComplete :: PackageName -> Version -> PackageInfo -> Bool
+nativeNpmComplete name version info = fromMaybe False $ do
+    guard (pkgEcosystem name == Npm && infoName info == name)
+    details <- Map.lookup (renderVersion version) (infoVersions info)
+    guard (pkgName details == name && renderVersion (pkgVersion details) == renderVersion version)
+    case pkgArtifacts details of
+        artifact :| [] -> do
+            (fileVersion, _) <- Project.tarballCoordinate name (artFilename artifact)
+            guard (renderVersion fileVersion == renderVersion version && maybe True (>= 0) (artSize artifact))
+            hashes <- nonEmpty (artHashes artifact)
+            pure (all (isJust . canonicalHashValue) hashes && isJust (canonicalHashValue (authoritativeDigest hashes)))
+        _ -> Nothing
 
 npmPublishRequestFor :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData NpmUploadMetadata -> Either PublishFault Request
 npmPublishRequestFor targetUrl credential plan uploadData =

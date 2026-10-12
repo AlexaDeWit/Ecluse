@@ -35,7 +35,7 @@ import System.FilePath ((</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, stateExchangeCharge, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge (Provenance (TrustedSource), mergePackuments)
@@ -54,6 +54,7 @@ import Ecluse.Core.Server.Admission.Meter (MemoryMeter, charge, takeLargestCharg
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfOutputPermille))
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
 import Ecluse.Core.Server.Cache.Types (StoreBudget (..))
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Server.MirrorView
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..))
 import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisBytes)
@@ -152,7 +153,7 @@ readRetainedCharge fixture = expectRight (decodeProjectRecord readLimits (fixtur
 newReadSession :: ReadFixture -> IO ReadSession
 newReadSession fixture = newSession (fixtureTarget fixture) limits (fixturePrivate fixture) $ \pay newer -> do
     let bytes = if newer then fixtureNew fixture else fixtureOld fixture
-    pay (stateWireChunkCharge (BS.length bytes))
+    pay (bufferedChunkCharge (BS.length bytes))
     pure bytes
   where
     limits = readLimits{maxMetadataBytes = max (BS.length (fixtureOld fixture)) (BS.length (fixtureNew fixture))}
@@ -165,7 +166,7 @@ newReadSessionFromFiles directory = do
         let path = directory </> if newer then "new.json" else "old.json"
         size <- getFileSize path
         when (size > toInteger (maxMetadataBytes readLimits)) (fail "state fixture exceeds the metadata limit")
-        pay (stateWireChunkCharge (fromInteger size))
+        pay (bufferedChunkCharge (fromInteger size))
         BS.readFile path
 
 newSession :: StateTarget -> Limits -> ByteString -> (StateCharge -> Bool -> IO ByteString) -> IO ReadSession

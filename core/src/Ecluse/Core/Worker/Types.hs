@@ -71,10 +71,8 @@ are the serve path's own, so ingest and serve reach one decision over one policy
 data WorkerPolicy = WorkerPolicy
     { wpFirstParty :: PackageName -> Bool
     -- ^ Whether a name belongs to a namespace this deployment owns.
-    , wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
-    {- ^ Resolve one version's metadata through the guarded public origin. Total by type:
-    every failure, transport included, classifies as a 'VersionMetadataUnavailable' value.
-    -}
+    , wpResolveVersion :: StateCharge -> PackageName -> Version -> IO VersionEvaluation
+    -- ^ Resolve through the guarded public origin, charging retained source fields before parsing.
     , wpRules :: [PreparedRule]
     -- ^ The prepared rule set re-evaluated against the resolved version.
     , wpMinIntegrity :: MinIntegrity
@@ -110,11 +108,15 @@ data WorkerMirrorState = WorkerMirrorState
     -- ^ Keep all admission regions alive until final proof finishes.
     }
 
--- | Independent regions keep transient state work separate from live records and companion input.
+-- | Independent regions keep transient work separate from overlapping records, source bytes and archive data.
 data WorkerStateBudget = WorkerStateBudget
     { wsbState :: StateCharge
     , wsbRecords :: StateCharge
     , wsbCompanions :: StateCharge
+    , wsbArtifacts :: StateCharge
+    , wsbArchive :: StateCharge
+    , wsbSource :: StateCharge
+    , wsbTargets :: StateCharge
     }
 
 {- | The bundles keyed by a job's package ecosystem. A job whose ecosystem is absent is

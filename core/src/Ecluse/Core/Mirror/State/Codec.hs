@@ -9,8 +9,6 @@ module Ecluse.Core.Mirror.State.Codec (
     projectRecordWeight,
     chargedDecodeProjectRecord,
     chargedEncodeProjectRecord,
-    stateWireChunkCharge,
-    stateDecodeCharge,
     stateExchangeCharge,
     saturatingStateCharge,
     mirrorInventoryWeight,
@@ -39,6 +37,7 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Text (textStorageBytes)
 import Ecluse.Core.Version (mkVersion, renderVersion)
 
@@ -138,7 +137,7 @@ fragmentWeight details source = weighVersion (VersionRead (Just (VersionDoc deta
 -- | Materialise source fields and domain weights under the reservation. Callers keep it until they release the returned record.
 chargedDecodeProjectRecord :: StateCharge -> Limits -> StateTarget -> PackageName -> ByteString -> IO (Either MirrorStateFault ProjectMirrorRecord)
 chargedDecodeProjectRecord charge limits target name bytes = do
-    let treeCharge = toInteger stateExchangeCharge + toInteger (stateWireChunkCharge (BS.length bytes)) + toInteger (stateDecodeCharge bytes)
+    let treeCharge = toInteger stateExchangeCharge + toInteger (bufferedChunkCharge (BS.length bytes)) + toInteger (decodedDocumentCharge bytes)
     charge (saturatingStateCharge treeCharge)
     evaluate (decodeProjectValue limits bytes) >>= \case
         Left fault -> pure (Left fault)
@@ -191,21 +190,6 @@ forceRecordSources record = foldl' forceVersion () (Map.elems (recordVersions re
     forceKey (ArrayEntry position) = force position `seq` ()
     forceKey (ObjectEntry name) = force name `seq` ()
     forceKey SingletonEntry = ()
-
--- | Allow four overlapping byte copies and builder/list cells before retaining each nonempty chunk.
-stateWireChunkCharge :: Int -> Int
-stateWireChunkCharge bytes
-    | bytes <= 0 = 0
-    | otherwise = saturatingStateCharge (4 * toInteger bytes + 128)
-
--- | Prepay scalar copies and JSON/XML tree bookkeeping from the actual body, before any tree decoding.
-stateDecodeCharge :: ByteString -> Int
-stateDecodeCharge bytes
-    | BS.null bytes = 0
-    | otherwise = saturatingStateCharge (4096 + 8 * toInteger (BS.length bytes) + 512 * markers)
-  where
-    -- Each marker covers tree nodes, pending members and indexes. Markers inside strings deliberately overcount.
-    markers = BS.foldl' (\count byte -> if byte `elem` [34, 44, 58, 60, 62, 91, 93, 123, 125] then count + 1 else count) 0 bytes
 
 -- | Fixed per-exchange metadata bookkeeping, independent of the configured maximum object size.
 stateExchangeCharge :: Int

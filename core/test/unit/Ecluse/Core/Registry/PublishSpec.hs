@@ -59,10 +59,10 @@ spec = do
             -- presents a current token. The transport mints it per call and never caches it.
             withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
-                _ <- mpProbeInventory publish isOdd
+                _ <- mpProbeInventory publish (const (pure ())) isOdd
                 captured <- lastCaptured stub
                 headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
-                _ <- mpProbeInventory publish isOdd
+                _ <- mpProbeInventory publish (const (pure ())) isOdd
                 minted <- readIORef mints
                 minted `shouldBe` 2
 
@@ -77,7 +77,7 @@ spec = do
 
         it "reports an unformable probe URL as a FetchFault value, never thrown" $ do
             publish <- publishAt ""
-            outcome <- mpProbeInventory publish isOdd
+            outcome <- mpProbeInventory publish (const (pure ())) isOdd
             outcome `shouldSatisfy` isProbeUrlFault
 
         it "reports an unformable publish URL as a PublishFault value, never thrown" $ do
@@ -87,7 +87,7 @@ spec = do
 
         it "reports a probe transport failure as a FetchTransport value, never thrown" $ do
             publish <- publishAt "http://127.0.0.1:1"
-            outcome <- mpProbeInventory publish isOdd
+            outcome <- mpProbeInventory publish (const (pure ())) isOdd
             outcome `shouldSatisfy` isProbeTransportFault
 
         it "refuses an over-cap probe body fail-closed as a FetchBoundExceeded value" $
@@ -103,7 +103,7 @@ spec = do
                             , ptTracing = passthroughTracingPort
                             }
                     publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- mpProbeInventory publish isOdd
+                outcome <- mpProbeInventory publish (const (pure ())) isOdd
                 outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16))))
 
         it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
@@ -147,7 +147,7 @@ spec = do
             -- redirectCount of 10, so only the transport's re-seal stops the hop.
             withRoutedStub (redirectFrom "/probe") $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpProbeInventory publish isOdd
+                _ <- mpProbeInventory publish (const (pure ())) isOdd
                 servedPaths stub `shouldReturn` ["/probe"]
 
         it "refuses to chase a redirect on the write leg, where the bearer rides" $
@@ -159,7 +159,7 @@ spec = do
         it "identifies the proxy on the wire, whatever headers the codec set" $
             withStub status200 "{}" $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpProbeInventory publish isOdd
+                _ <- mpProbeInventory publish (const (pure ())) isOdd
                 captured <- lastCaptured stub
                 headerValue "User-Agent" captured `shouldBe` Just userAgent
 
@@ -170,9 +170,11 @@ unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcVersionListParser = Just (const (pure VersionListObject))
+        , pcNativeComplete = pcNativeComplete npmPublishCodec
+        , pcTargetReadPermille = pcTargetReadPermille npmPublishCodec
         , pcTargetRead = npmRead{erRequest = \targetUrl _ _ -> unsealed (targetUrl <> "/probe")}
         , pcPrepareSource = prepareNpmSource
-        , pcPrepareUpload = \_ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
+        , pcPrepareUpload = \_ _ inventory source file bytes -> pure (prepareNpmUpload inventory source file bytes)
         , pcPublishRequest = \targetUrl _token _plan _upload ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = \_ _ -> Right ()

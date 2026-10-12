@@ -69,7 +69,7 @@ import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
-import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
+import Ecluse.Core.Worker.Fetch (fetchArtifactBytesCharged)
 import Ecluse.Core.Worker.Managed
 import Ecluse.Core.Worker.Types
 
@@ -151,7 +151,7 @@ reevaluateThenMirror job = do
 
 withMirrorBudget :: WorkerPolicy -> (WorkerStateBudget -> WorkerM JobOutcome) -> WorkerM JobOutcome
 withMirrorBudget policy action = case wpMirrorState policy of
-    Nothing -> action (WorkerStateBudget ignore ignore ignore)
+    Nothing -> action (WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore)
       where
         ignore = const (pure ())
     Just binding -> withRunInIO $ \run ->
@@ -173,7 +173,7 @@ firstPartyReason job =
 mirrorUnlessPresent :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
 mirrorUnlessPresent charge policy job = do
     result <- runExceptT $ do
-        target <- ExceptT (probeInventory policy job)
+        target <- ExceptT (probeInventory charge policy job)
         if isNothing (wpMirrorState policy) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
             then pure ()
             else do
@@ -190,10 +190,10 @@ mirrorUnlessPresent charge policy job = do
 -- A pass rereads native inventory before state, so concurrent additions cannot hide behind an old proof.
 completePass :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
 completePass charge policy job attempts target previous = do
-    admitted <- ExceptT (reevaluatePolicy policy job)
+    admitted <- ExceptT (reevaluatePolicy charge policy job)
     record <- stateAction (persistInventory charge (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
     copied <- copyRecorded charge policy job target (raUpstreamLatest admitted) record
-    finalTarget <- ExceptT (probeInventory policy job)
+    finalTarget <- ExceptT (probeInventory charge policy job)
     latest <- readRecord charge policy job (Just copied)
     current <- maybe (throwError (Retried AfterPublish "mirror record disappeared before completion")) pure latest
     version <- requiredVersion job current
@@ -201,9 +201,12 @@ completePass charge policy job attempts target previous = do
     case checkMirrorCompletion version (targetFiles job finalTarget) of
         MirrorComplete -> verifyRecordedCompanions charge policy version
         MirrorIncomplete faults
+            | any conflicting faults -> throwError (Dropped ("mirror target identity conflicts: " <> show faults))
             | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass charge policy job (attempts - 1) finalTarget (Just current)
             | otherwise -> throwError (Retried AfterPublish ("mirror remains incomplete: " <> show faults))
   where
+    conflicting (ConflictingMirrorFile _) = True
+    conflicting _ = False
     newlyRequired known (MissingMirrorFile name) = Map.notMember name known
     newlyRequired known (PendingMirrorCompanion name) = Map.notMember name known
     newlyRequired _ _ = False
@@ -242,9 +245,9 @@ targetFiles job target = maybe [] (toList . pkgArtifacts) (Map.lookup (renderVer
 
 {- An unreadable answer is not an empty store, so it reports a fault rather than let the write
 declare a tag chosen without the inventory. A 404 is a store holding this package not at all. -}
-probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome PackageInfo)
-probeInventory policy job = do
-    probed <- liftIO (mpProbeInventory (wpPublish policy) (jobPackage job))
+probeInventory :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome PackageInfo)
+probeInventory charge policy job = do
+    probed <- liftIO (mpProbeInventory (wpPublish policy) (wsbTargets charge) (jobPackage job))
     pure $ case probed of
         Right inventory -> Right inventory
         Left MetadataAbsent -> Right (PackageInfo (jobPackage job) mempty mempty [])
@@ -284,9 +287,9 @@ data Readmitted = Readmitted
     , raUpstreamLatest :: Maybe Version
     }
 
-reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
-reevaluatePolicy policy job =
-    liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
+reevaluatePolicy :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
+reevaluatePolicy charge policy job =
+    liftIO (wpResolveVersion policy (wsbSource charge) (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
 
 admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
 admitEvaluation policy job evaluation = case evaluation of
@@ -428,16 +431,33 @@ copyRecorded charge policy job target upstreamLatest record = do
                 admitted <- ExceptT (admitEvaluation policy job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) upstreamLatest))
                 foldM (copyFile (raPrepared admitted)) current (toList (raLocations admitted))
     needsWork version artifact =
-        Map.lookup (artFilename artifact) (versionCompanions version) == Just CompanionPending
-            || not (any ((== artFilename artifact) . artFilename) currentFiles)
+        let name = artFilename artifact
+            matches = filter ((== name) . artFilename) currentFiles
+            verified = Map.lookup name (versionVerifiedIdentities version)
+         in Map.lookup name (versionCompanions version) == Just CompanionPending
+                || null matches
+                || maybe True (\file -> not (all (expectedTargetMatchesWith file verified) matches)) (Map.lookup name (versionFiles version))
     copyFile prepared current (file, location) = do
         version <- requiredVersion job current
         let name = artFilename (expectedArtifact file)
             matches = filter ((== name) . artFilename) currentFiles
             verified = Map.lookup name (versionVerifiedIdentities version)
-        unless (all (expectedTargetMatchesWith file verified) matches) $
-            throwError (Retried BeforePublish ("mirror file lacks compatible current identity: " <> name))
-        uploaded <- if null matches then mirrorArtifact charge policy job plan prepared file location current else pure current
+        when (any (targetIdentityConflict file verified) matches) $
+            throwError (Dropped ("mirror target identity conflicts: " <> name))
+        uploaded <-
+            if null matches
+                then mirrorArtifact charge policy job plan prepared file location current
+                else
+                    if all (expectedTargetMatchesWith file verified) matches
+                        then pure current
+                        else do
+                            (bytes, retained) <- fetchVerified charge policy job file location current
+                            let proof = Just (verifiedTargetHash bytes)
+                            when (any (targetIdentityConflict file proof) matches) $
+                                throwError (Dropped ("mirror target identity conflicts: " <> name))
+                            unless (all (expectedTargetMatchesWith file proof) matches) $
+                                throwError (Retried BeforePublish ("mirror file lacks compatible current identity: " <> name))
+                            pure retained
         retained <- retainPending charge policy job file uploaded
         lift recordWorkerProgress
         pure retained
@@ -451,22 +471,26 @@ retainPending charge policy job file record = do
             Just binding -> do
                 location <- either throwError pure (sourceLocation policy (expectedArtifact file){artUrl = sidecarUrl (artUrl (expectedArtifact file))})
                 let limits = (wmsLimits binding){maxMirrorArtifactBytes = maxMetadataBytes (wmsLimits binding)}
-                liftIO (wsbCompanions charge (fromInteger (min (toInteger (maxBound :: Int)) (2 * toInteger (maxMetadataBytes limits)))))
-                bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytes limits (artifactByUrl (wpArtifact policy)) location)
+                bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytesCharged (wsbCompanions charge) limits (artifactByUrl (wpArtifact policy)) location)
                 verified <- either (throwError . stateOutcome) pure (verifyCompanionBytes (wmsLimits binding) file bytes)
                 stateAction (retainCompanion charge binding (jobVersion job) verified record)
         _ -> pure record
 
 mirrorArtifact :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirrorVersion -> ExpectedMirrorFile -> RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
 mirrorArtifact charge policy job plan prepared file location record = do
-    bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) location)
-    verified <- publishAction job (pure (verifyMirrorBytes file bytes))
-    retained <- stateAction (persistVerified charge (wpMirrorState policy) (jobVersion job) verified record)
-    ready <- publishAction job (liftIO (pmvPrepareUpload prepared file verified))
+    (verified, retained) <- fetchVerified charge policy job file location record
+    ready <- publishAction job (liftIO (pmvPrepareUpload prepared (wsbArchive charge) file verified))
     outcome <- lift (publishVerified job plan ready)
     case outcome of
         Succeeded -> pure retained
         failure -> throwError failure
+
+fetchVerified :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> ExpectedMirrorFile -> RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM (VerifiedArtifactBytes, ProjectMirrorRecord)
+fetchVerified charge policy job file location record = do
+    bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytesCharged (wsbArtifacts charge) (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) location)
+    verified <- publishAction job (pure (verifyMirrorBytes file bytes))
+    retained <- stateAction (persistVerified charge (wpMirrorState policy) (jobVersion job) verified record)
+    pure (verified, retained)
 
 publishAction :: MirrorJob -> WorkerM (Either PublishFault a) -> ExceptT JobOutcome WorkerM a
 publishAction job action =

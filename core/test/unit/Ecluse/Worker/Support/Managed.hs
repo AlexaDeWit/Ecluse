@@ -60,7 +60,7 @@ data ManagedFixture = ManagedFixture
 
 -- | Unit fixtures keep production region boundaries without claiming process memory admission.
 unmeteredStateBudget :: WorkerStateBudget
-unmeteredStateBudget = WorkerStateBudget ignore ignore ignore
+unmeteredStateBudget = WorkerStateBudget ignore ignore ignore ignore ignore ignore ignore
   where
     ignore = const (pure ())
 
@@ -137,7 +137,7 @@ fixturePublish :: IORef (Maybe ProjectMirrorRecord) -> IORef [Artifact] -> IORef
 fixturePublish record target uploads probes reject loseReply transform onProbe =
     MirrorPublish
         { mpNativeComplete = \_ _ _ -> False
-        , mpProbeInventory = \name -> do
+        , mpProbeInventory = \_ name -> do
             number <- atomicModifyIORef' probes (\n -> (n + 1, n + 1))
             readIORef onProbe >>= ($ number)
             files <- readIORef target
@@ -146,7 +146,7 @@ fixturePublish record target uploads probes reject loseReply transform onProbe =
         , mpPrepareVersion = \name version doc -> do
             raw <- maybeToRight (PublishSourceUnavailable "missing fixture source") (vdRaw doc >>= snd pypiSimpleCached)
             inventory <- checkedMirrorInventory name version doc (PyPIMirrorRead raw)
-            pure $ PreparedMirrorVersion inventory $ \file _ -> pure . Right . PreparedMirrorUpload $ \_ -> do
+            pure $ PreparedMirrorVersion inventory $ \_ file _ -> pure . Right . PreparedMirrorUpload $ \_ -> do
                 stored <- readIORef record
                 let expected = maybe mempty versionFiles (recordVersion version =<< stored)
                 unless (all (\member -> Map.member (artFilename (expectedArtifact member)) expected) (inventoryFiles inventory)) $

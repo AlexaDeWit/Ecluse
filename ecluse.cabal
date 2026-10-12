@@ -134,6 +134,9 @@ library ecluse-core
     Ecluse.Core.Mirror.State.Codec
     Ecluse.Core.Registry.PyPI.Archive
     Ecluse.Core.Registry.PyPI.Archive.Path
+    Ecluse.Core.Registry.PyPI.Archive.BZip
+    Ecluse.Core.Registry.PyPI.Archive.Inflate
+    Ecluse.Core.Registry.PyPI.Archive.Lzma
     Ecluse.Core.Registry.PyPI.Archive.Tar
     Ecluse.Core.Registry.PyPI.UploadMetadata
     Ecluse.Core.Registry.PyPI.Publish
@@ -290,6 +293,7 @@ library ecluse-core
     Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
+    Ecluse.Core.Server.MirrorView
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics
     Ecluse.Core.Server.Pipeline.Origin
@@ -327,6 +331,7 @@ library ecluse-core
       Ecluse.Core.Worker.Fetch
       Ecluse.Core.Worker.Integrity
       Ecluse.Core.Worker.Job
+      Ecluse.Core.Worker.Managed
       Ecluse.Core.Worker.Lease
       Ecluse.Core.Worker.Liveness
       Ecluse.Core.Worker.Loop
@@ -362,8 +367,9 @@ library ecluse-core
 
   build-depends:
     , tar ^>=0.6.4
-    , bzlib ^>=0.5
-    , lzma ^>=0.0.1
+    , bzlib-conduit ^>=0.3.0.4
+    , digest ^>=0.0.2
+    , ecluse-lzma-managed ^>=0.0.1
     , zlib ^>=0.7
     , wai-extra ^>=3.1
     , aeson                 >=2.2      && <2.4
@@ -458,6 +464,7 @@ library
     Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
+    Ecluse.Composition.MirrorState
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Types
@@ -472,6 +479,7 @@ library
     Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig
     Ecluse.Config.Parser
+    Ecluse.Config.Mirror
     Ecluse.Config.QueueTarget
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
@@ -582,7 +590,6 @@ library ecluse-runtime
   autogen-modules: Paths_ecluse
 
   build-depends:
-    , lens ^>=5.3
     , ecluse:ecluse-core
     , aeson                           >=2.2 && <2.4
     , amazonka                        ^>=2.0
@@ -723,6 +730,7 @@ library ecluse-test-support
   hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Mirror.State
+    Ecluse.Test.Mirror.Read
     Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
@@ -980,6 +988,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.Mirror.StateSpec
     Ecluse.Core.Registry.PyPI.ArchiveSpec
     Ecluse.Core.Registry.PyPI.Archive.PathSpec
+    Ecluse.Core.Registry.PyPI.Archive.BZipSpec
+    Ecluse.Core.Registry.PyPI.Archive.InflateSpec
+    Ecluse.Core.Registry.PyPI.Archive.LzmaSpec
     Ecluse.Core.Registry.PyPI.Archive.TarSpec
     Ecluse.Core.Registry.PyPI.UploadMetadataSpec
     Ecluse.Core.Registry.PyPI.PublishSpec
@@ -1118,6 +1129,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataSpec
+    Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
     Ecluse.Core.Server.Pipeline.DiagnosticsSpec
     Ecluse.Core.Server.Pipeline.InternalSpec
@@ -1147,8 +1159,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
+    Ecluse.Core.Worker.FetchSpec
     Ecluse.Core.Worker.IntegritySpec
     Ecluse.Core.Worker.JobSpec
+    Ecluse.Core.Worker.ManagedSpec
     Ecluse.Core.Worker.LeaseSpec
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
@@ -1169,6 +1183,7 @@ test-suite ecluse-core-unit
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
+    Ecluse.Worker.Support.Managed
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
@@ -1176,7 +1191,7 @@ test-suite ecluse-core-unit
   build-depends:
     , tar ^>=0.6.4
     , bzlib ^>=0.5
-    , lzma ^>=0.0.1
+    , ecluse-lzma-managed ^>=0.0.1
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , ecluse:ecluse-test-contracts
@@ -1264,6 +1279,7 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.PrivateCopy
     Ecluse.BenchLoad.PrivateCopySpec
     Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.ManagedMirror
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
@@ -1325,6 +1341,7 @@ test-suite ecluse-unit
     Ecluse.Config.AmbientSpec
     Ecluse.Config.DocCoverageSpec
     Ecluse.Config.ParserSpec
+    Ecluse.Config.MirrorSpec
     Ecluse.Config.QueueTargetSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
@@ -1508,6 +1525,7 @@ test-suite ecluse-integration
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
     Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
     Ecluse.Core.Server.Pipeline.SharedIntegrationSpec
@@ -1578,13 +1596,21 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
+    Ecluse.Core.Server.MirrorViewResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
 
   build-depends:
     , aeson             >=2.2 && <2.4
+    , bzlib ^>=0.5
+    , conduit ^>=1.3
+    , directory ^>=1.3
+    , ecluse-lzma-managed ^>=0.0.1
+    , temporary ^>=1.3
+    , zlib ^>=0.7
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
@@ -1907,6 +1933,7 @@ benchmark ecluse-bench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
     Ecluse.Core.DigestBench
+    Ecluse.Core.MirrorReadBench
     Ecluse.Core.MergeBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
@@ -1966,6 +1993,7 @@ executable bench-load
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyServe
     Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.ManagedMirror
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe

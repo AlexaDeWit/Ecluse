@@ -48,7 +48,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
         { -- Deny by default, as a mount that declares no namespaces owns none. A case
           -- that drives the privilege overrides this field.
           wpFirstParty = const False
-        , wpResolveVersion = resolve
+        , wpResolveVersion = const resolve
         , wpRules = rules
         , wpMinIntegrity = defaultMinIntegrity
         , wpArtifactHostHonoured = const True
@@ -106,7 +106,7 @@ mirrorPoliciesCapped rules artifactMaxBytes publish currentDigests =
 workerSourceAt :: Text -> WorkerPolicies -> WorkerPolicies
 workerSourceAt location = Map.map relocate
   where
-    relocate policy = policy{wpResolveVersion = \name version -> relocateEvaluation location <$> wpResolveVersion policy name version}
+    relocate policy = policy{wpResolveVersion = \pay name version -> relocateEvaluation location <$> wpResolveVersion policy pay name version}
 
 relocateEvaluation :: Text -> VersionEvaluation -> VersionEvaluation
 relocateEvaluation location (VersionPresent doc latest) =

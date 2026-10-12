@@ -31,7 +31,6 @@ module Ecluse.Core.Mirror.State (
     StateWrite (..),
     MirrorState (..),
     StateCharge,
-    newStateCharge,
     extendProjectRecord,
     retainCompanionReference,
     verifyCompanionBytes,
@@ -47,8 +46,6 @@ module Ecluse.Core.Mirror.State (
     recordVerifiedArtifact,
 ) where
 
-import Control.Concurrent.MVar qualified as MVar
-
 import Ecluse.Core.Mirror.State.Codec
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package (PackageDetails, PackageName)
@@ -63,15 +60,6 @@ fragmentDetails (StoredMirrorFragment details _ _) = details
 -- | Coordinates in this source value are local to this fragment.
 fragmentReadData :: StoredMirrorFragment -> MirrorReadData
 fragmentReadData (StoredMirrorFragment _ source _) = source
-
--- | Adapt incremental ticket payment to one sequential state region. Concurrent or separately retained work needs another region.
-newStateCharge :: (Int -> IO ()) -> IO StateCharge
-newStateCharge pay = do
-    highWater <- MVar.newMVar 0
-    pure $ \requested -> MVar.modifyMVar_ highWater $ \previous -> do
-        let next = max previous requested
-        when (next > previous) (pay (next - previous))
-        pure next
 
 -- | Record additions before any new distribution upload. Collisions reread and union within a fixed budget.
 recordExpectedInventory :: Limits -> StateCharge -> StateTarget -> MirrorState -> MirrorInventory -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))

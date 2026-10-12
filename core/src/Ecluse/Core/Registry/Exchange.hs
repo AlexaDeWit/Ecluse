@@ -26,6 +26,9 @@ module Ecluse.Core.Registry.Exchange (
 
     -- * Metered reads
     chargedRead,
+    chargedReadWith,
+    accumulatingCharge,
+    boundedChargedRead,
 
     -- * Request formation
     formThen,
@@ -71,6 +74,7 @@ import Ecluse.Core.Security (
     floorServeCapMicros,
     floorWindowMicros,
  )
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge)
 import Ecluse.Core.Snapshot (ContentDigest, digestFromContext)
 
 -- | Destructive clients must return uncertain transport failures for reassessment before retry.
@@ -170,7 +174,25 @@ digestingRead consume readChunk = do
 
 -- | Pay for each chunk's length before the consumer sees it.
 chargedRead :: (Int -> IO ()) -> IO ByteString -> IO ByteString
-chargedRead charge readChunk = do
+chargedRead charge = chargedReadWith (charge . BS.length)
+
+-- | Pay for the observed chunk before a parser or buffer retains it.
+chargedReadWith :: (ByteString -> IO ()) -> IO ByteString -> IO ByteString
+chargedReadWith charge readChunk = do
     chunk <- readChunk
-    charge (BS.length chunk)
+    charge chunk
     pure chunk
+
+-- | Convert per-chunk costs to an absolute requirement within one read operation.
+accumulatingCharge :: (Int -> IO ()) -> IO (Int -> IO ())
+accumulatingCharge charge = do
+    held <- newIORef (0 :: Integer)
+    pure $ \bytes -> when (bytes > 0) $ do
+        required <- atomicModifyIORef' held (\previous -> let next = previous + toInteger bytes in (next, next))
+        charge (fromInteger (min (toInteger (maxBound :: Int)) required))
+
+-- | Reserve buffered chunks and their final strict copy before the bounded reader retains them.
+boundedChargedRead :: (Int -> IO ()) -> BodyLimit -> IO ByteString -> IO (Either LimitError (Int, ByteString))
+boundedChargedRead charge limits readChunk = do
+    retain <- accumulatingCharge charge
+    boundedRead limits (chargedRead (retain . bufferedChunkCharge) readChunk)

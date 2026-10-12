@@ -29,11 +29,12 @@ import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
-import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateDecodeCharge, stateExchangeCharge, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (StateCharge)
 import Ecluse.Core.Registry.Exchange (chargedRead)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 
@@ -118,7 +119,7 @@ sendBounded charge requestCharge consumesBody env limits request native = do
         Nothing -> throwIO ObjectProgress
         Just (Left err) -> pure (Left err)
         Just (Right (wireCharge, bytes, service, response)) -> do
-            let decodeCharge = if consumesBody || statusCode (HTTP.responseStatus response) >= 300 then stateDecodeCharge bytes else 0
+            let decodeCharge = if consumesBody || statusCode (HTTP.responseStatus response) >= 300 then decodedDocumentCharge bytes else 0
             liftIO $ charge (saturatingStateCharge (toInteger wireCharge + toInteger decodeCharge))
             fmap HTTP.responseBody <$> AWS.response pure service native response
 
@@ -126,7 +127,7 @@ readSource :: StateCharge -> Int -> Watch -> Limits -> Types.ClientBody -> Resou
 readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
     wireCharge <- newIORef (toInteger stateExchangeCharge + toInteger requestCharge)
     let payChunk size = do
-            total <- atomicModifyIORef' wireCharge (\previous -> let nextCharge = previous + toInteger (stateWireChunkCharge size) in (nextCharge, nextCharge))
+            total <- atomicModifyIORef' wireCharge (\previous -> let nextCharge = previous + toInteger (bufferedChunkCharge size) in (nextCharge, nextCharge))
             charge (saturatingStateCharge total)
     pending <- newIORef (sealConduitT source)
     let next = do
@@ -178,7 +179,7 @@ writeObject :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteStr
 writeObject charge env limits bucket key revision bytes
     | BS.length bytes > maxMetadataBytes limits = pure (Left (ObjectTooLarge (maxMetadataBytes limits)))
     | otherwise = boundedCall $ do
-        result <- runResourceT (sendBounded charge (stateWireChunkCharge (BS.length bytes)) True env limits request (Proxy :: Proxy S3.PutObject))
+        result <- runResourceT (sendBounded charge (bufferedChunkCharge (BS.length bytes)) True env limits request (Proxy :: Proxy S3.PutObject))
         pure $ case result of
             Right response -> ObjectStored <$> objectRevision (response ^. S3L.putObjectResponse_eTag)
             Left err

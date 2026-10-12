@@ -16,6 +16,7 @@ import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.DigestBench qualified as DigestBench
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
+import Ecluse.Core.MirrorReadBench qualified as MirrorReadBench
 import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.PackedBench qualified as PackedBench
 import Ecluse.Core.RouteBench qualified as RouteBench
@@ -39,6 +40,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 main :: IO ()
 main = do
     ecosystems <- ecosystemBenches
+    mirrorReads <- MirrorReadBench.benchmarks
     cacheBenchmarks <- CacheBench.benchmarks
     packed <- traverse PackedBench.benchmarks ecosystems
     digests <- DigestBench.benchmarks ecosystems
@@ -47,7 +49,7 @@ main = do
             defaultMain
                 [ bgroup
                     "ecluse-core (work-per-request)"
-                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
+                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
                 , testGroup "synthetic generators" (map generatorTests ecosystems)
                 ]
 

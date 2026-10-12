@@ -108,12 +108,12 @@ recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
         { mpNativeComplete = pcNativeComplete npmPublishCodec
-        , mpProbeInventory = \name -> do
+        , mpProbeInventory = \_ name -> do
             targets <- plTargets <$> readIORef logRef
             pure (Right (PackageInfo name targets mempty []))
         , mpPrepareVersion = \name version doc -> do
             (inventory, metadata) <- prepareNpmSource name version doc
-            pure $ PreparedMirrorVersion inventory $ \file verified -> pure $ do
+            pure $ PreparedMirrorVersion inventory $ \_ file verified -> pure $ do
                 upload <- prepareNpmUpload inventory metadata file verified
                 pure $ PreparedMirrorUpload $ \plan -> do
                     let document = uploadBytes upload
@@ -127,7 +127,7 @@ recordingPublish logRef outcome =
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = \name -> do
+        { mpProbeInventory = \_ name -> do
             targets <- plTargets <$> readIORef logRef
             pure (Right (PackageInfo name (targets <> Map.fromList [(renderVersion version, Fixtures.sampleDetails name version) | version <- versions]) mempty []))
         }
@@ -136,28 +136,28 @@ mirrorListingPublish logRef outcome versions =
 probeUnreachablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreachablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = const (pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "simulated mirror outage")))))
+        { mpProbeInventory = \_ -> const (pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "simulated mirror outage")))))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a readable status with a body the version projection refuses.
 probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreadablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = const (pure (Left MetadataUndecodable))
+        { mpProbeInventory = \_ -> const (pure (Left MetadataUndecodable))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = const (pure (Left (MetadataHttpFailure 503)))
+        { mpProbeInventory = \_ -> const (pure (Left (MetadataHttpFailure 503)))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.
 probeOverboundPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeOverboundPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = const (pure (Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))))
+        { mpProbeInventory = \_ -> const (pure (Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.

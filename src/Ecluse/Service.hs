@@ -41,14 +41,15 @@ import Ecluse.Composition.MemoryPlan (
 import Ecluse.Composition.MemoryPlan.Transient (brakeBounds, meterStepBytes)
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
+import Ecluse.Composition.MirrorState (bindMirrorStates, newMirrorStates)
 import Ecluse.Composition.Plan (
-    BootPlan (bpCacheConfig, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpValidated),
+    BootPlan (bpCacheConfig, bpLimits, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpS3Endpoint, bpValidated),
  )
 import Ecluse.Composition.Sizing (newPooledManager)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
 import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
-import Ecluse.Composition.Worker (workerPoliciesFor)
+import Ecluse.Composition.Worker (workerPoliciesWithState)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
@@ -66,7 +67,9 @@ import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Admission.Brake (defaultBrakeMarks)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
-import Ecluse.Core.Server.Cache (newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries), newMetadataCacheWithProvider)
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
+import Ecluse.Core.Server.Cache.Provider (localCacheProviderWithPool)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
@@ -131,14 +134,18 @@ withServiceRuntime bootEnv plan mirror action = do
         memoryPlan = bpMemoryPlan bootPlan
         deferredMetrics = mwDeferredMetrics mirror
         cveSyncPlan = mwCveSync mirror
-        bindings = bwBindings (mwBootWiring mirror)
+        baseBindings = bwBindings (mwBootWiring mirror)
 
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
     (memoryMeter, sampler) <- memoryAdmission memoryPlan
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
-    metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
+    let cacheConfig = bpCacheConfig bootPlan
+    pool <- newLocalPool (cacheMaxEntries cacheConfig) (cacheMaxBytes cacheConfig)
+    metadataCache <- localCacheProviderWithPool pool cacheConfig >>= newMetadataCacheWithProvider
+    states <- newMirrorStates (bpS3Endpoint bootPlan) appConfig (bpLimits bootPlan) cacheConfig pool
+    let bindings = bindMirrorStates states baseBindings
 
     (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
     withEnvWithAdmission serveAdmission memoryMeter queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
@@ -156,7 +163,7 @@ withServiceRuntime bootEnv plan mirror action = do
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
-                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
+                , svcWorkerPolicies = workerPoliciesWithState builtEnv states bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
                 , svcMirrorDrain = superviseBackground "mirror-enqueue-drain" builtEnv <$> mirrorDrain
                 , svcSyncTasks =
                     cveSyncTasks

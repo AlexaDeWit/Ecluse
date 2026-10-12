@@ -160,6 +160,7 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
 | `test/`     | Unit, integration, E2E and package-store conformance tests, with shared contracts under `test/contracts/`                |
 | `json-stream/` | Maintained json-stream fork: the private lexer and parser library, retaining upstream BSD-3-Clause attribution |
+| `vendor/` | Attributed native decoder sources with bounded resource lifetime support |
 | `config/`   | The embedded defaults (`default.yaml`), the schema guidepost operator configs override                                    |
 | `runbooks/` | Maintainer procedures run step by step (releases)                                                                        |
 | `docs/`     | Architecture and design documents                                                                                        |

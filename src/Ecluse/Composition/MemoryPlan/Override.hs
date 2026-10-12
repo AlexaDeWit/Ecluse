@@ -30,7 +30,7 @@ import Data.Text qualified as T
 import Ecluse.Composition.MemoryPlan.Bounds (mirrorArtifactEnvelopeMultiplier, queueDepthFloor)
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (..),
-    PlanInputs (piCache, piExplicitAdmission, piLimits, piQueue),
+    PlanInputs (piCache, piExplicitAdmission, piLimits, piPublishRequestCaps, piQueue),
     ShedOutcomes (soResidualOvershoot),
     TenantDemands (..),
  )
@@ -45,6 +45,7 @@ noOverridePins =
         , opAdmission = Nothing
         , opResponse = Nothing
         , opRequest = Nothing
+        , opMountRequest = Nothing
         , opDepth = Nothing
         , opArtifact = Nothing
         }
@@ -57,11 +58,14 @@ configuredPins inputs =
         , opAdmission = piExplicitAdmission inputs
         , opResponse = limMaxResponseBytes limits
         , opRequest = limMaxRequestBytes limits
+        , opMountRequest = largest (catMaybes (piPublishRequestCaps inputs))
         , opDepth = qsMaxMemoryDepth (piQueue inputs)
         , opArtifact = limMaxArtifactBytes limits
         }
   where
     limits = piLimits inputs
+    largest [] = Nothing
+    largest (cap : caps) = Just (foldl' max cap caps)
 
 {- | The fully-shed minimum tenant sum for a pin set. Each unpinned tenant contributes
 the floor the shed ladder reaches. Comparing pin sets attributes an overshoot to its pins.
@@ -72,9 +76,13 @@ overrideMinShedSum d pins =
         + tdFixedBuffers d
         + fromMaybe 0 (opCache pins)
         + 1
-        + (if tdPublishConfigured d then fromMaybe (tdRequestComputed d) (opRequest pins) else 0)
+        + (if tdPublishConfigured d then max inheritedRequest (fromMaybe 0 (opMountRequest pins)) else 0)
         + (if tdMemoryBacked d then fromMaybe queueDepthFloor (opDepth pins) * mirrorJobEstimatedBytes else 0)
         + (if tdMirrors d then maybe 0 (* mirrorArtifactEnvelopeMultiplier) (opArtifact pins) else 0)
+  where
+    inheritedRequest
+        | tdDefaultRequestUsed d || isNothing (opMountRequest pins) = fromMaybe (tdRequestComputed d) (opRequest pins)
+        | otherwise = 0
 
 {- | Each explicit override present in the pin set, paired with the pin set that
 substitutes only it out, and with the operator's config-key name.
@@ -84,6 +92,7 @@ overrideSubstitutions pins =
     catMaybes
         [ ("cache.maxBytes", pins{opCache = Nothing}) <$ opCache pins
         , ("limits.maxRequestBytes", pins{opRequest = Nothing}) <$ opRequest pins
+        , ("mounts.*.maxRequestBytes", pins{opMountRequest = Nothing}) <$ opMountRequest pins
         , ("queue.maxMemoryDepth", pins{opDepth = Nothing}) <$ opDepth pins
         , ("limits.maxArtifactBytes", pins{opArtifact = Nothing}) <$ opArtifact pins
         ]

@@ -12,11 +12,10 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO.Async (cancel, withAsync)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord, stateDecodeCharge, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
@@ -24,6 +23,8 @@ import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Security (Limits (..), defaultLimits)
+import Ecluse.Core.Server.Admission.Meter (newChargeRegion)
+import Ecluse.Core.Server.MemoryModel (bufferedChunkCharge, decodedDocumentCharge)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Mirror.State (mirrorFilename, mirrorPackage, mirrorSample, mirrorSource, mirrorVersion)
 import Ecluse.Test.Package (hexSha256Of, hexSha512Of)
@@ -37,28 +38,16 @@ spec = describe "durable mirror expectations" $ do
         small <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         large <- expectRight (extendProjectRecord defaultLimits target added (Just small))
         paid <- newIORef (0 :: Int)
-        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        charge <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
         replicateM_ 3 (chargedEncodeProjectRecord charge defaultLimits small >>= expectRight)
         smallPaid <- readIORef paid
         void (chargedEncodeProjectRecord charge defaultLimits large >>= expectRight)
         largePaid <- readIORef paid
         largePaid `shouldSatisfy` (> smallPaid)
         freshPaid <- newIORef (0 :: Int)
-        freshCharge <- newStateCharge (\cost -> modifyIORef' freshPaid (+ cost))
+        freshCharge <- newChargeRegion (\cost -> modifyIORef' freshPaid (+ cost))
         void (chargedEncodeProjectRecord freshCharge defaultLimits large >>= expectRight)
         readIORef freshPaid `shouldReturn` largePaid
-
-    it "does not remember an unpaid high-water request after cancellation" $ do
-        entered <- newEmptyMVar
-        blocked <- newEmptyMVar
-        firstPayment <- newIORef True
-        paid <- newIORef (0 :: Int)
-        charge <- newStateCharge $ \cost -> do
-            initial <- atomicModifyIORef' firstPayment (False,)
-            if initial then putMVar entered () >> takeMVar blocked else modifyIORef' paid (+ cost)
-        withAsync (charge 1024) $ \worker -> takeMVar entered >> cancel worker
-        charge 1024
-        readIORef paid `shouldReturn` 1024
 
     it "bases decode charges on the actual body rather than the configured maximum" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
@@ -68,7 +57,7 @@ spec = describe "durable mirror expectations" $ do
         chargedDecodeProjectRecord (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
         observed <- readIORef payments
         observed `shouldSatisfy` all (< maxMetadataBytes defaultLimits)
-        observed `shouldSatisfy` all (>= stateWireChunkCharge (BS.length bytes) + stateDecodeCharge bytes)
+        observed `shouldSatisfy` all (>= bufferedChunkCharge (BS.length bytes) + decodedDocumentCharge bytes)
         projectRecordWeight defaultLimits{maxNestingDepth = 1} record `shouldSatisfy` isRight
 
     it "prepays typed restoration separately when long version keys outweigh the JSON tree model" $ do

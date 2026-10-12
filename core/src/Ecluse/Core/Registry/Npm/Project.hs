@@ -16,6 +16,7 @@ module Ecluse.Core.Registry.Npm.Project (
     projectName,
     projectScope,
     npmNameLeadChars,
+    tarballCoordinate,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:?))
@@ -39,6 +40,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
     mkSriHashes,
+    unscopedName,
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..))
@@ -54,6 +56,7 @@ import Ecluse.Core.Registry.WireSupport (
     withinNameLimit,
  )
 import Ecluse.Core.Security (Limits, maxNestingDepth)
+import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Strict (strictElements)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -195,3 +198,11 @@ withinNpmNameLimit = withinNameLimit "npm name" npmNameLimit
 -- npm's own cap on a package name, the one its validator applies to a new package.
 npmNameLimit :: Int
 npmNameLimit = 214
+
+-- | Parse an npm tarball-slot @file@ into the 'Version' and verbatim 'Filename' it names for @name@.
+tarballCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
+tarballCoordinate name file =
+    case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
+        Just version
+            | not (T.null version) -> (mkVersion Npm version,) <$> mkFilename file
+        _ -> Nothing

@@ -229,15 +229,21 @@ serveAdmittedPackument serving clientToken = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
     case pdMirrorState deps of
         Just mirror | not (pdFirstParty deps (psvName serving)) -> do
-            private <- fetchPrivateOrigin deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+            ((private, checked), public) <-
+                concurrently
+                    ( do
+                        private <- fetchPrivateOrigin deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+                        checked <- case private of
+                            OriginAuthorisationFailure _ -> pure (Right Nothing)
+                            _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
+                        pure (private, checked)
+                    )
+                    (fetchPublicOrigin deps (psvRuntime serving) (psvTicket serving) (psvName serving))
             case private of
                 OriginAuthorisationFailure _ -> privateAccessRefused serving
-                _ ->
-                    liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving)) >>= \case
-                        Left _ -> mirrorUnavailable serving
-                        Right record -> do
-                            public <- fetchPublicOrigin deps (psvRuntime serving) (psvTicket serving) (psvName serving)
-                            serveMergedPackument serving evalCtx record private public
+                _ -> case checked of
+                    Left _ -> mirrorUnavailable serving
+                    Right record -> serveMergedPackument serving evalCtx record private public
         _ -> do
             (private, public) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
             case private of

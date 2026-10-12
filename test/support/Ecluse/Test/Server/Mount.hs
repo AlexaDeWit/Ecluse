@@ -2,29 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Test fixtures for a mount's serve dependencies.
-
-The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ convention.
-
-'serveDepsFor' is the one shared builder for a mount's 'PackumentDeps'. It takes the ecosystem's
-adapter and fills the standard production wiring once: that adapter's metadata and artifact
-capability records, the derived tarball-host gate, and the policy defaults. A call site passes
-only its own axes and record-updates the few fields unique to it, so a 'PackumentDeps' schema
-change lands in one place. 'npmServeDeps' and 'inertPackumentDeps' are npm's aliases.
-
-== The inert deps
-
-'inertDepsFor' is complete but __unreachable__: every upstream it names is a closed port. A
-'Ecluse.Core.Server.Context.MountBinding' always carries packument dependencies, so a spec that
-never drives the data plane must still supply them. A spec that /does/ drive it builds its own
-through 'serveDepsFor' against a live stub upstream.
-
-== Varying an upstream
-
-'withPrivateBaseUrl', 'overPrivateBaseUrl', and 'withMirrorPlan' each rebind the deps' whole
-upstream cluster through 'mountUpstreams', so the tarball-host gate re-derives with the URL. A
-fixture cannot express a stale gate, because the cluster's constructor is private and its
-selectors are not exported. See "Ecluse.Core.Server.Upstream".
+{- | Shared mount fixtures bind adapter capabilities and derive host gates from their origins.
+Inert fixtures use closed loopback ports so accidental data-plane calls cannot reach upstreams.
 -}
 module Ecluse.Test.Server.Mount (
     serveDepsFor,
@@ -78,6 +57,7 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdMetadata = adapterMetadata adapter
         , pdArtifact = adapterArtifact adapter
         , pdEgressUrl = mkRegistryUrl
+        , pdMirrorState = Nothing
         }
 
 -- | 'serveDepsFor' over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
@@ -88,11 +68,7 @@ npmServeDeps = serveDepsFor npmAdapter
 pypiServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 pypiServeDeps = serveDepsFor pypiAdapter
 
-{- | A mount's serve dependencies wired to nowhere: a closed loopback port for every base URL, an
-empty rule set, and a fixed clock. It is complete enough to bind a
-'Ecluse.Core.Server.Context.MountBinding', but a packument or artifact request through it fails to
-connect instead of reaching an upstream.
--}
+-- | Closed loopback origins prevent fixture reads from reaching an upstream.
 inertDepsFor :: RegistryAdapter -> PackumentDeps
 inertDepsFor adapter =
     (serveDepsFor adapter (Just closedPort) closedPort (MirrorOnAdmit closedPort) [] (pure fixedNow))

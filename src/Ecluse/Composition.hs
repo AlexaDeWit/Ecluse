@@ -49,14 +49,14 @@ import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirro
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubMaxRequestBytes, vpubStaticCredential, vpubTarget),
  )
 import Ecluse.Config (
     AppConfig (..),
     EgressSettings (..),
     FirstParty (..),
     IntegritySettings (..),
-    MirrorTarget (mtUrl),
+    MirrorTarget (mtUploadUrl, mtUrl, mtUsername),
     Mount (..),
     MountConfig (..),
     MountIntegrity (..),
@@ -259,6 +259,7 @@ packumentDepsFor ctx adapter mount mcfg = do
             , pdMetadata = adapterMetadata adapter
             , pdArtifact = adapterArtifact adapter
             , pdEgressUrl = mkRegistryUrl
+            , pdMirrorState = Nothing
             }
 
 -- A role that mints nothing references nothing, and a mount with no mirror target never writes,
@@ -297,9 +298,10 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
         PublishDeps
             { pubTargetUrl = publicationTargetUrl (vpubTarget publication)
             , pubAllowed = firstPartyName (vpubFirstParty publication)
-            , pubStaticToken = vpubStaticToken publication
+            , pubStaticCredential = vpubStaticCredential publication
             , pubInboundToken = srvAuthToken (cfgServer app)
-            , pubLimits = limits{maxPublishRequestBytes = pbMaxRequestBytes budget}
+            , pubMaxRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)
+            , pubLimits = limits{maxPublishRequestBytes = fromMaybe (pbMaxRequestBytes budget) (vpubMaxRequestBytes publication)}
             , pubBodyBudget = pbBodyBudget budget
             , pubHelp = helpMessage
             , pubProjectName = adapterProjectName adapter
@@ -322,6 +324,10 @@ data PublishTarget = PublishTarget
     -- ^ The ecosystem this publish target serves.
     , ptMirrorUrl :: RegistryUrl
     -- ^ The mirror-target endpoint the worker publishes approved artifacts to.
+    , ptUploadUrl :: RegistryUrl
+    -- ^ The exact native upload endpoint, independently configured from the read root.
+    , ptUsername :: Maybe Text
+    -- ^ The backend credential convention retained beside the refreshing secret provider.
     , ptCredentials :: CredentialProvider
     -- ^ The provider minting the mirror-target write token.
     }
@@ -352,6 +358,8 @@ publishTargetFor providers mount = do
                 PublishTarget
                     { ptEcosystem = mountEcosystem mount
                     , ptMirrorUrl = mtUrl target
+                    , ptUploadUrl = mtUploadUrl target
+                    , ptUsername = mtUsername target
                     , ptCredentials = provider
                     }
         Nothing ->

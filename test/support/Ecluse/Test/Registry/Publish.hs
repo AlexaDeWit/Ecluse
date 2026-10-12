@@ -19,7 +19,7 @@ publishOnlyFile publish doc plan bytes = case mpPrepareVersion publish (pkgName 
     Right prepared -> case inventoryFiles (pmvInventory prepared) of
         file :| [] -> case verifyMirrorBytes file bytes of
             Left fault -> pure (Left fault)
-            Right verified -> pmvPrepareUpload prepared file verified >>= either (pure . Left) (`publishPrepared` plan)
+            Right verified -> pmvPrepareUpload prepared (const (pure ())) file verified >>= either (pure . Left) (`publishPrepared` plan)
         _ -> pure (Left (PublishSourceUnavailable "the publication fixture requires one physical file"))
   where
     details = vdDetails doc

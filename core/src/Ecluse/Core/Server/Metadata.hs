@@ -17,6 +17,7 @@ module Ecluse.Core.Server.Metadata (
     ecosystemMetadataReads,
     withinRequestCap,
     publicMetadataClient,
+    uncachedPublicMetadataClient,
     preparePublicVersion,
     privateMetadataClient,
 
@@ -121,6 +122,10 @@ withinRequestCap progress (MetadataReads settle) = MetadataReads $ \upstream cac
 -- | The anonymous origin's handle, resolving through the shared cache under its 'Source' key.
 publicMetadataClient :: MetadataCache -> Source -> MetadataReads Public -> MetadataClient
 publicMetadataClient cache source (MetadataReads settle) = newMetadataClient (settle Metric.Public (Cached cache source))
+
+-- | Keep worker upload reads out of the narrower serving-version cache.
+uncachedPublicMetadataClient :: MetadataReads Public -> MetadataClient
+uncachedPublicMetadataClient (MetadataReads settle) = newMetadataClient (settle Metric.Public Uncached)
 
 -- | Prepare anonymous selected metadata while keeping its logs and upstream metrics on the leader.
 preparePublicVersion :: MetadataCache -> Source -> MetadataReads Public -> PackageName -> Version -> IO (PreparedStore MetadataError VersionRead)

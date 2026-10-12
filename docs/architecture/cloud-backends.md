@@ -19,36 +19,48 @@ Deploy dual-reading workers and the new read visibility support first, stop old 
 deploy version 2 producers and enable PyPI mirroring. Old workers must not consume version 2 jobs.
 For rollback, stop producers and drain or quarantine version 2 messages before reverting workers.
 
-A separate worker receives jobs and, for each one:
+The worker checks the current first-party declaration before touching a public source. It reads
+the target inventory, then tests any durable expected inventory against current target identities.
+A complete managed version needs no public fetch or new admission. A filename or version alone
+cannot prove PyPI completion. npm can prove its atomic single-artifact version from validated
+native package, version, filename and digest facts, so completed npm retries also avoid public reads.
 
-1. **Probes the mirror target** and acknowledges a confirmed-present duplicate outright, sparing
-   a fleet-wide install's duplicate jobs a full download and no-op publish. A probe that cannot
-   tell falls through to the full pipeline.
-2. **Re-evaluates current policy** through the same shared admission gate the serve path runs
-   (`Ecluse.Core.Package.Admission`), and re-checks the fetch URL against the mount's
-   tarball-host gate. The worker drops a version refused since its serve-time admit: a new
-   advisory, a raised floor, a withdrawn file. Such a version never freezes into the
-   rule-exempt mirror.
-3. Checks the mirror upload data against the admitted snapshot before fetching the artifact.
-   npm requires the complete one-tarball inventory, matching identity and artifact facts, and the
-   paired source version object. Missing or inconsistent input retires the job without a download
-   or write. The writer accepts only this checked mirror upload data.
-4. **Verifies its bytes against the re-admitted artifact's integrity digest**: npm
-   `dist.integrity`, read from the current metadata. The queue payload carries no digest at all.
-5. Publishes to the mirror target and acknowledges the job. The publish document carries the
-   version object the re-evaluation read, so the metadata is admission-time metadata and the
-   queue payload contributes nothing to it. The operator manual states which fields the write
-   keeps, rewrites, and strips.
+For new files, the worker resolves the supported source inventory and applies current policy,
+integrity floors and location checks. It persists expected identities and paired source fields
+before uploading anything. Each missing distribution is fetched once, verified against its
+strongest supported source digest, and prepared for the native writer. PyPI preparation extracts
+bounded archive Core Metadata from those verified bytes. It neither executes archive content nor
+changes distribution bytes. The worker stores its independently computed SHA-256 before upload.
 
-A hash mismatch fails the job. The worker publishes nothing, writes an ERROR log, and acknowledges
-the message so it stops cycling. The job is never retried and never dead-lettered, because no
-redelivery can make tampered bytes verify. A corrupt or tampered artifact therefore never enters
-the private upstream, which Écluse later serves without rules. At-least-once delivery is safe because
-publishing is idempotent: versions are immutable, so a redelivered job finds the version already
-present and succeeds.
+One ordinary successful pass reads the target twice, before and after the uploads. The final
+read precedes validation of the latest durable record and every declared retained companion.
+Only full filename, identity and companion proof acknowledges completion. Duplicate-file replies
+are write outcomes, not completion evidence. Conflicting target bytes refuse rather than trigger
+repeated publication. Existing receipt, retry and terminal-fault rules still govern failures.
 
-Between approval and a package appearing in the private upstream, requests fall through to the
-public upstream and re-run the deterministic rules.
+### Durable PyPI read data
+
+A project record retains each physical filename's first admitted source entry once. Separate
+fragment coordinates prevent later admissions from colliding with earlier array positions.
+Conditional updates union new identities and refuse conflicting bytes or declarations. A source
+URL change does not change immutable byte identity. Native archive upload metadata stays transient.
+
+The independently configured S3-compatible store must provide strong reads and conditional
+creation and replacement. It retains expected files, supported consumer fields, verified digest
+evidence and declared companion bytes. Its permissions and retention requirements are in the
+operator manual. Worker deletion remains outside this interface.
+
+Physical uploads become visible incrementally. Écluse checks caller-authorised private metadata
+before one conditional project-state read. It combines private locations with retained source
+fields only when current target identities prove the full expected view. An incomplete version
+needs a validated full public alternative or answers unavailable. Unknown or malformed state
+cannot fall back to current public metadata alone, which may omit historically expected files.
+Conclusive state absence keeps unmanaged private handling. First-party names bypass this process.
+
+Project listings keep public release discovery. Complete retained versions remain usable during
+a public outage. Requests for another recorded wheel or companion use the authorised private or
+retained path without public retrieval, policy re-evaluation or enqueue. These guarantees apply
+through Écluse, not to direct reads from the underlying registry.
 
 The mirror worker exists only when a mount mirrors. A deployment with no mirror target starts no
 worker and builds no queue. The configured queue URL picks the backend: SQS for durability, or a
@@ -70,37 +82,32 @@ worker reports no poll and stays live on its listener alone.
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant W as Mirror worker
-    participant Queue as Mirror queue
-    participant Pub as Public upstream
-    participant Cred as CredentialProvider
-    participant Mirror as Mirror target
-
-    loop consume loop
-        W->>Queue: receive (long-poll)
-        alt no message
-            Queue-->>W: empty batch (timeout)
-        else job delivered
-            Queue-->>W: mirror job
-            W->>Pub: fetch artifact
-            Pub-->>W: bytes
-            Note over W: verify bytes against dist.integrity
-            alt hash mismatch
-                W->>Queue: ack + ERROR alarm (retired, never published)
-            else verified
-                W->>Cred: currentToken
-                Cred-->>W: bearer token
-                W->>Mirror: publishArtifact (npm protocol + token)
-                alt published or already-exists
-                    W->>Queue: ack
-                else publish failed
-                    W-->>Queue: do not ack (retry / DLQ)
-                end
-            end
+    participant Q as Queue
+    participant P as Public source
+    participant S as Durable project state
+    participant T as Mirror target
+    Q->>W: Version trigger
+    W->>T: Initial inventory
+    W->>S: Expected inventory
+    alt Complete current proof
+        W->>Q: Acknowledge
+    else Missing files
+        W->>P: Resolve and admit source inventory
+        W->>S: Conditionally retain expected files and read data
+        loop Each missing distribution
+            W->>P: Fetch verified bytes once
+            W->>S: Retain verified identity and declared companion
+            W->>T: Native upload
+        end
+        W->>T: Fresh full inventory
+        W->>S: Latest expected set and companion proof
+        alt Complete
+            W->>Q: Acknowledge
+        else Incomplete or failed
+            W-->>Q: Retry or terminal outcome
         end
     end
-    Note over W,Mirror: at-least-once delivery + idempotent publish
 ```
 
 ### Holding a receipt for the life of its job
@@ -311,13 +318,17 @@ Backends that add an ecosystem also owe the [ecosystem checklist](../testing.md#
 ### The credential mint
 
 Outbound auth (proxy to registry) is the mint facet of a hosted store. A `CredentialProvider`
-yields the current bearer token for that store's endpoint, refreshing before expiry. Two consumers
+yields the current secret for that store's endpoint, refreshing before expiry. Two consumers
 use it: the mirror worker's write to the mirror target, and Dredger's store reads, including its
 preview reads of the private cache. Client reads forward the caller's own credential and the public
 upstream is anonymous
 ([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
 tag the mirror target declares picks the mint, see
 [Outbound registry credentials](configuration.md#outbound-registry-credentials).
+
+The backend binds the secret to its protocol convention. npm renders Bearer credentials. PyPI
+retains an explicit Basic username, with `aws` supplied by the CodeArtifact backend and generic
+usernames supplied by configuration. The codec invents no username.
 
 Each credential provider serialises its mints and keeps its own breaker. During healthy minting,
 expired callers wait for the current mint. After cooldown, one mint owns recovery. Other expired

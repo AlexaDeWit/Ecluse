@@ -226,11 +226,16 @@
             then sequentialCompile (sequentialHaddock pkg)
             else pkg) hsuper;
 
+        managedLzmaOverlay = hself: _hsuper: {
+          ecluse-lzma-managed = hself.callCabal2nix "ecluse-lzma-managed" ./vendor/lzma-managed { };
+        };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
+            managedLzmaOverlay
             sequentialBuildOverlay
           ];
         };

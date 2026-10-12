@@ -25,17 +25,18 @@ import Network.HTTP.Client (Manager, Request)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (BodyOutcome, FetchFault, ParseError, PublishFault (PublishFetch), UrlFormationError)
-import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedJsonFetch)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
 
@@ -46,7 +47,7 @@ newtype PublishPlan = PublishPlan {ppLatest :: Version}
 -- | A complete source snapshot with adapter-owned per-file upload preparation.
 data PreparedMirrorVersion = PreparedMirrorVersion
     { pmvInventoryValue :: MirrorInventory
-    , pmvPrepareUploadAction :: ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
+    , pmvPrepareUploadAction :: (Int -> IO ()) -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
     }
 
 -- | Publication captures checked metadata and verified bytes, so a caller cannot replace the body.
@@ -59,7 +60,7 @@ pmvInventory :: PreparedMirrorVersion -> MirrorInventory
 pmvInventory = pmvInventoryValue
 
 -- | Prepare one verified member without accepting replacement bytes.
-pmvPrepareUpload :: PreparedMirrorVersion -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
+pmvPrepareUpload :: PreparedMirrorVersion -> (Int -> IO ()) -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
 pmvPrepareUpload = pmvPrepareUploadAction
 
 -- | Run the bound write with its captured verified body and required upload metadata.
@@ -69,8 +70,12 @@ publishPrepared = runPreparedUpload
 -- | The codec owns source and upload metadata while the worker owns whole-version orchestration.
 data PublishCodec = forall source metadata. PublishCodec
     { pcPrepareSource :: PackageName -> Version -> VersionDoc -> Either PublishFault (MirrorInventory, source)
-    , pcPrepareUpload :: Limits -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
+    , pcPrepareUpload :: Limits -> (Int -> IO ()) -> MirrorInventory -> source -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault (MirrorUploadData metadata))
+    , pcNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
+    -- ^ Atomic native inventories may prove completion without retained external source state.
     , pcTargetRead :: EcosystemRead
+    , pcTargetReadPermille :: Int
+    -- ^ The adapter's existing full-read heap charge per thousand source bytes.
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
     , pcVersionListParser :: Maybe (Limits -> J.Parser VersionListItem)
     -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
@@ -88,30 +93,35 @@ data MirrorTransport = MirrorTransport
 
 -- | A target-bound version reader and checked upload preparation capability.
 data MirrorPublish = MirrorPublish
-    { mpProbeInventory :: PackageName -> IO (Either MetadataError PackageInfo)
+    { mpProbeInventory :: (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
+    , mpNativeComplete :: PackageName -> Version -> PackageInfo -> Bool
     , mpPrepareVersion :: PackageName -> Version -> VersionDoc -> Either PublishFault PreparedMirrorVersion
     }
 
 -- | The read and upload endpoints are explicit because native upload routes need not share the read root.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> RegistryUrl -> PublishCodec -> MirrorPublish
-newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcTargetRead, pcPublishRequest, pcPublishOutcome} =
+newMirrorPublish transport readTarget uploadTarget PublishCodec{pcPrepareSource, pcPrepareUpload, pcNativeComplete, pcTargetRead, pcTargetReadPermille, pcPublishRequest, pcPublishOutcome} =
     MirrorPublish
-        { mpProbeInventory = probeInventory transport readTarget pcTargetRead
+        { mpProbeInventory = probeInventory transport readTarget pcTargetRead pcTargetReadPermille
+        , mpNativeComplete = pcNativeComplete
         , mpPrepareVersion = \name version doc -> do
             (inventory, source) <- pcPrepareSource name version doc
             pure
                 PreparedMirrorVersion
                     { pmvInventoryValue = inventory
-                    , pmvPrepareUploadAction = \file bytes ->
+                    , pmvPrepareUploadAction = \charge file bytes ->
                         fmap (PreparedMirrorUpload . publishUpload transport uploadTarget pcPublishRequest pcPublishOutcome)
-                            <$> pcPrepareUpload (ptLimits transport) inventory source file bytes
+                            <$> pcPrepareUpload (ptLimits transport) charge inventory source file bytes
                     }
         }
 
-probeInventory :: MirrorTransport -> RegistryUrl -> EcosystemRead -> PackageName -> IO (Either MetadataError PackageInfo)
-probeInventory transport target reader name = do
+probeInventory :: MirrorTransport -> RegistryUrl -> EcosystemRead -> Int -> (Int -> IO ()) -> PackageName -> IO (Either MetadataError PackageInfo)
+probeInventory transport target targetRead factor charge name = do
+    pay <- accumulatingCharge charge
     credential <- ptMintCredential transport
-    fmap manifestInfo <$> fetchManifest reader (ptTracing transport) (originClient (ptLimits transport) (ptManager transport) target credential) name
+    -- The initial and final target snapshots can overlap during completion.
+    let origin = (originClient (ptLimits transport) (ptManager transport) target credential){ocChargeFullRead = pay . scaleCharge (2 * factor)}
+    fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
 
 -- | Read bounded version identifiers for the protocol maintenance caller.
 fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))

@@ -13,7 +13,7 @@ name: Security
 # updates".
 on:
   pull_request:
-    paths: ["flake.lock", "flake.nix", "cabal.project.freeze", "json-stream/upstream.freeze", ".github/workflows/security.yml"]
+    paths: ["flake.lock", "flake.nix", "cabal.project.freeze", "json-stream/upstream.freeze", "vendor/lzma-managed/upstream.freeze", ".github/workflows/security.yml"]
   schedule:
     - cron: "27 6 * * *" # daily, off-peak minute
   workflow_dispatch:

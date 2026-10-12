@@ -232,7 +232,7 @@ withUpstream :: (Text -> IO a) -> IO a
 withUpstream body = withStub status200 tarballBytes (body . stubBaseUrl)
 
 duplicateInventory :: WorkerPolicy -> WorkerPolicy
-duplicateInventory policy = policy{wpResolveVersion = \name version -> duplicateVersionInventory <$> wpResolveVersion policy name version}
+duplicateInventory policy = policy{wpResolveVersion = \pay name version -> duplicateVersionInventory <$> wpResolveVersion policy pay name version}
 
 duplicateVersionInventory :: VersionEvaluation -> VersionEvaluation
 duplicateVersionInventory (VersionPresent doc latest) =

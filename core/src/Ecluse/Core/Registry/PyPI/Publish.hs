@@ -26,11 +26,12 @@ import Ecluse.Core.Registry.MirrorUpload.Internal (checkedMirrorUploadData)
 import Ecluse.Core.Registry.Publish (PublishCodec (..))
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
-import Ecluse.Core.Registry.PyPI.Metadata (pypiRead)
+import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
 import Ecluse.Core.Registry.PyPI.Request (simpleIndexRequest)
-import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields)
+import Ecluse.Core.Registry.PyPI.UploadMetadata (PyPIUploadMetadata, parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
 import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
 import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes))
+import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
 
 -- | Read native target inventories and prepare one checked multipart upload per distribution.
 pypiPublishCodec :: PublishCodec
@@ -40,13 +41,20 @@ pypiPublishCodec =
             source <- maybeToRight (PublishSourceUnavailable "PyPI snapshot has no paired source metadata") (vdRaw doc >>= snd pypiSimpleCached)
             inventory <- checkedMirrorInventory package version doc (PyPIMirrorRead source)
             pure (inventory, ())
-        , pcPrepareUpload = \limits inventory () file bytes -> do
-            extracted <- archiveMetadata limits (inventoryPackage inventory) (inventoryVersion inventory) (artFilename (expectedArtifact file)) (verifiedBytes bytes)
-            pure $ do
-                raw <- first (PublishSourceUnavailable . parseErrorMessage) extracted
-                metadata <- first (PublishSourceUnavailable . parseErrorMessage) (parseUploadMetadata (maxMetadataBytes limits) (inventoryPackage inventory) (inventoryVersion inventory) raw)
-                checkedMirrorUploadData inventory file bytes metadata
+        , pcPrepareUpload = \limits charge inventory () file bytes -> do
+            extracted <- archiveMetadata limits charge (inventoryPackage inventory) (inventoryVersion inventory) (artFilename (expectedArtifact file)) (verifiedBytes bytes)
+            case first (PublishSourceUnavailable . parseErrorMessage) extracted of
+                Left fault -> pure (Left fault)
+                Right raw -> case first (PublishSourceUnavailable . parseErrorMessage) (uploadMetadataMemoryBytes raw) of
+                    Left fault -> pure (Left fault)
+                    Right weight -> do
+                        charge weight
+                        pure $ do
+                            metadata <- first (PublishSourceUnavailable . parseErrorMessage) (parseUploadMetadata (maxMetadataBytes limits) (inventoryPackage inventory) (inventoryVersion inventory) raw)
+                            checkedMirrorUploadData inventory file bytes metadata
+        , pcNativeComplete = \_ _ _ -> False
         , pcTargetRead = pypiRead
+        , pcTargetReadPermille = cfFullReadPermille pypiChargeFactors
         , pcProbeRequest = simpleIndexRequest
         , pcVersionListParser = Nothing
         , pcPublishRequest = \target credential _ -> publishRequest target credential

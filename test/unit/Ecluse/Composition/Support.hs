@@ -16,6 +16,7 @@ module Ecluse.Composition.Support (
     noCeiling,
     staticEnvVars,
     pubUrlEnv,
+    pypiMirrorEnv,
     publicGateEnv,
     privateUpstreamUrl,
     collapsingMirrorTarget,
@@ -315,3 +316,15 @@ captureBoot boot = do
 -- | The non-blank lines of a report.
 reportLines :: Text -> [Text]
 reportLines = filter (not . T.null) . lines
+
+-- | A generic PyPI mirror with separate native upload and durable metadata declarations.
+pypiMirrorEnv :: [(String, String)]
+pypiMirrorEnv =
+    pubUrlEnv
+        <> [ ("ECLUSE_MIRROR_STATE__URL", "s3://mirror-state/records")
+           , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")
+           , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL", "https://target.example.test/")
+           , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://target.example.test/legacy/")
+           , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__USERNAME", "publisher")
+           , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+           ]
