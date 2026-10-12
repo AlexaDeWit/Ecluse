@@ -90,6 +90,21 @@ The cold, warm, and replacement probes retain their separate combined lifetime c
 The state-only charge is not an admission allowance. Update, worker, encoding and inventory
 reservations retain their conservative selected-release accounting.
 
+Archive decoder probes run on the pinned Linux/glibc runtime. Hosted residency proof runs on
+arm64. The test-only allocator wrapper and its runtime results remain unverified on amd64.
+After four warmups, each gzip, bzip2 and XZ case performs 64 early exits through return, refusal or
+cancellation without a GC. VM growth and allocator-retained growth must each stay within 1 MiB.
+The Haskell control allocates at least 16 MiB while meeting both gates. Eight simultaneously open
+XZ decoders must exceed both gates before their scopes close.
+
+The allocator counter adds glibc `mallinfo2` fields `uordblks` and `hblkhd` across all arenas and
+allocator mmap regions. It includes freed thread-cache chunks and allocator overhead, so it does
+not count exact live decoder ownership. ByteString payloads use the GHC heap. The Haskell control
+checks that separation on the hosted target. Unsupported allocator platforms fail the probe
+explicitly. The report retains RSS as diagnostics because freed pages can remain resident and
+RSS growth does not track Haskell allocation bytes. Each row names its mode and includes the
+allocator fields before and after the interval. No allocator tunables or caches change.
+
 Metadata probes use a fresh child process for each corpus package and retained shape.
 They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
 The complete corpus must include a capture above the previous 3,687,514-byte maximum.

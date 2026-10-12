@@ -16,7 +16,11 @@ import Data.Bits (finiteBitSize)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
+import Foreign.C.Types (CInt (..), CSize (..))
+import Foreign.Marshal.Alloc (alloca)
+import Foreign.Ptr (Ptr)
 import Foreign.StablePtr (freeStablePtr, newStablePtr)
+import Foreign.Storable (peek)
 import GHC.Conc (getAllocationCounter)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, gcs, max_live_bytes), getRTSStats)
 import System.Directory (getFileSize)
@@ -54,7 +58,7 @@ data Measurement = Measurement
 instance ToJSON Measurement
 instance FromJSON Measurement
 
--- Native VM growth is checked separately from uncollected Haskell output pages.
+-- RSS includes cached and uncollected pages. VM and allocator retention have independent gates.
 data NativeMeasurement = NativeMeasurement
     { nativeWorkspaceBytes :: Int
     , nativeAllocatedBytes :: Integer
@@ -64,11 +68,27 @@ data NativeMeasurement = NativeMeasurement
     , controlVirtualGrowthBytes :: Integer
     , controlResidentGrowthBytes :: Integer
     , nativeOutputCount :: Int
+    , nativeAllocatorBefore :: AllocatorSnapshot
+    , nativeAllocatorAfter :: AllocatorSnapshot
+    , nativeAllocatorGrowthBytes :: Integer
+    , controlAllocatorBefore :: AllocatorSnapshot
+    , controlAllocatorAfter :: AllocatorSnapshot
+    , controlAllocatorGrowthBytes :: Integer
     }
     deriving stock (Generic, Show)
 
 instance ToJSON NativeMeasurement
 instance FromJSON NativeMeasurement
+
+-- Glibc counts freed thread-cache chunks here, so this is retention rather than exact live ownership.
+data AllocatorSnapshot = AllocatorSnapshot
+    { allocatorArenaBytes :: Integer
+    , allocatorMappedBytes :: Integer
+    }
+    deriving stock (Generic, Show)
+
+instance ToJSON AllocatorSnapshot
+instance FromJSON AllocatorSnapshot
 
 spec :: Spec
 spec = describe "archive residency" $ do
@@ -97,9 +117,9 @@ spec = describe "archive residency" $ do
                     checkControl result
                     nativeOutputCount result `shouldBe` 64
                     nativeAllocatedBytes result `shouldSatisfy` (<= controlAllocatedBytes result)
-                    nativeVirtualGrowthBytes result `shouldSatisfy` (<= virtualSlackBytes)
-                    nativeResidentGrowthBytes result `shouldSatisfy` (<= nativeAllocatedBytes result + virtualSlackBytes)
-    it "detects retained LZMA decoders with the same virtual-memory gate" $
+                    nativeVirtualGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
+                    nativeAllocatorGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
+    it "detects retained LZMA decoders with the same VM and allocator gates" $
         withSystemTempDirectory "ecluse-archive-retained" $ \directory -> do
             let path = directory </> "fixture"
             BS.writeFile path (BSL.toStrict (Lzma.compress (BSL.replicate (1024 * 1024) 97)))
@@ -107,16 +127,18 @@ spec = describe "archive residency" $ do
             checkControl result
             nativeOutputCount result `shouldBe` 8
             nativeAllocatedBytes result `shouldSatisfy` (<= controlAllocatedBytes result)
-            nativeVirtualGrowthBytes result `shouldSatisfy` (> virtualSlackBytes)
+            nativeVirtualGrowthBytes result `shouldSatisfy` (> nativeGrowthLimit)
+            nativeAllocatorGrowthBytes result `shouldSatisfy` (> nativeGrowthLimit)
 
--- GHC 9.10 reserves the heap range before committing pages. The control checks that one megablock of slack suffices.
-virtualSlackBytes :: Integer
-virtualSlackBytes = 1024 * 1024
+-- The independent VM and allocator gates each allow one MiB after warmup.
+nativeGrowthLimit :: Integer
+nativeGrowthLimit = 1024 * 1024
 
 checkControl :: NativeMeasurement -> Expectation
 checkControl result = do
     controlAllocatedBytes result `shouldSatisfy` (>= 16 * 1024 * 1024)
-    controlVirtualGrowthBytes result `shouldSatisfy` (<= virtualSlackBytes)
+    controlVirtualGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
+    controlAllocatorGrowthBytes result `shouldSatisfy` (<= nativeGrowthLimit)
 
 compressor :: Text -> BSL.ByteString -> BSL.ByteString
 compressor = \case
@@ -129,7 +151,7 @@ child mode path nursery = do
     executable <- getExecutablePath
     (status, output, errors) <- readProcessWithExitCode executable ["--archive-probe", toString mode, path, "+RTS", "-T", "-N1", "-F1", "-A" <> nursery, "-RTS"] ""
     unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
-    putStrLn ("archive-residency " <> output)
+    putStrLn ("archive-residency " <> toString mode <> " " <> output)
     expectRight (eitherDecodeStrict (encodeUtf8 (toText output)))
 
 -- | Parent-authored fixtures keep compression work outside the measured child interval.
@@ -173,6 +195,8 @@ data NativeSample = NativeSample
     { sampledAllocated :: Integer
     , sampledVirtual :: Integer
     , sampledResident :: Integer
+    , sampledAllocatorBefore :: AllocatorSnapshot
+    , sampledAllocatorAfter :: AllocatorSnapshot
     }
 
 nativeProbe :: Text -> Text -> FilePath -> IO NativeMeasurement
@@ -238,6 +262,12 @@ nativeMeasurement control sampled workspace count =
         , controlVirtualGrowthBytes = sampledVirtual control
         , controlResidentGrowthBytes = sampledResident control
         , nativeOutputCount = count
+        , nativeAllocatorBefore = sampledAllocatorBefore sampled
+        , nativeAllocatorAfter = sampledAllocatorAfter sampled
+        , nativeAllocatorGrowthBytes = allocatorGrowth sampled
+        , controlAllocatorBefore = sampledAllocatorBefore control
+        , controlAllocatorAfter = sampledAllocatorAfter control
+        , controlAllocatorGrowthBytes = allocatorGrowth control
         }
 
 haskellControl :: IO NativeSample
@@ -256,10 +286,12 @@ sampleWithoutGC run = do
     performMajorGC
     (virtualBefore, residentBefore) <- processMemory
     rtsBefore <- getRTSStats
+    allocatorBefore <- allocatorSnapshot
     allocationBefore <- getAllocationCounter
     run $ do
         allocationAfter <- getAllocationCounter
         (virtualAfter, residentAfter) <- processMemory
+        allocatorAfter <- allocatorSnapshot
         rtsAfter <- getRTSStats
         gcs rtsAfter `shouldBe` gcs rtsBefore
         pure
@@ -267,7 +299,25 @@ sampleWithoutGC run = do
                 { sampledAllocated = toInteger allocationBefore - toInteger allocationAfter
                 , sampledVirtual = virtualAfter - virtualBefore
                 , sampledResident = residentAfter - residentBefore
+                , sampledAllocatorBefore = allocatorBefore
+                , sampledAllocatorAfter = allocatorAfter
                 }
+
+allocatorGrowth :: NativeSample -> Integer
+allocatorGrowth sample = total (sampledAllocatorAfter sample) - total (sampledAllocatorBefore sample)
+  where
+    total snapshot = allocatorArenaBytes snapshot + allocatorMappedBytes snapshot
+
+allocatorSnapshot :: IO AllocatorSnapshot
+allocatorSnapshot = alloca $ \arena -> alloca $ \mapped -> do
+    supported <- c_allocatorSnapshot arena mapped
+    unless (supported == 1) (fail "native allocator residency requires Linux with glibc mallinfo2")
+    arenaBytes <- toInteger <$> peek arena
+    mappedBytes <- toInteger <$> peek mapped
+    pure (AllocatorSnapshot arenaBytes mappedBytes)
+
+foreign import ccall unsafe "ecluse_archive_allocator_snapshot"
+    c_allocatorSnapshot :: Ptr CSize -> Ptr CSize -> IO CInt
 
 retainedProbe :: FilePath -> IO NativeMeasurement
 retainedProbe path = do

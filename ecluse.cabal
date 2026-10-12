@@ -1597,6 +1597,7 @@ test-suite ecluse-residency
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
+  c-sources:          test/residency/cbits/archive-native-memory.c
   other-modules:
     Data.JsonStream.LexerResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
