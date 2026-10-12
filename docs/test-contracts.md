@@ -201,7 +201,8 @@ The `ReadLoadFoundation` scope requires the 25 shared read and stress laws for n
 `FullLoad` adds `MirrorWorker` as a separate requirement.
 PyPI currently reports `MissingLoadScenario MirrorWorker "worker-mirroring"` for that full scope.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
-Their pass floors require calibration, while the existing floors and measured settings stay fixed.
+Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
+The existing floors and measured settings stay fixed.
 
 The allocation, live acceptance, benchmark and regular load workflows produce per-ecosystem
 performance receipts after native measurement. Each receipt binds actual observations and
