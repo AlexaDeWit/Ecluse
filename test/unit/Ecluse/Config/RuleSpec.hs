@@ -137,6 +137,11 @@ rulePolicySpec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
                 `shouldBe` Left [MalformedRule "pinned-fix" "\"AllowByIdentity\" requires \"identity\""]
 
+    describe "DenyIfKnownMalicious validation" $
+        it "rejects malformed unavailable handling on a manual rule declaration" $
+            resolveJson "{\"rules\":{\"manual-mal\":{\"type\":\"DenyIfKnownMalicious\",\"onUnavailable\":\"maybe\"}}}"
+                `shouldBe` Left [MalformedRule "manual-mal" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""]
+
     describe "DenyIfCve (add, patch, and validation)" $ do
         it "adds a DenyIfCve from a minCvss, defaulting onUnavailable to fail-closed" $
             resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}}"

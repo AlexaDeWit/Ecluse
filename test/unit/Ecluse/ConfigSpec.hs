@@ -463,6 +463,11 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
         map mountDatabaseRequirement (Map.elems (configMounts present)) `shouldBe` [DatabaseRequired]
         map mountEpssRequirement (Map.elems (configMounts present)) `shouldBe` [EpssOptional]
     for_ [[], source] $ \sourceEnv -> do
+        it ("rejects malformed unavailable handling on a retained disabled MAL default " <> show sourceEnv) $
+            loadConfig
+                (pubUrlEnv <> sourceEnv)
+                (Just "{\"rules\":{\"deny-known-malicious\":{\"enabled\":false}},\"mounts\":{\"pypi\":{\"rules\":{\"deny-known-malicious\":{\"onUnavailable\":\"maybe\"}}}}}")
+                `shouldBe` Left [PolicyErrors [MalformedRule "deny-known-malicious" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""]]
         for_ [(off, "{}"), ("{}", off), (off, off), (off, partial)] $ \(global, mount) ->
             it ("retains disable through patches " <> show (sourceEnv, global, mount)) $
                 load sourceEnv global mount >>= (\cfg -> malRules cfg `shouldBe` [])
