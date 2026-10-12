@@ -365,6 +365,12 @@ Native deprecation/yank handling, npm publication metadata and tamper-refusal as
 The new shared installation family runs these four IDs for each of `npm` and `pypi`:
 `installation/accepted-install`, `installation/default-denial`, `installation/artifact-integrity`,
 and `installation/artifact-head`, with the ecosystem prefix.
+
+Admission preserves the native version or distribution observation until the contract compares it with the expected result.
+Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
+`core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
+Those negative controls create and inspect their files before checking the contract's failure.
+
 The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
 and `npm/advisories/exact-fix`.
 The PyPI full contract also runs `pypi/telemetry/signals`,
@@ -487,7 +493,9 @@ The other 231 retain their native assertions and receive fixed `integration/<gro
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
 Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
 
-The pure catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+The pure expected catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+Preparation builds the expected plan from that snapshot.
+The integration entrypoint discovers actual case IDs from its fixed Hspec specs before acquiring fixtures.
 Removing a case, profile, or required capability fails catalogue validation.
 Mutation checks exercise every registered case and capability without constructing integration specs.
 The shared runner compares actual Hspec result IDs against each group's declared case set.
