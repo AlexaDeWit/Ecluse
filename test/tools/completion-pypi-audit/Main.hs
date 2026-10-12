@@ -11,7 +11,7 @@ import Ecluse.E2E.Catalogue (catalogue)
 import Ecluse.E2E.Drivers.PyPI (pypiDriver)
 import Ecluse.Runtime.Test.Contract.UnitCatalogue (runtimeUnitCatalogue)
 import Ecluse.Test.Contract.Catalogue (combineCatalogues)
-import Ecluse.Test.Contract.Completion (CompletionScope (ReadOnlyEcosystemFoundation))
+import Ecluse.Test.Contract.Completion (CompletionScope (FullEcosystem))
 import Ecluse.Test.Contract.Ecosystem (ecosystemCompletion)
 import Ecluse.Test.Contract.Integration.Catalogue (integrationCatalogue)
 import Ecluse.Test.Contract.Manifest (auditCompletionFiles, failRunner)
@@ -33,7 +33,7 @@ main = do
     getArgs >>= \case
         [corePlan, coreReport, runtimePlan, runtimeReport, integrationPlan, integrationReport, e2ePlan, subjectReport] ->
             auditCompletionFiles
-                (ecosystemCompletion ReadOnlyEcosystemFoundation pypiDriver)
+                (ecosystemCompletion FullEcosystem pypiDriver)
                 [ (core, corePlan, [coreReport])
                 , (runtime, runtimePlan, [runtimeReport])
                 , (integration, integrationPlan, [integrationReport])

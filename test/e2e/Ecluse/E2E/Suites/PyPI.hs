@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | The explicitly read-only PyPI foundation, pending the separate full-parity activation.
+-- | The full PyPI conformance subject, including named failures for missing drivers.
 module Ecluse.E2E.Suites.PyPI (declarations) where
 
 import Ecluse.E2E.Drivers.PyPI (pypiDriver)
-import Ecluse.Test.Contract.Ecosystem (readOnlyEcosystemFoundation)
+import Ecluse.Test.Contract.Ecosystem (fullEcosystemContract)
 import Ecluse.Test.Contract.Runner (DeclaredGroup)
 
--- | This foundation does not certify full ecosystem conformance.
+-- | Missing required behaviour fails without stopping unrelated contracts.
 declarations :: [DeclaredGroup]
-declarations = readOnlyEcosystemFoundation pypiDriver
+declarations = fullEcosystemContract pypiDriver

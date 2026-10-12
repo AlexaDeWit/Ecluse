@@ -747,7 +747,8 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-The foundation runs 64 E2E cases. It keeps all 49 prior observations, including the Dredger cases.
+The active plan registers 90 E2E cases. It retains all 49 prior observations, including the Dredger cases.
+It adds 15 green-foundation observations and 26 named PyPI missing-capability cases.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 
@@ -1097,11 +1098,13 @@ failure is a task limit reached outside the harness, which sets none. The harnes
 failure with the process limits, the task counts, and the failed attempt's cgroup as it read them,
 and the report counts the boot attempts. Any other boot failure fails the scenario.
 
-Three scenarios stress admission under memory pressure. `npm/herd` sends 100 simultaneous cold
-`typescript` listings to an idle proxy. `npm/warm-under-cold` measures assembled hits and retained
-selected reads while a second generator drives heavy-tier listings that never reuse an assembled
-response. `npm/ramp` steps from 10 to 400 connections, one configured duration per step, and
-reports each step. None of the three joins the concurrency-one pass.
+Three scenarios per ecosystem stress admission under memory pressure.
+`npm/herd` sends 100 simultaneous cold `typescript` listings to an idle proxy.
+`pypi/herd` sends the same burst of cold `boto3` Simple-index requests.
+`npm/warm-under-cold` and `pypi/warm-under-cold` measure assembled hits and retained selected reads.
+A second generator drives heavy-tier listings that never reuse an assembled response.
+`npm/ramp` and `pypi/ramp` step from 10 to 400 connections, one configured duration per step, and report each step.
+None of these six scenarios joins the concurrency-one pass.
 
 The private-copy scenarios model a mirror target that is also the private upstream. Its document
 for a package holds the versions the deployment has mirrored. Every listing decodes its own private
@@ -1165,16 +1168,16 @@ heap overflows as its reading, so they do not fail it. It fails only when no lim
 successes a scheduled run checks: one floor per scenario, pass, and pod shape, for npm and PyPI
 alike. A run held to the floors fails when a count is below its floor. A floor catches what the
 zero-success check cannot: a scenario at a tenth of its normal successes is not at zero. The floors
-are loose. Each is half the lowest count of ten nightly runs, so it leaves room for the spread
-between nights and for a change that moves throughput by a few percent. The load test never gates a
+are loose. Each is half the lowest count of its reviewed calibration runs, so it leaves room for
+variation between runs and for a change that moves throughput by a few percent. The load test never gates a
 merge: a breach turns only its own scheduled or dispatched run red.
 
 | Count | What its floor holds |
 |---|---|
 | Loaded pass | The successes in the scenario's window |
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
-| `npm/ramp` | Every step. The one floor comes from the lowest step of the ten runs, and each step must reach it |
-| `npm/warm-under-cold` | Both loads, the measured one and the concurrent one |
+| `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
+| `npm/warm-under-cold`, `pypi/warm-under-cold` | Both loads, the measured one and the concurrent one |
 | `npm/worker-mirroring` | The jobs the worker completes, under `unlimited` only, the one shape that runs it |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
 
@@ -1537,7 +1540,8 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-The read-only PyPI foundation has a separate name until the full PyPI contract is activated.
+PyPI runs the full composition and completion audit. Its missing write drivers produce 26 named failed cases.
+All 17 existing PyPI cases still execute. These failures keep the E2E aggregate and terminal CI gate red.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.

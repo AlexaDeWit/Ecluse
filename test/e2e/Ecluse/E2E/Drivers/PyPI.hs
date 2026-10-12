@@ -15,7 +15,7 @@ import Ecluse.E2E.PyPI.InstallE2ESpec (nativeInstallationContract)
 import Ecluse.E2E.TelemetryE2ESpec (pypiReadTelemetryFamily)
 import Ecluse.Test.Contract.Ecosystem
 
--- | Full parity retains each missing write law. The foundation explicitly selects read families.
+-- | Missing write drivers retain their required laws as named failures.
 pypiDriver :: EcosystemDriver () () () () ()
 pypiDriver =
     EcosystemDriver

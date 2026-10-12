@@ -28,7 +28,8 @@ Use equivalent native fixtures for a shared obligation, and keep each native ass
 Declare obligations independently of drivers, registrations, and current production capability flags.
 A missing required family must produce a named failed outcome while other contracts execute.
 Capability flags may describe availability, but must not remove a full-contract requirement.
-The read-only PyPI foundation names its smaller scope and does not claim full completion.
+PyPI runs the full contract and fails missing required behaviours by name.
+Those failures identify incomplete conformance and do not claim production write support.
 Keep blocked rule types explicit in `adapterRuleBlocks` when the protocol cannot supply their meaning.
 
 Register stable case IDs, lifecycle groups, and concrete drivers for each supported family.
