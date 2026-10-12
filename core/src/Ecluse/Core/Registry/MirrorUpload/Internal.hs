@@ -16,8 +16,6 @@ module Ecluse.Core.Registry.MirrorUpload.Internal (
     expectedIdentityMatches,
     expectedTargetMatchesWith,
     targetIdentityConflict,
-    inventoryPackage,
-    inventoryVersion,
     inventoryDetails,
     inventoryFiles,
     inventoryReadData,
@@ -139,14 +137,6 @@ uploadFile = mudFile
 -- | Required ecosystem upload metadata.
 uploadMetadata :: MirrorUploadData metadata -> metadata
 uploadMetadata = mudMetadata
-
--- | The inventory's validated package identity.
-inventoryPackage :: MirrorInventory -> PackageName
-inventoryPackage = pkgName . inventoryDetails
-
--- | The inventory's validated version identity.
-inventoryVersion :: MirrorInventory -> Version
-inventoryVersion = pkgVersion . inventoryDetails
 
 -- | Reject a mismatched identity or source payload before deriving the complete physical inventory.
 checkedMirrorInventory :: PackageName -> Version -> VersionDoc -> MirrorReadData -> Either PublishFault MirrorInventory

@@ -24,7 +24,7 @@ import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
 import Ecluse.Core.Package (PackageInfo (infoVersions))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
-import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, verifyMirrorBytes)
+import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, inventoryPackage, inventoryVersion, verifyMirrorBytes)
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -48,7 +48,10 @@ spec = do
                     transport = MirrorTransport manager (pure (Just (ClientCredential (Just "publisher") (mkSecret "password")))) defaultLimits passthroughTracingPort
                     writer = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) target pypiPublishCodec
                 version <- expectRight (mpPrepareVersion writer (unscopedPyPI "example") (pypiVersion "1") snapshot)
-                let file = NE.head (inventoryFiles (pmvInventory version))
+                let inventory = pmvInventory version
+                    file = NE.head (inventoryFiles inventory)
+                inventoryPackage inventory `shouldBe` unscopedPyPI "example"
+                inventoryVersion inventory `shouldBe` pypiVersion "1"
                 verified <- expectRight (verifyMirrorBytes file bytes)
                 prepared <- pmvPrepareUpload version (const (pure ())) file verified >>= expectRight
                 publishPrepared prepared (PublishPlan (pypiVersion "1")) `shouldReturn` Right ()

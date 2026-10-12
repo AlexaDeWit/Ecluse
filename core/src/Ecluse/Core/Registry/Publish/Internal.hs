@@ -8,10 +8,7 @@ Every request disables redirects, and credentials are minted for each exchange.
 module Ecluse.Core.Registry.Publish.Internal (
     PublishPlan (..),
     PreparedMirrorVersion (..),
-    pmvInventory,
-    pmvPrepareUpload,
     PreparedMirrorUpload (..),
-    publishPrepared,
     PublishCodec (..),
     fetchVersionList,
     MirrorTransport (..),
@@ -54,18 +51,6 @@ data PreparedMirrorVersion = PreparedMirrorVersion
 newtype PreparedMirrorUpload = PreparedMirrorUpload
     { runPreparedUpload :: PublishPlan -> IO (Either PublishFault ())
     }
-
--- | The complete expected source inventory bound to this preparation capability.
-pmvInventory :: PreparedMirrorVersion -> MirrorInventory
-pmvInventory = pmvInventoryValue
-
--- | Prepare one verified member without accepting replacement bytes.
-pmvPrepareUpload :: PreparedMirrorVersion -> (Int -> IO ()) -> ExpectedMirrorFile -> VerifiedArtifactBytes -> IO (Either PublishFault PreparedMirrorUpload)
-pmvPrepareUpload = pmvPrepareUploadAction
-
--- | Run the bound write with its captured verified body and required upload metadata.
-publishPrepared :: PreparedMirrorUpload -> PublishPlan -> IO (Either PublishFault ())
-publishPrepared = runPreparedUpload
 
 -- | The codec owns source and upload metadata while the worker owns whole-version orchestration.
 data PublishCodec = forall source metadata. PublishCodec

@@ -32,4 +32,14 @@ module Ecluse.Core.Registry.MirrorUpload (
     uploadMetadata,
 ) where
 
+import Ecluse.Core.Package (PackageDetails (pkgName, pkgVersion), PackageName)
 import Ecluse.Core.Registry.MirrorUpload.Internal
+import Ecluse.Core.Version (Version)
+
+-- | The inventory's validated package identity.
+inventoryPackage :: MirrorInventory -> PackageName
+inventoryPackage = pkgName . inventoryDetails
+
+-- | The inventory's validated version identity.
+inventoryVersion :: MirrorInventory -> Version
+inventoryVersion = pkgVersion . inventoryDetails
