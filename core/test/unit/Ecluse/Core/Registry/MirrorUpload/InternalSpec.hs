@@ -137,7 +137,7 @@ sourceInventoryWith :: (ByteString -> [Hash]) -> NonEmpty (EntryKey, Text, Text,
 sourceInventoryWith hashes files = checkedMirrorInventory name version doc (PyPIMirrorRead document)
   where
     name = unscopedPyPI "demo"
-    version = pypiVersion "1.0"
+    version = pypiVersion "1"
     details = (sampleDetails name version){pkgArtifacts = fmap artifact files}
     document = simpleDocument mempty (map entry (toList files))
     doc = VersionDoc details (Just (fst pypiSimpleCached document))
