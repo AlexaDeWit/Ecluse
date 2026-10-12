@@ -200,7 +200,8 @@ Provider coverage runs outside measured operations. New PyPI stress rows add sam
 
 The `ReadLoadFoundation` scope requires the 25 shared read and stress laws for npm and PyPI.
 `FullLoad` adds `MirrorWorker` as a separate requirement.
-PyPI currently reports `MissingLoadScenario MirrorWorker "worker-mirroring"` for that full scope.
+Active npm and PyPI fixtures and receipts use `FullLoad`, including their native worker rows.
+PyPI also requires its three managed-read comparisons.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
 Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
 The existing floors and measured settings stay fixed.
