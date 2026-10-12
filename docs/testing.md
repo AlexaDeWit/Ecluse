@@ -756,9 +756,9 @@ The npm subject composes the former serving and write arrangements under one eco
 The shared-system subject owns cross-ecosystem and core capability cases that belong to no single ecosystem.
 The subject matrix disables fail-fast, so one failure does not stop the other subjects.
 Preparation, subject runs, and the execution audit all gate.
-Each ecosystem job also audits its report against the integration plan and report from the
-same workflow attempt. The audit checks compiled plans, required laws, execution status,
-source, architecture, run identity, and the E2E image identity where it applies.
+Each ecosystem job also audits its report against the core unit, runtime unit and integration
+plans and reports from the same workflow attempt. The audit checks compiled plans, required laws,
+execution status, source, architecture, run identity, and the E2E image identity where it applies.
 The existing change classifier alone permits a documentation-only omission.
 The audit runs after failed or cancelled subjects and rejects missing artifacts or execution results.
 It compares the source revision, architecture, image identity, plan digest, groups, and case IDs.
@@ -1521,10 +1521,10 @@ An incomplete driver cannot reduce either required list. Discovery is pure, and 
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
 The read-only PyPI foundation has a separate name until the full PyPI contract is activated.
-CI uploads the actual integration plan and report from the instrumented integration leg.
-Each ecosystem job downloads them and audits them with its own E2E report.
-The two tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
-The integration report has no product image, while E2E binds the prepared image digest.
+CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
+integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
+All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
+The lower tiers have no product image, while E2E binds the prepared image digest.
 
 Measurement runners keep their existing process and sampling boundaries.
 `checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
@@ -1652,7 +1652,8 @@ with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, 
 shared-system subject jobs and their completeness audit. The Verdaccio and CodeArtifact
 package-store subjects run in separate jobs. `codecov-notify` follows the coverage legs
 and releases the Codecov statuses.
-The integration coverage leg uploads its plan and execution report for the ecosystem completion audits.
+The core unit, runtime unit and integration coverage legs upload their plan and execution reports
+for the ecosystem completion audits.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64

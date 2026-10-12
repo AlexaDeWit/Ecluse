@@ -74,6 +74,24 @@ tasks:
     desc: Run the fast, gating unit suites (core + app)
     cmds:
       - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
+  test-unit-core-receipt:
+    desc: Run core unit tests and write their completion plan and report
+    env:
+      ECLTEST_UNIT_PLAN_PATH: scratchpad/unit/core/unit-plan.json
+      ECLTEST_UNIT_REPORT_PATH: scratchpad/unit/core/unit-report.json
+    cmds:
+      - mkdir -p scratchpad/unit/core
+      - rm -f scratchpad/unit/core/unit-plan.json scratchpad/unit/core/unit-report.json
+      - cabal test ecluse-core-unit --test-show-details=direct
+  test-unit-runtime-receipt:
+    desc: Run runtime unit tests and write their completion plan and report
+    env:
+      ECLTEST_UNIT_PLAN_PATH: scratchpad/unit/runtime/unit-plan.json
+      ECLTEST_UNIT_REPORT_PATH: scratchpad/unit/runtime/unit-report.json
+    cmds:
+      - mkdir -p scratchpad/unit/runtime
+      - rm -f scratchpad/unit/runtime/unit-plan.json scratchpad/unit/runtime/unit-report.json
+      - cabal test ecluse-runtime-unit --test-show-details=direct
   test-integration:
     desc: Run the complete fixed integration suite
     cmds:

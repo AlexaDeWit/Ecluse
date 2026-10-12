@@ -263,13 +263,16 @@ Failed-attempt reports, logs, and status remain available for diagnosis and cann
 The full audit requires every group and case exactly once, with matching execution identities.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
 
-For a local cross-tier completion audit, give integration and E2E the same `ECLTEST_SOURCE`
+For a local cross-tier completion audit, give all tiers the same `ECLTEST_SOURCE`
 and `ECLTEST_RUN_ID`. Set `ECLTEST_ARCHITECTURE` to `arm64` or `amd64` for the host.
-Run `task test-integration`, then the staged E2E commands above.
+Run `task test-unit-core-receipt`, `task test-unit-runtime-receipt`, and `task test-integration`.
+Then run the staged E2E commands above.
+Set `ECLTEST_CORE_UNIT_ARTIFACT_DIR` to `scratchpad/unit/core`.
+Set `ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR` to `scratchpad/unit/runtime`.
 Set `ECLTEST_INTEGRATION_ARTIFACT_DIR` to `scratchpad/integration/$ECLTEST_RUN_ID`.
 Run `task test-e2e-npm-completion` or `task test-e2e-pypi-completion`.
-The completion audit reads the actual integration and subject E2E reports.
-It checks required laws and execution identities against both compiled plans.
+The completion audit reads the actual reports from all four tiers.
+It checks required laws and execution identities against their compiled plans.
 
 The `task test-integration` wrapper supplies container ownership and daemon exclusion controls.
 Unit declaration audits run through `task test`. Smoke and residency retain their existing commands.
