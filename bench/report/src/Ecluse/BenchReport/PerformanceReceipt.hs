@@ -17,10 +17,9 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Version (showVersion)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import System.Exit (ExitCode)
 import System.FilePath ((</>))
 import System.Info (compilerName, compilerVersion)
-import UnliftIO.Exception (try, tryAny)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.BenchReport.Performance
 import Ecluse.BenchReport.PerformanceCommand
@@ -77,7 +76,7 @@ writePerformanceReceipts kind root conditionsPath = do
 
 publishSubject :: FilePath -> Text -> Map Text Text -> NativeOutcome -> Text -> Maybe NativePerformance -> Text -> IO Bool
 publishSubject root kind conditions outcome attempt native ecosystem = do
-    result <- try @ExitCode $ tryAny $ do
+    result <- tryAny $ do
         let recorded = maybe conditions (\evidence -> Map.union (npConditions evidence) conditions) native
         obligation <- either failRunner pure (compileObligation kind ("ecosystem-" <> ecosystem) recorded)
         identity <- readRequiredPlanIdentity False (digest (jsonLine obligation))
@@ -94,8 +93,7 @@ publishSubject root kind conditions outcome attempt native ecosystem = do
         pure (null faults)
     case result of
         Left problem -> putTextLn ("performance receipt: " <> ecosystem <> ": " <> show problem) >> pure False
-        Right (Left problem) -> putTextLn ("performance receipt: " <> ecosystem <> ": " <> show problem) >> pure False
-        Right (Right passed) -> pure passed
+        Right passed -> pure passed
 
 -- | Diagnostic reasons and floor eligibility share the native audit's policy.
 receiptDiagnostic :: Text -> Map Text Text -> Maybe NativePerformance -> Maybe Text
