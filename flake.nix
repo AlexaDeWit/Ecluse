@@ -354,15 +354,13 @@
         };
 
         # ---- Dev-shell composition -------------------------------------------
-        # Env shared by every shell. A UTF-8 locale, so hspec's '✔' and other
-        # Unicode output encode regardless of host locale. Plus the NODE_PATH that
-        # makes `require("semver")` resolve for the npm version oracle (fixture
-        # generator and smoke suite).
         shellEnv = {
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
           AWS_EC2_METADATA_DISABLED = "true";
+          # GHC loads archive libraries while evaluating compile-time splices.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.zlib pkgs.bzip2 pkgs.xz ];
         };
 
         # CI shares one closure: toolchain, gate, ops, and bench.

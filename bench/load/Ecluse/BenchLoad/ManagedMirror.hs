@@ -11,6 +11,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status304, status404)
@@ -120,8 +121,8 @@ stateApp latency fixture advanced churn counts request respond = do
     input <- requireFixture fixture
     newer <- readIORef advanced
     changing <- readIORef churn
-    let path = encodeUtf8 ("/" <> mirrorStateBucket <> "/" <> projectKey (fixtureTarget input) mirrorPackage <> "/project.json")
-        revision = encodeUtf8 ("\"" <> (if changing then show sequenceNumber else if newer then "new" else "old") <> "\"")
+    let path = TE.encodeUtf8 ("/" <> mirrorStateBucket <> "/" <> projectKey (fixtureTarget input) mirrorPackage <> "/project.json")
+        revision = TE.encodeUtf8 ("\"" <> (if changing then show sequenceNumber else if newer then "new" else "old") <> "\"")
         unchanged = lookup hIfNoneMatch (requestHeaders request) == Just revision
         body = if newer then fixtureNew input else fixtureOld input
     if rawPathInfo request /= path

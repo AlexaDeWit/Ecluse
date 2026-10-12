@@ -186,13 +186,13 @@ stateApp latency fixture request respond = do
             bytes <- LBS.toStrict <$> strictRequestBody request
             let condition = case previous of
                     Nothing -> lookup "If-None-Match" headers == Just "*"
-                    Just (revision, _) -> lookup "If-Match" headers == Just revision
-                revision = "\"" <> encodeUtf8 (hexSha256Of bytes) <> "\""
+                    Just (storedRevision, _) -> lookup "If-Match" headers == Just storedRevision
+                nextRevision = "\"" <> encodeUtf8 (hexSha256Of bytes) <> "\""
             if condition
                 then do
-                    modifyIORef' (wfObjects fixture) (Map.insert key (revision, bytes))
+                    modifyIORef' (wfObjects fixture) (Map.insert key (nextRevision, bytes))
                     count fixture "state-write"
-                    respond (responseLBS status200 [("ETag", revision)] "")
+                    respond (responseLBS status200 [("ETag", nextRevision)] "")
                 else respond (responseLBS status412 [(hContentType, "application/xml")] "<Error><Code>PreconditionFailed</Code></Error>")
         _ -> respond (responseLBS status400 [] "unexpected object request")
 

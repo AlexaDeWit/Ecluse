@@ -6,6 +6,7 @@
 module Ecluse.Test.Contract.Metadata.Fetch (ReadFixture (..), metadataFetchContract) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception (throwIO)
 import Data.Aeson (Value, encode)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -15,7 +16,6 @@ import Network.HTTP.Client (Request, defaultManagerSettings, newManager, parseRe
 import Network.HTTP.Types (hLocation, mkStatus, status200, status302)
 import Network.HTTP.Types.Header (hContentEncoding)
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, mkPackageName)
