@@ -386,7 +386,7 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 
 `Sweep.Types` owns the fixture and operation records. `Sweep` owns shared inventory, listing and refusal assertions.
 The Dredger provider keeps five isolated lifecycle brackets: identity, scored advisory, MAL advisory, recovery and rollout.
-All four remain inside the single schedulable `npm/dredger` group.
+All five remain inside the single schedulable `npm/dredger` group.
 The detailed tables below preserve all 49 original E2E observations and descriptions.
 Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
 
