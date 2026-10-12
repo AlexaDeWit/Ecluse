@@ -31,9 +31,6 @@ extra-source-files:
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
-  test/fixtures/package-store/pypi/*.whl
-  test/fixtures/package-store/pypi/*.tar.gz
-  test/fixtures/package-store/pypi/SHA256SUMS
   test/fixtures/package-store/pypi/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
