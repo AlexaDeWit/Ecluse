@@ -37,7 +37,9 @@ case "$(basename "$0")" in
   ecluse-e2e-*)
     test "$#" = 0
     test "$ECLTEST_CONTAINER_LOCK" = held
-    echo '{"passed":true}' > "$ECLTEST_REPORT_PATH"
+    if [ "${TEST_MISSING_REPORT:-0}" = 0 ]; then
+      printf '{"passed":%s}\n' "${TEST_PASSED:-true}" > "$ECLTEST_REPORT_PATH"
+    fi
     if [ "${TEST_BLOCK_RUN:-}" = 1 ]; then
       touch "$TEST_WORK/running"
       while [ ! -f "$TEST_WORK/release-run" ]; do sleep 0.01; done
@@ -128,9 +130,25 @@ reject env TEST_BUILD_FAIL=1 bash "$script" pypi
 reject bash "$script" audit
 bash "$script" pypi
 status=0
-TEST_RUN_STATUS=7 bash "$script" pypi || status=$?
+TEST_RUN_STATUS=7 TEST_PASSED=false bash "$script" pypi || status=$?
+[ "$status" = 7 ]
+[ -s "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+jq -e '.passed == false' "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" >/dev/null
+current_attempt="$(dirname "$(find "$ECLTEST_ARTIFACT_DIR/reports/attempts" -name status -exec grep -l '^7$' {} +)")"
+[ "$(cat "$current_attempt/status")" = 7 ]
+cmp "$current_attempt/report.json" "$ECLTEST_ARTIFACT_DIR/reports/pypi.json"
+reject bash "$script" audit
+bash "$script" pypi
+status=0
+TEST_RUN_STATUS=7 TEST_MISSING_REPORT=1 bash "$script" pypi || status=$?
 [ "$status" = 7 ]
 [ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+reject bash "$script" audit
+bash "$script" pypi
+reject env TEST_MISSING_REPORT=1 bash "$script" pypi
+grep -q 'runner completed without a current execution report' "$work/rejected.log"
+[ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+find "$ECLTEST_ARTIFACT_DIR/reports/attempts" -name status -exec grep -l '^missing-report$' {} + | grep -q .
 reject bash "$script" audit
 bash "$script" pypi
 reject bash "$script" pypi --group forbidden

@@ -791,8 +791,8 @@ An artifact lock prevents overlapping preparation, loading, execution, or auditi
 `test-e2e-audit` checks current reports against the complete plan and identity.
 Rerun a subject with its fixed task, such as `task test-e2e-pypi`.
 Each attempt invalidates its previous published report before checking prerequisites.
-Only a successful runner and cleanup publish the current `reports/<subject>.json`.
-Failed reports, status, and logs remain under `reports/attempts/` and cannot satisfy the audit.
+Each nonempty current report publishes to `reports/<subject>.json`, including after a failed runner or cleanup.
+The command preserves its failure status, and the audit rejects failed results. Attempt reports, status, and logs remain under `reports/attempts/`.
 Test entrypoints accept no custom selection arguments.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds.
 The separate manifest and audit commands appear in the [coverage and reproduction map](test-contracts.md#reproduction).

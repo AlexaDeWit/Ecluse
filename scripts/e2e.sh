@@ -136,13 +136,14 @@ run_attempt() {
   status=$?
   set -e
   printf '%s\n' "$status" > "$attempt/status"
-  [ "$status" -eq 0 ] || return "$status"
   if [ ! -s "$ECLTEST_REPORT_PATH" ]; then
+    [ "$status" -eq 0 ] || return "$status"
     printf 'missing-report\n' > "$attempt/status"
     fail "runner completed without a current execution report"
   fi
   cp "$ECLTEST_REPORT_PATH" "$root/reports/$shard.json.tmp"
   mv "$root/reports/$shard.json.tmp" "$root/reports/$shard.json"
+  return "$status"
 }
 
 audit() {
