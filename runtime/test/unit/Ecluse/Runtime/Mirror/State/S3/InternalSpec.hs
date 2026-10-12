@@ -8,6 +8,7 @@ module Ecluse.Runtime.Mirror.State.S3.InternalSpec (spec) where
 import Amazonka qualified as AWS
 import Amazonka.Auth (fromKeys)
 import Data.ByteString qualified as BS
+import Data.List (lookup)
 import Network.HTTP.Types
 import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, responseStream, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)

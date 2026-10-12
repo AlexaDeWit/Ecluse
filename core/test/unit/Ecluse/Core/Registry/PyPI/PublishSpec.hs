@@ -11,6 +11,7 @@ import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
+import Data.List (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (defaultManagerSettings, newManager)

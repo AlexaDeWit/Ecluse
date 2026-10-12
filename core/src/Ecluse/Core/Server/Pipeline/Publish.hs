@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Pipeline.Publish (
     servePublish,
 ) where
 
+import Data.List (lookup)
 import Network.HTTP.Types (ResponseHeaders, Status, hContentType, mkStatus, status400, status401, status403, status413, status500, status502)
 import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), ResponseReceived, getRequestBodyChunk, requestBodyLength, requestHeaders)
 

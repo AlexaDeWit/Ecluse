@@ -7,7 +7,7 @@ module Ecluse.Core.Server.MirrorViewIntegrationSpec (spec) where
 
 import Data.Aeson (Object, Value (Array, Object, String), eitherDecode, encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.List (dropWhileEnd)
+import Data.List (dropWhileEnd, lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)

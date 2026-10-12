@@ -44,7 +44,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Types (ArtifactRequest (..), TarballR
 import Ecluse.Core.Server.Response (ServeDecision (Admit), mkRefusal, serveDecisionOf)
 import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Server.Stream (RelayResponder (..), UpstreamResult (..))
-import Ecluse.Core.Version (Version, versionRaw)
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Bind GET and HEAD to the same metadata selection and bounded relay.
 sidecarAction :: TarballReplies response -> Method -> PackageName -> Version -> Filename -> ResponseAction response
@@ -227,8 +227,8 @@ publicSelectionAdmitted ctx expected = do
     result <- tryAny (preparePublicMetadata (arRuntime ctx) deps (arPackage ctx) (arVersion ctx) >>= liftIO . executePrepared)
     case result of
         Right (Right readVersion) | Just doc <- vrVersion readVersion -> do
-            let info = PackageInfo (arPackage ctx) (Map.singleton (versionRaw (arVersion ctx)) (vdDetails doc)) Map.empty []
-            if maybe True (\mirror -> publicMirrorCoverage (Map.singleton (versionRaw (arVersion ctx)) mirror) info) expected
+            let info = PackageInfo (arPackage ctx) (Map.singleton (renderVersion (arVersion ctx)) (vdDetails doc)) Map.empty []
+            if maybe True (\mirror -> publicMirrorCoverage (Map.singleton (renderVersion (arVersion ctx)) mirror) info) expected
                 then do
                     evaluation <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
                     decide <- liftIO (newEvaluator evaluation (pdRules deps))

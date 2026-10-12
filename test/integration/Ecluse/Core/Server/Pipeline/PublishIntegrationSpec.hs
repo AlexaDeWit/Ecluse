@@ -8,6 +8,7 @@
 module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Text qualified as T
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
 import Network.Wai (
