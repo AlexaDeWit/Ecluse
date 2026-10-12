@@ -1529,7 +1529,10 @@ The integration report has no product image, while E2E binds the prepared image 
 Measurement runners keep their existing process and sampling boundaries.
 `checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
 Both the benchmark and allocation harness call that loader.
-The load harness also refuses empty fixtures and duplicate scenario names before running work.
+The load harness composes 25 shared read and stress laws with `readLoadContract` for each ecosystem.
+`requiredLoadLaws` stays independent of each fixture's actual scenario names.
+`loadCoverageGaps` names a missing or duplicate law before measured work begins.
+`FullLoad` also requires worker mirroring, which PyPI does not yet provide.
 Existing residency registration checks still require captures, positive limits, and every calibrated shape.
 The shared retention contract changes neither 2,000/16,000 repetition counts nor the strict live-byte allowance.
 
