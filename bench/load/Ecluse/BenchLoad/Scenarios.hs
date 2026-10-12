@@ -13,26 +13,31 @@ module Ecluse.BenchLoad.Scenarios (
 
 import Data.Set qualified as Set
 
+import Ecluse.BenchLoad.Contract (LoadScope (FullLoad, ReadLoadFoundation), loadCoverageGaps)
 import Ecluse.BenchLoad.Floors (FloorKey, Pass (ConcurrencyOne, Loaded))
 import Ecluse.BenchLoad.Harness (Scenario (scenarioInProcess, scenarioName, scenarioServiceTime), UpstreamFixture (fixtureEcosystem, fixtureScenarios))
 import Ecluse.BenchLoad.Npm (npmFixture)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited))
 import Ecluse.BenchLoad.PyPI (pypiFixture)
 import Ecluse.BenchLoad.Selection (scenarioKey, selectScenario)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Test.EcosystemBench (checkBenchmarkCoverage)
 
 -- | Each ecosystem's fixture, in report order.
 fixtures :: [UpstreamFixture]
 fixtures = [npmFixture, pypiFixture]
 
--- | Reject missing providers and empty or ambiguous scenario registrations before loading work.
+-- | Reject omitted read laws and ambiguous scenario identities before loading work.
 checkFixtureCoverage :: [UpstreamFixture] -> Either Text ()
 checkFixtureCoverage registered = do
     checkBenchmarkCoverage (map fixtureEcosystem registered)
     for_ registered $ \fixture -> do
-        let names = map scenarioName (fixtureScenarios fixture)
-        when (null names) (Left ("empty load fixture: " <> show (fixtureEcosystem fixture)))
-        when (length names /= Set.size (Set.fromList names)) (Left ("duplicate load scenarios: " <> show (fixtureEcosystem fixture)))
+        let scope = case fixtureEcosystem fixture of
+                Npm -> FullLoad
+                PyPI -> ReadLoadFoundation
+                RubyGems -> FullLoad
+            gaps = loadCoverageGaps scope (fixtureEcosystem fixture) (map scenarioName (fixtureScenarios fixture))
+        unless (null gaps) (Left ("load contract gaps for " <> show (fixtureEcosystem fixture) <> ": " <> show gaps))
 
 -- | The scenario an ecosystem-qualified key names.
 findScenario :: Text -> Maybe Scenario

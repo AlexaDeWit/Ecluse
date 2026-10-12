@@ -10,10 +10,14 @@ module Ecluse.BenchLoad.PyPI (
     pypiFixture,
     pypiPrivateCopy,
     pypiLoadNotes,
+    selectWarmArtifacts,
+    indexStubWithArtifacts,
+    wheelStubWith,
 ) where
 
 import Control.Concurrent (threadDelay)
-import Data.Aeson (Value, eitherDecode, encode, object, (.=))
+import Data.Aeson (Value, eitherDecode, encode, object, (.:), (.=))
+import Data.Aeson.Types (Pair)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (dropWhileEnd)
 import Data.List qualified as List
@@ -21,52 +25,53 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
-import Network.Wai (Application, Request, pathInfo, responseLBS)
+import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 
-import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
+import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttp), Load (Load), LoadKnobs (..), Scenario, UpstreamFixture (..), proxied, scenario)
-import Ecluse.BenchLoad.PatternScenario (patternScenarios)
-import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
+import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveHttp, DriveRamp), Load (Load), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..))
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Selection (evictionEntries)
+import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Package (artFilename, artUrl, infoVersions, pkgArtifacts)
+import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
-import Ecluse.Test.Corpus (CorpusPackage (cpWeight), cpName, pypiCorpusPackages)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, pypiCorpusPackages, readCorpusPins)
 import Ecluse.Test.Corpus.Subset (newestPyPIShare)
+import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 
 -- | The supported PyPI read paths, with no mirror worker or publishing stand-in.
 pypiFixture :: UpstreamFixture
-pypiFixture =
-    UpstreamFixture
-        { fixtureEcosystem = PyPI
-        , fixtureScenarios =
-            [ indexColdScenario
-            , shippedAdvisories PyPI indexColdScenario
-            , allRulesAdvisories PyPI indexColdScenario
-            ]
-                <> privateCopyScenarios pypiPrivateCopy
-                <> [ indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
-                   , revalidateScenario
-                   , shippedAdvisories PyPI revalidateScenario
-                   , cacheFitsScenario
-                   , cacheEvictsScenario
-                   , wheelScenario PrivateWheel
-                   , wheelScenario PublicOnboarding
-                   ]
-                <> patternScenarios
-                    PyPI
-                    pypiCorpusPackages
-                    (\knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
-                    ( \knobs bodies _artifacts -> do
-                        rewritten <- newIORef mempty
-                        pure (indexStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
-                    )
-                    indexUrl
+pypiFixture = readLoadContract pypiReadDriver []
+
+pypiReadDriver :: LoadReadDriver
+pypiReadDriver =
+    LoadReadDriver
+        { lrdPrivateCopy = pypiPrivateCopy
+        , lrdColdMetadata = indexColdScenario
+        , lrdAssembledHit = indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
+        , lrdRevalidate = revalidateScenario
+        , lrdCacheFits = cacheFitsScenario
+        , lrdCacheEvicts = cacheEvictsScenario
+        , lrdPrivateArtifact = wheelScenario PrivateWheel
+        , lrdPublicArtifact = wheelScenario PublicOnboarding
+        , lrdArtifactCeiling = wheelCeilingScenario
+        , lrdHerd = herdScenario
+        , lrdWarmUnderCold = warmUnderColdScenario
+        , lrdRamp = rampScenario
+        , lrdPatternPrivate = \knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lrdPatternPublic = \knobs bodies _artifacts -> do
+            rewritten <- newIORef mempty
+            pure (indexStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
         }
 
 -- | State the effective eviction size and the limits of the service-time attribution.
@@ -166,11 +171,92 @@ wheelScenario source =
             , "GET a wheel after a private index 404, public index admission, and public artifact fetch. Public cache TTL 0 preserves admission work under load, with concurrent misses coalesced. No mirror job runs."
             )
 
+wheelCeilingScenario :: Scenario
+wheelCeilingScenario =
+    (wheelScenario PrivateWheel)
+        { scenarioName = "wheel-ceiling"
+        , scenarioDescription = "Measure the private wheel relay at four times the base concurrency under load, one connection for service time, and 2 ms upstream latency. The payload knob sets the streamed body size."
+        , scenarioConcurrencyScale = 4
+        , scenarioUpstreamLatencyMicros = Just 2_000
+        , scenarioPublicLegUnavailableReason = Just "the private-hit artifact relay has no public leg"
+        }
+
+herdScenario :: Scenario
+herdScenario =
+    ( scenario
+        "herd"
+        ("Send " <> show herdSize <> " simultaneous cold GET /pypi/simple/boto3 to an idle proxy, once, with public cache TTL 0 and no warm-up. Any admission that reacts to measured memory sees this burst late.")
+        ( \knobs k ->
+            withUnprimedIndexProxy knobs 0 Nothing pypiCorpusPackages (\port -> [indexUrl port "boto3"]) $ \proxy -> \case
+                url : _ -> k (proxied proxy (DriveBurst herdSize url))
+                [] -> benchFail "pypi/herd: no URL to drive"
+        )
+    )
+        { scenarioServiceTime = False
+        }
+
+warmUnderColdScenario :: Scenario
+warmUnderColdScenario =
+    ( scenario
+        "warm-under-cold"
+        "With cache TTL 3600, measure assembled-response hits and retained selected-version reads for the corpus outside the heavy tier, while a second generator drives listings of the heavy tier at the same concurrency. The heavy tier's private indexes change on every request, so those listings never reuse an assembled response."
+        ( pairedLoad
+            WarmLoadDriver
+                { wldEcosystem = PyPI
+                , wldPackages = pypiCorpusPackages
+                , wldListingUrl = indexUrl
+                , wldArtifactUrl = \port artifact -> localhost port <> "/pypi/" <> saProxyPath artifact
+                , wldSelect = selectWarmArtifacts
+                , wldPrivate = wheelStubWith
+                , wldPublic = indexStubWithArtifacts
+                }
+        )
+    )
+        { scenarioServiceTime = False
+        }
+
+-- | Resolve warm selected reads from captured PyPI pins through the production projection.
+selectWarmArtifacts :: [CorpusPackage] -> Map Text LByteString -> IO (Map Text SelectedArtifact)
+selectWarmArtifacts packages captures = do
+    pins <- readCorpusPins (.: "pypiPins") >>= either (benchFail . toText) pure
+    fmap Map.fromList $ forM packages $ \package -> either benchFail pure $ do
+        let name = cpName package
+        version <- maybe (Left ("missing captured PyPI pin: " <> name)) Right (Map.lookup name pins)
+        bytes <- maybe (Left ("missing captured PyPI body: " <> name)) Right (Map.lookup name captures)
+        (info, _) <- first show (projectPyPIIndex defaultLimits (cpPackage package) (LBS.toStrict bytes))
+        details <- maybe (Left ("captured PyPI version is absent: " <> version)) Right (Map.lookup version (infoVersions info))
+        let artifact :| _ = pkgArtifacts details
+        path <- maybe (Left "captured artifact filename has no PyPI route") Right (distributionPath (cpPackage package) (artFilename artifact))
+        pure (name, SelectedArtifact path (artUrl artifact))
+
+rampScenario :: Scenario
+rampScenario =
+    ( scenario
+        "ramp"
+        ("GET the weighted Simple-index corpus with public cache TTL 0, holding " <> T.intercalate ", " (map show rampSteps) <> " connections in turn for the configured duration each. Successes should level off past saturation, not fall.")
+        ( \knobs k ->
+            withUnprimedIndexProxy knobs 0 Nothing pypiCorpusPackages (weightedMix cpWeight indexUrl pypiCorpusPackages) $ \proxy urls ->
+                k (proxied proxy (DriveRamp rampSteps (urlLoad urls)))
+        )
+    )
+        { scenarioServiceTime = False
+        }
+
 workingSet :: LoadKnobs -> [CorpusPackage]
 workingSet knobs = take (max 1 (lkWorkingSet knobs)) pypiCorpusPackages
 
 withIndexProxy :: LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (CorpusPackage -> Int) -> (ProxyProcess -> [Text] -> IO a) -> IO a
-withIndexProxy knobs ttl entries packages weight body = do
+withIndexProxy knobs ttl entries packages weight body =
+    withUnprimedIndexProxy knobs ttl entries packages (weightedMix weight indexUrl packages) $ \proxy urls -> do
+        for_ (ordNub urls) $ \url -> do
+            index <- checkedIndex url
+            let filenames = map ifFilename (siFiles index)
+            unless (wheelFilename (siName index) `elem` filenames && length filenames > 1) $
+                benchFail ("pypi index preflight did not merge public files and the private overlay: " <> url)
+        body proxy urls
+
+withUnprimedIndexProxy :: LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+withUnprimedIndexProxy knobs ttl entries packages mix body = do
     captures <- loadCorpusBodies packages
     rewritten <- newIORef mempty
     let latency = lkUpstreamLatencyMicros knobs
@@ -181,15 +267,8 @@ withIndexProxy knobs ttl entries packages weight body = do
         entries
         (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
         (indexStub rewritten latency captures)
-        (weightedMix weight indexUrl packages)
-        ( \proxy urls -> do
-            for_ (ordNub urls) $ \url -> do
-                index <- checkedIndex url
-                let filenames = map ifFilename (siFiles index)
-                unless (wheelFilename (siName index) `elem` filenames && length filenames > 1) $
-                    benchFail ("pypi index preflight did not merge public files and the private overlay: " <> url)
-            body proxy urls
-        )
+        mix
+        body
 
 pypiMountBase :: Text
 pypiMountBase = "https://bench.proxy/pypi"
@@ -222,6 +301,28 @@ wheelStub latency bytes = \request respond -> do
     digest = hexSha256Of (LBS.toStrict bytes)
     size = fromIntegral (LBS.length bytes)
     knownProject project = project `elem` map cpName pypiCorpusPackages
+
+-- | Serve only selected capture artifacts, leaving the unmodified index stub as the fallback.
+indexStubWithArtifacts :: IORef (Map Text LByteString) -> Int -> Map Text LByteString -> Map ByteString LByteString -> Application
+indexStubWithArtifacts rewritten latency captures artifacts request respond =
+    case Map.lookup (rawPathInfo request) artifacts of
+        Just bytes -> do
+            threadDelay latency
+            respond (responseLBS status200 [(hContentType, "application/octet-stream")] bytes)
+        Nothing -> indexStub rewritten latency captures request respond
+
+-- | Vary private listing bytes per request without changing the trusted wheel.
+wheelStubWith :: (Text -> IO [Pair]) -> Int -> LByteString -> Application
+wheelStubWith extraFields latency bytes request respond =
+    case requestPath request of
+        ["simple", project] | project `elem` map cpName pypiCorpusPackages -> do
+            threadDelay latency
+            extra <- extraFields project
+            respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (withKeys extra (wheelIndex (selfBaseUrl request) digest size project))))
+        _ -> wheelStub latency bytes request respond
+  where
+    digest = hexSha256Of (LBS.toStrict bytes)
+    size = fromIntegral (LBS.length bytes)
 
 missingStub :: Int -> Application
 missingStub latency _ respond = do
