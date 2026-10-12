@@ -633,10 +633,13 @@ covered them. Enable them *after* you warm your private mirror:
    versions you depend on. Each lands in the trusted store, and Écluse serves it from there without
    gating it again at request time.
 2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minCvss` you are
-   comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
-   of the threshold.
-3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
-   which outranks both. That covers a false positive or a risk you accept.
+   comfortable with. A threshold of 8 blocks high and critical CVEs. Unscored advisories satisfy
+   every CVSS threshold. The source-configured MAL rule denies known MAL evidence independently
+   of CVSS.
+3. An `AllowByIdentity` pin at its default precedence of 250 overrides the scored `DenyIfCve`
+   and `DenyIfEpss` rules. An intentional exception to `DenyIfKnownMalicious` needs explicit
+   precedence above 300, for example `precedence: 301`. Use that exception only for a false
+   positive or a risk you accept.
 
 A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
 current rules that apply at revocation and prunes what they deny. A policy change therefore cannot
