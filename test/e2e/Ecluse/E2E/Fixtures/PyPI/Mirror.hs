@@ -9,6 +9,10 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorRoot,
     mirrorDependency,
     mirrorVersion,
+    mirrorPlatformX86,
+    mirrorPlatformArm,
+    mirrorWheelFile,
+    mirrorArchitectures,
     buildMirrorGraph,
     buildPublication,
     distributionEntry,
@@ -20,9 +24,10 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
+import System.Info qualified as System
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
-import Ecluse.E2E.Fixtures.PyPI (buildWheelWithMetadata)
+import Ecluse.E2E.Fixtures.PyPI (buildWheelWithFiles)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | Original bytes and supported source fields for one distribution.
@@ -57,11 +62,19 @@ buildProject :: FilePath -> Text -> IO [Distribution]
 buildProject root project = do
     let projectDir = root </> "simple" </> toString project
     createDirectoryIfMissing True projectDir
-    wheels <- forM ["py3-none-any", "py3-none-win_amd64"] $ \tag -> do
-        let filename = T.replace "-" "_" project <> "-" <> mirrorVersion <> "-" <> tag <> ".whl"
+    wheels <- forM [("x86_64", mirrorPlatformX86), ("aarch64", mirrorPlatformArm)] $ \(architecture, platform) -> do
+        let tag = "py3-none-" <> platform
+            filename = mirrorWheelFile project platform
             metadata = projectMetadata project ("Wheel " <> tag)
             path = projectDir </> toString filename
-        buildWheelWithMetadata project mirrorVersion metadata tag (root </> toString (".build-" <> filename)) path
+        buildWheelWithFiles
+            project
+            mirrorVersion
+            metadata
+            tag
+            [(toString (T.replace "-" "_" project) </> "architecture.txt", architecture <> "\n")]
+            (root </> toString (".build-" <> filename))
+            path
         bytes <- BS.readFile path
         let companion = encodeUtf8 (metadata <> "\nPublic companion payload.\n")
         BS.writeFile (path <> ".metadata") companion
@@ -127,3 +140,25 @@ distributionIndex base project distributions =
         , "versions" .= [mirrorVersion]
         , "files" .= map (distributionEntry base) (filter ((== project) . distributionProject) distributions)
         ]
+
+-- | The Linux x86_64 compatibility tag used for the first cross-target installation.
+mirrorPlatformX86 :: Text
+mirrorPlatformX86 = "manylinux_2_17_x86_64"
+
+-- | The distinct Linux aarch64 target installed after mirroring and public shutdown.
+mirrorPlatformArm :: Text
+mirrorPlatformArm = "manylinux_2_17_aarch64"
+
+-- | The architecture-specific wheel selected for one project and pip platform value.
+mirrorWheelFile :: Text -> Text -> Text
+mirrorWheelFile project platform = T.replace "-" "_" project <> "-" <> mirrorVersion <> "-py3-none-" <> platform <> ".whl"
+
+-- | The native client architecture first and the distinct Linux target second.
+mirrorArchitectures :: Either Text ((Text, Text), (Text, Text))
+mirrorArchitectures = case System.arch of
+    "x86_64" -> Right (x86, arm)
+    "aarch64" -> Right (arm, x86)
+    other -> Left ("unsupported E2E client architecture: " <> toText other)
+  where
+    x86 = ("x86_64", mirrorPlatformX86)
+    arm = ("aarch64", mirrorPlatformArm)

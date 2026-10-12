@@ -22,7 +22,7 @@ import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
-import Ecluse.Test.Poll (pollUntil)
+import UnliftIO (finally)
 
 -- | These cases run in the recurring image tier against native HTTP and emulated durable services.
 spec :: Spec
@@ -51,12 +51,34 @@ interruptedScenario plane target distributions = do
     let config = nativeMirrorConfig{ecQueueUrl = Just queue}
     control <- coldInstall plane config
     targetFiles target `shouldReturn` Map.empty
-    setUploadFault target (RejectAfter 1)
+    setUploadFault target (HoldAfter 1)
+    preserved <-
+        flip finally (releaseBlockedUpload target) $
+            withE2EWith
+                config
+                ( \proxy -> do
+                    blocked <- awaitBlockedUpload target
+                    files <- targetFiles target
+                    Map.size files `shouldBe` 1
+                    Map.member blocked files `shouldBe` False
+                    readTVarIO (ntInFlight target) >>= (`shouldSatisfy` (> 0))
+                    runProcess_ (proc "docker" ["kill", "--signal=KILL", e2eProxyContainer proxy])
+                    pure files
+                )
+                plane
+    targetFiles target `shouldReturn` preserved
     withE2EWith
-        config
-        ( \proxy -> do
-            (Map.size <$> pollUntil 120 500000 ((== 1) . Map.size) (targetFiles target)) `shouldReturn` 1
-            runProcess_ (proc "docker" ["kill", "--signal=KILL", e2eProxyContainer proxy])
+        nativeMirrorConfig{ecArgs = ["proxy", "--no-worker"]}
+        ( \observer -> do
+            sourceView observer `shouldReturn` fst control
+            missing <-
+                maybe
+                    (fail "partial target has no missing distribution")
+                    pure
+                    (find (\distribution -> Map.notMember (distributionFilename distribution) preserved) distributions)
+            entries <- listedFiles observer (distributionProject missing)
+            verifyDistribution observer entries missing
+            targetFiles target `shouldReturn` preserved
         )
         plane
     withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
@@ -65,11 +87,13 @@ interruptedScenario plane target distributions = do
             (\proxy -> proxyStatus proxy ("/pypi/simple/" <> mirrorRoot) `shouldReturn` 503)
             plane
     uploaded <- Map.keys <$> targetFiles target
+    attemptsBefore <- readTVarIO (ntAttempts target)
     setUploadFault target AcceptUploads
     withStubFault plane (PyPIMirrorBackend (ntPort target) False) $
         withE2EWith config (\proxy -> awaitWholeMirror proxy target distributions) plane
-    uploads <- readTVarIO (ntUploads target)
-    for_ uploaded $ \filename -> length (filter ((== filename) . fst) uploads) `shouldBe` 1
+    attemptsAfter <- readTVarIO (ntAttempts target)
+    for_ uploaded $ \filename ->
+        length (filter (== filename) attemptsAfter) `shouldBe` length (filter (== filename) attemptsBefore)
     verifyHot plane target distributions control
 
 coldInstall :: GlobalDataPlane -> E2EConfig -> IO ([(Text, Value, [(Text, LByteString)])], InstalledTree)
@@ -79,6 +103,14 @@ coldInstall plane config =
         ( \proxy -> do
             coldView <- sourceView proxy
             tree <- installGraph proxy
+            ((nativeArchitecture, nativePlatform), (_, otherPlatform)) <- either (fail . toString) pure mirrorArchitectures
+            verifyPlatformInstallation proxy nativePlatform nativeArchitecture
+            answeredRequests <- publicReads plane
+            for_ [mirrorRoot, mirrorDependency] $ \project ->
+                filter (requestedDistribution (mirrorWheelFile project otherPlatform)) answeredRequests `shouldBe` []
+            counters <- publicWorkCounters proxy
+            pwcRuleEvaluations counters `shouldSatisfy` (> 0)
+            pwcMirrorEnqueues counters `shouldSatisfy` (> 0)
             pure (coldView, tree)
         )
         plane
@@ -86,29 +118,42 @@ coldInstall plane config =
 installGraph :: E2E -> IO InstalledTree
 installGraph proxy = do
     tree <- pipInstallGraph proxy mirrorRoot mirrorVersion
-    for_ [mirrorRoot, mirrorDependency] $ \project ->
+    ((architecture, _), _) <- either (fail . toString) pure mirrorArchitectures
+    for_ [mirrorRoot, mirrorDependency] $ \project -> do
         Map.member (toString (pypiDistInfoFor project mirrorVersion) <> "/METADATA") tree `shouldBe` True
+        Map.lookup (toString (T.replace "-" "_" project) <> "/architecture.txt") tree
+            `shouldBe` Just (TreeFile False (encodeUtf8 (architecture <> "\n")))
     pure tree
 
 verifyHot :: GlobalDataPlane -> NativeTarget -> [Distribution] -> ([(Text, Value, [(Text, LByteString)])], InstalledTree) -> IO ()
 verifyHot plane target distributions (cold, tree) =
     withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
         withE2EWith
-            nativeMirrorConfig{ecCollector = True, ecExtraEnv = ecExtraEnv nativeMirrorConfig <> otlpCollectorEnv}
+            nativeMirrorConfig
             ( \proxy -> do
+                originStart <- length <$> stubReadsNow plane
                 phaseStart <- length <$> publicReads plane
+                countersBefore <- publicWorkCounters proxy
                 hot <- sourceView proxy
                 hot `shouldBe` cold
                 installGraph proxy `shouldReturn` tree
-                downloaded <- pipDownloadPlatform proxy mirrorRoot mirrorVersion
-                downloaded `shouldBe` [(toString (distributionFilename d), distributionBytes d) | d <- distributions, distributionProject d == mirrorRoot, "win_amd64.whl" `T.isSuffixOf` distributionFilename d]
+                (_, (otherArchitecture, otherPlatform)) <- either (fail . toString) pure mirrorArchitectures
+                verifyPlatformInstallation proxy otherPlatform otherArchitecture
+                unsupported <- pipInstallForPlatform proxy mirrorRoot mirrorVersion "manylinux_2_17_riscv64"
+                void (shouldFail (ptiClient unsupported))
+                ptiTree unsupported `shouldBe` Map.empty
                 publicAnswered <- drop phaseStart <$> publicReads plane
                 filter answeredByPublic publicAnswered `shouldBe` []
+                filter (not . publicProjectDiscovery) publicAnswered `shouldBe` []
                 entries <- concat <$> traverse (listedFiles proxy) [mirrorRoot, mirrorDependency]
                 readsBefore <- publicReads plane
                 traverse_ (verifyDistribution proxy entries) distributions
                 publicReads plane `shouldReturn` readsBefore
-                verifyNoAdmissions proxy
+                verifyPrivateOrigins plane originStart distributions
+                publicReads plane `shouldReturn` readsBefore
+                publicWorkCounters proxy `shouldReturn` countersBefore
+                phaseReads <- drop phaseStart <$> publicReads plane
+                filter (not . publicProjectDiscovery) phaseReads `shouldBe` []
             )
             plane
 
@@ -173,20 +218,55 @@ verifyDistribution proxy entries distribution = do
     status `shouldBe` 200
     LBS.toStrict bytes `shouldBe` distributionBytes distribution
     path <- maybe (fail "artifact URL lacks the proxy origin") pure (T.stripPrefix (e2eBaseUrl proxy) url)
-    (headStatus, _, headBytes) <- proxyHead proxy path
+    (headStatus, headLength, headBytes) <- proxyHead proxy path
     headStatus `shouldBe` 200
+    headLength `shouldBe` Just (fromIntegral (LBS.length bytes))
     headBytes `shouldBe` 0
     when (".whl" `T.isSuffixOf` distributionFilename distribution) $ do
         (companionStatus, companion) <- getUrl proxy (url <> ".metadata")
         companionStatus `shouldBe` 200
         LBS.toStrict companion `shouldBe` distributionMetadata distribution
+        proxyHead proxy (path <> ".metadata") `shouldReturn` (200, Just (fromIntegral (LBS.length companion)), 0)
 
-verifyNoAdmissions :: E2E -> IO ()
-verifyNoAdmissions proxy = do
-    let finalPath = "/simple/" <> mirrorDependency <> "/" <> mirrorDependency <> "-" <> mirrorVersion <> ".zip"
-        targetAnswers = privateArtifactAnswers "pypi-mirror" finalPath
-    spans <- awaitCollectorSpans proxy (elem (IntValue 200) . targetAnswers) 80
-    targetAnswers spans `shouldContain` [IntValue 200]
-    for_ [mirrorRoot, mirrorDependency] $ \project ->
-        for_ ["ecluse.rule.eval", "ecluse.mirror.enqueue"] $ \name ->
-            filter (spanFor project canonicalVersion name) spans `shouldBe` []
+publicProjectDiscovery :: StubRead -> Bool
+publicProjectDiscovery request =
+    srMethod request == "GET"
+        && srPath request `elem` ["/simple/" <> project <> suffix | project <- [mirrorRoot, mirrorDependency], suffix <- ["", "/"]]
+
+verifyPlatformInstallation :: E2E -> Text -> Text -> IO ()
+verifyPlatformInstallation proxy platform architecture = do
+    installed <- pipInstallForPlatform proxy mirrorRoot mirrorVersion platform
+    void (shouldSucceedThroughProxy proxy (ptiClient installed))
+    sources <- either (fail . toString) pure (ptiSources installed)
+    map fst sources `shouldMatchList` [mirrorRoot, mirrorDependency]
+    for_ [mirrorRoot, mirrorDependency] $ \project -> do
+        let marker = toString (T.replace "-" "_" project) <> "/architecture.txt"
+        Map.lookup marker (ptiTree installed) `shouldBe` Just (TreeFile False (encodeUtf8 (architecture <> "\n")))
+        source <- maybe (fail "pip omitted the installed dependency source") pure (lookup project sources)
+        source `shouldSatisfy` T.isSuffixOf ("/" <> mirrorWheelFile project platform)
+
+requestedDistribution :: Text -> StubRead -> Bool
+requestedDistribution filename request =
+    srMethod request == "GET"
+        && ("/" <> filename) `T.isSuffixOf` T.takeWhile (/= '?') (srPath request)
+
+verifyPrivateOrigins :: GlobalDataPlane -> Int -> [Distribution] -> IO ()
+verifyPrivateOrigins plane start distributions = do
+    answeredRequests <- awaitStubReads plane start complete
+    complete answeredRequests `shouldBe` True
+  where
+    expected =
+        [ (method, "/simple/" <> distributionProject distribution <> "/" <> distributionFilename distribution)
+        | distribution <- distributions
+        , method <- ["GET", "HEAD"]
+        ]
+    complete answeredRequests =
+        all
+            ( \(method, path) ->
+                any
+                    ( \request ->
+                        srRoute request == PyPIMirror && srMethod request == method && srPath request == path && srStatus request == 200
+                    )
+                    answeredRequests
+            )
+            expected

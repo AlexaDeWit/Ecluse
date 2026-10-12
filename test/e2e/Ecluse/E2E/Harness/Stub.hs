@@ -8,6 +8,7 @@ module Ecluse.E2E.Harness.Stub (
     StubRoute (..),
     stubHosts,
     stubUrl,
+    nativeUploadLimit,
 
     -- * Faults
     StubFault (..),
@@ -92,7 +93,7 @@ serverBlock fault route =
         <> maybe [] (`faultLines` route) fault
         <> case (fault, route) of
             (Just (PyPIMirrorBackend port _), PyPIMirror) ->
-                [ "    client_max_body_size 0;"
+                [ "    client_max_body_size " <> show nativeUploadLimit <> ";"
                 , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
                 , "}"
                 ]
@@ -208,3 +209,7 @@ stubReads = mapMaybe (readOf . words) . lines
 -- | Whether a public upstream answered the request, where an outage leaves it unanswered.
 answeredByPublic :: StubRead -> Bool
 answeredByPublic r = isPublic (srRoute r) && srStatus r /= unansweredStatus
+
+-- | The native fixture's maximum multipart request body, shared with its TLS forwarder.
+nativeUploadLimit :: Int
+nativeUploadLimit = 1024 * 1024

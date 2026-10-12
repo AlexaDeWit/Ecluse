@@ -18,6 +18,7 @@ module Ecluse.E2E.Fixtures.PyPI (
     pypiDistInfoFor,
     buildPyPIFixtures,
     buildWheelWithMetadata,
+    buildWheelWithFiles,
 ) where
 
 import Data.Aeson (Value (Bool, Object, String), object, (.=))
@@ -27,7 +28,7 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
@@ -108,7 +109,11 @@ buildWheelFor project version metadata = buildWheelWithMetadata project version 
 
 -- | Build a wheel with per-file metadata and the declared compatibility tag.
 buildWheelWithMetadata :: Text -> Text -> Text -> Text -> FilePath -> FilePath -> IO ()
-buildWheelWithMetadata project version metadata tag work wheelPath = do
+buildWheelWithMetadata project version metadata tag = buildWheelWithFiles project version metadata tag []
+
+-- | Add fixture-owned package files to a wheel and its complete installation manifest.
+buildWheelWithFiles :: Text -> Text -> Text -> Text -> [(FilePath, Text)] -> FilePath -> FilePath -> IO ()
+buildWheelWithFiles project version metadata tag additions work wheelPath = do
     let escaped = T.replace "-" "_" project
         distInfo = pypiDistInfoFor project version
         moduleDir = work </> toString escaped
@@ -119,7 +124,10 @@ buildWheelWithMetadata project version metadata tag work wheelPath = do
     writeFileText (metadataDir </> "METADATA") metadata
     writeFileText (wheelPath <> ".metadata") metadata
     writeFileText (metadataDir </> "WHEEL") (wheelMetadataFile tag)
-    writeFileText (metadataDir </> "RECORD") (recordFileFor project version)
+    writeFileText (metadataDir </> "RECORD") (recordFileFor project version (map fst additions))
+    for_ additions $ \(relative, contents) -> do
+        createDirectoryIfMissing True (takeDirectory (work </> relative))
+        writeFileText (work </> relative) contents
     runProcess_ . setWorkingDir work $
         proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escaped, toString distInfo]
 
@@ -155,14 +163,15 @@ wheelMetadataFile tag =
 
 -- pip reads RECORD to write its own install manifest and checks no digest in it, so the
 -- entries carry the filename alone. The wheel's own sha256 is what this tier verifies.
-recordFileFor :: Text -> Text -> Text
-recordFileFor project version =
-    T.unlines
-        [ T.replace "-" "_" project <> "/__init__.py,,"
-        , pypiDistInfoFor project version <> "/METADATA,,"
-        , pypiDistInfoFor project version <> "/WHEEL,,"
-        , pypiDistInfoFor project version <> "/RECORD,,"
+recordFileFor :: Text -> Text -> [FilePath] -> Text
+recordFileFor project version additions =
+    T.unlines . map (<> ",,") . ordNub $
+        [ T.replace "-" "_" project <> "/__init__.py"
+        , pypiDistInfoFor project version <> "/METADATA"
+        , pypiDistInfoFor project version <> "/WHEEL"
+        , pypiDistInfoFor project version <> "/RECORD"
         ]
+            <> map toText additions
 
 simpleIndex :: Text -> Text -> Text -> Value
 simpleIndex digest sourceDigest yankedDigest =

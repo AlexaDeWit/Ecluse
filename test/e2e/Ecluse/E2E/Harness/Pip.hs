@@ -10,7 +10,8 @@ module Ecluse.E2E.Harness.Pip (
     pipInstalled,
     pipInstallsWheel,
     pipInstallGraph,
-    pipDownloadPlatform,
+    PipTargetInstall (..),
+    pipInstallForPlatform,
 
     -- * The served index
     advertisedFiles,
@@ -20,7 +21,7 @@ import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
-import System.Directory (doesDirectoryExist, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import Test.Hspec (Expectation, expectationFailure, shouldReturn)
 import UnliftIO.Environment (getEnvironment)
@@ -195,11 +196,20 @@ pipInstallGraph proxy project version = withPipProject proxy project version "" 
     roots <- listDirectory site
     snapshotTree site roots
 
--- | Let pip select a different platform wheel with an empty download directory and cache disabled.
-pipDownloadPlatform :: E2E -> Text -> Text -> IO [(FilePath, ByteString)]
-pipDownloadPlatform proxy project version = withPipProject proxy project version "" $ \client -> do
-    let destination = ppDir client </> "download"
-    void $
+-- | Cross-target installation evidence. The target files are inspected without executing foreign code.
+data PipTargetInstall = PipTargetInstall
+    { ptiClient :: ClientResult
+    , ptiTree :: InstalledTree
+    , ptiSources :: Either Text [(Text, Text)]
+    }
+    deriving stock (Show)
+
+-- | Install the complete dependency graph for a named platform into a fresh target directory.
+pipInstallForPlatform :: E2E -> Text -> Text -> Text -> IO PipTargetInstall
+pipInstallForPlatform proxy project version platform = withPipProject proxy project version "" $ \client -> do
+    let destination = ppDir client </> "target"
+        report = ppDir client </> "report.json"
+    result <-
         runClient
             (ppDir client)
             (ppEnv client)
@@ -207,22 +217,42 @@ pipDownloadPlatform proxy project version = withPipProject proxy project version
             [ "-m"
             , "pip"
             , "--isolated"
-            , "download"
+            , "install"
             , "--no-cache-dir"
+            , "--no-compile"
             , "--disable-pip-version-check"
             , "--no-input"
-            , "--no-deps"
+            , "--ignore-installed"
             , "--platform"
-            , "win_amd64"
+            , toString platform
             , "--python-version"
             , "3.12"
             , "--only-binary=:all:"
             , "--index-url"
             , toString (ppIndex client)
-            , "--dest"
+            , "--target"
             , destination
+            , "--report"
+            , report
             , toString (project <> "==" <> version)
             ]
-            >>= shouldSucceedThroughProxy proxy
-    files <- listDirectory destination
-    forM files $ \file -> (file,) <$> readFileBS (destination </> file)
+    exists <- doesDirectoryExist destination
+    roots <- if exists then listDirectory destination else pure []
+    tree <- snapshotTree destination roots
+    reported <- doesFileExist report
+    sources <- if reported then reportSources <$> readFileBS report else pure (Left "pip wrote no installation report")
+    pure PipTargetInstall{ptiClient = result, ptiTree = tree, ptiSources = sources}
+
+reportSources :: ByteString -> Either Text [(Text, Text)]
+reportSources bytes =
+    first toText (Aeson.eitherDecodeStrict bytes) >>= \case
+        Object report | Just (Array installed) <- KeyMap.lookup "install" report -> traverse source (toList installed)
+        _ -> Left "pip report has no install array"
+  where
+    source (Object entry)
+        | Just (Object metadata) <- KeyMap.lookup "metadata" entry
+        , Just (String name) <- KeyMap.lookup "name" metadata
+        , Just (Object download) <- KeyMap.lookup "download_info" entry
+        , Just (String url) <- KeyMap.lookup "url" download =
+            Right (name, url)
+    source _ = Left "pip report omits a project's name or source URL"
