@@ -14,20 +14,69 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (finally, throwIO)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), newStateCharge, stateTarget)
-import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
+import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge, stateWireChunkCharge)
 import Ecluse.Core.Mirror.State.Internal (CompanionRef (..))
 import Ecluse.Core.Package (HashAlg (SHA256), mkHash, mkPackageName)
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
 import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
 import Ecluse.Test.Package (hexSha256Of)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), expectRight)
 
 spec :: Spec
 spec = describe "conditional mirror metadata storage" $ do
+    it "pays each streamed chunk before the server releases the next chunk" $ do
+        release <- newEmptyMVar
+        payments <- newIORef ([] :: [Int])
+        charge <- newStateCharge $ \cost -> do
+            paid <- atomicModifyIORef' payments (\previous -> let updated = cost : previous in (updated, sum updated))
+            when (paid == stateExchangeCharge + stateWireChunkCharge 1) (putMVar release True)
+        withS3 (gatedChunks release) $ \env ->
+            ( timeout paymentWaitMicros (readObject charge env limits{maxMetadataBytes = 2} "records" "key" Nothing)
+                `shouldReturn` Just (Right (ObjectLoaded "\"one\"" "ab"))
+            )
+                `finally` void (tryPutMVar release False)
+        reverse <$> readIORef payments `shouldReturn` [stateExchangeCharge, stateWireChunkCharge 1, stateWireChunkCharge 1]
+
+    it "propagates refused chunk payment without returning a decoded project" $ do
+        release <- newEmptyMVar
+        paid <- newIORef (0 :: Int)
+        let refused = TestContractEscape "state chunk payment refused"
+        charge <- newStateCharge $ \cost -> do
+            previous <- readIORef paid
+            if previous == 0 then writeIORef paid cost else throwIO refused
+        withS3 (gatedChunks release) $ \env -> do
+            let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+            ( timeout paymentWaitMicros (msReadProject store charge (mkPackageName PyPI Nothing "demo") Nothing)
+                    `shouldThrow` (== refused)
+                )
+                `finally` void (tryPutMVar release False)
+        readIORef paid `shouldReturn` stateExchangeCharge
+
+    it "propagates cancellation during a streamed chunk payment" $ do
+        release <- newEmptyMVar
+        entered <- newEmptyMVar
+        blocked <- newEmptyMVar
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge $ \cost -> do
+            previous <- readIORef paid
+            if previous == 0 then writeIORef paid cost else putMVar entered () >> takeMVar blocked
+        withS3 (gatedChunks release) $ \env ->
+            withAsync
+                (readObject charge env limits "records" "key" Nothing)
+                ( \worker -> do
+                    timeout paymentWaitMicros (takeMVar entered) `shouldReturn` Just ()
+                    cancel worker
+                    either fromException (const Nothing) <$> waitCatch worker `shouldReturn` Just AsyncCancelled
+                )
+                `finally` void (tryPutMVar release False)
+        readIORef paid `shouldReturn` stateExchangeCharge
+
     it "keeps admission pauses outside the upstream progress window" $ do
         floorSpec <- expectRight (mkProgressFloor 1 0.05 1)
         payments <- newIORef ([] :: [Int])
@@ -293,6 +342,19 @@ spec = describe "conditional mirror metadata storage" $ do
     it "rejects an oversized write before opening the endpoint" $
         withS3 (\_ _ -> expectationFailure "unexpected write" >> fail "unexpected write") $ \env ->
             writeObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing "123456789" `shouldReturn` Left (ObjectTooLarge 8)
+
+gatedChunks :: MVar Bool -> Application
+gatedChunks release _ respond =
+    respond
+        ( responseStream status200 [(hETag, "\"one\"")] $ \write flush -> do
+            write "a"
+            flush
+            sendNext <- takeMVar release
+            when sendNext (write "b" >> flush)
+        )
+
+paymentWaitMicros :: Int
+paymentWaitMicros = 5_000_000
 
 limits :: Limits
 limits = defaultLimits{maxMetadataBytes = 1024}
