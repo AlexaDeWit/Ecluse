@@ -1604,7 +1604,8 @@ Both the benchmark and allocation harness call that loader.
 The load harness composes 25 shared read and stress laws with `readLoadContract` for each ecosystem.
 `requiredLoadLaws` stays independent of each fixture's actual scenario names.
 `loadCoverageGaps` names a missing or duplicate law before measured work begins.
-`FullLoad` also requires worker mirroring, which PyPI does not yet provide.
+`FullLoad` also requires worker mirroring, which both npm and PyPI fixtures provide.
+Worker mirroring applies only to unlimited runs.
 Existing residency registration checks still require captures, positive limits, and every calibrated shape.
 The shared retention contract changes neither 2,000/16,000 repetition counts nor the strict live-byte allowance.
 
