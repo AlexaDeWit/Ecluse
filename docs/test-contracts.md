@@ -90,7 +90,7 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
-| conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, matching nonempty ETag, exact Content-Length, GET and HEAD 304 with empty bodies |
+| conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, ETag presence and equality, exact Content-Length, GET and HEAD 304 with empty bodies |
 
 Seven native duplicate example bodies are removed. Twenty shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
@@ -345,7 +345,7 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 | Canonical module | Registered cases | Native evidence retained |
 |---|---|---|
 | `Install` | The shared npm and PyPI installation families, plus the retained original install IDs | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
-| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Native file lists, digests, exact denial text and remediation controls. |
+| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Exact expected artifact membership in native listings before remediation installation, advertised digests, exact denial text and remediation controls. |
 | `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
 | `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
 | `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |

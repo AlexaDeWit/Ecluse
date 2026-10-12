@@ -67,20 +67,28 @@ npmAdvisoryDriver =
         npmVersions
         npmRelease
   where
-    npmVersions e2e = do
-        (_, body) <- proxyGet e2e "/npm/e2e-advisory"
-        value <- maybe (fail "npm advisory metadata was not JSON") pure (Aeson.decode body)
-        pure (sort (map Key.toText (KeyMap.keys (objectAt "versions" (asObject value)))))
-    npmRelease e2e version =
+    npmVersions e2e = sort . map Key.toText . KeyMap.keys <$> npmAdvisoryVersions e2e
+    npmRelease e2e version = do
+        versions <- npmAdvisoryVersions e2e
+        let dist = objectAt "dist" (objectAt (Key.fromText version) versions)
+            artifacts = maybeToList ((,) <$> textAt "tarball" dist <*> textAt "integrity" dist)
         pure $
             AdvisoryDriver
-                { advisoryInstall = withNpmProject e2e $ \project -> do
+                { advisoryExpectedArtifact = e2eBaseUrl e2e <> npmTarballPath "e2e-advisory" version
+                , advisoryAdvertisedArtifacts = artifacts
+                , advisoryInstall = withNpmProject e2e $ \project -> do
                     result <- npmInstallIn project ("e2e-advisory@" <> version)
                     installed <- installedVersion project "e2e-advisory"
                     pure (result, installed == Just version)
                 , advisoryArtifactStatus = proxyStatus e2e (npmTarballPath "e2e-advisory" version)
                 , advisoryAwaitDenials = awaitDenials e2e
                 }
+
+npmAdvisoryVersions :: E2E -> IO Aeson.Object
+npmAdvisoryVersions e2e = do
+    (_, body) <- proxyGet e2e "/npm/e2e-advisory"
+    value <- maybe (fail "npm advisory metadata was not JSON") pure (Aeson.decode body)
+    pure (objectAt "versions" (asObject value))
 
 pypiAdvisoryDriver :: GlobalDataPlane -> AdvisoryScenarioDriver
 pypiAdvisoryDriver =
@@ -129,7 +137,7 @@ withPolicy ecosystem extra plane action =
             expectationFailure (toString ("the proxy never synced its advisory generation. Last proxy log lines:\n" <> logTail logTailLines logs))
         action e2e
 
--- | Read the seeded wheel digest independently of a policy-filtered index.
+-- | Use the advertised wheel digest, with a fixture fallback for policy-filtered refusal probes.
 pypiReleaseDriver :: E2E -> Text -> Text -> IO AdvisoryDriver
 pypiReleaseDriver e2e name version = do
     let wheelPath = gdpWorkDir (e2ePlane e2e) </> "pypi" </> "simple" </> toString name </> toString (pypiWheelFor name version)
@@ -137,7 +145,9 @@ pypiReleaseDriver e2e name version = do
     digest <- maybe (hexSha256Of <$> BS.readFile wheelPath) pure (lookup (pypiWheelFor name version) files)
     pure
         AdvisoryDriver
-            { advisoryInstall = withPipProject e2e name version digest $ \project ->
+            { advisoryExpectedArtifact = pypiWheelFor name version
+            , advisoryAdvertisedArtifacts = files
+            , advisoryInstall = withPipProject e2e name version digest $ \project ->
                 (,) <$> pipInstallIn project <*> pipInstalled project (pypiDistInfoFor name version)
             , advisoryArtifactStatus = proxyStatus e2e ("/pypi/simple/" <> name <> "/" <> pypiWheelFor name version)
             , advisoryAwaitDenials = awaitDenials e2e
