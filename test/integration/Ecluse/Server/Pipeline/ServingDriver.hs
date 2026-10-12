@@ -13,7 +13,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200, status404, statusCode)
+import Network.HTTP.Types (hContentLength, status200, status404, statusCode)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -78,7 +78,8 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
         | BS.dropWhileEnd (== 47) (rawPathInfo request) == metadataPath =
             respond (responseLBS status200 [] (encode (document (selfBaseUrl request) releases)))
         | Just release <- find ((== rawPathInfo request) . artifactPath . releaseVersion) releases =
-            respond (responseLBS status200 [] (toLazy (releaseBytes release)))
+            -- Warp does not infer a builder response's representation length for HEAD.
+            respond (responseLBS status200 [(hContentLength, show (BS.length (releaseBytes release)))] (toLazy (releaseBytes release)))
         | otherwise = respond (responseLBS status404 [] "")
 
 npmArtifact :: Text -> ByteString
