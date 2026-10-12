@@ -277,7 +277,8 @@ The driver supplies production handles, deterministic service boundaries, fixtur
 The contract owns the common client-visible guarantees and the required family list.
 Different stores may use different completion mechanisms under those guarantees.
 
-Current full-contract subjects are Verdaccio and CodeArtifact.
+Current full-contract profiles are Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI.
+CodeArtifact runs both formats in one fixed backend job, with separate `codeartifact` and `codeartifact-pypi` case IDs.
 The generic `registry` tag lacks maintenance operations and does not claim full package-store completion.
 CodeArtifact uses the production adapter with deterministic control-plane doubles.
 Its conformance result does not claim that CI performed live AWS operations or minted a real AWS token.
@@ -301,7 +302,8 @@ Keep acquisition, native faults, polling, and direct observations in the backend
 Call `fullPackageStoreContract` with a named concrete provider in the subject's fixed entrypoint.
 Register obligations independently of the provider's current registrations and capability flags.
 Check the catalogue against actual Hspec registration and execution, including each required family.
-A missing family or failed operation must prevent a full completion verdict.
+A missing ecosystem profile, family or failed operation must prevent a full completion verdict.
+CodeArtifact checks both explicit registrations against independently declared npm and PyPI obligations.
 Use `task test-conformance-verdaccio` and `task test-conformance-codeartifact` as worked examples.
 The core and runtime unit specs also run the same laws under the existing coverage suites.
 Use the [contract coverage map](../test-contracts.md) to find existing laws and native extensions.

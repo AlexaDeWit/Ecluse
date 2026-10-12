@@ -39,7 +39,7 @@ import Data.Text qualified as T
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Types (status200, status400, status404, status413, status503, statusCode)
 import Network.Wai (Application, Request, Response, getRequestBodyChunk, pathInfo, requestHeaders, requestMethod, responseLBS, responseRaw)
-import Network.Wai.Parse (FileInfo (fileContent, fileName), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
+import Network.Wai.Parse (FileInfo (fileContent, fileName))
 import System.Exit (ExitCode (ExitSuccess))
 import System.Process.Typed (proc, readProcess)
 
@@ -56,6 +56,7 @@ import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Exposition (Sample (..), parseExpositionStrict)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Registry.PyPI.Multipart (decodeUpload)
 import System.FilePath ((</>))
 
 -- | Native targets can preserve upload fields or lose the richer public source fields.
@@ -150,17 +151,9 @@ nativeApplication config expected target request respond
 
 parseUpload :: NativeTargetConfig -> [Distribution] -> NativeTarget -> Request -> ByteString -> IO Response
 parseUpload config expected target request body =
-    case parseContentType <$> lookup "Content-Type" (requestHeaders request) of
-        Just ("multipart/form-data", attributes)
-            | Just boundary <- lookup "boundary" attributes
-            , not (BS.null boundary)
-            , BS.length boundary <= 256 -> do
-                chunks <- newIORef body
-                (fields, files) <- sinkRequestBody lbsBackEnd (Multipart boundary) (atomicModifyIORef' chunks (BS.empty,))
-                case files of
-                    [("content", file)] -> receiveUpload config expected target request fields file
-                    _ -> pure (responseLBS status400 [] "expected one content part")
-        _ -> pure (responseLBS status400 [] "expected bounded multipart boundary")
+    decodeUpload (lookup "Content-Type" (requestHeaders request)) body >>= \case
+        Left reason -> pure (responseLBS status400 [] (LBS.fromStrict (encodeUtf8 reason)))
+        Right (fields, file) -> receiveUpload config expected target request fields file
 
 receiveUpload :: NativeTargetConfig -> [Distribution] -> NativeTarget -> Request -> [(ByteString, ByteString)] -> FileInfo LByteString -> IO Response
 receiveUpload config expected target request fields file =

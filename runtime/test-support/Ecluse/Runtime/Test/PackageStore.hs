@@ -2,30 +2,65 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | CodeArtifact adapter conformance over npm HTTP and a deterministic typed control plane.
-module Ecluse.Runtime.Test.PackageStore (codeArtifactDriver) where
+-- | CodeArtifact conformance over npm and PyPI data planes and an independent typed control plane.
+module Ecluse.Runtime.Test.PackageStore (
+    codeArtifactDriver,
+    codeArtifactPyPIDriver,
+    codeArtifactCatalogue,
+    codeArtifactSuiteGroups,
+    validateCodeArtifact,
+) where
 
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 import Lens.Micro ((?~), (^.))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Registry.Maintenance (StoreFault, StoreMaintenance, protocolFault)
+import Data.Text qualified as T
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Registry.Maintenance (StoreFault, StoreMaintenance, StoreManifestRead, protocolFault)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (..), maintenanceFor)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
-import Ecluse.Test.Contract.PackageStore (FullPackageStoreDriver, PackageStoreRelease (psrVersion))
-import Ecluse.Test.Contract.PackageStore.Protocol (NpmStoreBoundary (..), npmStoreDriver, readStoreManifestOver)
+import Ecluse.Test.Contract.Catalogue (combineCatalogues)
+import Ecluse.Test.Contract.Completion (validateCompletion)
+import Ecluse.Test.Contract.Manifest (failRunner)
+import Ecluse.Test.Contract.PackageStore (FullPackageStoreDriver, PackageStoreRelease (psrVersion), packageStoreCatalogueFor, packageStoreCompletion)
+import Ecluse.Test.Contract.PackageStore.Protocol (npmStoreDriver, readStoreManifestOver)
+import Ecluse.Test.Contract.PackageStore.Provider (StoreBoundary (..))
+import Ecluse.Test.Contract.PackageStore.PyPI (pypiStoreDriver, readPyPIStoreManifestOver)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Catalogue (..), Group (..))
 
 -- | This proves Écluse's adapter behaviour, not remote AWS retention, IAM, or service fidelity.
 codeArtifactDriver :: FullPackageStoreDriver
-codeArtifactDriver = npmStoreDriver "codeartifact" codeArtifactMaintenance
+codeArtifactDriver = npmStoreDriver "codeartifact" (codeArtifactMaintenance Npm CA.PackageFormat_Npm readStoreManifestOver)
 
-codeArtifactMaintenance :: OriginClient -> NpmStoreBoundary -> IO StoreMaintenance
-codeArtifactMaintenance origin boundary = do
-    format <- maybe (fail "npm has no CodeArtifact format") pure (codeArtifactFormat Npm)
+-- | PyPI executes every law with six distinct distributions across two releases.
+codeArtifactPyPIDriver :: FullPackageStoreDriver
+codeArtifactPyPIDriver = pypiStoreDriver "codeartifact-pypi" (codeArtifactMaintenance PyPI CA.PackageFormat_Pypi readPyPIStoreManifestOver)
+
+-- | Both ecosystem profiles belong to the same backend and fixed conformance job.
+codeArtifactCatalogue :: Catalogue
+codeArtifactCatalogue =
+    combineCatalogues
+        [ packageStoreCatalogueFor "npm" "codeartifact" "package-store-codeartifact" "codeartifact"
+        , packageStoreCatalogueFor "pypi" "codeartifact" "package-store-codeartifact" "codeartifact-pypi"
+        ]
+
+-- | Preserve each concrete registration while assigning the existing backend job.
+codeArtifactSuiteGroups :: [DeclaredGroup] -> [DeclaredGroup]
+codeArtifactSuiteGroups = map (\declaration -> declaration{declaredGroup = (declaredGroup declaration){groupPartition = "package-store-codeartifact"}})
+
+-- | Independent completion claims require both formats, regardless of actual registrations.
+validateCodeArtifact :: IO ()
+validateCodeArtifact = for_ ["codeartifact", "codeartifact-pypi"] $ \subject ->
+    either (failRunner . T.unlines) (const (pure ())) (validateCompletion (packageStoreCompletion subject) [codeArtifactCatalogue])
+
+codeArtifactMaintenance :: Ecosystem -> CA.PackageFormat -> (OriginClient -> StoreManifestRead) -> OriginClient -> StoreBoundary -> IO StoreMaintenance
+codeArtifactMaintenance ecosystem expectedFormat readManifest origin boundary = do
+    format <- maybe (fail "ecosystem has no CodeArtifact format") pure (codeArtifactFormat ecosystem)
     let store =
             CodeArtifactStore
                 { casDomain = "contract-domain"
@@ -34,28 +69,29 @@ codeArtifactMaintenance origin boundary = do
                 , casRepository = "contract-store"
                 , casFormat = format
                 }
-    pure (maintenanceFor (mkNameAlphabet "c") (readStoreManifestOver origin) store (controlPlane boundary))
+    pure (maintenanceFor (mkNameAlphabet "c") (readManifest origin) store (controlPlane expectedFormat boundary))
 
-controlPlane :: NpmStoreBoundary -> ControlPlane
-controlPlane boundary =
+controlPlane :: CA.PackageFormat -> StoreBoundary -> ControlPlane
+controlPlane expectedFormat boundary =
     ControlPlane
         { cpRead =
             ReadPlane
                 { rpListPackages = \request -> do
-                    releases <- nsbReleases boundary
+                    releases <- sbReleases boundary
                     pure $ do
                         checkRepository (request ^. CAL.listPackages_domain) (request ^. CAL.listPackages_domainOwner) (request ^. CAL.listPackages_repository)
-                        unless (request ^. CAL.listPackages_format == Just CA.PackageFormat_Npm) (Left (protocolFault "list packages used the wrong format"))
+                        unless (request ^. CAL.listPackages_format == Just expectedFormat) (Left (protocolFault "list packages used the wrong format"))
+                        unless (isNothing (request ^. CAL.listPackages_namespace)) (Left (protocolFault "list packages used a namespace"))
                         unless (isNothing (request ^. CAL.listPackages_nextToken)) (Left (protocolFault "unexpected package pagination token"))
                         pure $
                             CA.newListPackagesResponse 200
                                 & CAL.listPackagesResponse_packages
                                 ?~ [CA.newPackageSummary & CAL.packageSummary_package ?~ "contract-package" | not (null releases)]
                 , rpListVersions = \request -> do
-                    releases <- nsbReleases boundary
+                    releases <- sbReleases boundary
                     pure $ do
                         checkRepository (request ^. CAL.listPackageVersions_domain) (request ^. CAL.listPackageVersions_domainOwner) (request ^. CAL.listPackageVersions_repository)
-                        checkPackage (request ^. CAL.listPackageVersions_package) (request ^. CAL.listPackageVersions_format)
+                        checkPackage expectedFormat (request ^. CAL.listPackageVersions_package) (request ^. CAL.listPackageVersions_namespace) (request ^. CAL.listPackageVersions_format)
                         unless (isNothing (request ^. CAL.listPackageVersions_nextToken)) (Left (protocolFault "unexpected version pagination token"))
                         pure $
                             CA.newListPackageVersionsResponse 200
@@ -66,16 +102,16 @@ controlPlane boundary =
                 , rpListTags = \_ -> fail "unexpected ListTagsForResource in persistence law"
                 }
         , cpDeleteVersions = \request -> do
-            blocked <- nsbTakeDeleteFailure boundary
+            blocked <- sbTakeDeleteFailure boundary
             let versions = request ^. CAL.deletePackageVersions_versions
                 valid = do
                     checkRepository (request ^. CAL.deletePackageVersions_domain) (request ^. CAL.deletePackageVersions_domainOwner) (request ^. CAL.deletePackageVersions_repository)
-                    checkPackage (request ^. CAL.deletePackageVersions_package) (request ^. CAL.deletePackageVersions_format)
+                    checkPackage expectedFormat (request ^. CAL.deletePackageVersions_package) (request ^. CAL.deletePackageVersions_namespace) (request ^. CAL.deletePackageVersions_format)
                     when blocked (Left (protocolFault "injected delete transport failure"))
             case valid of
                 Left fault -> pure (Left fault)
                 Right () -> do
-                    nsbRemove boundary versions
+                    sbRemove boundary versions
                     pure $
                         Right $
                             CA.newDeletePackageVersionsResponse 200
@@ -91,8 +127,8 @@ checkRepository domain owner repository =
         (domain == "contract-domain" && owner == Just "123456789012" && repository == "contract-store")
         (Left (protocolFault "control-plane request addressed the wrong repository"))
 
-checkPackage :: Text -> CA.PackageFormat -> Either StoreFault ()
-checkPackage package format =
+checkPackage :: CA.PackageFormat -> Text -> Maybe Text -> CA.PackageFormat -> Either StoreFault ()
+checkPackage expectedFormat package namespace format =
     unless
-        (package == "contract-package" && format == CA.PackageFormat_Npm)
+        (package == "contract-package" && isNothing namespace && format == expectedFormat)
         (Left (protocolFault "control-plane request addressed the wrong package or format"))
