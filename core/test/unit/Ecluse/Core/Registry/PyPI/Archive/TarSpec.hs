@@ -81,23 +81,23 @@ spec = describe "extractTar" $ do
         extract defaultLimits [extended, alias, target] `shouldReturn` Right metadata
     it "applies a local PAX path once and removes a deleted global path" $ do
         global <- pax 'g' (paxRecord "path=example-1/global.txt\n")
-        local <- pax 'x' (paxRecord "path=example-1/PKG-INFO\n")
+        localHeader <- pax 'x' (paxRecord "path=example-1/PKG-INFO\n")
         info <- regular "placeholder" metadata
         inherited <- regular "another-placeholder" "global content"
         deleteGlobal <- pax 'g' (paxRecord "path=\n")
         ordinary <- regular "example-1/ordinary.txt" "ordinary content"
         alias <- link True "example-1/global-alias" "global.txt"
-        extract defaultLimits [global, local, info, inherited, deleteGlobal, ordinary, alias] `shouldReturn` Right metadata
-        extract defaultLimits [global, local, info, deleteGlobal, ordinary, alias] `shouldReturn` Left (ParseError "tar link target is absent")
+        extract defaultLimits [global, localHeader, info, inherited, deleteGlobal, ordinary, alias] `shouldReturn` Right metadata
+        extract defaultLimits [global, localHeader, info, deleteGlobal, ordinary, alias] `shouldReturn` Left (ParseError "tar link target is absent")
     it "lets an empty local PAX value suppress a global path for one entry" $ do
         global <- pax 'g' (paxRecord "path=example-1/inherited.txt\n")
-        local <- pax 'x' (paxRecord "path=\n")
+        localHeader <- pax 'x' (paxRecord "path=\n")
         info <- regular "example-1/PKG-INFO" metadata
         inherited <- regular "placeholder" "data"
         deleteGlobal <- pax 'g' (paxRecord "path=\n")
         alias <- link True "example-1/inherited-alias" "inherited.txt"
-        extract defaultLimits [global, local, info, inherited, deleteGlobal, alias] `shouldReturn` Right metadata
-        extract defaultLimits [global, local, info, deleteGlobal, alias] `shouldReturn` Left (ParseError "tar link target is absent")
+        extract defaultLimits [global, localHeader, info, inherited, deleteGlobal, alias] `shouldReturn` Right metadata
+        extract defaultLimits [global, localHeader, info, deleteGlobal, alias] `shouldReturn` Left (ParseError "tar link target is absent")
     it "reads GNU long-name and long-link records" $ do
         longName <- pax 'L' "example-1/PKG-INFO\NUL"
         longLink <- pax 'K' "metadata.txt\NUL"
