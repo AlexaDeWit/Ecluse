@@ -11,6 +11,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Registry (ParseError (..))
 import Ecluse.Core.Registry.PyPI.UploadMetadata (parseUploadMetadata, uploadFields, uploadMetadataMemoryBytes)
 import Ecluse.Core.Version (mkVersion)
 
@@ -49,6 +50,61 @@ spec = describe "parseUploadMetadata" $ do
             `shouldSatisfy` either (const False) (elem ("description", "first\r\nsecond\r\n third"))
         fmap uploadFields (parse (base <> "\nfirst\n       |literal body pipe\n"))
             `shouldSatisfy` either (const False) (elem ("description", "first\n       |literal body pipe\n"))
+    it "projects mixed-case headers and preserves repeated native upload fields in order" $
+        fmap uploadFields (parse (base <> "sUmMaRy:\tOriginal spelling\nClassifier: First\nClassifier: Second\nProject-URL: Source, https://example.test/source\nProject-URL: Docs, https://example.test/docs\nImport-Name: example; private\nImport-Namespace: example.plugins\n"))
+            `shouldBe` Right
+                [ ("metadata_version", "2.4")
+                , ("name", "Example_Pkg")
+                , ("version", "1.0")
+                , ("summary", "Original spelling")
+                , ("classifiers", "First")
+                , ("classifiers", "Second")
+                , ("project_urls", "Source, https://example.test/source")
+                , ("project_urls", "Docs, https://example.test/docs")
+                , ("import_name", "example; private")
+                , ("import_namespace", "example.plugins")
+                ]
+    it "preserves tab-folded values and accepts the final header without a newline" $
+        fmap uploadFields (parse (base <> "Summary: first\r\n\tsecond"))
+            `shouldBe` Right [("metadata_version", "2.4"), ("name", "Example_Pkg"), ("version", "1.0"), ("summary", "first\r\n\tsecond")]
+    it "compares canonical identity without rewriting the author values" $ do
+        let declared = "Metadata-Version: 2.4\nName: EXAMPLE.pkg\nVersion: 1.0.0\n"
+        fmap uploadFields (parse declared)
+            `shouldBe` Right [("metadata_version", "2.4"), ("name", "EXAMPLE.pkg"), ("version", "1.0.0")]
+        parse "Metadata-Version: 2.4\nName: other\nVersion: 1\n"
+            `shouldBe` Left (ParseError "Core Metadata names another package")
+        parse "Metadata-Version: 2.4\nName: example-pkg\nVersion: 2\n"
+            `shouldBe` Left (ParseError "Core Metadata names another version")
+    for_
+        [ (" Summary: orphan\n" <> base, "Core Metadata starts with a continuation")
+        , (base <> "Summary: before\rafter\n", "bare carriage return in Core Metadata")
+        , (base <> "Summary: final\r", "bare carriage return in Core Metadata")
+        , (base <> "Summary: \NUL\n", "Core Metadata contains a control character")
+        , (base <> "Summary: \DEL\n", "Core Metadata contains a control character")
+        , (base <> "Bad_Name: value\n", "malformed Core Metadata header")
+        , (base <> ": value\n", "malformed Core Metadata header")
+        , (base <> "Dynamic: Unknown-Field\n", "invalid Dynamic declaration")
+        , ("Metadata-Version: 9.0\nName: example-pkg\nVersion: 1\n", "unsupported Core Metadata version")
+        , ("Metadata-Version: 2.4\nName:\nVersion: 1\n", "missing or ambiguous Core Metadata field: name")
+        ]
+        $ \(bytes, reason) ->
+            it ("classifies malformed metadata: " <> toString reason <> " " <> show bytes) $
+                parse bytes `shouldBe` Left (ParseError reason)
+    it "accepts the byte ceiling and refuses one byte beyond it or a disabled ceiling" $ do
+        parseUploadMetadata (BS.length base) name version base `shouldBe` parse base
+        for_ [0, -1, BS.length base - 1] $ \cap ->
+            parseUploadMetadata cap name version base `shouldBe` Left (ParseError "Core Metadata exceeds its byte bound")
+    it "bounds header lines separately from the total metadata bytes" $ do
+        let header = "Summary: " <> BS.replicate (16384 - 9) 97
+            decode = parseUploadMetadata 32768 name version
+        fmap uploadFields (decode (base <> header <> "\n"))
+            `shouldSatisfy` either (const False) (elem ("summary", decodeUtf8 (BS.drop 9 header)))
+        decode (base <> header <> "a\n") `shouldBe` Left (ParseError "Core Metadata header line exceeds its bound")
+    it "counts continuation lines toward the header ceiling" $ do
+        let headers = base <> "Summary: first\n" <> BS.concat (replicate 65532 " continuation\n")
+            decode = parseUploadMetadata (2 * 1024 * 1024) name version
+        fmap (length . uploadFields) (decode headers) `shouldBe` Right 4
+        decode (headers <> " continuation\n") `shouldBe` Left (ParseError "Core Metadata header count exceeds its bound")
     it "charges actual metadata bytes and header structures without expanding description lines" $ do
         let body = BS.replicate 65536 10
             opaque = BS.replicate 65536 65

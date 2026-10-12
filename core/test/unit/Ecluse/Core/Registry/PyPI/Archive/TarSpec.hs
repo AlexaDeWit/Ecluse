@@ -79,6 +79,88 @@ spec = describe "extractTar" $ do
         alias <- link True "placeholder" "unused"
         target <- regular "example-1/metadata.txt" metadata
         extract defaultLimits [extended, alias, target] `shouldReturn` Right metadata
+    it "applies a local PAX path once and removes a deleted global path" $ do
+        global <- pax 'g' (paxRecord "path=example-1/global.txt\n")
+        local <- pax 'x' (paxRecord "path=example-1/PKG-INFO\n")
+        info <- regular "placeholder" metadata
+        inherited <- regular "another-placeholder" "global content"
+        deleteGlobal <- pax 'g' (paxRecord "path=\n")
+        ordinary <- regular "example-1/ordinary.txt" "ordinary content"
+        extract defaultLimits [global, local, info, inherited, deleteGlobal, ordinary] `shouldReturn` Right metadata
+    it "lets an empty local PAX value suppress a global path for one entry" $ do
+        global <- pax 'g' (paxRecord "path=example-1/inherited.txt\n")
+        local <- pax 'x' (paxRecord "path=\n")
+        info <- regular "example-1/PKG-INFO" metadata
+        inherited <- regular "placeholder" "data"
+        extract defaultLimits [global, local, info, inherited] `shouldReturn` Right metadata
+    it "reads GNU long-name and long-link records" $ do
+        longName <- pax 'L' "example-1/PKG-INFO\NUL"
+        longLink <- pax 'K' "metadata.txt\NUL"
+        alias <- link True "placeholder" "unused"
+        target <- regular "example-1/metadata.txt" metadata
+        extract defaultLimits [longName, longLink, alias, target] `shouldReturn` Right metadata
+    it "rejects orphan and conflicting extended headers" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        extended <- pax 'x' (paxRecord "path=example-1/data\n")
+        longName <- pax 'L' "example-1/data\NUL"
+        extract defaultLimits [info, extended] `shouldReturn` Left (ParseError "orphan extended tar header")
+        extract defaultLimits [extended, longName, info] `shouldReturn` Left (ParseError "ambiguous extended tar headers")
+    for_
+        [ ("99 path=x\n", "truncated pax record")
+        , ("x path=x\n", "malformed pax decimal")
+        , ("9 path=x!", "malformed pax record")
+        , (paxRecord "bad key=x\n", "malformed pax record")
+        , (paxRecord "hdrcharset=BINARY\n", "unsupported pax header charset")
+        , (paxRecord "SCHILY.realsize=10\n", "unsupported pax framing extension")
+        ]
+        $ \(attributes, reason) ->
+            it ("classifies invalid PAX framing: " <> toString reason <> " " <> show attributes) $ do
+                extended <- pax 'x' attributes
+                info <- regular "example-1/PKG-INFO" metadata
+                extract defaultLimits [extended, info] `shouldReturn` Left (ParseError reason)
+    it "accepts an explicit UTF-8 PAX charset and rejects a non-UTF-8 path" $ do
+        charset <- pax 'x' (paxRecord "hdrcharset=UTF-8\n")
+        invalidPath <- pax 'x' (paxRecord ("path=example-1/" <> BS.singleton 255 <> "\n"))
+        info <- regular "example-1/PKG-INFO" metadata
+        extract defaultLimits [charset, info] `shouldReturn` Right metadata
+        extract defaultLimits [invalidPath, info] `shouldReturn` Left (ParseError "archive path is not UTF-8")
+    it "refuses metadata that resolves to an explicit or implicit directory" $ do
+        path <- expectRight (Tar.toTarPath True "example-1/PKG-INFO")
+        let directory = Tar.simpleEntry path Tar.Directory
+        extract defaultLimits [directory] `shouldReturn` Left (ParseError "Core Metadata link does not name a regular file")
+        alias <- link True "example-1/PKG-INFO" "src"
+        child <- regular "example-1/src/module.py" "source"
+        extract defaultLimits [alias, child] `shouldReturn` Left (ParseError "Core Metadata link does not name a regular file")
+    it "refuses a member beneath a link even when its target remains in the archive" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        alias <- link True "example-1/alias" "src"
+        target <- regular "example-1/src/module.py" "source"
+        child <- regular "example-1/alias/extra.py" "extra"
+        extract defaultLimits [info, alias, target, child] `shouldReturn` Left (ParseError "archive member traverses a link")
+    it "rejects duplicate paths after PAX overrides and multiple metadata identities" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        extended <- pax 'x' (paxRecord "path=example-1/PKG-INFO\n")
+        duplicate <- regular "placeholder" metadata
+        equivalent <- regular "example-1.0/PKG-INFO" metadata
+        extract defaultLimits [info, extended, duplicate] `shouldReturn` Left (ParseError "duplicate archive entry")
+        extract defaultLimits [info, equivalent] `shouldReturn` Left (ParseError "ambiguous archive Core Metadata")
+    it "refuses a PAX payload size on a link" $ do
+        extended <- pax 'x' (paxRecord "size=1\n")
+        alias <- link True "example-1/PKG-INFO" "metadata.txt"
+        target <- regular "example-1/metadata.txt" metadata
+        extract defaultLimits [extended, alias, target] `shouldReturn` Left (ParseError "non-file tar entry carries a payload")
+    it "accepts exact entry, path-depth, and inflated-byte ceilings" $ do
+        info <- regular "example-1/PKG-INFO" metadata
+        let bytes = BSL.toStrict (Tar.write [info])
+            limits = defaultLimits{maxArtifactCount = 1, maxNestingDepth = 2, maxMirrorArtifactBytes = BS.length bytes}
+        readChunks limits [bytes] `shouldReturn` Right metadata
+        readChunks limits{maxArtifactCount = 0} [bytes] `shouldReturn` Left (ParseError "archive entry count exceeds its bound")
+        readChunks limits{maxNestingDepth = 1} [bytes] `shouldReturn` Left (ParseError "tar path depth exceeds its bound")
+        readChunks limits{maxMirrorArtifactBytes = BS.length bytes - 1} [bytes] `shouldReturn` Left (ParseError "archive inflated bytes exceed their bound")
+    it "rejects a partial trailer and a truncated selected payload" $ do
+        bytes <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
+        readChunks defaultLimits [BS.take 512 bytes <> BS.take 1 metadata] `shouldReturn` Left (ParseError "truncated tar payload")
+        readChunks defaultLimits [BS.take 1536 bytes <> BS.replicate 511 0] `shouldReturn` Left (ParseError "invalid tar trailer")
     it "pays for an indexed path before reading its metadata payload" $ do
         tar <- BSL.toStrict <$> tarBytes [("example-1/PKG-INFO", metadata)]
         readPayload <- newIORef False
