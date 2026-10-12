@@ -7,6 +7,7 @@
 -- | Pack retained values for shared rendering, preserving first members and key order.
 module Ecluse.Core.Registry.Json.Writer (
     Writer,
+    packTree,
     newWriter,
     Frame,
     sealValue,
@@ -17,7 +18,7 @@ module Ecluse.Core.Registry.Json.Writer (
     discard,
 ) where
 
-import Control.Monad.ST (ST)
+import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (..), toEncoding)
 import Data.Aeson.Encoding (encodingToLazyByteString)
 import Data.Aeson.Key qualified as Key
@@ -54,6 +55,13 @@ data Writer st = Writer
     , writerMarks :: MutablePrimArray st Int
     , writerReplaced :: MutVar st (Maybe ByteArray)
     }
+
+-- | Pack an already bounded tree without another JSON parse or a shared string table.
+packTree :: [Text] -> Value -> Packed
+packTree path value = runST $ do
+    writer <- newWriter Nothing
+    writeWhole writer value
+    sealValue writer path
 
 -- | Create a read's writer, optionally adding a top-level member. Shared originals are replaced and retained for diagnostics. Owned originals win.
 newWriter :: Maybe (Entry, Entry) -> ST st (Writer st)

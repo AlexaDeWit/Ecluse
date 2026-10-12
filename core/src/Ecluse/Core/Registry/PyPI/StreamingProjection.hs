@@ -84,6 +84,7 @@ collectField limits mode acc =
             bounded = case mode of
                 FullRead -> acc
                 SelectedRead{} -> withBound (checkVersionCountOf limits count) acc
+                MirrorRead{} -> withBound (checkVersionCountOf limits count) acc
          in case raw of
                 Just value | isNothing (projectedBound bounded) || mode == FullRead -> retainFile position value bounded
                 _ -> bounded

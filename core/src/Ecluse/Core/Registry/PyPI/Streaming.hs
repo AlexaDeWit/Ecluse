@@ -26,7 +26,7 @@ import Ecluse.Core.Package.Hash (HashAlg (SRI), renderHashAlg)
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, fcVersionKey, readLatestCoordinate)
 
 -- | Select all files or one canonical release while counting every input file.
-data PyPIRead = FullRead | SelectedRead PackageName Text
+data PyPIRead = FullRead | SelectedRead PackageName Text | MirrorRead PackageName Text
     deriving stock (Eq, Show)
 
 -- | File events carry original positions, including items that yield no retained payload.

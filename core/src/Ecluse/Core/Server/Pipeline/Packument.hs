@@ -39,6 +39,7 @@ import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
+import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoVersions),
@@ -86,6 +87,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.Framing (frameBytes)
+import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -225,10 +227,22 @@ serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential ->
 serveAdmittedPackument serving clientToken = do
     logFM InfoS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
-    (privResult, pubResult) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
-    case privResult of
-        OriginAuthorisationFailure _ -> privateAccessRefused serving
-        _ -> serveMergedPackument serving evalCtx privResult pubResult
+    case pdMirrorState deps of
+        Just mirror | not (pdFirstParty deps (psvName serving)) -> do
+            private <- fetchPrivateOrigin deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+            case private of
+                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                _ ->
+                    liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving)) >>= \case
+                        Left _ -> mirrorUnavailable serving
+                        Right record -> do
+                            public <- fetchPublicOrigin deps (psvRuntime serving) (psvTicket serving) (psvName serving)
+                            serveMergedPackument serving evalCtx record private public
+        _ -> do
+            (private, public) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+            case private of
+                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                _ -> serveMergedPackument serving evalCtx Nothing private public
   where
     deps = psvDeps serving
 
@@ -254,25 +268,45 @@ privateAccessRefused serving = do
 serveMergedPackument ::
     PackumentServing response ->
     EvalContext ->
+    Maybe (StateRevision, ProjectMirrorRecord) ->
     OriginResult ->
     OriginResult ->
     Handler ResponseReceived
-serveMergedPackument serving evalCtx privResult pubResult = do
-    let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
-        trustedVersions = maybe Map.empty (infoVersions . srcInfo) private
-    public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (originManifest pubResult))
-    let sources = catMaybes [private, paContribution public]
-    case originMiss privResult of
-        Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
-        _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
-            Just plan -> serveResolved serving sources plan
-            Nothing ->
-                noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
-                    collectDecisions privResult pubResult (privateExclusions <> paExclusions public)
+serveMergedPackument serving evalCtx record privResult pubResult =
+    case views of
+        Left _ -> mirrorUnavailable serving
+        Right (unmanagedManifest, managedManifest, pending) -> do
+            let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
+                (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
+                privateSources = catMaybes [unmanaged <|> (emptyContribution <$> unmanagedManifest <* managed), managed]
+                trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
+            public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (originManifest pubResult))
+            let sources = privateSources <> maybeToList (paContribution public)
+                covered = Map.null pending || maybe False (publicMirrorCoverage pending . srcInfo) (paContribution public)
+            if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
+                then mirrorUnavailable serving
+                else case originMiss privResult of
+                    Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
+                    _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
+                        Just plan -> serveResolved serving sources plan
+                        Nothing ->
+                            noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
+                                collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
   where
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
+    views = case record of
+        Nothing -> Right (originManifest privResult, Nothing, Map.empty)
+        Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
+
+emptyContribution :: Manifest -> Contribution
+emptyContribution manifest = Contribution TrustedSource (manifestInfo manifest){infoVersions = Map.empty} (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)
+
+mirrorUnavailable :: PackumentServing response -> Handler ResponseReceived
+mirrorUnavailable serving = do
+    liftIO (mpServeDecision (servingMetrics serving) Metric.Unavailable)
+    liftIO (psvRespond serving (packumentUnavailable (psvReplies serving) [] (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable")))
 
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case

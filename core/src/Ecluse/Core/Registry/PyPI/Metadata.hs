@@ -7,6 +7,7 @@
 -- | PyPI full and selected Simple-index reads for "Ecluse.Core.Registry.Metadata.Fetch".
 module Ecluse.Core.Registry.PyPI.Metadata (
     pypiRead,
+    pypiMirrorRead,
     pypiChargeFactors,
     pypiIndexWalk,
     projectPyPIStream,
@@ -18,10 +19,11 @@ module Ecluse.Core.Registry.PyPI.Metadata (
 import Control.Monad.ST (ST, stToIO)
 import Data.JsonStream.Lexer (Cursor)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiPacked, pypiSimpleCached)
 import Ecluse.Core.Registry.Json.Intern (InternTable, tableTexts)
 import Ecluse.Core.Registry.Json.Packed (docTable)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, Walked (..), pureStep, readJsonWalk, readJsonWalkST)
@@ -30,7 +32,7 @@ import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionDoc (..), VersionRead (..))
 import Ecluse.Core.Registry.Metadata.Fetch.Types (DocumentWalk, EcosystemRead (..))
 import Ecluse.Core.Registry.Metadata.Projection (streamError)
-import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument)
+import Ecluse.Core.Registry.PyPI.Document (PackedSimple, SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Registry.PyPI.FileWriter (FileWriter, fileWriter)
 import Ecluse.Core.Registry.PyPI.Reader (fileUniqueFields, pypiFullWalk, pypiWalk)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
@@ -50,6 +52,18 @@ pypiRead =
         , erFinishFull = finishPyPIFull
         , erWalkSelected = \limits name version -> readPyPIIndex limits name (SelectedRead name (renderVersion version))
         , erFinishSelected = finishPyPIVersion
+        }
+
+-- | Workers retain the supported envelope beside selected files without changing ordinary serve reads.
+pypiMirrorRead :: EcosystemRead
+pypiMirrorRead =
+    EcosystemRead
+        { erRequest = simpleIndexRequest
+        , erUniqueFields = fileUniqueFields
+        , erWalkFull = \limits name _ -> readPyPIFull limits name
+        , erFinishFull = finishPyPIFull
+        , erWalkSelected = \limits name version -> readPyPIIndex limits name (MirrorRead name (renderVersion version))
+        , erFinishSelected = finishPyPIMirrorVersion
         }
 
 -- | Charges per 1000 source or output-basis bytes, calibrated with native memory probes. See @docs/testing.md@.
@@ -98,6 +112,21 @@ finishPyPIVersion limits name base version streamed = do
                 details <- Map.lookup (renderVersion version) (infoVersions info)
                 located <- enforceArtifactLocationsOf pypiArtifactAuthorities base details
                 pure VersionDoc{vdDetails = located, vdRaw = Nothing}
+            , vrBodyBytes = streamBytes streamed
+            , vrUpstreamLatest = Nothing
+            }
+
+finishPyPIMirrorVersion :: Limits -> PackageName -> Text -> Version -> StreamResult PyPIProjection -> Either MetadataError VersionRead
+finishPyPIMirrorVersion limits name base version streamed = do
+    (info, document) <- projectPyPIStream limits name streamed
+    pure
+        VersionRead
+            { vrVersion = do
+                details <- Map.lookup (renderVersion version) (infoVersions info)
+                located <- enforceArtifactLocationsOf pypiArtifactAuthorities base details
+                let keys = Set.fromList (map artEntryKey (toList (pkgArtifacts located)))
+                    retained = simpleDocument (simpleEnvelope document) (filter ((`Set.member` keys) . fst) (simpleFiles document))
+                pure VersionDoc{vdDetails = located, vdRaw = Just (fst pypiSimpleCached retained)}
             , vrBodyBytes = streamBytes streamed
             , vrUpstreamLatest = Nothing
             }

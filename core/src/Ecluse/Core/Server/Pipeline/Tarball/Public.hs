@@ -9,6 +9,7 @@ worker would refuse is refused here too. An admitted @GET@ enqueues the demand-d
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Public (
     servePublicArtifact,
+    servePublicArtifactWithCoverage,
 
     -- * The public artifact gate (exposed for direct testing)
     PublicArtifactGate (..),
@@ -102,7 +103,11 @@ import UnliftIO (withRunInIO)
 
 -- | Gate the requested version under the mount's admission budget, then relay it.
 servePublicArtifact :: ArtifactRequest response -> Handler ResponseReceived
-servePublicArtifact ctx = do
+servePublicArtifact = servePublicArtifactWithCoverage (const True)
+
+-- | A managed fallback must cover the whole expected version before its requested file is admitted.
+servePublicArtifactWithCoverage :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Handler ResponseReceived
+servePublicArtifactWithCoverage covered ctx = do
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
@@ -110,7 +115,7 @@ servePublicArtifact ctx = do
     withMetadataAdmission
         (arRuntime ctx)
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-        (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion ctx advisoryEtag))
+        (const (preparePublicMetadata (arRuntime ctx) (arDeps ctx) (arPackage ctx) (arVersion ctx) >>= gatePublicVersion covered ctx advisoryEtag))
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
@@ -141,13 +146,14 @@ data PublicArtifactGate
       Refused ServeDecision
 
 -- Execute the captured read and fresh policy while both admission brackets are held.
-gatePublicVersion :: ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
-gatePublicVersion ctx advisoryEtag prepared = do
+gatePublicVersion :: (Maybe PackageDetails -> Bool) -> ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
+gatePublicVersion covered ctx advisoryEtag prepared = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
     eval <- liftIO (versionEvaluation <$> executePrepared prepared)
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
-        VersionMissing -> pure (Refused versionAbsent)
+        VersionMissing -> pure (Refused (if covered Nothing then versionAbsent else upstreamUnavailable))
+        VersionPresent doc _ | not (covered (Just (vdDetails doc))) -> pure (Refused upstreamUnavailable)
         VersionPresent doc _ ->
             liftIO $
                 spanRuleEval (srTracing rt) (arPackage ctx) (arVersion ctx) $ do

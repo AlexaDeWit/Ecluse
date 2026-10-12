@@ -60,6 +60,7 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
+        MirrorRead{} -> True
     emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
@@ -84,8 +85,11 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     -- A selected read carries its filename memo from file to file of one array.
     files = case mode of
         FullRead -> eachItem file
-        SelectedRead name wanted -> \done (Walked table acc) ->
-            eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
+        SelectedRead name wanted -> selected name wanted
+        MirrorRead name wanted -> selected name wanted
+
+    selected name wanted done (Walked table acc) =
+        eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
 
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest

@@ -65,6 +65,7 @@ import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
+import Ecluse.Core.Server.MirrorView (MirrorView)
 import Ecluse.Core.Server.Response (HelpMessage)
 import Ecluse.Core.Server.Upstream (
     MirrorServePlan,
@@ -109,6 +110,8 @@ data ServeRuntime = ServeRuntime
 data PackumentDeps = PackumentDeps
     { pdUpstreams :: MountUpstreams
     -- ^ Upstreams bound to their derived host gate, so their authorities cannot diverge.
+    , pdMirrorState :: Maybe MirrorView
+    -- ^ Source-only state, validated after each caller authorises the private read.
     , pdFirstParty :: PackageName -> Bool
     {- ^ Whether a name belongs to a namespace this deployment owns, derived once at the composition root and deny
     by default. Its one authority is the private upstream: the public leg is never entered, and a private miss is @404@.
