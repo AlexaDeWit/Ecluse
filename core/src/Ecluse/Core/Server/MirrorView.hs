@@ -22,6 +22,7 @@ import Data.List (mapAccumL)
 import Data.Map.Strict qualified as Map
 import Data.Primitive.SmallArray (smallArrayFromList)
 import Data.Time (NominalDiffTime)
+import Data.Traversable (for)
 import UnliftIO (tryAny)
 
 import Ecluse.Core.Mirror.State

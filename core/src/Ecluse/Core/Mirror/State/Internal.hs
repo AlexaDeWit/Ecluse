@@ -48,6 +48,7 @@ import Data.Aeson (Object)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text.Short qualified as TS
+import Data.Traversable (for)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (TransportFault)

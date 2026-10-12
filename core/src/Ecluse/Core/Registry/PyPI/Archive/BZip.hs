@@ -8,7 +8,7 @@ module Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks) where
 
 import Conduit
 import Control.Monad.Except (throwError)
-import Control.Monad.Trans.Resource (InternalState, closeInternalState, createInternalState, runInternalState)
+import Control.Monad.Trans.Resource (InternalState, allocate, closeInternalState, createInternalState, release, runInternalState)
 import Data.ByteString qualified as BS
 import Data.Conduit.BZlib qualified as BZip
 import System.IO.Error (ioeGetErrorString, isUserError)
