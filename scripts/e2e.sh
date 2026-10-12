@@ -54,8 +54,29 @@ identity() {
   ECLTEST_RUN_ID="$(jq -r .runId "$root/identity.json")"
 }
 
+archive_config_digest() {
+  local config digest
+  config="$(tar -xOf "$1" manifest.json | jq -er 'if length == 1 then .[0].Config else error("expected one image") end')" || return
+  digest="$(tar -xOf "$1" "$config" | sha256sum | cut -d' ' -f1)" || return
+  printf 'sha256:%s\n' "$digest"
+}
+
+# Docker image IDs identify configurations or manifests, depending on the image store.
+verified_image_ref() (
+  local reference="$1" actual actual_config
+  actual="$(docker image inspect --format '{{.Id}}' "$reference")" || return
+  [[ "$actual" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "invalid loaded image ID: $actual"
+  check_directory="$(mktemp -d "$root/.image-check.XXXXXXXXXX")" || return
+  trap 'rm -rf "$check_directory"' EXIT
+  docker image save --output "$check_directory/image.tar" "$actual" || return
+  actual_config="$(archive_config_digest "$check_directory/image.tar")" || return
+  [ "$actual_config" = "$ECLTEST_IMAGE_ID" ] \
+    || fail "loaded image configuration mismatch: expected=$ECLTEST_IMAGE_ID actual=$actual_config daemon-id=$actual reference=$reference"
+  printf '%s\n' "$actual"
+)
+
 prepare() {
-  local binary archive config image
+  local binary archive image
   [ ! -e "$root/plan.json" ] && [ ! -e "$root/identity.json" ] && [ ! -e "$root/docker-image.tar" ] \
     || fail "prepared inputs already exist, choose a new ECLTEST_ARTIFACT_DIR"
   mkdir "$root/.preparation" || fail "preparation already attempted, choose a new ECLTEST_ARTIFACT_DIR"
@@ -63,8 +84,7 @@ prepare() {
   "$binary" > "$root/plan.json"
   archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
   cp "$archive" "$root/docker-image.tar"
-  config="$(tar -xOf "$archive" manifest.json | jq -er 'if length == 1 then .[0].Config else error("expected one image") end')"
-  image="sha256:$(tar -xOf "$archive" "$config" | sha256sum | cut -d' ' -f1)"
+  image="$(archive_config_digest "$archive")"
   jq -n --arg source "${ECLTEST_SOURCE:-$(git rev-parse HEAD)}" --arg image "$image" \
     --arg architecture "$(architecture)" --arg planDigest "$(sha256sum "$root/plan.json" | cut -d' ' -f1)" \
     --arg archiveDigest "$(sha256sum "$archive" | cut -d' ' -f1)" \
@@ -78,16 +98,14 @@ load_image() {
   digest="$(sha256sum "$root/docker-image.tar" | cut -d' ' -f1)"
   [ "$digest" = "$(jq -r .archiveDigest "$root/identity.json")" ] || fail "archive digest mismatch"
   tag="$(bash "$here/docker-load.sh" "$root/docker-image.tar")"
-  [ "$(docker image inspect --format '{{.Id}}' "$tag")" = "$ECLTEST_IMAGE_ID" ] || fail "loaded image identity mismatch"
-  printf '%s\n' "$tag" > "$root/image-ref"
+  verified_image_ref "$tag" > "$root/image-ref"
 }
 
 run_component() {
   local binary component="$1"
   identity
   export ECLTEST_E2E_IMAGE
-  ECLTEST_E2E_IMAGE="$(cat "$root/image-ref")"
-  [ "$(docker image inspect --format '{{.Id}}' "$ECLTEST_E2E_IMAGE")" = "$ECLTEST_IMAGE_ID" ] || fail "loaded image identity mismatch"
+  ECLTEST_E2E_IMAGE="$(verified_image_ref "$(cat "$root/image-ref")")"
   binary="$(runner "$component")"
   exec "$binary"
 }

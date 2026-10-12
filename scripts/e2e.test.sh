@@ -58,7 +58,27 @@ case "$1" in
   load) echo 'Loaded image: ecluse:test' ;;
   info) exit "${TEST_DOCKER_STATUS:-0}" ;;
   ps|network) ;;
-  image) printf '%s\n' "${TEST_IMAGE_ID:-sha256:wrong}" ;;
+  image)
+    case "$2" in
+      inspect)
+        case "$5" in
+          sha256:*) printf '%s\n' "$5" ;;
+          *) printf '%s\n' "${TEST_IMAGE_ID:-sha256:wrong}" ;;
+        esac
+        ;;
+      save)
+        [ "$3" = --output ]
+        [ "${TEST_SAVE_STATUS:-0}" = 0 ] || exit "$TEST_SAVE_STATUS"
+        [ "${TEST_SAVE_MISSING:-0}" = 0 ] || exit 0
+        if [ "$5" != "$TEST_IMAGE_ID" ]; then
+          cp "$TEST_WORK/wrong-image.tar" "$4"
+        else
+          cp "${TEST_SAVED_ARCHIVE:-$TEST_WORK/image.tar}" "$4"
+        fi
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
   *) exit 2 ;;
 esac
 STUB
@@ -77,7 +97,17 @@ bash "$script" prepare
 export TEST_IMAGE_ID
 TEST_IMAGE_ID="$(jq -r .image "$ECLTEST_ARTIFACT_DIR/identity.json")"
 bash "$script" load
-[ "$(cat "$ECLTEST_ARTIFACT_DIR/image-ref")" = ecluse:test ]
+[ "$(cat "$ECLTEST_ARTIFACT_DIR/image-ref")" = "$TEST_IMAGE_ID" ]
+legacy_image_id="$TEST_IMAGE_ID"
+mkdir -p "$work/modern-image/blobs/sha256"
+cp "$work/archive/config.json" "$work/modern-image/blobs/sha256/${legacy_image_id#sha256:}"
+printf '[{"Config":"blobs/sha256/%s"}]\n' "${legacy_image_id#sha256:}" > "$work/modern-image/manifest.json"
+tar -cf "$work/modern-image.tar" -C "$work/modern-image" manifest.json blobs
+export TEST_SAVED_ARCHIVE="$work/modern-image.tar"
+TEST_IMAGE_ID="sha256:$(printf manifest | sha256sum | cut -d' ' -f1)"
+[ "$TEST_IMAGE_ID" != "$legacy_image_id" ]
+bash "$script" load
+[ "$(cat "$ECLTEST_ARTIFACT_DIR/image-ref")" = "$TEST_IMAGE_ID" ]
 bash "$script" pypi
 [ -f "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
 grep -q 'runner evidence' "$ECLTEST_ARTIFACT_DIR/reports/pypi.log"
@@ -109,6 +139,28 @@ reject bash "$script" audit
 reject env ECLTEST_SOURCE=other bash "$script" load
 reject env ECLTEST_RUN_ID=other bash "$script" load
 reject env TEST_IMAGE_ID=sha256:wrong bash "$script" load
+reject env TEST_SAVE_STATUS=17 bash "$script" load
+reject env TEST_SAVE_MISSING=1 bash "$script" load
+mkdir "$work/wrong-image"
+printf '{"architecture":"arm64","wrong":true}\n' > "$work/wrong-image/config.json"
+printf '[{"Config":"config.json"}]\n' > "$work/wrong-image/manifest.json"
+tar -cf "$work/wrong-image.tar" -C "$work/wrong-image" config.json manifest.json
+reject env TEST_SAVED_ARCHIVE="$work/wrong-image.tar" bash "$script" load
+grep -q "expected=$legacy_image_id actual=sha256:" "$work/rejected.log"
+grep -q "daemon-id=$TEST_IMAGE_ID reference=ecluse:test" "$work/rejected.log"
+bash "$script" load
+bash "$script" pypi
+reject env TEST_SAVED_ARCHIVE="$work/wrong-image.tar" bash "$script" pypi
+[ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+reject bash "$script" audit
+bash "$script" load
+bash "$script" pypi
+printf 'sha256:%s\n' "$(printf substituted | sha256sum | cut -d' ' -f1)" > "$ECLTEST_ARTIFACT_DIR/image-ref"
+reject bash "$script" pypi
+[ ! -e "$ECLTEST_ARTIFACT_DIR/reports/pypi.json" ]
+reject bash "$script" audit
+bash "$script" load
+[ -z "$(find "$ECLTEST_ARTIFACT_DIR" -maxdepth 1 -name '.image-check.*' -print -quit)" ]
 reject env ECLTEST_ARTIFACT_DIR="$work/build-failure" TEST_BUILD_FAIL=1 bash "$script" prepare
 reject env -u ECLTEST_ARTIFACT_DIR bash "$script" prepare
 
