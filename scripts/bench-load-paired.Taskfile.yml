@@ -36,4 +36,3 @@ tasks:
       - bash -n scripts/bench-load-paired.sh scripts/bench-load-sample.sh
       - shellcheck scripts/bench-load-paired.sh scripts/bench-load-sample.sh
       - actionlint .github/workflows/bench-load.yml
-

@@ -187,4 +187,3 @@ case "${1:-}" in
     ;;
   *) echo 'usage: bench-load-paired.sh {prepare|build A/B|seal|delegate|children|grid A/B 1-4}' >&2; exit 2 ;;
 esac
-
