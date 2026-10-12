@@ -39,7 +39,6 @@ import Data.Text qualified as T
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Types (status200, status400, status404, status413, status503, statusCode)
 import Network.Wai (Application, Request, Response, getRequestBodyChunk, pathInfo, requestHeaders, requestMethod, responseLBS, responseRaw)
-import Network.Wai.Handler.Warp (defaultSettings, setHost, testWithApplicationSettings)
 import Network.Wai.Parse (FileInfo (fileContent, fileName), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
 import System.Exit (ExitCode (ExitSuccess))
 import System.Process.Typed (proc, readProcess)
@@ -50,6 +49,7 @@ import UnliftIO.STM (checkSTM)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness.Advisories (advisoryBucket, createAdvisoryBucket)
+import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.E2E.Harness.Docker (withStubFault)
 import Ecluse.E2E.Harness.Stub (StubFault (PyPIMirrorBackend), StubRoute (PyPIMirror, PyPIPublic), nativeUploadLimit, stubUrl)
 import Ecluse.E2E.Harness.Types
@@ -104,7 +104,7 @@ withConfiguredNativeTarget config expected action = do
     active <- newTVarIO 0
     stale <- newTVarIO Set.empty
     let target = NativeTarget 0 files attempts fault requests blocked released active stale
-    testWithApplicationSettings (setHost "*" defaultSettings) (pure (nativeApplication config expected target)) $ \port ->
+    withBridgeApplication (nativeApplication config expected target) $ \port ->
         action target{ntPort = port}
 
 -- | Read the exact filenames and bytes accepted by the target.

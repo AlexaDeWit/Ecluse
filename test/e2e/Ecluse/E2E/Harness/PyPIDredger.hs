@@ -122,7 +122,7 @@ physicalInventory distributions target = do
 -- | Read the native mirror through the production proxy and its declared private cache.
 withSweepProxy :: PyPISweepPlane -> [(Text, Text)] -> Maybe Text -> [String] -> (PyPISweepStore -> IO a) -> IO a
 withSweepProxy plane extra queue args action =
-    withE2EWith config (\proxy -> action (PyPISweepStore plane proxy "mirror" (e2eBaseUrl proxy <> "/pypi/") (e2eBaseUrl proxy <> "/pypi/"))) (pspGlobal plane)
+    withE2EWith config (\proxy -> action (PyPISweepStore plane proxy "mirror" (e2eBaseUrl proxy <> "/pypi/") (e2eBaseUrl proxy <> "/pypi/legacy/"))) (pspGlobal plane)
   where
     config = defaultE2EConfig{ecExtraEnv = proxyRoleEnv <> extra, ecQueueUrl = queue, ecArgs = args}
 

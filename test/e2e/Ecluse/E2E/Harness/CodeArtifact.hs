@@ -29,7 +29,6 @@ import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.HTTP.Types (Status, status200, status400, status403, status404)
 import Network.Wai (Application, Request, Response, getRequestBodyChunk, pathInfo, queryString, requestHeaders, requestMethod, responseLBS)
-import Network.Wai.Handler.Warp (defaultSettings, setHost, testWithApplicationSettings)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName, renderPackageName)
@@ -38,6 +37,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.PyPI.Project (pypiNameLeadChars)
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.E2E.Harness.Container (withBridgeApplication)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), codeArtifactFormat)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (ControlPlane (cpRead), controlPlaneFor, observationFor)
 import Ecluse.Test.Maintenance (withBucket)
@@ -83,7 +83,7 @@ withCodeArtifactFixture repositories action = do
     refused <- newTVarIO []
     requests <- newTVarIO []
     let fixture = CodeArtifactFixture 0 tags refused requests
-    testWithApplicationSettings (setHost "*" defaultSettings) (pure (codeArtifactApplication repositories fixture)) $ \port ->
+    withBridgeApplication (codeArtifactApplication repositories fixture) $ \port ->
         action fixture{cafPort = port}
 
 -- | Traverse the production adapter's prefix listing over the HTTP fixture.

@@ -13,6 +13,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
 import Test.Hspec
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..), concreteFamily)
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
@@ -68,7 +69,8 @@ publicationDriver proxy target distributions project =
     PublicationDriver
         { publicationRun = publishProject proxy [distribution | distribution <- distributions, distributionProject distribution == project]
         , publicationInstall = do
-            (result, tree) <- pipInstallAndInspect proxy project mirrorVersion
+            let client = proxy{e2eClientEndpoints = Map.adjust (pipCredentialUrl "client-user" "client-password") PyPI (e2eClientEndpoints proxy)}
+            (result, tree) <- pipInstallAndInspect client project mirrorVersion
             when (crExit result == ExitSuccess) $
                 Map.member (toString (pypiDistInfoFor project mirrorVersion) <> "/METADATA") tree `shouldBe` True
             pure result
@@ -99,6 +101,7 @@ publicationConfig =
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL", stubUrl PyPIMirror <> "legacy/")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__TOKEN", "fixture-password")
             , ("ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__USERNAME", "fixture-user")
+            , ("ECLUSE_SERVER__AUTH_TOKEN", "client-password")
             ]
         }
 
@@ -115,7 +118,7 @@ sendUpload proxy distribution extra = do
 
 uploadClient :: E2E -> Distribution -> [(Text, Text)] -> IO ClientResult
 uploadClient proxy distribution extra = do
-    base <- parseRequest (toString (e2eBaseUrl proxy <> "/pypi/"))
+    base <- parseRequest (toString (e2eBaseUrl proxy <> "/pypi/legacy/"))
     let request =
             applyBasicAuth
                 "client-user"
@@ -129,7 +132,7 @@ uploadClient proxy distribution extra = do
     let status = statusCode (responseStatus response)
     pure
         ClientResult
-            { crCommand = "POST " <> e2eBaseUrl proxy <> "/pypi/ " <> distributionFilename distribution
+            { crCommand = "POST " <> e2eBaseUrl proxy <> "/pypi/legacy/ " <> distributionFilename distribution
             , crExit = if status >= 200 && status < 300 then ExitSuccess else ExitFailure 1
             , crStdout = show status
             , crStderr = decodeUtf8 (responseBody response)

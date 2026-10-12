@@ -15,6 +15,7 @@ module Ecluse.E2E.Harness.Container (
     commandOk,
     publishedPort,
     freeHostPort,
+    withBridgeApplication,
     uniqueSuffix,
     awaitContainerLog,
     containerLogs,
@@ -22,16 +23,20 @@ module Ecluse.E2E.Harness.Container (
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
-import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
+import Network.Socket (Family (AF_INET), HostAddress, SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, defaultProtocol, listen, maxListenQueue, socket, socketPort, tupleToHostAddress)
+import Network.Wai (Application)
+import Network.Wai.Handler.Warp qualified as Warp
 import System.Directory (createDirectoryIfMissing)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import System.Random (randomIO)
-import UnliftIO (bracket, finally, handleAny, onException, withException)
+import UnliftIO (bracket, finally, handleAny, onException, race, throwIO, withException)
+import UnliftIO.Concurrent (myThreadId, throwTo)
 
 import Ecluse.Test.Container.Image (ImageRef (PinnedExternal), PinnedImageRef, renderImageRef)
 import Ecluse.Test.Poll (pollUntil)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | A concrete container specification. Its surrounding bracket owns removal.
 data DockerRun = DockerRun
@@ -168,12 +173,31 @@ publishedPort cname containerPort = do
 
 -- | Reserve and release a host port before declaring the proxy public URL.
 freeHostPort :: IO Int
-freeHostPort =
+freeHostPort = withHostSocket (tupleToHostAddress (127, 0, 0, 1)) (\port _ -> pure port)
+
+withHostSocket :: HostAddress -> (Int -> Socket -> IO a) -> IO a
+withHostSocket address action =
     bracket (socket AF_INET Stream defaultProtocol) close $ \sock -> do
-        bind sock (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
-        getSocketName sock >>= \case
-            SockAddrInet port _ -> pure (fromIntegral port)
-            other -> fail ("unexpected socket address: " <> show other)
+        bind sock (SockAddrInet 0 address)
+        port <- fromIntegral <$> socketPort sock
+        action port sock
+
+-- | Serve a fixture to both bridge containers and local observers, propagating server failures.
+withBridgeApplication :: Application -> (Int -> IO a) -> IO a
+withBridgeApplication application action =
+    withHostSocket (tupleToHostAddress (0, 0, 0, 0)) $ \port sock -> do
+        listen sock maxListenQueue
+        owner <- myThreadId
+        ready <- newEmptyMVar
+        let settings =
+                Warp.setBeforeMainLoop (putMVar ready ())
+                    . Warp.setOnException (\_ fault -> when (Warp.defaultShouldDisplayException fault) (throwTo owner fault))
+                    $ Warp.defaultSettings
+        -- Warp's test helpers always bind loopback, even when setHost names another address.
+        race (Warp.runSettingsSocket settings sock application) (readMVar ready >> action port) >>= \case
+            Right result -> pure result
+            -- An early listener exit invalidates the fixture's dependent observations.
+            Left () -> throwIO (TestContractEscape "bridge fixture server stopped before its action finished")
 
 -- | A random identifier for concurrently acquired resources across processes.
 uniqueSuffix :: IO String

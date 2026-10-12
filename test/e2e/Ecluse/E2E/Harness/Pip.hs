@@ -5,6 +5,7 @@
 -- | Isolated pip clients for digest checks, dependency installs, and platform selection.
 module Ecluse.E2E.Harness.Pip (
     withPipProject,
+    pipCredentialUrl,
     pipInstallIn,
     pipResolveIn,
     pipInstalled,
@@ -42,6 +43,10 @@ import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
 import Ecluse.Test.Contract.Mirror (Observed (..))
 import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile), snapshotTree)
+
+-- | Add the fixture's URL-safe Basic credentials to its local HTTP index URL.
+pipCredentialUrl :: Text -> Text -> Text -> Text
+pipCredentialUrl username password = T.replace "http://" ("http://" <> username <> ":" <> password <> "@")
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a

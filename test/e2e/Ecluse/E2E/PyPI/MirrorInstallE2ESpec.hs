@@ -72,7 +72,7 @@ interruptedScenario plane target distributions = do
                 plane
     targetFiles target `shouldReturn` preserved
     withE2EWith
-        nativeMirrorConfig{ecArgs = ["proxy", "--no-worker"]}
+        config{ecArgs = ["proxy", "--no-worker"]}
         ( \observer -> do
             sourceView observer `shouldReturn` fst control
             missing <-
@@ -219,7 +219,7 @@ sharedMirrorDriver plane target distributions config =
             flip finally (atomically (writeTVar (ntFiles target) stored)) $
                 withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
                     withE2EWith
-                        nativeMirrorConfig{ecArgs = ["proxy", "--no-worker"]}
+                        config{ecArgs = ["proxy", "--no-worker"]}
                         ( \proxy -> do
                             reachable <- publicProjectReachable proxy
                             ((_, platform), _) <- either (fail . toString) pure mirrorArchitectures

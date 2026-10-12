@@ -18,7 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiWheelFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror (Distribution (..), distributionUploadBody, nativeUploadContentType)
 import Ecluse.E2E.Harness.Client (runClient)
-import Ecluse.E2E.Harness.Pip (withPipProject)
+import Ecluse.E2E.Harness.Pip (pipCredentialUrl, withPipProject)
 import Ecluse.E2E.Harness.PyPIDredger
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Sweep.Types (ClientOps (..))
@@ -39,10 +39,7 @@ pypiSweepClientOps =
 withProject :: PyPISweepStore -> (PipProject -> IO a) -> IO a
 withProject store = withPipProject proxy "unused-fixture" "0" "unused"
   where
-    proxy = (pssProxy store){e2eClientEndpoints = Map.singleton PyPI (credentialUrl (pssReadUrl store <> "simple/"))}
-
-credentialUrl :: Text -> Text
-credentialUrl = T.replace "http://" "http://aws:fixture-token@"
+    proxy = (pssProxy store){e2eClientEndpoints = Map.singleton PyPI (pipCredentialUrl "aws" "fixture-token" (pssReadUrl store <> "simple/"))}
 
 installIn :: PipProject -> Text -> Maybe Text -> IO ClientResult
 installIn project name version =
