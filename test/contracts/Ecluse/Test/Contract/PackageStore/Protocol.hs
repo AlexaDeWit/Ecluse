@@ -4,7 +4,6 @@
 
 -- | npm production adapters exercised against an independently decoded stateful HTTP boundary.
 module Ecluse.Test.Contract.PackageStore.Protocol (
-    NpmStoreBoundary (..),
     verdaccioDriver,
     npmStoreDriver,
     readStoreManifestOver,
@@ -24,13 +23,11 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status, status200, status201, status400, status401, status404, status409, status503)
 
 import Ecluse.Core.Credential (bareCredential)
-import Ecluse.Core.Package (Artifact (..), HashAlg (SRI), PackageDetails (pkgArtifacts), PackageName, hashAlg, hashValue, renderPackageName)
-import Ecluse.Core.Registry (RegistryResponse (..))
+import Ecluse.Core.Package (Artifact (..), HashAlg (SRI), PackageDetails (pkgArtifacts), PackageName, hashAlg, hashValue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance (..), StoreManifestRead, VersionOutcome (VersionRemoved), collectPages, storeFaultOfMetadata, storedVersion)
-import Ecluse.Core.Registry.Maintenance.NameSpace (wholeNameSpace)
+import Ecluse.Core.Registry.Maintenance (StoreMaintenance (..), StoreManifestRead, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), ProtocolStore (..), newProtocolMaintenance)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent), VersionDoc (..), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion)
@@ -40,32 +37,23 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish)
-import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Contract.PackageStore
-import Ecluse.Test.Maintenance (testDeleteGuard)
+import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), headerValue, stubBaseUrl, withRoutedStubIO)
-
--- | The control-plane oracle sees only state accepted from decoded npm wire requests.
-data NpmStoreBoundary = NpmStoreBoundary
-    { nsbReleases :: IO [PackageStoreRelease]
-    , nsbRemove :: [Text] -> IO ()
-    , nsbTakeDeleteFailure :: IO Bool
-    }
 
 -- | Verdaccio's supported npm profile includes protocol inventory and deletion.
 verdaccioDriver :: FullPackageStoreDriver
 verdaccioDriver = npmStoreDriver "verdaccio" protocolMaintenance
 
 -- | Reuse npm's shipped data plane while supplying the backend's production maintenance handle.
-npmStoreDriver :: Text -> (OriginClient -> NpmStoreBoundary -> IO StoreMaintenance) -> FullPackageStoreDriver
+npmStoreDriver :: Text -> (OriginClient -> StoreBoundary -> IO StoreMaintenance) -> FullPackageStoreDriver
 npmStoreDriver subject maintenance =
     FullPackageStoreDriver
         { psdSubject = subject
@@ -75,17 +63,17 @@ npmStoreDriver subject maintenance =
         , psdWithSession = withNpmSession maintenance
         }
 
-withNpmSession :: (OriginClient -> NpmStoreBoundary -> IO StoreMaintenance) -> (PackageStoreSession -> IO ()) -> IO ()
+withNpmSession :: (OriginClient -> StoreBoundary -> IO StoreMaintenance) -> (PackageStoreSession -> IO ()) -> IO ()
 withNpmSession maintenance use = do
     held <- newIORef Map.empty
     writes <- newIORef []
     failWrite <- newIORef False
     failDelete <- newIORef False
     let boundary =
-            NpmStoreBoundary
-                { nsbReleases = Map.elems <$> readIORef held
-                , nsbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
-                , nsbTakeDeleteFailure = takeFlag failDelete
+            StoreBoundary
+                { sbReleases = Map.elems <$> readIORef held
+                , sbRemove = \versions -> modifyIORef' held (\releases -> foldr Map.delete releases versions)
+                , sbTakeDeleteFailure = takeStoreFailure failDelete
                 }
     withRoutedStubIO (reply held writes failWrite failDelete) $ \stub -> do
         let reopen = do
@@ -105,23 +93,7 @@ withNpmSession maintenance use = do
                 }
 
 operations :: OriginClient -> MirrorPublish -> StoreMaintenance -> PackageStoreOperations
-operations origin publisher store =
-    PackageStoreOperations
-        { psoRead = readRelease origin
-        , psoWrite = writeRelease publisher
-        , psoInventory = do
-            names <- collectPages (listPackagesIn store wholeNameSpace)
-            case names of
-                Left fault -> pure (Left (show fault))
-                Right packages -> fmap sequence $ forM packages $ \name -> do
-                    versions <- enumerateVersions store name
-                    pure (first show (fmap (\items -> (renderPackageName name, sort (map (renderVersion . storedVersion) items))) versions))
-        , psoDelete = \versions ->
-            map (bimap renderVersion deletionResult) <$> deleteVersions store testDeleteGuard packageName (map npmVersion versions)
-        }
-  where
-    deletionResult VersionRemoved = Right ()
-    deletionResult other = Left (show other)
+operations origin publisher = storeOperations packageName npmVersion (readRelease origin) (writeRelease publisher)
 
 readRelease :: OriginClient -> Text -> IO (Either Text (Maybe PackageStoreRelease))
 readRelease origin version =
@@ -139,15 +111,12 @@ readRelease origin version =
                     pure (Just (PackageStoreRelease version metadata files))
 
 readArtifact :: OriginClient -> Artifact -> IO (Either Text PackageStoreArtifact)
-readArtifact origin artifact = case artifactRequestByUrl (ocToken origin) (artUrl artifact) of
-    Left fault -> pure (Left (show fault))
-    Right request -> do
-        response <- fetchTestBody (ocManager origin) (progressFloor (ocLimits origin)) (MirrorArtifactBodyLimit 4096) request
-        pure $ do
-            received <- first show response
-            unless (responseStatusCode received == 200) (Left "stored artifact did not answer HTTP 200")
-            digest <- maybeToRight "stored artifact has no SRI digest" (hashValue <$> find ((== SRI) . hashAlg) (artHashes artifact))
-            pure (PackageStoreArtifact (artFilename artifact) (responseBody received) digest)
+readArtifact origin artifact = do
+    response <- fetchStoreArtifact (MirrorArtifactBodyLimit 4096) origin (artifactRequestByUrl (ocToken origin) (artUrl artifact))
+    pure $ do
+        bytes <- response
+        digest <- maybeToRight "stored artifact has no SRI digest" (hashValue <$> find ((== SRI) . hashAlg) (artHashes artifact))
+        pure (PackageStoreArtifact (artFilename artifact) bytes digest)
 
 writeRelease :: MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
 writeRelease publisher release' = case toList (psrArtifacts release') of
@@ -159,7 +128,7 @@ writeRelease publisher release' = case toList (psrArtifacts release') of
         body = toStrict (encode (object ["name" .= packageText, "versions" .= object [Key.fromText (psrVersion release') .= versionDocument "" release' artifact]]))
     _ -> pure (Left "the shipped npm writer accepts one tarball per version")
 
-protocolMaintenance :: OriginClient -> NpmStoreBoundary -> IO StoreMaintenance
+protocolMaintenance :: OriginClient -> StoreBoundary -> IO StoreMaintenance
 protocolMaintenance origin _ = do
     listing <- maybe (fail "npm has no maintenance listing") pure (maintenanceListing npmMaintenance)
     deletion <- maybe (fail "npm has no maintenance deletion") pure (maintenanceVersionDelete npmMaintenance)
@@ -200,13 +169,13 @@ reply held writes failWrite failDelete captured
                 Nothing -> (status404, [], "{}")
                 Just artifact -> (status200, [], LBS.fromStrict (psaBytes artifact))
         ("PUT", path) | path == packagePath -> do
-            blocked <- takeFlag failWrite
+            blocked <- takeStoreFailure failWrite
             if blocked then pure (status503, [], "{}") else acceptPublish held writes (capBody captured)
         ("PUT", path) | path == packagePath <> "/-rev/fixture" -> do
-            blocked <- takeFlag failDelete
+            blocked <- takeStoreFailure failDelete
             if blocked then pure (status503, [], "{}") else applyEdit held (capBody captured)
         ("DELETE", path) | path == packagePath <> "/-rev/fixture" -> do
-            blocked <- takeFlag failDelete
+            blocked <- takeStoreFailure failDelete
             if blocked then pure (status503, [], "{}") else writeIORef held Map.empty >> pure (status200, [], "{}")
         ("DELETE", _) -> pure (status200, [], "{}")
         _ -> pure (status404, [], "{}")
@@ -301,9 +270,6 @@ release version bytes mainFile =
         version
         (Map.fromList [("main", mainFile), ("license", "MIT")])
         (PackageStoreArtifact (packageText <> "-" <> version <> ".tgz") bytes (sriSha512Of bytes) :| [])
-
-takeFlag :: IORef Bool -> IO Bool
-takeFlag flag = atomicModifyIORef' flag (False,)
 
 artifactPath :: PackageStoreArtifact -> ByteString
 artifactPath artifact = packagePath <> "/-/" <> encodeUtf8 (psaFilename artifact)

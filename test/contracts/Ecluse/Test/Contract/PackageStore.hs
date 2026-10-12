@@ -11,7 +11,9 @@ module Ecluse.Test.Contract.PackageStore (
     FullPackageStoreDriver (..),
     fullPackageStoreContract,
     packageStoreSpec,
+    packageStoreIntegrityLaw,
     packageStoreCatalogue,
+    packageStoreCatalogueFor,
     packageStoreCompletion,
     validatePackageStore,
 ) where
@@ -110,10 +112,7 @@ packageStoreLaws driver =
             psoRead (pssOperations session) siblingVersion `shouldReturn` Right (Just sibling)
             psoInventory (pssOperations session) `shouldReturn` Right [(psdPackage driver, [siblingVersion])]
     , declare "integrity" $
-        contractCase "integrity" "bytes-and-digests" "preserves every artifact byte and declared verified digest" $ \session -> do
-            psoWrite (pssOperations session) primary `shouldReturn` Right ()
-            pssObservedWrites session `shouldReturn` [primary]
-            psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
+        contractCase "integrity" "bytes-and-digests" "preserves every artifact byte and declared verified digest" (packageStoreIntegrityLaw driver)
     , declare "recovery" $ do
         contractCase "recovery" "publish-retry" "reports a failed write before a later attempt completes" $ \session -> do
             pssFailNextWrite session
@@ -150,18 +149,32 @@ packageStoreLaws driver =
     contractCase family suffix description = it (caseLabel (identifier driver family <> "/" <> suffix) description)
     declare family spec = (family, around (psdWithSession driver) spec)
 
+-- | Negative controls execute the same complete-file expectation as the registered integrity case.
+packageStoreIntegrityLaw :: FullPackageStoreDriver -> PackageStoreSession -> Expectation
+packageStoreIntegrityLaw driver session = do
+    psoWrite (pssOperations session) primary `shouldReturn` Right ()
+    pssObservedWrites session `shouldReturn` [primary]
+    psoRead (pssOperations session) primaryVersion `shouldReturn` Right (Just primary)
+  where
+    primary = psdPrimary driver
+    primaryVersion = psrVersion primary
+
 -- | The required cases are declared independently of the Hspec examples above.
 packageStoreCatalogue :: Text -> Catalogue
-packageStoreCatalogue subject =
+packageStoreCatalogue subject = packageStoreCatalogueFor "npm" subject ("package-store-" <> subject) subject
+
+-- | Ecosystem, backend and suite remain explicit when one backend hosts several profiles.
+packageStoreCatalogueFor :: Text -> Text -> Text -> Text -> Catalogue
+packageStoreCatalogueFor ecosystem backend partition subject =
     Catalogue
-        { catalogueProductionEcosystems = ["npm"]
-        , catalogueProfiles = [Profile profile ["npm"] [subject] families]
+        { catalogueProductionEcosystems = [ecosystem]
+        , catalogueProfiles = [Profile profile [ecosystem] [backend] families]
         , catalogueObligations =
             [ Obligation storeGroupId profile family Supported [family] (caseIdentifiers subject family)
             | family <- families
             , let storeGroupId = storeIdentifier subject family
             ]
-        , catalogueGroups = map (packageStoreGroup subject) families
+        , catalogueGroups = [(packageStoreGroup subject family){groupPartition = partition} | family <- families]
         }
   where
     profile = "package-store/" <> subject

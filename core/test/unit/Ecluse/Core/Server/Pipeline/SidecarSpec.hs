@@ -34,6 +34,11 @@ spec = do
                 let candidate = parent{artCoreMetadata = Just declaration}
                 selectSidecar floorSpec (const True) (artFilename parent) (details [candidate]) `shouldBe` Just candidate
 
+        it "does not use companion digests to satisfy the parent integrity floor" $ do
+            floorSpec <- expectRight (mkMinIntegrity SHA256)
+            let weak = parent{artHashes = [], artCoreMetadata = Just (MetadataDigests (Map.singleton "sha256" validSha256))}
+            selectSidecar floorSpec (const True) (artFilename parent) (details [weak]) `shouldBe` Nothing
+
         it "skips a weak duplicate without borrowing its declaration or location" $ do
             floorSpec <- expectRight (mkMinIntegrity SHA256)
             let weak = parent{artHashes = [], artEntryKey = ArrayEntry 0, artUrl = "https://files.test/weak"}

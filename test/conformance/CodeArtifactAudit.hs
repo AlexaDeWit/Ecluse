@@ -7,15 +7,15 @@ module Main (main) where
 
 import Data.Text qualified as T
 
+import Ecluse.Runtime.Test.PackageStore (codeArtifactCatalogue, validateCodeArtifact)
 import Ecluse.Test.Contract.Manifest (auditFiles, failRunner)
-import Ecluse.Test.Contract.PackageStore (packageStoreCatalogue, validatePackageStore)
 import Ecluse.Test.Contract.Result (makePlan)
 
 -- | A missing, failed, pending, or stale result cannot establish conformance.
 main :: IO ()
 main = do
-    validatePackageStore "codeartifact"
-    compiled <- either (failRunner . T.unlines) pure $ makePlan (packageStoreCatalogue "codeartifact")
+    validateCodeArtifact
+    compiled <- either (failRunner . T.unlines) pure $ makePlan codeArtifactCatalogue
     getArgs >>= \case
         [plan, report] -> auditFiles compiled plan [report]
         _ -> failRunner "usage: ecluse-conformance-codeartifact-audit PLAN REPORT"

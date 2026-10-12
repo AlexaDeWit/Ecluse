@@ -9,6 +9,7 @@ import Data.Text qualified as T
 
 import Ecluse.E2E.Catalogue (catalogue)
 import Ecluse.Runtime.Test.Contract.UnitCatalogue (runtimeUnitCatalogue)
+import Ecluse.Runtime.Test.PackageStore (codeArtifactCatalogue)
 import Ecluse.Test.Contract.Catalogue (combineCatalogues)
 import Ecluse.Test.Contract.Completion (Completion)
 import Ecluse.Test.Contract.Integration.Catalogue (integrationCatalogue)
@@ -26,7 +27,7 @@ completionAuditMain executable completion = do
             makePlan (unitCatalogueFor "core-unit" (combineCatalogues [expectedUnitCatalogue coreUnitCatalogue, packageStoreCatalogue "verdaccio"]))
     runtime <-
         either (failRunner . T.unlines) pure $
-            makePlan (unitCatalogueFor "runtime-unit" (combineCatalogues [expectedUnitCatalogue runtimeUnitCatalogue, packageStoreCatalogue "codeartifact"]))
+            makePlan (unitCatalogueFor "runtime-unit" (combineCatalogues [expectedUnitCatalogue runtimeUnitCatalogue, codeArtifactCatalogue]))
     integration <- either (failRunner . T.unlines) pure (makePlan integrationCatalogue)
     e2e <- either (failRunner . T.unlines) pure (makePlan catalogue)
     getArgs >>= \case

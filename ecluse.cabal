@@ -31,6 +31,7 @@ extra-source-files:
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
+  test/fixtures/package-store/pypi/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
@@ -733,6 +734,7 @@ library ecluse-test-support
   exposed-modules:
     Ecluse.Test.Mirror.State
     Ecluse.Test.Mirror.Read
+    Ecluse.Test.Registry.PyPI.Multipart
     Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
@@ -893,6 +895,9 @@ library ecluse-test-contracts
     exposed-modules:
       Ecluse.Test.Contract.Metadata.Fetch
       Ecluse.Test.Contract.PackageStore.Protocol
+      Ecluse.Test.Contract.PackageStore.Provider
+      Ecluse.Test.Contract.PackageStore.PyPI
+    other-modules: Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
 
   build-depends:
     , ecluse:ecluse-core
@@ -912,6 +917,7 @@ library ecluse-test-contracts
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
     , universe-base     ^>=1.1
+    , wai-extra         ^>=3.1
     , zlib              ^>=0.7
 
 -- Internal runtime-test-support library shared by suites that depend on the runtime tier.
@@ -940,6 +946,7 @@ library ecluse-runtime-test-support
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
     , katip             ^>=0.8.8
+    , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
 
@@ -1500,6 +1507,7 @@ test-suite ecluse-runtime-unit
     , containers        ^>=0.7
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
+    , HUnit             ^>=1.6
     , hspec             ^>=2.11
     , hspec-wai         ^>=0.11
     , microlens         ^>=0.4.13

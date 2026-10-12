@@ -133,8 +133,10 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 ### Full package-store subjects
 
-Verdaccio and CodeArtifact each run the same ten cases through `fullPackageStoreContract`.
-Each ID below has the prefix `package-store/<subject>/`, where `<subject>` is `verdaccio` or `codeartifact`.
+Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI each run the same ten cases through `fullPackageStoreContract`.
+Each ID below has the prefix `package-store/<subject>/`.
+The subjects are `verdaccio`, `codeartifact` and `codeartifact-pypi`.
+Both CodeArtifact profiles use the existing `package-store-codeartifact` job and the `codeartifact` backend identity.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
 
@@ -147,17 +149,26 @@ from the provider catalogue cannot make its absence pass.
 | `integrity` | `bytes-and-digests` | Preserve all artifact bytes and their verified digests. |
 | `recovery` | `publish-retry`, `reopen`, `delete-retry` | Report failed work, finish a later attempt, and read completed work from a fresh handle. |
 
-Both subjects use production handles through deterministic service boundaries.
+All profiles use production handles through deterministic service boundaries.
+The PyPI profile uploads two wheels and one source distribution per version, with distinct consumer metadata.
+Its native fixture decodes submitted multipart fields and retains actual uploaded bytes.
+Independent format constants check the CodeArtifact requests.
+Fresh handles retain only the remote fixture state.
 The CodeArtifact result does not claim live AWS operations.
 The npm E2E subject supplies separate Verdaccio service evidence.
 
 All other original assertions remain in their native specs. This includes memory FIFO and overflow accounting, SQS visibility extension and active lease renewal, terminal redrive and dead-letter capture budget, unreachable endpoint classification, secret representation, refresh/expiry/cancellation policy, provider mint mapping, maintenance raw JSON preservation, pagination tokens, request credentials, per-version refusals, uncertain/unreached outcomes, upstream classification, cursor persistence and bounds, advisory HEAD/GET race, republication identity, EPSS policy, last-good age, cancellation, and the compile/publish/serve integration.
 
-Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
+Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. S3 package storage remains planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
 No automatic test verifies a real AWS token mint or the Datadog SaaS.
 Credential tests use local HTTP stubs. Telemetry tests use the local Collector and process logs.
 
 ### Negative controls and lifecycle
+
+CodeArtifact registration checks reject a missing PyPI profile before fixture acquisition.
+The npm and PyPI integrity controls alter successful production reads to change bytes, digests or consumer metadata.
+A PyPI control also removes distribution files.
+Each control requires an assertion failure and proves that the altered read ran.
 
 New Ecluse.Test.Contract.QueueSpec runs the same queuePayloadLaw with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
 
@@ -484,9 +495,9 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 20 complete lifecycle groups and 341 unique examples.
+The integration runner registers 20 complete lifecycle groups and 346 unique examples.
 Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 318 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The other 323 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
 The PyPI cases retain source authority, companion integrity, credential confinement, and private mirror observations.
 Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
@@ -509,7 +520,7 @@ The old wrapper remains as a native source reference, but the runner does not sc
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
 | `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
-| `integration/mirror-view` | `native-001` to `native-016` (22) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
+| `integration/mirror-view` | `native-001` to `native-018` (27) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
 | `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |

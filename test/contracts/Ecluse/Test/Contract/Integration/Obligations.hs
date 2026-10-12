@@ -123,6 +123,11 @@ integrationObligations =
         , "integration/mirror-view/native-015/undecidable-policy"
         , "integration/mirror-view/native-015/incomplete-inventory"
         , "integration/mirror-view/native-016"
+        , "integration/mirror-view/native-017/incomplete"
+        , "integration/mirror-view/native-017/later-file"
+        , "integration/mirror-view/native-018/partial"
+        , "integration/mirror-view/native-018/absent"
+        , "integration/mirror-view/native-018/unavailable"
         ]
     , required
         "integration/egress"

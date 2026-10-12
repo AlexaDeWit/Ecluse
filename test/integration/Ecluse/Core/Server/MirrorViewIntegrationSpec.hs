@@ -27,7 +27,7 @@ import Ecluse.Core.Queue (MirrorJob (jobPackage, jobTriggerFilename, jobVersion)
 import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), inventoryFiles, inventoryReadData)
 import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope, simpleFiles)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny), Rule (AllowByIdentity, DenyByIdentity, DenyIfCve))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny), Rule (AllowByIdentity, DenyByIdentity, DenyIfCve), RuleVerdict (Deny))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool)
@@ -42,7 +42,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Mirror.State
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, packageRule, revocation)
 import Ecluse.Test.Server.Mount (pypiServeDeps, withMirrorPlan)
 import Ecluse.Test.Support (expectRight)
 import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
@@ -217,12 +217,17 @@ spec = describe "managed PyPI mirror reads" $ do
             withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) view False (nativeWith True "private" status200 [1, 2, 3]) public $ \app ->
                 for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status404
 
-    it (caseLabel "integration/mirror-view/native-013" "applies public policy to a later filename and its declared companion") $ do
+    it (caseLabel "integration/mirror-view/native-013" "denies a later artifact while serving its declared companion") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
-        withManagedProxy view False (nativeWith True "private" status200 [1, 2, 3]) (nativeWith True "public" status200 [1, 2, 3]) $ \app ->
-            for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status403
+        withManagedProxy view False (nativeWith True "private" status200 [1, 2, 3]) (nativeWith True "public" status200 [1, 2, 3]) $ \app -> do
+            let path = "/pypi/simple/demo/" <> encodeUtf8 (mirrorFilename 3)
+            artifact <- getPath path app
+            simpleStatus artifact `shouldBe` status403
+            companion <- getPath (path <> ".metadata") app
+            simpleStatus companion `shouldBe` status200
+            simpleBody companion `shouldBe` "public"
 
     for_
         [ ("without-public-admission", "without an admitted public version", [DenyByIdentity "demo@1"])
@@ -274,6 +279,49 @@ spec = describe "managed PyPI mirror reads" $ do
         withManagedProxyOver (queue, \deps -> deps{pdRules = rules, pdMinIntegrity = integrityFloor}) view False (projectVersions sourceEnvelope ["2.0"]) (native status200 [1, 2]) $ \app -> do
             response <- getPath "/pypi/simple/demo/" app
             simpleStatus response `shouldBe` status503
+
+    for_ [("incomplete", [1], 1), ("later-file", [1, 2, 3], 3)] $ \(identifier, privateFiles, number) ->
+        it (caseLabel ("integration/mirror-view/native-017/" <> identifier) "serves managed public companions without policy reads or queue writes") $ do
+            old <- mirrorSample [1, 2] False "https://public.test/" "original"
+            record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
+            view <- testView (pure (Right (StateLoaded revision record)))
+            advisoryReads <- newIORef (0 :: Int)
+            policyReads <- newIORef (0 :: Int)
+            queued <- newIORef []
+            queue <- newTestMemoryQueue
+            let rules = [packageRule "deny-companion-control" 0 FailDeny Nothing (modifyIORef' policyReads (+ 1)) (Deny Nothing revocation)]
+                observing = queue{enqueue = \job -> modifyIORef' queued (<> [job]) $> Right ()}
+                configure deps =
+                    (withMirrorPlan (MirrorOnAdmit (loopbackRegistryUrl "http://localhost:1")) deps)
+                        { pdRules = rules
+                        , pdAdvisoryEtag = modifyIORef' advisoryReads (+ 1) $> Nothing
+                        }
+                path = "/pypi/simple/demo/" <> encodeUtf8 (mirrorFilename number)
+            withManagedProxyOver (observing, configure) view False (nativeWith True "private" status200 privateFiles) (nativeWith True "public" status200 [1, 2, 3]) $ \app -> do
+                artifact <- getPath path app
+                simpleStatus artifact `shouldBe` status403
+                readIORef advisoryReads >>= (`shouldSatisfy` (> 0))
+                readIORef policyReads >>= (`shouldSatisfy` (> 0))
+                writeIORef advisoryReads 0
+                writeIORef policyReads 0
+                companion <- getPath (path <> ".metadata") app
+                simpleStatus companion `shouldBe` status200
+                simpleBody companion `shouldBe` "public"
+                headed <- requestAt methodHead (path <> ".metadata") defaultRequest app
+                simpleStatus headed `shouldBe` status200
+                simpleBody headed `shouldBe` ""
+            readIORef advisoryReads `shouldReturn` 0
+            readIORef policyReads `shouldReturn` 0
+            readIORef queued `shouldReturn` []
+
+    for_ [("partial", nativeWith True "public" status200 [1]), ("absent", native status404 []), ("unavailable", native status503 [])] $ \(identifier, public) ->
+        it (caseLabel ("integration/mirror-view/native-018/" <> identifier) "refuses a companion without complete public coverage") $ do
+            inventory <- mirrorSample [1, 2] False "https://public.test/" "original"
+            record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+            view <- testView (pure (Right (StateLoaded revision record)))
+            withManagedProxy view False (nativeWith True "private" status200 [1]) public $ \app -> do
+                response <- getPath (artifactPath <> ".metadata") app
+                simpleStatus response `shouldBe` status503
 
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]
