@@ -9,6 +9,7 @@ module Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar) where
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
 import Conduit
+import Control.Monad (foldM)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
@@ -92,7 +93,7 @@ readHeader header = case Tar.read (BSL.fromStrict header) of
     Tar.Next entry _ -> Right entry
     _ -> bad "malformed tar header"
 
-takeBytes :: Int64 -> ConduitT ByteString o TarDecode ByteString
+takeBytes :: Int -> ConduitT ByteString o TarDecode ByteString
 takeBytes size = takeCE size .| foldC
 
 skipPayload :: Integer -> ConduitT ByteString o TarDecode ()

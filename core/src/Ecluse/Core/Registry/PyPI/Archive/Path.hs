@@ -23,11 +23,11 @@ checkPath path = do
 -- | Select only the admitted distribution metadata directory.
 metadataPath :: PackageName -> Version -> DistributionKind -> [Text] -> Either ParseError Bool
 metadataPath package version kind parts = case (kind, parts) of
-    (Wheel, [root, "METADATA"]) | Just stem <- T.stripSuffix ".dist-info" root -> identity stem
-    (Sdist, [root, "PKG-INFO"]) -> identity root
+    (Wheel, [root, "METADATA"]) | Just stem <- T.stripSuffix ".dist-info" root -> matchesIdentity stem
+    (Sdist, [root, "PKG-INFO"]) -> matchesIdentity root
     _ -> Right False
   where
-    identity stem = case fileCoordinate package (stem <> ".tar.gz") of
+    matchesIdentity stem = case fileCoordinate package (stem <> ".tar.gz") of
         Just coordinate | fcVersion coordinate == version -> Right True
         _ -> bad "archive metadata directory disagrees with admitted identity"
 

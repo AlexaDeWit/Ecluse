@@ -13,6 +13,7 @@ import Codec.Compression.BZip.Internal qualified as BZipStream
 import Codec.Compression.Lzma qualified as Lzma
 import Codec.Compression.Zlib.Internal qualified as GZipStream
 import Conduit
+import Control.Monad (foldM)
 import Control.Monad.Except (throwError)
 import Data.Bits (shiftR, (.&.))
 import Data.ByteString qualified as BS
