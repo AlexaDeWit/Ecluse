@@ -11,18 +11,33 @@ testing side is in
 and the checklist of tests, benchmarks and fixtures is in
 [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem).
 
+## Full ecosystem completion
+
+A passing `fullEcosystemContract` with a concrete driver defines completion for an ecosystem.
+The full contract requires proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
+Give the suite a direct call such as `fullEcosystemContract npmDriver`.
+The driver supplies clients, fixtures, native observations, and resource acquisition.
+The contract owns common business assertions and the required family list.
+
 Supply fixtures and operation records to the shared contracts in `test/contracts/Ecluse/Test/Contract/`.
 Keep protocol decoding, request construction, native observations, and raw-wire oracles in the ecosystem's provider.
-Do not copy an existing contract's business assertions into a new spec.
-The [contract coverage map](test-contracts.md) identifies shared laws and native extensions.
+Do not copy a shared business assertion into a new spec.
+Keep native extensions for facts that have no common meaning, such as npm lifecycle and scope rules or PyPI yanks.
+Use equivalent native fixtures for a shared obligation, and keep each native assertion in its own test.
 
-Add direct contract calls with named concrete fixtures to the applicable suite entrypoint.
-Register supported capabilities, lifecycle groups, and stable case IDs as metadata for those declarations.
-Declare obligations independently of driver availability, then check them against the production adapter registry.
-A missing driver for a supported operation fails coverage. A planned operation records its delivery issue and runs no placeholder.
-Provide negative controls that prove incorrect observations and missing registrations fail.
-Read the [fixed suite contract lists](test-contracts.md#fixed-e2e-entrypoints) and run `cabal run ecluse-e2e-manifest` without services.
-Run the applicable fixed E2E task after `task test-e2e-prepare` and `task test-e2e-load` with an explicit `ECLTEST_ARTIFACT_DIR`.
+Declare obligations independently of drivers, registrations, and current production capability flags.
+A missing required family must produce a named failed outcome while other contracts execute.
+Capability flags may describe availability, but must not remove a full-contract requirement.
+The read-only PyPI foundation names its smaller scope and does not claim full completion.
+Keep blocked rule types explicit in `adapterRuleBlocks` when the protocol cannot supply their meaning.
+
+Register stable case IDs, lifecycle groups, and concrete drivers for each supported family.
+Check the declared IDs against actual Hspec registration and execution reports.
+Add negative controls for omitted registrations and wrong observations.
+The [contract coverage map](test-contracts.md) identifies common laws, native extensions, and retained lower-tier evidence.
+Run `cabal run ecluse-e2e-manifest` to inspect the plan without services.
+Run the ecosystem's fixed E2E task after `task test-e2e-prepare` and `task test-e2e-load` with an explicit `ECLTEST_ARTIFACT_DIR`.
+Unit, integration, residency, allocation, load, and smoke duties remain in their proper tiers.
 
 Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
 Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.

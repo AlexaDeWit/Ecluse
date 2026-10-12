@@ -8,6 +8,14 @@ E2E execution reports audit those IDs against the fixed execution manifest.
 Lower-tier catalogues validate registration independently of fixture availability.
 Performance runners keep their native sampling and verdict paths.
 
+`fullEcosystemContract` requires proxying, installation, policy, advisories, mirroring,
+publication, Dredger, and telemetry. `fullPackageStoreContract` requires reads, writes,
+inventory, deletion, integrity, and recovery. These lists are normative for each subject.
+Driver capability flags cannot shrink them. Independent obligations detect a family omitted
+from registration, while actual Hspec execution proves the registered laws ran.
+Each missing required family must fail by name, and unrelated families continue.
+The named read-only PyPI foundation is partial until PyPI runs the same full composition as npm.
+
 ## Metadata and serving
 
 ### Metadata transport
@@ -121,6 +129,26 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 | Runtime Cve.SyncSpec refused artifact retains last-good generation | advisory/local/last-good | Full byte, ETag, provenance, install age, remediation and temporary-file snapshot before/after exact epoch refusal |
 | Additional real S3 conformance | advisory/s3/last-good | Same canonical body through production exportToS3, raw SDK producer HEAD identity, real S3 fetch and syncStep |
 
+### Full package-store subjects
+
+Verdaccio and CodeArtifact each run the same ten cases through `fullPackageStoreContract`.
+Each ID below has the prefix `package-store/<subject>/`, where `<subject>` is `verdaccio` or `codeartifact`.
+The six family names come from an independent completion definition, so removing a family
+from the provider catalogue cannot make its absence pass.
+
+| Family | Case suffixes | Required observation |
+|---|---|---|
+| `reads` | `present`, `absent` | Read both stored versions and distinguish absence from a failed read. |
+| `writes` | `complete`, `idempotent` | Publish a complete release beside a sibling and preserve it on retry. |
+| `inventory` | `exact` | List exactly the published package and versions. |
+| `deletion` | `selected` | Remove one version while its sibling stays readable and listed. |
+| `integrity` | `bytes-and-digests` | Preserve all artifact bytes and their verified digests. |
+| `recovery` | `publish-retry`, `reopen`, `delete-retry` | Report failed work, finish a later attempt, and read completed work from a fresh handle. |
+
+Both subjects use production handles through deterministic service boundaries.
+The CodeArtifact result does not claim live AWS operations.
+The npm E2E subject supplies separate Verdaccio service evidence.
+
 All other original assertions remain in their native specs. This includes memory FIFO and overflow accounting, SQS visibility extension and active lease renewal, terminal redrive and dead-letter capture budget, unreachable endpoint classification, secret representation, refresh/expiry/cancellation policy, provider mint mapping, maintenance raw JSON preservation, pagination tokens, request credentials, per-version refusals, uncertain/unreached outcomes, upstream classification, cursor persistence and bounds, advisory HEAD/GET race, republication identity, EPSS policy, last-good age, cancellation, and the compile/publish/serve integration.
 
 Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
@@ -206,7 +234,7 @@ cabal run ecluse-e2e-audit -- PLAN REPORT...
 cabal run ecluse-integration-audit -- PLAN REPORT
 ```
 
-Run `task test-e2e` for fresh artifacts, all four fixed components, and the full audit.
+Run `task test-e2e` for fresh artifacts, all three fixed subjects, and the full audit.
 The task prints its artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 For staged preparation, choose a fresh directory explicitly:
 
@@ -215,40 +243,53 @@ mkdir -p scratchpad/e2e
 export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
 task test-e2e-prepare
 task test-e2e-load
-task test-e2e-npm-serving
-task test-e2e-npm-writes
+task test-e2e-npm
 task test-e2e-pypi
 task test-e2e-shared-system
 task test-e2e-audit
 ```
 
 Preparation cannot overwrite an existing artifact directory. Commands sharing that directory hold the same lock.
-Rerun a fixed component with its named task. It reuses the prepared image and immutable plan.
+Rerun a fixed subject with its named task. It reuses the prepared image and immutable plan.
 Before checking prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
-Only successful execution and cleanup publish `reports/<component>.json`.
+Only successful execution and cleanup publish `reports/<subject>.json`.
 Failed-attempt reports, logs, and status remain available for diagnosis and cannot satisfy completion.
 The full audit requires every group and case exactly once, with matching execution identities.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
 
-Run the complete integration tier with `task test-integration`.
-Its Task wrapper supplies container ownership and daemon exclusion controls.
+For a local cross-tier completion audit, give integration and E2E the same `ECLTEST_SOURCE`
+and `ECLTEST_RUN_ID`. Set `ECLTEST_ARCHITECTURE` to `arm64` or `amd64` for the host.
+Run `task test-integration`, then the staged E2E commands above.
+Set `ECLTEST_INTEGRATION_ARTIFACT_DIR` to `scratchpad/integration/$ECLTEST_RUN_ID`.
+Run `task test-e2e-npm-completion` or `task test-e2e-pypi-completion`.
+The completion audit reads the actual integration and subject E2E reports.
+It checks required laws and execution identities against both compiled plans.
+
+The `task test-integration` wrapper supplies container ownership and daemon exclusion controls.
 Unit declaration audits run through `task test`. Smoke and residency retain their existing commands.
 Integration coverage runs and audits the complete manifest.
 `COVERAGE_FLAGS` cannot select cases, bypass execution, or change the report path.
 
+Run `task test-conformance-verdaccio` and `task test-conformance-codeartifact` for the fixed
+package-store subjects. Each runs its own manifest, full contract, and audit with an
+execution identity. A missing report, failed law, or incomplete subject fails the task.
+CodeArtifact uses the production adapter with deterministic control-plane doubles.
+Its result does not claim live AWS service coverage.
+
 ## Fixed E2E entrypoints
 
 Read each suite's declaration list to see the contracts and concrete fixtures it runs.
-The four Cabal components are `ecluse-e2e-npm-serving`, `ecluse-e2e-npm-writes`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
+The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
 
-| Suite entrypoint | Explicit contract calls | Cases |
+| Subject entrypoint | Composition | Cases in the green foundation |
 |---|---|---|
-| [NpmServing.hs](../test/e2e/Ecluse/E2E/Suites/NpmServing.hs) | `installationContract npmRegistryFixture` | 9 |
-| [NpmWrites.hs](../test/e2e/Ecluse/E2E/Suites/NpmWrites.hs) | `mirrorContract npmMirrorFixture`, `publicationContract npmPublicationFixture`, `dredgerContract npmDredgerFixture` | 6 + 2 + 16 = 24 |
-| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `installationContract pypiPublicFixture`, `advisoryContract pypiPilotFixture` | 5 + 4 = 9 |
-| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | `telemetryContract npmTelemetryFixture`, `mixedMountContract mixedRegistryFixture` | 6 + 1 = 7 |
+| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | 46: former serving and write cases, six moved telemetry cases, four shared installation laws, and three advisory laws. |
+| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `readOnlyEcosystemFoundation pypiDriver` pending full parity | 17: nine prior cases, four shared installation laws, and four read telemetry laws. |
+| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | 1: the mixed-client case. |
 
-These lists run 49 cases in total, including the 16 Dredger cases.
+The foundation runs 64 E2E cases, including all 49 prior observations.
+Six telemetry IDs gain an `npm/` prefix, and the PyPI canonical-fix case moves to its native advisory group.
+The old count is not a completion target.
 [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
 The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
 Metadata checks the actual declarations and reports. It does not choose test combinations at runtime.
@@ -261,13 +302,13 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 
 | Canonical module | Registered cases | Native evidence retained |
 |---|---|---|
-| `Install` | `npm/install/default-denial`, `npm/install/lifecycle-script-control`, `pypi/install/wheel`, `mixed/alternating-clients` | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
-| `Install.Advisory` | All four `pypi/advisories/*` cases | Native file lists, digests, exact denial text and remediation controls. |
+| `Install` | The shared npm and PyPI installation families, plus the retained original install IDs | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
+| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Native file lists, digests, exact denial text and remediation controls. |
 | `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
-| `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect` | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
+| `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
 | `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
 | `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
-| `Telemetry` | All six `telemetry/*` cases | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
+| `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
 | `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
 | `Sweep.Advisory` | `npm/dredger/advisory-revocation` | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
 | `Sweep.Recovery` | Five recovery cases below | Residual deletion, refill, absent source bytes and copies arriving after cleanup. |
@@ -276,12 +317,35 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 `Sweep.Types` owns the fixture and operation records. `Sweep` owns shared inventory, listing and refusal assertions.
 The Dredger provider keeps four lifecycle brackets in order: identity, advisory, recovery and rollout.
 All four remain inside the single schedulable `npm/dredger` group.
-The detailed tables below preserve all 49 original E2E case identities and descriptions.
+The detailed tables below preserve all 49 original E2E observations and descriptions.
 Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
+
+The new shared installation family runs these four IDs for each of `npm` and `pypi`:
+`installation/accepted-install`, `installation/default-denial`, `installation/artifact-integrity`,
+and `installation/artifact-head`, with the ecosystem prefix.
+The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
+and `npm/advisories/exact-fix`.
+The PyPI read telemetry foundation also runs `pypi/telemetry/signals`,
+`pypi/telemetry/disabled`, `pypi/telemetry/export-failure`, and `pypi/telemetry/datadog`.
+The six former telemetry IDs map as follows. Each case keeps its original observations.
+
+| Former ID | Current ID |
+|---|---|
+| `telemetry/signals` | `npm/telemetry/signals` |
+| `telemetry/domain-spans` | `npm/telemetry/domain-spans` |
+| `telemetry/private-fetch` | `npm/telemetry/private-fetch` |
+| `telemetry/disabled` | `npm/telemetry/disabled` |
+| `telemetry/export-failure` | `npm/telemetry/export-failure` |
+| `telemetry/datadog` | `npm/telemetry/datadog` |
+
+`npm/telemetry/domain-spans` and `npm/telemetry/private-fetch` remain required by the full contract.
+`pypi/advisories/canonical-fix` keeps its ID in the native advisory group.
+Each new ID runs beside the original native case IDs and their negative controls.
 
 ## E2E assertion identities
 
-The following original example descriptions retain their assertions and negative controls under stable IDs.
+The following original example descriptions retain their assertions and negative controls.
+The six telemetry IDs gained the `npm/` prefix as mapped above.
 The native modules retain scenario providers. The fixed suite declarations register their contract calls.
 
 ### `test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs`

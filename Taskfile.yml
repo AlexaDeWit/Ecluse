@@ -94,24 +94,36 @@ tasks:
     desc: Verify and load the prepared E2E image archive
     cmds:
       - bash scripts/e2e.sh load
-  test-e2e-npm-serving:
-    desc: Run the fixed npm-serving E2E component with prepared artifacts
+  test-e2e-npm:
+    desc: Run the fixed npm E2E subject with prepared artifacts
     cmds:
-      - bash scripts/e2e.sh npm-serving
-  test-e2e-npm-writes:
-    desc: Run the fixed npm-writes E2E component with prepared artifacts
-    cmds:
-      - bash scripts/e2e.sh npm-writes
+      - bash scripts/e2e.sh npm
   test-e2e-pypi:
-    desc: Run the fixed pypi E2E component with prepared artifacts
+    desc: Run the fixed PyPI E2E subject with prepared artifacts
     cmds:
       - bash scripts/e2e.sh pypi
   test-e2e-shared-system:
-    desc: Run the fixed shared-system E2E component with prepared artifacts
+    desc: Run the fixed shared-system E2E subject with prepared artifacts
     cmds:
       - bash scripts/e2e.sh shared-system
+  test-e2e-npm-completion:
+    desc: Audit npm completion against integration and E2E reports
+    cmds:
+      - bash scripts/e2e-completion.sh npm
+  test-e2e-pypi-completion:
+    desc: Audit PyPI completion against integration and E2E reports
+    cmds:
+      - bash scripts/e2e-completion.sh pypi
+  test-conformance-verdaccio:
+    desc: Run the fixed Verdaccio package-store contract
+    cmds:
+      - bash scripts/package-store-conformance.sh verdaccio
+  test-conformance-codeartifact:
+    desc: Run the fixed CodeArtifact package-store contract
+    cmds:
+      - bash scripts/package-store-conformance.sh codeartifact
   test-e2e-audit:
-    desc: Check that shard reports cover the complete prepared plan
+    desc: Check that subject reports cover the complete prepared plan
     cmds:
       - bash scripts/e2e.sh audit
   test-e2e:
@@ -374,8 +386,10 @@ tasks:
       - bash scripts/ci-classify-change.test.sh
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/ci-runner-policy.test.sh
+      - bash scripts/package-store-conformance.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/e2e.test.sh
+      - bash scripts/e2e-completion.test.sh
       - bash scripts/test-integration.test.sh
       - bash scripts/test-containers.test.sh
       - bash scripts/docs-open.test.sh

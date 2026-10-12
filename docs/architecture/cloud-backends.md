@@ -248,6 +248,21 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 
 ### Onboarding a backend
 
+A passing `fullPackageStoreContract` with a concrete driver defines completion for a package store.
+The full contract requires reads, writes, inventory, deletion, integrity, and recovery.
+Use a direct entrypoint such as `fullPackageStoreContract codeArtifactDriver`.
+The driver supplies production handles, deterministic service boundaries, fixtures, and native observations.
+The contract owns the common client-visible guarantees and the required family list.
+Different stores may use different completion mechanisms under those guarantees.
+
+Current full-contract subjects are Verdaccio and CodeArtifact.
+The generic `registry` tag lacks maintenance operations and does not claim full package-store completion.
+CodeArtifact uses the production adapter with deterministic control-plane doubles.
+Its conformance result does not claim that CI performed live AWS operations or minted a real AWS token.
+The npm E2E subject adds real-service Verdaccio evidence.
+A future package store, including a cache provider such as Valkey, needs its own subject and full contract.
+S3 advisory storage does not supply package-store operations.
+
 A new backend supplies deterministic tests for each handle it provides before it counts as onboarded.
 Mirror each implementation module with `Spec`, `IntegrationSpec`, or `SmokeSpec` under the matching suite root.
 Register those modules in [ecluse.cabal](../../ecluse.cabal).
@@ -257,13 +272,16 @@ The [tier rules](../testing.md#what-gates-and-what-doesnt) decide placement from
 |---|---|---|
 | `MirrorQueue` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Queue/<Backend>Spec.hs` for deterministic adapter behaviour. `ecluse-integration`: `test/integration/Ecluse/Runtime/Queue/<Backend>IntegrationSpec.hs` for the emulated service. | [SqsSpec](../../runtime/test/unit/Ecluse/Runtime/Queue/SqsSpec.hs) and [SqsIntegrationSpec](../../test/integration/Ecluse/Runtime/Queue/SqsIntegrationSpec.hs). [AwsEndToEndIntegrationSpec](../../test/integration/Ecluse/AwsEndToEndIntegrationSpec.hs) exercises the composed serve-to-worker path. |
 | `CredentialProvider` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Credential/<Backend>Spec.hs` for a stubbed mint. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs) asserts the token and expiry extracted from a stubbed response. No automatic test verifies a real AWS mint. |
-| `StoreMaintenance` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Maintenance/<Backend>Spec.hs` and matching child specs for control-plane responses. Add `test/integration/Ecluse/Runtime/Maintenance/<Backend>IntegrationSpec.hs` when an emulator supplies those operations. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifactSpec.hs) and its [child specs](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifact/) cover the control plane with doubles. The protocol implementation uses [Npm/MaintenanceSpec](../../core/test/unit/Ecluse/Core/Registry/Npm/MaintenanceSpec.hs) in `ecluse-core-unit`. [Npm/DredgerE2ESpec](../../test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs) exercises Verdaccio in `ecluse-e2e-npm-writes`, not live CodeArtifact. |
+| `StoreMaintenance` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Maintenance/<Backend>Spec.hs` and matching child specs for control-plane responses. Add `test/integration/Ecluse/Runtime/Maintenance/<Backend>IntegrationSpec.hs` when an emulator supplies those operations. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifactSpec.hs) and its [child specs](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifact/) cover the control plane with doubles. The protocol implementation uses [Npm/MaintenanceSpec](../../core/test/unit/Ecluse/Core/Registry/Npm/MaintenanceSpec.hs) in `ecluse-core-unit`. [Npm/DredgerE2ESpec](../../test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs) exercises Verdaccio in the npm E2E subject, not live CodeArtifact. |
 
-Supply operation records for the applicable contracts in `test/contracts/Ecluse/Test/Contract/`.
+Supply operation records for every full package-store family in `test/contracts/Ecluse/Test/Contract/`.
 Keep acquisition, native faults, polling, and direct observations in the backend's provider.
-Call each applicable contract with a named concrete provider in the suite entrypoint.
-Register metadata for those declarations against independent obligations.
-A fake provider proves consumer behaviour. It does not replace the required emulator or live backend check.
+Call `fullPackageStoreContract` with a named concrete provider in the subject's fixed entrypoint.
+Register obligations independently of the provider's current registrations and capability flags.
+Check the catalogue against actual Hspec registration and execution, including each required family.
+A missing family or failed operation must prevent a full completion verdict.
+Use `task test-conformance-verdaccio` and `task test-conformance-codeartifact` as worked examples.
+The core and runtime unit specs also run the same laws under the existing coverage suites.
 Use the [contract coverage map](../test-contracts.md) to find existing laws and native extensions.
 
 A queue profile declares whether receipt removes the message or leases it for redelivery.

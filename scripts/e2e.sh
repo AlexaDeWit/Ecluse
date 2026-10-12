@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare immutable inputs, run fixed suites, and audit their reports.
+# Prepare immutable inputs, run fixed subjects, and audit their reports.
 set -euo pipefail
 
 root="${ECLTEST_ARTIFACT_DIR:-}"
@@ -129,7 +129,7 @@ run_attempt() {
   set +e
   (
     set -e
-    [ "$#" -eq 0 ] || fail "fixed suites accept no arguments"
+    [ "$#" -eq 0 ] || fail "fixed subjects accept no arguments"
     identity
     bash "$here/test-containers.sh" run bash "$here/e2e.sh" owned-run "$component"
   ) 2>&1 | tee "$attempt/run.log" "$root/reports/$shard.log"
@@ -151,7 +151,7 @@ audit() {
   identity
   shopt -s nullglob
   reports=("$root"/reports/*.json)
-  [ "${#reports[@]}" -gt 0 ] || { echo 'e2e: no shard reports' >&2; return 1; }
+  [ "${#reports[@]}" -gt 0 ] || { echo 'e2e: no subject reports' >&2; return 1; }
   binary="$(runner ecluse-e2e-audit)"
   "$binary" "$root/plan.json" "${reports[@]}"
 }
@@ -167,8 +167,7 @@ diagnostics() {
 case "${1:-}" in
   prepare) lock_artifacts; prepare ;;
   load) lock_artifacts; load_image ;;
-  npm-serving) lock_artifacts; run_attempt npm-serving ecluse-e2e-npm-serving "${@:2}" ;;
-  npm-writes) lock_artifacts; run_attempt npm-writes ecluse-e2e-npm-writes "${@:2}" ;;
+  npm) lock_artifacts; run_attempt npm ecluse-e2e-npm "${@:2}" ;;
   pypi) lock_artifacts; run_attempt pypi ecluse-e2e-pypi "${@:2}" ;;
   shared-system) lock_artifacts; run_attempt shared-system ecluse-e2e-shared-system "${@:2}" ;;
   full)
@@ -182,8 +181,7 @@ case "${1:-}" in
     lock_artifacts
     prepare
     load_image
-    run_attempt npm-serving ecluse-e2e-npm-serving
-    run_attempt npm-writes ecluse-e2e-npm-writes
+    run_attempt npm ecluse-e2e-npm
     run_attempt pypi ecluse-e2e-pypi
     run_attempt shared-system ecluse-e2e-shared-system
     audit
@@ -192,12 +190,12 @@ case "${1:-}" in
     shift
     [ "${ECLTEST_CONTAINER_LOCK:-}" = held ] || fail "missing container lifetime"
     case "${1:-}" in
-      ecluse-e2e-npm-serving|ecluse-e2e-npm-writes|ecluse-e2e-pypi|ecluse-e2e-shared-system) ;;
+      ecluse-e2e-npm|ecluse-e2e-pypi|ecluse-e2e-shared-system) ;;
       *) fail "unknown fixed component" ;;
     esac
     run_component "$1"
     ;;
   audit) lock_artifacts; audit ;;
   diagnostics) lock_artifacts; diagnostics ;;
-  *) echo "usage: $0 {prepare|load|npm-serving|npm-writes|pypi|shared-system|full|audit|diagnostics}" >&2; exit 2 ;;
+  *) echo "usage: $0 {prepare|load|npm|pypi|shared-system|full|audit|diagnostics}" >&2; exit 2 ;;
 esac

@@ -171,6 +171,9 @@ jobs:
             flag: integration
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,6 +216,16 @@ jobs:
           COVERAGE_TASK: ${{ matrix.coverage-task }}
           SUITE: ${{ matrix.suite }}
         run: nix develop .#ci --command task "$COVERAGE_TASK" SUITE="$SUITE"
+
+      - name: Upload integration execution evidence
+        if: ${{ always() && matrix.suite == 'ecluse-integration' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-evidence
+          path: |
+            scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}/plan.json
+            scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}/report.json
+          if-no-files-found: error
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -335,16 +348,16 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-  e2e-shards:
-    name: End-to-end tests (${{ matrix.component }})
-    needs: [changes, e2e-prepare]
-    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+  e2e-conformance:
+    name: Conformance (${{ matrix.subject }})
+    needs: [changes, coverage, e2e-prepare]
+    if: ${{ always() && needs.changes.outputs.docs-only != 'true' && needs.e2e-prepare.result == 'success' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        component: [npm-serving, npm-writes, pypi, shared-system]
+        subject: [npm, pypi, shared-system]
     permissions:
       contents: read
     env:
@@ -352,6 +365,7 @@ jobs:
       ECLTEST_ARTIFACT_DIR: scratchpad/e2e
       ECLTEST_SOURCE: ${{ github.sha }}
       ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -391,15 +405,29 @@ jobs:
       - name: Verify and load exact image
         run: nix develop .#ci --command task test-e2e-load
 
-      - name: Run fixed component
+      - name: Run fixed subject
         env:
-          COMPONENT: ${{ matrix.component }}
-        run: nix develop .#ci --command task "test-e2e-$COMPONENT"
+          SUBJECT: ${{ matrix.subject }}
+        run: nix develop .#ci --command task "test-e2e-$SUBJECT"
+
+      - name: Download integration execution evidence
+        if: ${{ always() && matrix.subject != 'shared-system' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-evidence
+          path: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Audit ecosystem completion across tiers
+        if: ${{ always() && matrix.subject != 'shared-system' }}
+        env:
+          SUBJECT: ${{ matrix.subject }}
+          ECLTEST_INTEGRATION_ARTIFACT_DIR: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
+        run: nix develop .#ci --command task "test-e2e-$SUBJECT-completion"
 
       - name: Record shard outcome
         if: always()
         env:
-          ECLTEST_COMPONENT: ${{ matrix.component }}
+          ECLTEST_COMPONENT: ${{ matrix.subject }}
           ECLTEST_JOB_STATUS: ${{ job.status }}
         run: bash scripts/e2e.sh diagnostics
 
@@ -407,13 +435,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-report-${{ matrix.component }}
+          name: e2e-report-${{ matrix.subject }}
           path: scratchpad/e2e/reports/
           if-no-files-found: error
 
   e2e:
     name: E2E execution completeness
-    needs: [changes, e2e-prepare, e2e-shards]
+    needs: [changes, e2e-prepare, e2e-conformance]
     if: ${{ always() && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
@@ -458,6 +486,52 @@ jobs:
       - name: Audit all required groups and cases
         if: always()
         run: nix develop .#ci --command task test-e2e-audit
+
+  backend-conformance:
+    name: Conformance (package store ${{ matrix.subject }})
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        subject: [verdaccio, codeartifact]
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Run the fixed package-store contract
+        env:
+          SUBJECT: ${{ matrix.subject }}
+        run: nix develop .#ci --command task "test-conformance-$SUBJECT"
+
+      - name: Upload package-store evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-store-report-${{ matrix.subject }}
+          path: scratchpad/backend-conformance/
+          if-no-files-found: error
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
@@ -814,8 +888,9 @@ jobs:
       - static-checks
       - docs
       - e2e-prepare
-      - e2e-shards
+      - e2e-conformance
       - e2e
+      - backend-conformance
       - weeder
       - stan
       - release-dry-run
@@ -845,8 +920,9 @@ jobs:
           CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}
           DOCS: ${{ needs.docs.result }}
           E2E_PREPARE: ${{ needs.e2e-prepare.result }}
-          E2E_SHARDS: ${{ needs.e2e-shards.result }}
+          E2E_CONFORMANCE: ${{ needs.e2e-conformance.result }}
           E2E: ${{ needs.e2e.result }}
+          BACKEND_CONFORMANCE: ${{ needs.backend-conformance.result }}
           WEEDER: ${{ needs.weeder.result }}
           STAN: ${{ needs.stan.result }}
           RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}

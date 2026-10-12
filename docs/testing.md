@@ -601,7 +601,7 @@ The hermetic span and metric assertions run in `ecluse-integration`. A request d
 Écluse, and a real Collector container asserts the spans and metrics arrived. The unit tier covers
 config parsing, the denial span-attribute mapping, the JSONL scribe, and the metric-label guard.
 
-## End-to-end tests: four fixed components (gating)
+## End-to-end conformance: fixed subjects (gating)
 
 The only tier that assembles the whole system through the real composition root and drives it with
 the real `npm` and `pip` clients. It runs the default OCI image built by `nix build .#dockerImage`.
@@ -747,20 +747,26 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-The four components run 49 cases, including 16 Dredger cases.
+The foundation runs 64 E2E cases. It keeps all 49 prior observations, including the Dredger cases.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 
-CI prepares the real image once. Each fixed component runs on a separate arm64 runner with matrix fail-fast disabled.
-Preparation, component runs, and the execution audit all gate.
+CI prepares the real image once. The npm, PyPI, and shared-system subjects each run on a separate arm64 runner.
+The npm subject composes the former serving and write arrangements under one ecosystem entrypoint.
+The shared-system subject owns cross-ecosystem and core capability cases that belong to no single ecosystem.
+The subject matrix disables fail-fast, so one failure does not stop the other subjects.
+Preparation, subject runs, and the execution audit all gate.
+Each ecosystem job also audits its report against the integration plan and report from the
+same workflow attempt. The audit checks compiled plans, required laws, execution status,
+source, architecture, run identity, and the E2E image identity where it applies.
 The existing change classifier alone permits a documentation-only omission.
-The audit runs after failed or cancelled components and rejects missing artifacts or execution results.
+The audit runs after failed or cancelled subjects and rejects missing artifacts or execution results.
 It compares the source revision, architecture, image identity, plan digest, groups, and case IDs.
-Changing a component's direct declaration list can rebalance work without changing contract bodies.
+Changing a subject's direct declaration list does not change the full contract's required families.
 No timing improvement is claimed until comparable runs measure it.
 
 The tier stays outside local `task gate` and `task check`. Run `task test-e2e` inside the Nix flake.
-It prepares, loads, and runs all four components serially in a fresh `scratchpad/e2e/run.*` directory, then audits their reports.
+It prepares, loads, and runs all three subjects serially in a fresh `scratchpad/e2e/run.*` directory, then audits their reports.
 It prints the artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
 Staged commands require an explicit directory:
 
@@ -769,8 +775,7 @@ mkdir -p scratchpad/e2e
 export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
 task test-e2e-prepare
 task test-e2e-load
-task test-e2e-npm-serving
-task test-e2e-npm-writes
+task test-e2e-npm
 task test-e2e-pypi
 task test-e2e-shared-system
 task test-e2e-audit
@@ -781,9 +786,9 @@ Another preparation cannot overwrite that directory, including after a failed pr
 An artifact lock prevents overlapping preparation, loading, execution, or auditing in the same directory.
 `test-e2e-load` validates the prepared identity before loading the archive.
 `test-e2e-audit` checks current reports against the complete plan and identity.
-Rerun a component with its fixed task, such as `task test-e2e-pypi`.
+Rerun a subject with its fixed task, such as `task test-e2e-pypi`.
 Each attempt invalidates its previous published report before checking prerequisites.
-Only a successful runner and cleanup publish the current `reports/<component>.json`.
+Only a successful runner and cleanup publish the current `reports/<subject>.json`.
 Failed reports, status, and logs remain under `reports/attempts/` and cannot satisfy the audit.
 Test entrypoints accept no custom selection arguments.
 `ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds.
@@ -1509,6 +1514,18 @@ An omitted supported provider or required case fails validation before fixture a
 Unsupported combinations carry reasons. Planned operations carry their delivery references and create no passing test result.
 See the [coverage and reproduction map](test-contracts.md) for the migration and retained native tests.
 
+The full ecosystem composition requires proxying, installation, policy, advisories, mirroring,
+publication, Dredger, and telemetry for every ecosystem. The full package-store composition
+requires reads, writes, inventory, deletion, integrity, and recovery for every backend subject.
+An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
+produce named failures without stopping unrelated contracts. A passing full composition defines
+completion only when its lower-tier obligations and execution reports also pass.
+The read-only PyPI foundation has a separate name until the full PyPI contract is activated.
+CI uploads the actual integration plan and report from the instrumented integration leg.
+Each ecosystem job downloads them and audits them with its own E2E report.
+The two tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
+The integration report has no product image, while E2E binds the prepared image digest.
+
 Measurement runners keep their existing process and sampling boundaries.
 `checkBenchmarkCoverage` compares reviewed npm/PyPI obligations, concrete providers, and production adapter registration before loading the corpus.
 Both the benchmark and allocation harness call that loader.
@@ -1534,8 +1551,8 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Recorded corpus outputs, gating in `ecluse-core-unit` | List the captures in [Ecluse.Test.Corpus](../test/support/Ecluse/Test/Corpus.hs) with a `CaptureUpstream`, give `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/StreamingSpec.hs` a `CorpusRead`, and record each capture's lines in [corpus-outputs.tsv](../core/test/unit/fixtures/corpus-outputs.tsv) | The [npm](../core/test/unit/Ecluse/Core/Registry/Npm/StreamingSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/StreamingSpec.hs) specs compare each capture's outputs, computed through `Ecluse.Test.Corpus.Outputs`, with its recorded lines. No tool writes the file. A new capture's spec fails, and its failure output lists the computed lines as Haskell string literals, with each tab shown as `\t`, to review and record. |
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
-| At least one real-client install, gating in the fixed E2E components | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
-| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in the fixed E2E components | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end tests](#end-to-end-tests-four-fixed-components-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
+| At least one real-client install, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
+| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
 | Metadata residency captures and limits, gating in `ecluse-residency` | Add one `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), with captures, retained-heap envelopes, peak limits, the entry bound and each probe hook. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | The tier checks every ecosystem with a registered adapter for a residency record, non-empty captures, positive peak limits and an envelope for each retained shape. Each record supplies the probe hooks and listing checks without generic ecosystem defaults. The same lookup excludes ecosystems without adapters, including RubyGems. Each regression limit stays below its adapter charge. The complete corpus includes a capture above 3,687,514 bytes. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
@@ -1628,8 +1645,11 @@ its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating
 The Haskell jobs run in parallel where their prerequisites permit it. `build` compiles every
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
 with one runner per instrumented suite. `allocation`, `docs`, `weeder`, `stan`, and
-`static-checks` each hold their own runner. E2E preparation feeds its partition matrix and completeness audit. `codecov-notify` follows the coverage legs and releases
-the Codecov statuses.
+`static-checks` each hold their own runner. E2E preparation feeds the ecosystem and
+shared-system subject jobs and their completeness audit. The Verdaccio and CodeArtifact
+package-store subjects run in separate jobs. `codecov-notify` follows the coverage legs
+and releases the Codecov statuses.
+The integration coverage leg uploads its plan and execution report for the ecosystem completion audits.
 
 CI's primary architecture is arm64: every job that builds or tests the code runs on the
 `ubuntu-26.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
@@ -1720,6 +1740,7 @@ Each diagnostic command has a five-second deadline and a 201-line output limit.
 ## Coverage: Codecov
 
 CI measures coverage per gating suite and reports it to [Codecov](https://about.codecov.io/).
+The conformance jobs add completion evidence. They do not change the four coverage uploads or their merged denominator.
 Generation is local and tool-agnostic. A suite is built instrumented: HPC, in an isolated
 `dist-coverage/` that leaves the normal build cache alone. Then `hpc-codecov` converts the
 `.tix`/`.mix` output to Codecov's native JSON. `scripts/coverage.sh` produces one tier. The Taskfile

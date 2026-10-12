@@ -29,7 +29,7 @@ cat > "$work/bin/runner" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$(basename "$0")" in
-  ecluse-e2e-manifest) echo '{"schemaVersion":1,"partitions":["npm-serving","npm-writes","pypi","shared-system"]}' ;;
+  ecluse-e2e-manifest) echo '{"schemaVersion":1,"partitions":["npm","pypi","shared-system"]}' ;;
   ecluse-e2e-audit)
     shift
     for report in "$@"; do jq -e '.passed == true' "$report" >/dev/null; done
@@ -48,7 +48,7 @@ case "$(basename "$0")" in
   *) exit 2 ;;
 esac
 STUB
-for component in manifest audit npm-serving npm-writes pypi shared-system; do
+for component in manifest audit npm pypi shared-system; do
   cp "$work/bin/runner" "$work/bin/ecluse-e2e-$component"
 done
 cat > "$work/bin/docker" <<'STUB'
@@ -210,7 +210,7 @@ for number in 1 2; do
 done
 [ "${full_roots[0]}" != "${full_roots[1]}" ]
 for directory in "${full_roots[@]}"; do
-  for component in npm-serving npm-writes pypi shared-system; do
+  for component in npm pypi shared-system; do
     [ -s "$directory/reports/$component.json" ]
   done
   ECLTEST_ARTIFACT_DIR="$directory" bash "$script" audit
