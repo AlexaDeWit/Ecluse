@@ -79,16 +79,16 @@ publishSubject root kind conditions outcome attempt native ecosystem = do
     result <- tryAny $ do
         let recorded = maybe conditions (\evidence -> Map.union (npConditions evidence) conditions) native
         obligation <- either failRunner pure (compileObligation kind ("ecosystem-" <> ecosystem) recorded)
-        identity <- readRequiredPlanIdentity False (digest (jsonLine obligation))
+        execution <- readRequiredPlanIdentity False (digest (jsonLine obligation))
         captures <- capturePaths ecosystem
         let directory = root </> toString (poSubject obligation)
-            request = PerformanceRequest identity attempt obligation (artifactPaths kind <> captures) outcome recorded
+            request = PerformanceRequest execution attempt obligation (artifactPaths kind <> captures) outcome recorded
         writeJsonFile (directory </> "obligation.json") obligation
         writeJsonFile (directory </> "request.json") request
         verifyRequest request
         receipt <- prepareReceipt request (nativePath kind)
         writeJsonFile (directory </> "receipt.json") receipt
-        let faults = auditPerformanceReceipts identity attempt [obligation] [receipt]
+        let faults = auditPerformanceReceipts execution attempt [obligation] [receipt]
         traverse_ putTextLn faults
         pure (null faults)
     case result of
@@ -175,9 +175,9 @@ instance ToJSON Diagnostic where
         object
             [ "scope" .= ("diagnostic-only" :: Text)
             , "reason" .= diagnosticReason diagnostic
-            , "source" .= identitySource identity
-            , "runId" .= identityRunId identity
-            , "architecture" .= identityArchitecture identity
+            , "source" .= identitySource execution
+            , "runId" .= identityRunId execution
+            , "architecture" .= identityArchitecture execution
             , "attempt" .= diagnosticAttempt diagnostic
             , "nativeOutcome" .= diagnosticOutcome diagnostic
             , "podShape" .= condition "podShape"
@@ -188,17 +188,17 @@ instance ToJSON Diagnostic where
             , "nativeDigest" .= diagnosticNativeDigest diagnostic
             ]
       where
-        identity = diagnosticIdentity diagnostic
+        execution = diagnosticIdentity diagnostic
         condition key = Map.findWithDefault "" key (diagnosticConditions diagnostic)
 
 publishDiagnostic :: FilePath -> Text -> Map Text Text -> NativeOutcome -> Text -> Text -> Maybe NativePerformance -> IO ()
 publishDiagnostic root kind conditions outcome attempt reason native = do
-    identity <- readRequiredPlanIdentity False "not-applicable"
+    execution <- readRequiredPlanIdentity False "not-applicable"
     reportDigest <- optionalDigest (reportPath kind)
     when (outcome == NativePassed && T.null reportDigest) $ failRunner "missing diagnostic report"
     nativeDigest <- optionalDigest (nativePath kind)
     let recorded = maybe conditions (\evidence -> Map.union (npConditions evidence) conditions) native
-    writeJsonFile (root </> "diagnostic.json") (Diagnostic identity attempt reason outcome recorded reportDigest nativeDigest)
+    writeJsonFile (root </> "diagnostic.json") (Diagnostic execution attempt reason outcome recorded reportDigest nativeDigest)
     putTextLn ("performance receipt: " <> reason <> " is diagnostic only")
 
 optionalDigest :: FilePath -> IO Text
