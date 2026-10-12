@@ -25,7 +25,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, projectRecordWeight)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
-import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Server.MemoryModel.Probe (HeapSample (live), forceShown, sample)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Mirror.Read (ReadFixture (fixtureOld), makeReadFixture, readLimits)
@@ -100,6 +99,7 @@ shape :: String -> ProjectMirrorRecord -> IO ProjectMirrorRecord
 shape mode record = do
     digest <- expectRight (mkHash SHA256 (T.replicate 64 "a"))
     let change version = case mode of
+            "Hashes" -> version{storedFragments = fmap hashFragment (storedFragments version)}
             "Descriptors" -> version{storedFragments = fmap repeatExpected (storedFragments version)}
             "Verified" -> version{storedIdentities = Map.fromList [(show n, digest) | n <- [1 .. 128 :: Int]]}
             "Companions" -> version{storedCompanions = Map.fromList [(show n, CompanionRetained (CompanionRef digest 1)) | n <- [1 .. 128 :: Int]]}
@@ -107,16 +107,12 @@ shape mode record = do
             _ -> version
         backing = T.take 1 (T.replicate 65536 "x")
         envelope = if mode == "Backing" then KeyMap.insert (Key.fromText backing) (String backing) (projectEnvelope record) else projectEnvelope record
-    versions <- if mode == "Hashes" then traverse addHashes (projectVersions record) else pure (Map.map change (projectVersions record))
-    pure record{projectVersions = versions, projectEnvelope = envelope}
+    pure record{projectVersions = Map.map change (projectVersions record), projectEnvelope = envelope}
   where
-    addHashes version = do
-        fragments <- traverse hashFragment (storedFragments version)
-        pure version{storedFragments = fragments}
-    hashFragment (StoredMirrorFragment details source _) = do
+    -- Decode validated the original pairing. Extend the retained graph without changing its source facts.
+    hashFragment (StoredMirrorFragment details source expected) =
         let updated = details{pkgArtifacts = fmap (\artifact -> artifact{artHashes = concat (replicate 128 (artHashes artifact))}) (pkgArtifacts details)}
-        expected <- expectRight (restoreMirrorFragment updated source)
-        pure (StoredMirrorFragment updated source expected)
+         in StoredMirrorFragment updated source expected
     repeatExpected (StoredMirrorFragment details source expected) = StoredMirrorFragment details source (foldl' (<>) expected (replicate 32 expected))
     longVersion (StoredMirrorFragment details source expected) =
         StoredMirrorFragment details{pkgVersion = mkVersion PyPI (T.intercalate "." (replicate 512 "1"))} source expected

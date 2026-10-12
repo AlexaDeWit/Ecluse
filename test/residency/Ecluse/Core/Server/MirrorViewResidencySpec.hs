@@ -24,11 +24,14 @@ import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
+import Ecluse.Core.Mirror.State.Internal (StateRevision (StateRevision))
 import Ecluse.Core.Package (infoVersions, pkgArtifacts)
 import Ecluse.Core.Registry.PyPI.Document (simpleFiles)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors)
 import Ecluse.Core.Server.Admission.Budget (roundUpToStep, scaleCharge)
 import Ecluse.Core.Server.Admission.Types (ChargeFactors (cfFullReadPermille))
+import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
+import Ecluse.Core.Server.MirrorView (mirrorRetentionWeight)
 import Ecluse.Test.Mirror.Read
 import Ecluse.Test.Mirror.State (mirrorPackage)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
@@ -95,7 +98,10 @@ spec = do
         warmCharge <- validateManagedProject session
         advanceReadSession session
         changedCharge <- validateManagedProject session
-        warmCharge `shouldBe` roundUpToStep 1_048_576 (retained + 256 + stateExchangeCharge)
+        let target = fixtureTarget fixture
+            key = fullKey (Source (show target)) mirrorPackage
+            entryWeight = mirrorRetentionWeight key (StateRevision target mirrorPackage "one") retained
+        warmCharge `shouldBe` roundUpToStep 1_048_576 (entryWeight + stateExchangeCharge)
         coldCharge `shouldSatisfy` (> warmCharge)
         changedCharge `shouldSatisfy` (> warmCharge)
     for_ [Cold, Warm, Replacement] $ \mode ->
