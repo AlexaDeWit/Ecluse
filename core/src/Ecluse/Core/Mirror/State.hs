@@ -30,6 +30,8 @@ module Ecluse.Core.Mirror.State (
     StateRead (..),
     StateWrite (..),
     MirrorState (..),
+    StateCharge,
+    newStateCharge,
     extendProjectRecord,
     retainCompanionReference,
     verifyCompanionBytes,
@@ -44,6 +46,8 @@ module Ecluse.Core.Mirror.State (
     retainProjectCompanion,
     recordVerifiedArtifact,
 ) where
+
+import Control.Concurrent.MVar qualified as MVar
 
 import Ecluse.Core.Mirror.State.Codec
 import Ecluse.Core.Mirror.State.Internal
@@ -60,40 +64,52 @@ fragmentDetails (StoredMirrorFragment details _ _) = details
 fragmentReadData :: StoredMirrorFragment -> MirrorReadData
 fragmentReadData (StoredMirrorFragment _ source _) = source
 
+-- | Adapt incremental ticket payment to one sequential state region. Concurrent or separately retained work needs another region.
+newStateCharge :: (Int -> IO ()) -> IO StateCharge
+newStateCharge pay = do
+    highWater <- MVar.newMVar 0
+    pure $ \requested -> MVar.modifyMVar_ highWater $ \previous -> do
+        let next = max previous requested
+        when (next > previous) (pay (next - previous))
+        pure next
+
 -- | Record additions before any new distribution upload. Collisions reread and union within a fixed budget.
-recordExpectedInventory :: Limits -> StateTarget -> MirrorState -> MirrorInventory -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
-recordExpectedInventory limits target store inventory =
-    updateRecord limits store (inventoryPackage inventory) (extendProjectRecord limits target inventory)
+recordExpectedInventory :: Limits -> StateCharge -> StateTarget -> MirrorState -> MirrorInventory -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
+recordExpectedInventory limits charge target store inventory =
+    updateRecord limits charge (mirrorInventoryWeight inventory) store (inventoryPackage inventory) (extendProjectRecord limits target inventory)
 
 -- | Store the target's usable digest before upload without changing the original served hash fields.
-recordVerifiedArtifact :: Limits -> MirrorState -> PackageName -> Version -> VerifiedArtifactBytes -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
-recordVerifiedArtifact limits store name version verified =
-    updateRecord limits store name (maybeToRight (StateInvalid "missing expected inventory") >=> retainVerifiedIdentity version verified)
+recordVerifiedArtifact :: Limits -> StateCharge -> MirrorState -> PackageName -> Version -> VerifiedArtifactBytes -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
+recordVerifiedArtifact limits charge store name version verified =
+    updateRecord limits charge 0 store name (maybeToRight (StateInvalid "missing expected inventory") >=> retainVerifiedIdentity version verified)
 
 -- | Durable bytes precede their reference. A collision cannot drop another version or companion update.
-retainProjectCompanion :: Limits -> MirrorState -> PackageName -> Version -> VerifiedCompanionBytes -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
-retainProjectCompanion limits store name version bytes =
-    msRetainCompanion store bytes >>= \case
+retainProjectCompanion :: Limits -> StateCharge -> MirrorState -> PackageName -> Version -> VerifiedCompanionBytes -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
+retainProjectCompanion limits charge store name version bytes =
+    msRetainCompanion store charge bytes >>= \case
         Left fault -> pure (Left fault)
-        Right reference -> updateRecord limits store name (maybeToRight StateMissingCompanion >=> retainCompanionReference version bytes reference)
+        Right reference -> updateRecord limits charge 0 store name (maybeToRight StateMissingCompanion >=> retainCompanionReference version bytes reference)
 
-updateRecord :: Limits -> MirrorState -> PackageName -> (Maybe ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord) -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
-updateRecord limits store name change = go (8 :: Int) StateRetryExhausted
+updateRecord :: Limits -> StateCharge -> Int -> MirrorState -> PackageName -> (Maybe ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord) -> IO (Either MirrorStateFault (StateRevision, ProjectMirrorRecord))
+updateRecord limits charge inputWeight store name change = go (8 :: Int) StateRetryExhausted
   where
     go 0 lastFault = pure (Left lastFault)
     go attempts _ =
-        msReadProject store name Nothing >>= \case
+        msReadProject store charge name Nothing >>= \case
             Left fault -> pure (Left fault)
             Right (StateUnchanged _) -> pure (Left StateRevisionMismatch)
             Right StateAbsent -> apply attempts Nothing Nothing
             Right (StateLoaded revision record) -> apply attempts (Just revision) (Just record)
-    apply attempts revision previous = case change previous >>= checked of
+    apply attempts revision previous = case traverse (projectRecordWeight limits) previous of
         Left fault -> pure (Left fault)
-        Right updated -> case revision of
-            Just current | previous == Just updated -> pure (Right (current, updated))
-            _ ->
-                msWriteProject store name revision updated >>= \case
-                    Right (StateStored current) -> pure (Right (current, updated))
-                    Right StateConflict -> go (attempts - 1) StateRetryExhausted
-                    Left fault -> go (attempts - 1) fault
-    checked record = encodeProjectRecord limits record $> record
+        Right retained -> do
+            charge (saturatingStateCharge (2 * (toInteger inputWeight + maybe 0 toInteger retained) + 4096))
+            case change previous of
+                Left fault -> pure (Left fault)
+                Right updated -> case revision of
+                    Just current | previous == Just updated -> pure (Right (current, updated))
+                    _ ->
+                        msWriteProject store charge name revision updated >>= \case
+                            Right (StateStored current) -> pure (Right (current, updated))
+                            Right StateConflict -> go (attempts - 1) StateRetryExhausted
+                            Left fault -> go (attempts - 1) fault

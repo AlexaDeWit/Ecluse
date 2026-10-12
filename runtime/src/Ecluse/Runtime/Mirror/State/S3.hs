@@ -13,6 +13,7 @@ import Data.Text qualified as T
 import Network.HTTP.Client.TLS (newTlsManagerWith, tlsManagerSettings)
 
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), projectKey)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
@@ -41,34 +42,35 @@ mirrorStateForEnv limits bucket prefix target env =
     key name = underPrefix (projectKey target name <> "/project.json")
     underPrefix suffix = if T.null prefix then suffix else T.dropWhileEnd (== '/') prefix <> "/" <> suffix
     referenceKey reference = underPrefix ("companions/sha256/" <> companionDigest reference)
-    readProject name revision = case revisionBytes target name revision of
+    readProject charge name revision = case revisionBytes target name revision of
         Left fault -> pure (Left fault)
         Right expected ->
-            fmap (first objectFault) (readObject env limits bucket (key name) expected)
-                <&> ( >>=
-                        \case
-                            ObjectAbsent -> Right StateAbsent
-                            ObjectUnchanged etag -> Right (StateUnchanged (StateRevision target name etag))
-                            ObjectLoaded etag bytes -> StateLoaded (StateRevision target name etag) <$> decodeProjectRecord limits target name bytes
-                    )
-    writeProject name revision record
+            readObject charge env limits bucket (key name) expected >>= \case
+                Left fault -> pure (Left (objectFault fault))
+                Right ObjectAbsent -> pure (Right StateAbsent)
+                Right (ObjectUnchanged etag) -> pure (Right (StateUnchanged (StateRevision target name etag)))
+                Right (ObjectLoaded etag bytes) -> fmap (StateLoaded (StateRevision target name etag)) <$> chargedDecodeProjectRecord charge limits target name bytes
+    writeProject charge name revision record
         | recordTarget record /= target || recordPackage record /= name = pure (Left StateIdentityMismatch)
-        | otherwise = case (,) <$> revisionBytes target name revision <*> encodeProjectRecord limits record of
+        | otherwise = case revisionBytes target name revision of
             Left fault -> pure (Left fault)
-            Right (expected, bytes) ->
-                fmap (first objectFault) (writeObject env limits bucket (key name) expected bytes)
-                    <&> fmap
-                        ( \case
-                            ObjectStored etag -> StateStored (StateRevision target name etag)
-                            ObjectConflict -> StateConflict
-                        )
-    retain verified@(VerifiedCompanionBytes _ reference _) = do
-        result <- writeObject env limits bucket (referenceKey reference) Nothing (companionBody verified)
+            Right expected ->
+                chargedEncodeProjectRecord charge limits record >>= \case
+                    Left fault -> pure (Left fault)
+                    Right bytes ->
+                        fmap (first objectFault) (writeObject charge env limits bucket (key name) expected bytes)
+                            <&> fmap
+                                ( \case
+                                    ObjectStored etag -> StateStored (StateRevision target name etag)
+                                    ObjectConflict -> StateConflict
+                                )
+    retain charge verified@(VerifiedCompanionBytes _ reference _) = do
+        result <- writeObject charge env limits bucket (referenceKey reference) Nothing (companionBody verified)
         case result of
             Right (ObjectStored _) -> pure (Right reference)
-            _ -> readCompanion reference <&> fmap (const reference)
-    readCompanion reference =
-        fmap (first objectFault) (readObject env limits bucket (referenceKey reference) Nothing)
+            _ -> readCompanion charge reference <&> fmap (const reference)
+    readCompanion charge reference =
+        fmap (first objectFault) (readObject charge env limits bucket (referenceKey reference) Nothing)
             <&> ( >>=
                     \case
                         ObjectLoaded _ bytes -> verifyRetainedCompanion reference bytes

@@ -16,7 +16,8 @@ import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, waitCatch, withA
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), stateTarget)
+import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), newStateCharge, stateTarget)
+import Ecluse.Core.Mirror.State.Codec (stateExchangeCharge)
 import Ecluse.Core.Mirror.State.Internal (CompanionRef (..))
 import Ecluse.Core.Package (HashAlg (SHA256), mkHash, mkPackageName)
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
@@ -27,6 +28,59 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "conditional mirror metadata storage" $ do
+    it "keeps admission pauses outside the upstream progress window" $ do
+        floorSpec <- expectRight (mkProgressFloor 1 0.05 1)
+        payments <- newIORef ([] :: [Int])
+        charge <- newStateCharge $ \cost -> do
+            modifyIORef' payments (cost :)
+            threadDelay 100_000
+        withS3 (reply status200 [(hETag, "\"one\"")] "record") $ \env ->
+            readObject charge env limits{progressFloor = floorSpec} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "record")
+        readIORef payments >>= (`shouldSatisfy` (not . null))
+
+    it "charges repeated conditional exchanges by high-water size rather than transfer count" $ do
+        requests <- newIORef (0 :: Int)
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        withS3
+            ( \request respond -> do
+                modifyIORef' requests (+ 1)
+                reply status200 [(hETag, "\"one\"")] "" request respond
+            )
+            $ \env -> do
+                writeObject charge env limits "records" "key" Nothing "record" `shouldReturn` Right (ObjectStored "\"one\"")
+                firstPaid <- readIORef paid
+                replicateM_ 4 (writeObject charge env limits "records" "key" (Just "\"one\"") "record" >>= (\result -> result `shouldBe` Right (ObjectStored "\"one\"")))
+                readIORef paid `shouldReturn` firstPaid
+        readIORef requests `shouldReturn` 5
+
+    it "charges error and fallback-list bodies without reserving their maximum size" $ do
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        withS3 (listingReply emptyList) $ \env ->
+            readObject charge env defaultLimits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
+        total <- readIORef paid
+        total `shouldSatisfy` (> 4096)
+        total `shouldSatisfy` (< maxMetadataBytes defaultLimits)
+
+    it "keeps a conditional 304 charge independent of the metadata limit" $ do
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        withS3 (reply status304 [] "") $ \env ->
+            readObject charge env defaultLimits "records" "key" (Just "\"one\"") `shouldReturn` Right (ObjectUnchanged "\"one\"")
+        readIORef paid `shouldReturn` stateExchangeCharge
+
+    it "charges retained companion bytes proportionally before returning them" $ do
+        digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        withS3 (reply status200 [(hETag, "\"one\"")] "metadata") $ \env -> do
+            let store = mirrorStateForEnv defaultLimits "records" "state" (stateTarget "https://private.test") env
+            msReadCompanion store charge (CompanionRef digest 8) `shouldReturn` Right "metadata"
+        total <- readIORef paid
+        total `shouldSatisfy` (> 8)
+        total `shouldSatisfy` (< maxMetadataBytes defaultLimits)
+
     it "signs create-if-absent and preserves the exact body" $ do
         observed <- newIORef Nothing
         withS3
@@ -36,7 +90,7 @@ spec = describe "conditional mirror metadata storage" $ do
                 respond (responseLBS status200 [(hETag, "\"one\"")] "")
             )
             $ \env -> do
-                writeObject env limits "records" "prefix/project" Nothing "record" `shouldReturn` Right (ObjectStored "\"one\"")
+                writeObject (const pass) env limits "records" "prefix/project" Nothing "record" `shouldReturn` Right (ObjectStored "\"one\"")
         readIORef observed >>= \case
             Nothing -> expectationFailure "no request reached the endpoint"
             Just (headers, bytes) -> do
@@ -54,16 +108,16 @@ spec = describe "conditional mirror metadata storage" $ do
                 respond (responseLBS status200 [(hETag, "\"new\"")] "")
             )
         $ \env ->
-            writeObject env limits "records" "key" (Just "\"old\"") "new" `shouldReturn` Right (ObjectStored "\"new\"")
+            writeObject (const pass) env limits "records" "key" (Just "\"old\"") "new" `shouldReturn` Right (ObjectStored "\"new\"")
 
     for_ [status409, status412] $ \status ->
         it ("returns conditional collision " <> show (statusCode status)) $
             withS3 (reply status [] (xmlError "PreconditionFailed")) $ \env ->
-                writeObject env limits "records" "key" Nothing "record" `shouldReturn` Right ObjectConflict
+                writeObject (const pass) env limits "records" "key" Nothing "record" `shouldReturn` Right ObjectConflict
 
     it "bounds XML error bodies before the SDK decoder sees them" $
         withS3 (reply status403 [] (xmlError "AccessDenied")) $ \env ->
-            readObject env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Left (ObjectTooLarge 8)
+            readObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Left (ObjectTooLarge 8)
 
     it "refuses a response body stalled below the configured progress floor" $ do
         floorSpec <- expectRight (mkProgressFloor 1 0.1 1)
@@ -82,7 +136,7 @@ spec = describe "conditional mirror metadata storage" $ do
                     )
             )
             $ \env ->
-                readObject env limits{progressFloor = floorSpec} "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
+                readObject (const pass) env limits{progressFloor = floorSpec} "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
 
     it "refuses slow body drips rather than treating each chunk as enough progress" $ do
         floorSpec <- expectRight (mkProgressFloor 1 0.1 8)
@@ -98,7 +152,7 @@ spec = describe "conditional mirror metadata storage" $ do
                     )
             )
             $ \env ->
-                readObject env limits{progressFloor = floorSpec} "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
+                readObject (const pass) env limits{progressFloor = floorSpec} "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
 
     it "allows a progressing background transfer past the foreground serve cap" $ do
         floorSpec <- expectRight (mkProgressFloor 0.3 0.1 1)
@@ -114,7 +168,7 @@ spec = describe "conditional mirror metadata storage" $ do
                     )
             )
             $ \env ->
-                readObject env limits{progressFloor = floorSpec} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "xxxxxxxxxxxx")
+                readObject (const pass) env limits{progressFloor = floorSpec} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "xxxxxxxxxxxx")
 
     it "propagates cancellation while a response body is blocked" $ do
         started <- newEmptyMVar
@@ -134,7 +188,7 @@ spec = describe "conditional mirror metadata storage" $ do
                     )
             )
             $ \env ->
-                withAsync (readObject env limits "records" "key" Nothing) $ \worker -> do
+                withAsync (readObject (const pass) env limits "records" "key" Nothing) $ \worker -> do
                     takeMVar started
                     cancel worker
                     putMVar release ()
@@ -144,17 +198,17 @@ spec = describe "conditional mirror metadata storage" $ do
         it "returns a typed transport fault when a project GET body closes early" $
             withS3 (brokenResponse "200 OK" body) $ \env -> do
                 let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
-                msReadProject store (mkPackageName PyPI Nothing "demo") Nothing >>= (`shouldSatisfy` stateTransportFailure)
+                msReadProject store (const pass) (mkPackageName PyPI Nothing "demo") Nothing >>= (`shouldSatisfy` stateTransportFailure)
 
         it "returns a typed transport fault when a retained companion body closes early" $ do
             digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
             withS3 (brokenResponse "200 OK" body) $ \env -> do
                 let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
-                msReadCompanion store (CompanionRef digest 8) >>= (`shouldSatisfy` stateTransportFailure)
+                msReadCompanion store (const pass) (CompanionRef digest 8) >>= (`shouldSatisfy` stateTransportFailure)
 
         it "returns a typed transport fault when an error body closes early" $
             withS3 (brokenResponse "403 Forbidden" body) $ \env ->
-                readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
+                readObject (const pass) env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
 
         it "does not infer absence when the fallback list body closes early"
             $ withS3
@@ -164,19 +218,19 @@ spec = describe "conditional mirror metadata storage" $ do
                         else brokenResponse "200 OK" body request respond
                 )
             $ \env ->
-                readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
+                readObject (const pass) env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
 
         it "returns a typed transport fault when a conditional PUT error body closes early" $
             withS3 (brokenResponse "412 Precondition Failed" body) $ \env ->
-                writeObject env limits "records" "key" Nothing "record" >>= (`shouldSatisfy` objectTransportFailure)
+                writeObject (const pass) env limits "records" "key" Nothing "record" >>= (`shouldSatisfy` objectTransportFailure)
 
     it "requires an ETag after a successful write" $
         withS3 (reply status200 [] "") $ \env ->
-            writeObject env limits "records" "key" Nothing "record" `shouldReturn` Left ObjectNoRevision
+            writeObject (const pass) env limits "records" "key" Nothing "record" `shouldReturn` Left ObjectNoRevision
 
     it "returns a loaded object's own revision" $
         withS3 (reply status200 [(hETag, "\"one\"")] "record") $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "record")
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "record")
 
     it "reuses only the revision sent with a conditional GET"
         $ withS3
@@ -185,31 +239,31 @@ spec = describe "conditional mirror metadata storage" $ do
                 respond (responseLBS status304 [] "")
             )
         $ \env ->
-            readObject env limits "records" "key" (Just "\"one\"") `shouldReturn` Right (ObjectUnchanged "\"one\"")
+            readObject (const pass) env limits "records" "key" (Just "\"one\"") `shouldReturn` Right (ObjectUnchanged "\"one\"")
 
     it "refuses an unsolicited 304" $
         withS3 (reply status304 [] "") $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Left ObjectNoRevision
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Left ObjectNoRevision
 
     it "requires a loaded object's revision" $
         withS3 (reply status200 [] "record") $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Left ObjectNoRevision
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Left ObjectNoRevision
 
     it "enforces the configured body cap" $
         withS3 (reply status200 [(hETag, "\"one\"")] "123456789") $ \env ->
-            readObject env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Left (ObjectTooLarge 8)
+            readObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Left (ObjectTooLarge 8)
 
     it "accepts exactly the configured body cap" $
         withS3 (reply status200 [(hETag, "\"one\"")] "12345678") $ \env ->
-            readObject env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "12345678")
+            readObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "12345678")
 
     it "recognises NoSuchKey as conclusive absence" $
         withS3 (reply status404 [] (xmlError "NoSuchKey")) $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
 
     it "does not treat a missing bucket as an absent record" $
         withS3 (reply status404 [] (xmlError "NoSuchBucket")) $ \env ->
-            readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
+            readObject (const pass) env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
 
     it "uses one exact-prefix listing to disambiguate a refused GET"
         $ withS3
@@ -222,23 +276,23 @@ spec = describe "conditional mirror metadata storage" $ do
                         respond (responseLBS status200 [] emptyList)
             )
         $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Right ObjectAbsent
 
     it "does not infer absence when listing is refused" $
         withS3 (reply status403 [] (xmlError "AccessDenied")) $ \env ->
-            readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
+            readObject (const pass) env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
 
     it "does not infer absence from a truncated listing" $
         withS3 (listingReply "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>") $ \env ->
-            readObject env limits "records" "key" Nothing `shouldReturn` Left ObjectUnknownAbsence
+            readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Left ObjectUnknownAbsence
 
     it "does not infer absence from a malformed listing" $
         withS3 (listingReply "broken") $ \env ->
-            readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
+            readObject (const pass) env limits "records" "key" Nothing >>= (`shouldSatisfy` isLeft)
 
     it "rejects an oversized write before opening the endpoint" $
         withS3 (\_ _ -> expectationFailure "unexpected write" >> fail "unexpected write") $ \env ->
-            writeObject env limits{maxMetadataBytes = 8} "records" "key" Nothing "123456789" `shouldReturn` Left (ObjectTooLarge 8)
+            writeObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing "123456789" `shouldReturn` Left (ObjectTooLarge 8)
 
 limits :: Limits
 limits = defaultLimits{maxMetadataBytes = 1024}

@@ -7,10 +7,19 @@ module Ecluse.Core.Mirror.State.Codec (
     encodeProjectRecord,
     decodeProjectRecord,
     projectRecordWeight,
+    chargedDecodeProjectRecord,
+    chargedEncodeProjectRecord,
+    stateWireChunkCharge,
+    stateDecodeCharge,
+    stateExchangeCharge,
+    saturatingStateCharge,
+    mirrorInventoryWeight,
 ) where
 
+import Control.Exception (evaluate)
 import Control.Monad.State.Strict (evalState, state)
 import Data.Aeson (Value (..), encode, object, (.:), (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, parseEither, withObject)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -22,13 +31,16 @@ import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Mirror.State.Internal
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
+import Ecluse.Core.Registry.CachedDocument (estimateValueBytes, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream, retainedValue)
-import Ecluse.Core.Registry.MirrorUpload (MirrorReadData (..), expectedArtifact)
+import Ecluse.Core.Registry.Metadata (VersionDoc (..), VersionRead (..))
+import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, MirrorReadData (..), expectedArtifact, inventoryDetails, inventoryReadData)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Security
-import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Version (mkVersion, versionRaw)
+import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Text (textStorageBytes)
+import Ecluse.Core.Version (mkVersion, renderVersion)
 
 -- | Account for declared companion bytes as well as encoded source records before writing.
 encodeProjectRecord :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault ByteString
@@ -43,11 +55,17 @@ encodeProjectRecord limits record = do
 -- | Bytes and nesting are bounded before building the value tree. Identity and fragments are then checked.
 decodeProjectRecord :: Limits -> StateTarget -> PackageName -> ByteString -> Either MirrorStateFault ProjectMirrorRecord
 decodeProjectRecord limits target name bytes = do
-    checkDimensions limits bytes
-    value <- boundedValue limits bytes
+    value <- decodeProjectValue limits bytes
+    restoreProjectValue limits target name (BS.length bytes) value
+
+decodeProjectValue :: Limits -> ByteString -> Either MirrorStateFault Value
+decodeProjectValue limits bytes = checkDimensions limits bytes >> boundedValue limits bytes
+
+restoreProjectValue :: Limits -> StateTarget -> PackageName -> Int -> Value -> Either MirrorStateFault ProjectMirrorRecord
+restoreProjectValue limits target name size value = do
     record <- first (StateInvalid . toText) (parseEither parseRecord value)
     unless (recordTarget record == target && recordPackage record == name) (Left StateIdentityMismatch)
-    checkRecord limits (BS.length bytes) record
+    checkRecord limits size record
     pure record
 
 boundedValue :: Limits -> ByteString -> Either MirrorStateFault Value
@@ -92,11 +110,110 @@ checkDimensions limits bytes = do
         traverse_ (checkArtifactCount limits) [a, f, s, c, h]
         pure updated
 
--- | The cache charges decoded expansion and retained companion bytes without storing authorisation.
+-- | Count retained fields without encoding. Referenced companion objects are charged only when read.
 projectRecordWeight :: Limits -> ProjectMirrorRecord -> Either MirrorStateFault Int
 projectRecordWeight limits record = do
-    bytes <- encodeProjectRecord limits record
-    pure (fromInteger (min (toInteger (maxBound :: Int)) (toInteger (expandWireBytes (BS.length bytes)) + companionBytes record)))
+    checkRecord limits 0 record
+    pure . saturatingStateCharge $
+        4096
+            + sum
+                [ 256
+                    + toInteger (textStorageBytes key)
+                    + sum [256 + toInteger (fragmentWeight details source) | StoredMirrorFragment details source _ <- toList (versionFragments version)]
+                    + 256 * toInteger (Map.size (versionVerifiedIdentities version) + Map.size (versionCompanions version))
+                | (key, version) <- Map.toList (recordVersions record)
+                ]
+
+-- | The admitted input already belongs to the caller. This estimates state-update scratch from its shape.
+mirrorInventoryWeight :: MirrorInventory -> Int
+mirrorInventoryWeight inventory = fragmentWeight (inventoryDetails inventory) (inventoryReadData inventory)
+
+fragmentWeight :: PackageDetails -> MirrorReadData -> Int
+fragmentWeight details source = weighVersion (VersionRead (Just (VersionDoc details (Just raw))) 0 Nothing)
+  where
+    raw = case source of
+        NpmMirrorRead fields -> fst npmCached (Object fields)
+        PyPIMirrorRead document -> fst pypiSimpleCached document
+
+-- | Materialise source fields and domain weights under the reservation. Callers keep it until they release the returned record.
+chargedDecodeProjectRecord :: StateCharge -> Limits -> StateTarget -> PackageName -> ByteString -> IO (Either MirrorStateFault ProjectMirrorRecord)
+chargedDecodeProjectRecord charge limits target name bytes = do
+    let treeCharge = toInteger stateExchangeCharge + toInteger (stateWireChunkCharge (BS.length bytes)) + toInteger (stateDecodeCharge bytes)
+    charge (saturatingStateCharge treeCharge)
+    evaluate (decodeProjectValue limits bytes) >>= \case
+        Left fault -> pure (Left fault)
+        Right value -> do
+            materialised <- evaluate (force value)
+            charge (saturatingStateCharge (treeCharge + domainDecodeCharge materialised))
+            evaluate (restoreProjectValue limits target name (BS.length bytes) materialised) >>= \case
+                Left fault -> pure (Left fault)
+                Right record -> case projectRecordWeight limits record of
+                    Left fault -> pure (Left fault)
+                    Right retained -> do
+                        void (evaluate retained)
+                        evaluate (forceRecordSources record)
+                        pure (Right record)
+
+domainDecodeCharge :: Value -> Integer
+domainDecodeCharge value = 4096 + 8 * toInteger (estimateValueBytes value) + sumArray "versions" value versionCharge
+  where
+    -- Reuse VersionWeight's allowances at schema-owned coordinates, never at arbitrary publisher fields with the same name.
+    versionCharge version = sumArray "fragments" version fragmentCharge
+    fragmentCharge fragment = maybe 0 detailsCharge (fieldValue "details" fragment) + maybe 0 sourceCharge (fieldValue "source" fragment)
+    detailsCharge details = 16 * 1024 + textCharge "version" details
+    sourceCharge source = sumArray "entries" source (maybe 0 (textCharge "filename") . fieldValue "value")
+    textCharge key parent = case fieldValue key parent of
+        Just (String text) -> 256 * toInteger (textStorageBytes text)
+        _ -> 0
+    sumArray key parent itemCharge = case fieldValue key parent of
+        Just (Array values) -> foldl' (\total child -> total + itemCharge child) 0 values
+        _ -> 0
+    fieldValue key (Object fields) = KeyMap.lookup key fields
+    fieldValue _ _ = Nothing
+
+-- | Reserve retained input, encoded output and validation overlap before creating the encoding tree.
+chargedEncodeProjectRecord :: StateCharge -> Limits -> ProjectMirrorRecord -> IO (Either MirrorStateFault ByteString)
+chargedEncodeProjectRecord charge limits record = case projectRecordWeight limits record of
+    Left fault -> pure (Left fault)
+    Right retained -> do
+        charge (saturatingStateCharge (4 * toInteger retained + 32768))
+        result <- evaluate (encodeProjectRecord limits record)
+        traverse (\bytes -> evaluate (BS.length bytes) $> bytes) result
+
+forceRecordSources :: ProjectMirrorRecord -> ()
+forceRecordSources record = foldl' forceVersion () (Map.elems (recordVersions record))
+  where
+    forceVersion () version = foldl' forceFragment () (versionFragments version)
+    forceFragment () (StoredMirrorFragment _ source _) = case source of
+        NpmMirrorRead fields -> force fields `seq` ()
+        PyPIMirrorRead document -> force (simpleEnvelope document) `seq` foldl' forceEntry () (simpleFiles document)
+    forceEntry () (key, value) = forceKey key `seq` force value `seq` ()
+    forceKey (ArrayEntry position) = force position `seq` ()
+    forceKey (ObjectEntry name) = force name `seq` ()
+    forceKey SingletonEntry = ()
+
+-- | Allow four overlapping byte copies and builder/list cells before retaining each nonempty chunk.
+stateWireChunkCharge :: Int -> Int
+stateWireChunkCharge bytes
+    | bytes <= 0 = 0
+    | otherwise = saturatingStateCharge (4 * toInteger bytes + 128)
+
+-- | Prepay scalar copies and JSON/XML tree bookkeeping from the actual body, before any tree decoding.
+stateDecodeCharge :: ByteString -> Int
+stateDecodeCharge bytes
+    | BS.null bytes = 0
+    | otherwise = saturatingStateCharge (4096 + 8 * toInteger (BS.length bytes) + 512 * markers)
+  where
+    -- Each marker covers tree nodes, pending members and indexes. Markers inside strings deliberately overcount.
+    markers = BS.foldl' (\count byte -> if byte `elem` [34, 44, 58, 60, 62, 91, 93, 123, 125] then count + 1 else count) 0 bytes
+
+-- | Fixed per-exchange metadata bookkeeping, independent of the configured maximum object size.
+stateExchangeCharge :: Int
+stateExchangeCharge = 4096
+
+-- | Saturate accounting arithmetic before crossing the Int-sized admission interface.
+saturatingStateCharge :: Integer -> Int
+saturatingStateCharge = fromInteger . max 0 . min (toInteger (maxBound :: Int))
 
 checkRecord :: Limits -> Int -> ProjectMirrorRecord -> Either MirrorStateFault ()
 checkRecord limits size record = do
@@ -163,7 +280,7 @@ fragmentValue (StoredMirrorFragment details source _) = object ["details" .= det
 parseFragment :: PackageName -> Text -> Value -> Parser StoredMirrorFragment
 parseFragment name key = withObject "source fragment" $ \value -> do
     details <- value .: "details" >>= parseDetails
-    unless (pkgName details == name && versionRaw (pkgVersion details) == key) (fail "fragment identity mismatch")
+    unless (pkgName details == name && renderVersion (pkgVersion details) == key) (fail "fragment identity mismatch")
     source <- value .: "source" >>= parseSource
     files <- either (const (fail "invalid source fragment pairing")) pure (restoreMirrorFragment details source)
     pure (StoredMirrorFragment details source files)
@@ -183,7 +300,7 @@ detailsValue :: PackageDetails -> Value
 detailsValue details =
     object
         [ "package" .= nameValue (pkgName details)
-        , "version" .= versionRaw (pkgVersion details)
+        , "version" .= renderVersion (pkgVersion details)
         , "published" .= pkgPublishedAt details
         , "install" .= installValue (pkgInstallCode details)
         , "availability" .= availabilityValue (pkgAvailability details)

@@ -12,9 +12,11 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
+import UnliftIO.Async (cancel, withAsync)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, chargedEncodeProjectRecord, stateDecodeCharge, stateWireChunkCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..), VerifiedCompanionBytes (..), retainVerifiedIdentity)
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
@@ -29,6 +31,63 @@ import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = describe "durable mirror expectations" $ do
+    it "charges repeated same-size state rewrites once and grows with the largest live encoding" $ do
+        inventory <- mirrorSample [1] False "https://first.test/" "original"
+        added <- mirrorSample [1, 2] False "https://first.test/" "original"
+        small <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        large <- expectRight (extendProjectRecord defaultLimits target added (Just small))
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge (\cost -> modifyIORef' paid (+ cost))
+        replicateM_ 3 (chargedEncodeProjectRecord charge defaultLimits small >>= expectRight)
+        smallPaid <- readIORef paid
+        void (chargedEncodeProjectRecord charge defaultLimits large >>= expectRight)
+        largePaid <- readIORef paid
+        largePaid `shouldSatisfy` (> smallPaid)
+        freshPaid <- newIORef (0 :: Int)
+        freshCharge <- newStateCharge (\cost -> modifyIORef' freshPaid (+ cost))
+        void (chargedEncodeProjectRecord freshCharge defaultLimits large >>= expectRight)
+        readIORef freshPaid `shouldReturn` largePaid
+
+    it "does not remember an unpaid high-water request after cancellation" $ do
+        entered <- newEmptyMVar
+        blocked <- newEmptyMVar
+        firstPayment <- newIORef True
+        paid <- newIORef (0 :: Int)
+        charge <- newStateCharge $ \cost -> do
+            initial <- atomicModifyIORef' firstPayment (False,)
+            if initial then putMVar entered () >> takeMVar blocked else modifyIORef' paid (+ cost)
+        withAsync (charge 1024) $ \worker -> takeMVar entered >> cancel worker
+        charge 1024
+        readIORef paid `shouldReturn` 1024
+
+    it "bases decode charges on the actual body rather than the configured maximum" $ do
+        inventory <- mirrorSample [1] False "https://first.test/" "original"
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord defaultLimits record)
+        payments <- newIORef ([] :: [Int])
+        chargedDecodeProjectRecord (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
+        observed <- readIORef payments
+        observed `shouldSatisfy` all (< maxMetadataBytes defaultLimits)
+        observed `shouldSatisfy` all (>= stateWireChunkCharge (BS.length bytes) + stateDecodeCharge bytes)
+        projectRecordWeight defaultLimits{maxNestingDepth = 1} record `shouldSatisfy` isRight
+
+    it "prepays typed restoration separately when long version keys outweigh the JSON tree model" $ do
+        original <- mirrorSample [1] False "https://first.test/" "original"
+        let versionText = T.intercalate "." (replicate 512 "1")
+            details = inventoryDetails original
+            artifacts = fmap (\artifact -> artifact{artFilename = T.replace "1.0" versionText (artFilename artifact), artUrl = T.replace "1.0" versionText (artUrl artifact)}) (pkgArtifacts details)
+        inventory <- expectRight (restoreMirrorInventory details{pkgVersion = mkVersion PyPI versionText, pkgArtifacts = artifacts} (mirrorSource artifacts "original"))
+        record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
+        bytes <- expectRight (encodeProjectRecord defaultLimits record)
+        retained <- expectRight (projectRecordWeight defaultLimits record)
+        payments <- newIORef ([] :: [Int])
+        chargedDecodeProjectRecord (\cost -> modifyIORef' payments (cost :)) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
+        readIORef payments >>= \case
+            [domainPaid, treePaid] -> do
+                treePaid `shouldSatisfy` (< retained)
+                domainPaid `shouldSatisfy` (> retained)
+            other -> expectationFailure ("expected prepaid tree and domain phases, got " <> show other)
+
     it "preserves old files when a later admitted source removes them" $ do
         a <- mirrorSample [1, 2] False "https://first.test/" "original"
         b <- mirrorSample [2, 3] False "https://later.test/" "changed"
@@ -125,28 +184,28 @@ spec = describe "durable mirror expectations" $ do
         let file :| _ = inventoryFiles inventory
             targetFile = (expectedArtifact file){artHashes = [sha256], artUrl = "https://private.test/file"}
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
-        before <- getVersion record
-        checkMirrorCompletion before [targetFile] `shouldBe` MirrorIncomplete (MissingMirrorProof (mirrorFilename 1) :| [])
+        unverifiedVersion <- getVersion record
+        checkMirrorCompletion unverifiedVersion [targetFile] `shouldBe` MirrorIncomplete (MissingMirrorProof (mirrorFilename 1) :| [])
         verified <- expectRight (verifyMirrorBytes file "wheel")
         updated <- expectRight (retainVerifiedIdentity mirrorVersion verified record)
-        after <- getVersion updated
-        checkMirrorCompletion after [targetFile] `shouldBe` MirrorComplete
-        checkMirrorCompletion after [targetFile{artHashes = [sha512]}] `shouldBe` MirrorComplete
-        map (artHashes . expectedArtifact) (Map.elems (versionFiles after)) `shouldBe` [[sha512]]
+        verifiedVersion <- getVersion updated
+        checkMirrorCompletion verifiedVersion [targetFile] `shouldBe` MirrorComplete
+        checkMirrorCompletion verifiedVersion [targetFile{artHashes = [sha512]}] `shouldBe` MirrorComplete
+        map (artHashes . expectedArtifact) (Map.elems (versionFiles verifiedVersion)) `shouldBe` [[sha512]]
         wrong <- expectRight (mkHash SHA256 (hexSha256Of "other"))
         conflictingSource <- expectRight (mkHash SHA512 (hexSha512Of "other"))
-        checkMirrorCompletion after [targetFile{artHashes = [sha256, conflictingSource]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
-        checkMirrorCompletion after [targetFile{artHashes = [wrong]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
+        checkMirrorCompletion verifiedVersion [targetFile{artHashes = [sha256, conflictingSource]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
+        checkMirrorCompletion verifiedVersion [targetFile{artHashes = [wrong]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
         decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
 
     it "unions concurrent versions without replacing an earlier version" $ do
-        first <- mirrorSample [1] False "https://first.test/" "original"
-        let details = inventoryDetails first
+        initialInventory <- mirrorSample [1] False "https://first.test/" "original"
+        let details = inventoryDetails initialInventory
             newVersion = mkVersion PyPI "2"
             renamed = fmap (\artifact -> artifact{artFilename = T.replace "1.0" "2.0" (artFilename artifact), artUrl = T.replace "1.0" "2.0" (artUrl artifact)}) (pkgArtifacts details)
         second <- expectRight (restoreMirrorInventory details{pkgVersion = newVersion, pkgArtifacts = renamed} (mirrorSource renamed "second"))
-        old <- expectRight (extendProjectRecord defaultLimits target first Nothing)
+        old <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
         updated <- expectRight (extendProjectRecord defaultLimits target second (Just old))
         Map.keys (recordVersions updated) `shouldBe` ["1", "2"]
         recordVersion mirrorVersion updated `shouldBe` recordVersion mirrorVersion old
@@ -170,14 +229,14 @@ spec = describe "durable mirror expectations" $ do
         let revision = StateRevision target mirrorPackage "one"
             store =
                 inertState
-                    { msReadProject = \_ _ -> Right . StateLoaded revision <$> readIORef held
-                    , msRetainCompanion = \_ -> writeIORef retained True $> Right reference
-                    , msWriteProject = \_ _ updated -> do
+                    { msReadProject = \_ _ _ -> Right . StateLoaded revision <$> readIORef held
+                    , msRetainCompanion = \_ _ -> writeIORef retained True $> Right reference
+                    , msWriteProject = \_ _ _ updated -> do
                         readIORef retained `shouldReturn` True
                         writeIORef held updated
                         pure (Right (StateStored revision))
                     }
-        (_, updated) <- retainProjectCompanion defaultLimits store mirrorPackage mirrorVersion verified >>= expectRight
+        (_, updated) <- retainProjectCompanion defaultLimits (const pass) store mirrorPackage mirrorVersion verified >>= expectRight
         version <- getVersion updated
         checkMirrorCompletion version [expectedArtifact file] `shouldBe` MirrorComplete
         bytes <- expectRight (encodeProjectRecord defaultLimits updated)
@@ -222,13 +281,13 @@ spec = describe "durable mirror expectations" $ do
         let revision = StateRevision target mirrorPackage "one"
             store =
                 inertState
-                    { msReadProject = \_ _ -> readIORef held <&> Right . maybe StateAbsent (StateLoaded revision)
-                    , msWriteProject = \_ _ record -> do
+                    { msReadProject = \_ _ _ -> readIORef held <&> Right . maybe StateAbsent (StateLoaded revision)
+                    , msWriteProject = \_ _ _ record -> do
                         modifyIORef' writes (+ 1)
                         writeIORef held (Just record)
                         pure (Left (StateInvalid "lost reply"))
                     }
-        result <- recordExpectedInventory defaultLimits target store inventory >>= expectRight
+        result <- recordExpectedInventory defaultLimits (const pass) target store inventory >>= expectRight
         fst result `shouldBe` revision
         readIORef writes `shouldReturn` 1
 
@@ -241,8 +300,8 @@ spec = describe "durable mirror expectations" $ do
         let revision = StateRevision target mirrorPackage "one"
             store =
                 inertState
-                    { msReadProject = \_ _ -> readIORef held <&> Right . maybe StateAbsent (StateLoaded revision)
-                    , msWriteProject = \_ _ record ->
+                    { msReadProject = \_ _ _ -> readIORef held <&> Right . maybe StateAbsent (StateLoaded revision)
+                    , msWriteProject = \_ _ _ record ->
                         readIORef collision >>= \firstWrite ->
                             if firstWrite
                                 then do
@@ -251,7 +310,7 @@ spec = describe "durable mirror expectations" $ do
                                     pure (Right StateConflict)
                                 else writeIORef held (Just record) $> Right (StateStored revision)
                     }
-        (_, record) <- recordExpectedInventory defaultLimits target store a >>= expectRight
+        (_, record) <- recordExpectedInventory defaultLimits (const pass) target store a >>= expectRight
         version <- getVersion record
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2]
 
@@ -268,8 +327,8 @@ hasNote _ _ = False
 inertState :: MirrorState
 inertState =
     MirrorState
-        { msReadProject = \_ _ -> pure (Right StateAbsent)
-        , msWriteProject = \_ _ _ -> pure (Left (StateInvalid "unexpected write"))
-        , msRetainCompanion = \_ -> pure (Left (StateInvalid "unexpected companion write"))
-        , msReadCompanion = \_ -> pure (Left StateMissingCompanion)
+        { msReadProject = \_ _ _ -> pure (Right StateAbsent)
+        , msWriteProject = \_ _ _ _ -> pure (Left (StateInvalid "unexpected write"))
+        , msRetainCompanion = \_ _ -> pure (Left (StateInvalid "unexpected companion write"))
+        , msReadCompanion = \_ _ -> pure (Left StateMissingCompanion)
         }

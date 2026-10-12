@@ -18,10 +18,10 @@ import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Amazonka.Types qualified as Types
 import Conduit (ConduitT, MonadResource, ResourceT, await, runResourceT, sealConduitT, yield, ($$++), (.|))
-import Control.Lens ((%~), (&), (?~), (^.))
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Data.Proxy (Proxy (..))
+import Lens.Micro ((%~), (&), (?~), (^.))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (withRunInIO)
@@ -29,6 +29,9 @@ import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge, stateDecodeCharge, stateExchangeCharge, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State.Internal (StateCharge)
+import Ecluse.Core.Registry.Exchange (chargedRead)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Stream (boundBytes)
@@ -92,8 +95,9 @@ newtype ObjectLimit = ObjectLimit Int
 
 instance Exception ObjectLimit
 
-sendBounded :: (AWS.AWSRequest request, AWS.AWSResponse request ~ RawResponse, AWS.AWSRequest native) => AWS.Env -> Limits -> request -> Proxy native -> ResourceT IO (Either AWS.Error (AWS.AWSResponse native))
-sendBounded env limits request native = do
+sendBounded :: (AWS.AWSRequest request, AWS.AWSResponse request ~ RawResponse, AWS.AWSRequest native) => StateCharge -> Int -> Bool -> AWS.Env -> Limits -> request -> Proxy native -> ResourceT IO (Either AWS.Error (AWS.AWSResponse native))
+sendBounded charge requestCharge consumesBody env limits request native = do
+    liftIO $ charge (saturatingStateCharge (toInteger stateExchangeCharge + toInteger requestCharge))
     received <- withRunInIO $ \run -> watched (progressFloor limits) $ \watch -> run $ do
         let metered =
                 env
@@ -108,15 +112,22 @@ sendBounded env limits request native = do
         AWS.sendEither (AWS.once metered{AWS.retryCheck = \_ _ -> False}) request >>= \case
             Left err -> pure (Left err)
             Right (RawResponse service response) -> do
-                bytes <- readSource watch limits (HTTP.responseBody response)
-                pure (Right (service, fmap (const (yield bytes)) response))
+                (wireCharge, bytes) <- readSource charge requestCharge watch limits (HTTP.responseBody response)
+                pure (Right (wireCharge, bytes, service, fmap (const (yield bytes)) response))
     case received of
         Nothing -> throwIO ObjectProgress
         Just (Left err) -> pure (Left err)
-        Just (Right (service, response)) -> fmap HTTP.responseBody <$> AWS.response pure service native response
+        Just (Right (wireCharge, bytes, service, response)) -> do
+            let decodeCharge = if consumesBody || statusCode (HTTP.responseStatus response) >= 300 then stateDecodeCharge bytes else 0
+            liftIO $ charge (saturatingStateCharge (toInteger wireCharge + toInteger decodeCharge))
+            fmap HTTP.responseBody <$> AWS.response pure service native response
 
-readSource :: Watch -> Limits -> Types.ClientBody -> ResourceT IO ByteString
-readSource watch limits source = withRunInIO $ \run -> do
+readSource :: StateCharge -> Int -> Watch -> Limits -> Types.ClientBody -> ResourceT IO (Int, ByteString)
+readSource charge requestCharge watch limits source = withRunInIO $ \run -> do
+    wireCharge <- newIORef (toInteger stateExchangeCharge + toInteger requestCharge)
+    let payChunk size = do
+            total <- atomicModifyIORef' wireCharge (\previous -> let nextCharge = previous + toInteger (stateWireChunkCharge size) in (nextCharge, nextCharge))
+            charge (saturatingStateCharge total)
     pending <- newIORef (sealConduitT source)
     let next = do
             current <- readIORef pending
@@ -127,9 +138,9 @@ readSource watch limits source = withRunInIO $ \run -> do
                 Just bytes
                     | BS.null bytes -> next
                     | otherwise -> pure bytes
-    boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) (meteredReader watch next) >>= \case
+    boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) (chargedRead payChunk (meteredReader watch next)) >>= \case
         Left _ -> throwIO (ObjectLimit (maxMetadataBytes limits))
-        Right (_, bytes) -> pure bytes
+        Right (_, bytes) -> (,bytes) . saturatingStateCharge <$> readIORef wireCharge
 
 data ObjectProgress = ObjectProgress
     deriving stock (Show)
@@ -140,10 +151,10 @@ byteCap :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
 byteCap cap = boundBytes cap (const (throwIO (ObjectLimit cap)))
 
 -- | GET returns bytes and their revision in the same resource lifetime.
-readObject :: AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> IO (Either ObjectFault ObjectRead)
-readObject env limits bucket key revision = boundedCall $ do
+readObject :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> IO (Either ObjectFault ObjectRead)
+readObject charge env limits bucket key revision = boundedCall $ do
     result <- runResourceT $ do
-        response <- sendBounded env limits (BoundedGet revision request) (Proxy :: Proxy S3.GetObject)
+        response <- sendBounded charge 0 False env limits (BoundedGet revision request) (Proxy :: Proxy S3.GetObject)
         case response of
             Left err -> pure (Left err)
             Right received -> do
@@ -156,18 +167,18 @@ readObject env limits bucket key revision = boundedCall $ do
         Left err
             | serviceStatus err == Just 304 -> pure $ maybe (Left ObjectNoRevision) (Right . ObjectUnchanged) revision
             | serviceStatus err == Just 404 && serviceCode err == Just "NoSuchKey" -> pure (Right ObjectAbsent)
-            | serviceStatus err == Just 403 -> absenceFallback env limits bucket key
+            | serviceStatus err == Just 403 -> absenceFallback charge env limits bucket key
             | otherwise -> pure (Left (ObjectTransport (classifyAwsTransport err)))
   where
     cap = maxMetadataBytes limits
     request = S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key)
 
 -- | A failed or uncertain write returns to the caller for reread and union before another attempt.
-writeObject :: AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> ByteString -> IO (Either ObjectFault ObjectWrite)
-writeObject env limits bucket key revision bytes
+writeObject :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> Maybe ByteString -> ByteString -> IO (Either ObjectFault ObjectWrite)
+writeObject charge env limits bucket key revision bytes
     | BS.length bytes > maxMetadataBytes limits = pure (Left (ObjectTooLarge (maxMetadataBytes limits)))
     | otherwise = boundedCall $ do
-        result <- runResourceT (sendBounded env limits request (Proxy :: Proxy S3.PutObject))
+        result <- runResourceT (sendBounded charge (stateWireChunkCharge (BS.length bytes)) True env limits request (Proxy :: Proxy S3.PutObject))
         pure $ case result of
             Right response -> ObjectStored <$> objectRevision (response ^. S3L.putObjectResponse_eTag)
             Left err
@@ -176,9 +187,9 @@ writeObject env limits bucket key revision bytes
   where
     request = ConditionalPut revision (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey key) (AWS.toBody bytes))
 
-absenceFallback :: AWS.Env -> Limits -> Text -> Text -> IO (Either ObjectFault ObjectRead)
-absenceFallback env limits bucket key = do
-    result <- runResourceT (sendBounded env limits request (Proxy :: Proxy S3.ListObjectsV2))
+absenceFallback :: StateCharge -> AWS.Env -> Limits -> Text -> Text -> IO (Either ObjectFault ObjectRead)
+absenceFallback charge env limits bucket key = do
+    result <- runResourceT (sendBounded charge 0 True env limits request (Proxy :: Proxy S3.ListObjectsV2))
     pure $ case result of
         Right response
             | response ^. S3L.listObjectsV2Response_isTruncated == Just False

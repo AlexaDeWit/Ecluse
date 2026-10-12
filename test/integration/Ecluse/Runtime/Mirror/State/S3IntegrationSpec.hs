@@ -44,23 +44,23 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
         retryingIO 21 500_000 (void (runResourceT (AWS.send env (S3.newCreateBucket (S3.BucketName bucket)))))
         store <- fresh
         inventory <- mirrorSample [1, 2, 3] True "https://original.test/" "original"
-        (_, initial) <- recordExpectedInventory defaultLimits target store inventory >>= expectRight
+        (_, initial) <- recordExpectedInventory defaultLimits (const pass) target store inventory >>= expectRight
         restarted <- fresh
         (_, observed) <- loaded restarted
         observed `shouldBe` initial
         let file :| _ = inventoryFiles inventory
         verified <- expectRight (verifyCompanionBytes defaultLimits file "metadata")
-        let refused = restarted{msRetainCompanion = \_ -> pure (Left (StateInvalid "injected storage failure"))}
-        retainProjectCompanion defaultLimits refused mirrorPackage mirrorVersion verified `shouldReturn` Left (StateInvalid "injected storage failure")
-        (_, pending) <- loaded restarted
-        pending `shouldBe` initial
-        reference <- msRetainCompanion restarted verified >>= expectRight
+        let refused = restarted{msRetainCompanion = \_ _ -> pure (Left (StateInvalid "injected storage failure"))}
+        retainProjectCompanion defaultLimits (const pass) refused mirrorPackage mirrorVersion verified `shouldReturn` Left (StateInvalid "injected storage failure")
+        (_, pendingRecord) <- loaded restarted
+        pendingRecord `shouldBe` initial
+        reference <- msRetainCompanion restarted (const pass) verified >>= expectRight
         afterObject <- fresh
         (_, withoutReference) <- loaded afterObject
         withoutReference `shouldBe` initial
-        msReadCompanion afterObject reference `shouldReturn` Right "metadata"
+        msReadCompanion afterObject (const pass) reference `shouldReturn` Right "metadata"
         reduced <- mirrorSample [1, 2] True "https://changed.test/" "changed"
-        (_, retained) <- recordExpectedInventory defaultLimits target afterObject reduced >>= expectRight
+        (_, retained) <- recordExpectedInventory defaultLimits (const pass) target afterObject reduced >>= expectRight
         retained `shouldBe` initial
         additions <- mirrorSample [1, 2, 3, 4] True "https://changed.test/" "changed"
         another <- mirrorSample [1] False "https://second.test/" "second"
@@ -75,10 +75,10 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
         companionStore <- firstWriteBarrier arrivals conflicts afterObject
         (added, (versionAdded, companionAdded)) <-
             concurrently
-                (recordExpectedInventory defaultLimits target additionStore additions)
+                (recordExpectedInventory defaultLimits (const pass) target additionStore additions)
                 ( concurrently
-                    (recordExpectedInventory defaultLimits target versionStore nextVersion)
-                    (retainProjectCompanion defaultLimits companionStore mirrorPackage mirrorVersion verified)
+                    (recordExpectedInventory defaultLimits (const pass) target versionStore nextVersion)
+                    (retainProjectCompanion defaultLimits (const pass) companionStore mirrorPackage mirrorVersion verified)
                 )
         traverse_ expectRight [added, versionAdded, companionAdded]
         readIORef conflicts >>= (`shouldSatisfy` (>= 2))
@@ -89,19 +89,19 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
         Map.keys (versionFiles version) `shouldBe` map mirrorFilename [1, 2, 3, 4]
         Map.lookup (mirrorFilename 1) (versionCompanions version) `shouldBe` Just (CompanionRetained reference)
         Map.lookup (mirrorFilename 3) (versionCompanions version) `shouldBe` Just CompanionPending
-        msReadCompanion final reference `shouldReturn` Right "metadata"
+        msReadCompanion final (const pass) reference `shouldReturn` Right "metadata"
         missingDigest <- expectRight (mkHash SHA256 (hexSha256Of "never retained"))
-        msReadCompanion final (CompanionRef missingDigest 14) `shouldReturn` Left StateMissingCompanion
+        msReadCompanion final (const pass) (CompanionRef missingDigest 14) `shouldReturn` Left StateMissingCompanion
         let CompanionRef digest size = reference
-        msReadCompanion final (CompanionRef digest (size + 1)) >>= (`shouldSatisfy` invalidState)
+        msReadCompanion final (const pass) (CompanionRef digest (size + 1)) >>= (`shouldSatisfy` invalidState)
         let objectKey = "recovery/companions/sha256/" <> companionDigest reference
-        object <- readObject env defaultLimits bucket objectKey Nothing >>= expectRight
+        object <- readObject (const pass) env defaultLimits bucket objectKey Nothing >>= expectRight
         case object of
             ObjectLoaded revision _ -> do
-                writeObject env defaultLimits bucket objectKey (Just revision) "corrupt" >>= expectRight >>= \case
+                writeObject (const pass) env defaultLimits bucket objectKey (Just revision) "corrupt" >>= expectRight >>= \case
                     ObjectStored _ -> pass
                     ObjectConflict -> expectationFailure "the corruption fixture lost its known revision"
-                msReadCompanion final reference >>= (`shouldSatisfy` invalidState)
+                msReadCompanion final (const pass) reference >>= (`shouldSatisfy` invalidState)
             other -> expectationFailure ("missing retained companion: " <> show other)
 
     it "reconciles a lost successful write and rejects malformed or oversized persisted records" $ \container -> do
@@ -116,9 +116,9 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
         writes <- newIORef (0 :: Int)
         let uncertain =
                 store
-                    { msWriteProject = \name revision record -> do
+                    { msWriteProject = \charge name revision record -> do
                         modifyIORef' writes (+ 1)
-                        result <- msWriteProject store name revision record
+                        result <- msWriteProject store charge name revision record
                         case result of
                             Right (StateStored _) -> do
                                 discard <- atomicModifyIORef' lost (False,)
@@ -126,22 +126,22 @@ spec = aroundAll withMinistack $ describe "durable project mirror state" $ do
                             _ -> pure result
                     }
         inventory <- mirrorSample [1, 2, 3] False "https://original.test/" "original"
-        (_, persisted) <- recordExpectedInventory defaultLimits target uncertain inventory >>= expectRight
+        (_, persisted) <- recordExpectedInventory defaultLimits (const pass) target uncertain inventory >>= expectRight
         readIORef writes `shouldReturn` 1
         restarted <- fresh "lost" defaultLimits
         snd <$> loaded restarted `shouldReturn` persisted
         let malformedKey = "malformed/" <> projectKey target mirrorPackage <> "/project.json"
-        writeObject env defaultLimits bucket malformedKey Nothing "{broken" >>= expectRight >>= \case
+        writeObject (const pass) env defaultLimits bucket malformedKey Nothing "{broken" >>= expectRight >>= \case
             ObjectStored _ -> pass
             ObjectConflict -> expectationFailure "malformed fixture unexpectedly exists"
         malformed <- fresh "malformed" defaultLimits
-        msReadProject malformed mirrorPackage Nothing >>= (`shouldSatisfy` invalidState)
+        msReadProject malformed (const pass) mirrorPackage Nothing >>= (`shouldSatisfy` invalidState)
         limited <- fresh "lost" defaultLimits{maxMetadataBytes = 8}
-        msReadProject limited mirrorPackage Nothing >>= (`shouldSatisfy` boundedState)
+        msReadProject limited (const pass) mirrorPackage Nothing >>= (`shouldSatisfy` boundedState)
 
 loaded :: MirrorState -> IO (StateRevision, ProjectMirrorRecord)
 loaded store =
-    msReadProject store mirrorPackage Nothing >>= expectRight >>= \case
+    msReadProject store (const pass) mirrorPackage Nothing >>= expectRight >>= \case
         StateLoaded revision record -> pure (revision, record)
         other -> fail ("expected a loaded project record, got " <> show other)
 
@@ -150,12 +150,12 @@ firstWriteBarrier arrivals conflicts store = do
     firstWrite <- newIORef True
     pure
         store
-            { msWriteProject = \name revision record -> do
-                first <- atomicModifyIORef' firstWrite (False,)
-                when first $ do
+            { msWriteProject = \charge name revision record -> do
+                initialWrite <- atomicModifyIORef' firstWrite (False,)
+                when initialWrite $ do
                     atomically (modifyTVar' arrivals (+ 1))
                     atomically (readTVar arrivals >>= check . (>= 3))
-                result <- msWriteProject store name revision record
+                result <- msWriteProject store charge name revision record
                 when (result == Right StateConflict) (atomicModifyIORef' conflicts (\count -> (count + 1, ())))
                 pure result
             }

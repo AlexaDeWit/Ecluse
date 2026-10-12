@@ -17,6 +17,7 @@ module Ecluse.Core.Mirror.State.Internal (
     StateRead (..),
     StateWrite (..),
     MirrorState (..),
+    StateCharge,
     extendProjectRecord,
     retainCompanionReference,
     retainVerifiedIdentity,
@@ -52,7 +53,7 @@ import Ecluse.Core.Package
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorFragment)
 import Ecluse.Core.Security (LimitError, Limits (..), checkArtifactCount, checkVersionCountOf)
-import Ecluse.Core.Version (Version, versionRaw)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (..), verifyIntegrity)
 
 -- | A digest of the configured target, never a credential or caller authorisation.
@@ -120,12 +121,15 @@ data StateRead = StateAbsent | StateUnchanged StateRevision | StateLoaded StateR
 data StateWrite = StateStored StateRevision | StateConflict
     deriving stock (Eq, Show)
 
+-- | An absolute high-water requirement for sequential state work under one caller-owned lifetime.
+type StateCharge = Int -> IO ()
+
 -- | Composition binds a target and storage prefix. No operation accepts an arbitrary object key.
 data MirrorState = MirrorState
-    { msReadProject :: PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)
-    , msWriteProject :: PackageName -> Maybe StateRevision -> ProjectMirrorRecord -> IO (Either MirrorStateFault StateWrite)
-    , msRetainCompanion :: VerifiedCompanionBytes -> IO (Either MirrorStateFault CompanionRef)
-    , msReadCompanion :: CompanionRef -> IO (Either MirrorStateFault ByteString)
+    { msReadProject :: StateCharge -> PackageName -> Maybe StateRevision -> IO (Either MirrorStateFault StateRead)
+    , msWriteProject :: StateCharge -> PackageName -> Maybe StateRevision -> ProjectMirrorRecord -> IO (Either MirrorStateFault StateWrite)
+    , msRetainCompanion :: StateCharge -> VerifiedCompanionBytes -> IO (Either MirrorStateFault CompanionRef)
+    , msReadCompanion :: StateCharge -> CompanionRef -> IO (Either MirrorStateFault ByteString)
     }
 
 -- | The configured target identity carried by this validated record.
@@ -158,7 +162,7 @@ extendProjectRecord limits target inventory previous = do
     let name = inventoryPackage inventory
         initial = ProjectMirrorRecord target name Map.empty
         record = fromMaybe initial previous
-        key = versionRaw (inventoryVersion inventory)
+        key = renderVersion (inventoryVersion inventory)
     unless (recordTarget record == target && recordPackage record == name) (Left StateIdentityMismatch)
     updated <- extendVersion inventory (Map.lookup key (recordVersions record))
     let result = record{projectVersions = Map.insert key updated (recordVersions record)}
@@ -194,7 +198,7 @@ versionFiles version =
 
 -- | A valid record without the requested version is unmanaged private content.
 recordVersion :: Version -> ProjectMirrorRecord -> Maybe MirrorVersion
-recordVersion version = Map.lookup (versionRaw version) . recordVersions
+recordVersion version = Map.lookup (renderVersion version) . recordVersions
 
 -- | A pending expectation cannot become retained until its actual bytes satisfy the declaration.
 verifyCompanionBytes :: Limits -> ExpectedMirrorFile -> ByteString -> Either MirrorStateFault VerifiedCompanionBytes
@@ -232,7 +236,7 @@ retainCompanionReference version (VerifiedCompanionBytes parent verified _) refe
         CompanionRetained existing | existing /= reference -> Left (StateCompanionConflict (artFilename parent))
         _ ->
             let updated = old{storedCompanions = Map.insert (artFilename parent) (CompanionRetained reference) (versionCompanions old)}
-             in Right record{projectVersions = Map.insert (versionRaw version) updated (recordVersions record)}
+             in Right record{projectVersions = Map.insert (renderVersion version) updated (recordVersions record)}
 
 -- | Retain a digest computed only from bytes that passed the admitted source integrity check.
 retainVerifiedIdentity :: Version -> VerifiedArtifactBytes -> ProjectMirrorRecord -> Either MirrorStateFault ProjectMirrorRecord
@@ -246,7 +250,7 @@ retainVerifiedIdentity version verified record = do
     for_ (Map.lookup name (versionVerifiedIdentities old)) $ \previous ->
         unless (previous == digest) (Left (StateFileConflict name))
     let updated = old{storedIdentities = Map.insert name digest (versionVerifiedIdentities old)}
-    pure record{projectVersions = Map.insert (versionRaw version) updated (recordVersions record)}
+    pure record{projectVersions = Map.insert (renderVersion version) updated (recordVersions record)}
 
 -- | A failed proof reports each missing file, conflicting identity, or pending companion.
 data MirrorCompletion = MirrorComplete | MirrorIncomplete (NonEmpty MirrorCompletionFault)
