@@ -71,6 +71,7 @@ benchmarkRequiredRows ecosystem packages =
                         ]
                    ]
                 <> ["security guards.checkNestingDepth (synthetic / 100000)", "security guards.checkVersionCount (synthetic / 2000)"]
+                <> ["managed mirror read: 1000 versions, three files per version." <> row | ecosystem == "pypi", row <- ["cold record and listing", "warm conditional 304 and listing", "cold listing then changed revision adding a file"]]
             )
   where
     prefix = "ecosystem: " <> ecosystem <> "."

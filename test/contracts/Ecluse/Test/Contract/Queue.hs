@@ -38,7 +38,7 @@ queuePayloadLaw driver = do
     map msgJob messages `shouldBe` [sampleJob]
     map (jobPackage . msgJob) messages `shouldBe` [jobPackage sampleJob]
     map (jobVersion . msgJob) messages `shouldBe` [jobVersion sampleJob]
-    map (jobArtifactUrl . msgJob) messages `shouldBe` [jobArtifactUrl sampleJob]
+    map (jobTriggerFilename . msgJob) messages `shouldBe` [jobTriggerFilename sampleJob]
     map (jobArtifactFilename . msgJob) messages `shouldBe` [jobArtifactFilename sampleJob]
     map (jobTraceContext . msgJob) messages `shouldBe` [jobTraceContext sampleJob]
     traverse_ (expectRightIO . ack (queueHandle driver) . msgReceipt) messages

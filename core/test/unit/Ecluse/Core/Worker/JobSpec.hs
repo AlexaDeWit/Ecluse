@@ -15,8 +15,9 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Mirror.State
 import Ecluse.Core.Package (
-    Artifact (artFilename, artHashes),
+    Artifact (artCoreMetadata, artFilename, artHashes),
     Availability (Deprecated, Yanked),
+    CoreMetadata (MetadataDigests),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SHA512, SRI),
     PackageDetails (pkgArtifacts, pkgAvailability, pkgPublishedAt),
@@ -68,7 +69,7 @@ import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
-import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withStub)
+import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withRoutedStub, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
 import Ecluse.Worker.Support
 import Ecluse.Worker.Support.Managed
@@ -208,7 +209,7 @@ spec = do
             withUpstream $ \url -> do
                 fixture <- managedFixture url False
                 writeIORef (mfTargetTransform fixture) (\file -> file{artHashes = [unsafeHash SHA256 someSha256]})
-                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                runManaged fixture >>= (`shouldSatisfy` isDropped)
                 readIORef (mfProbes fixture) `shouldReturn` 2
 
         it "refuses a missing final file without repeated upload passes" $
@@ -295,6 +296,48 @@ spec = do
                     runManaged fixture `shouldReturn` Succeeded
                     readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
                     length <$> allCaptured moved `shouldReturn` 3
+
+        it "checks bytes received from a replacement URL against the original admitted digest" $
+            withStub status404 "unavailable" $ \original ->
+                withStub status200 "changed bytes" $ \moved -> do
+                    fixture <- managedFixture (stubBaseUrl original) False
+                    runManaged fixture >>= (`shouldSatisfy` isRetried)
+                    changed <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                    runManaged fixture >>= (`shouldSatisfy` isDropped)
+                    length <$> allCaptured moved `shouldReturn` 1
+                    readIORef (mfUploads fixture) `shouldReturn` []
+
+        for_ [False, True] $ \corrupt ->
+            it (if corrupt then "refuses changed companion bytes at a newly admitted location" else "retains pending companions from a newly admitted location before completion") $
+                withRoutedStub (\request -> if ".metadata" `T.isSuffixOf` decodeUtf8 (capPath request) then (status404, [], "missing") else (status200, [], toLazy tarballBytes)) $ \original ->
+                    withRoutedStub (\request -> (status200, [], if ".metadata" `T.isSuffixOf` decodeUtf8 (capPath request) then if corrupt then "changed" else "metadata" else toLazy tarballBytes)) $ \moved -> do
+                        fixture <- managedFixture (stubBaseUrl original) True
+                        let declared location = do
+                                inventory <- managedInventory location True [1, 2, 3]
+                                let details = inventoryDetails inventory
+                                    files = fmap (\file -> file{artCoreMetadata = Just (MetadataDigests (Map.singleton "sha256" (hexSha256Of "metadata")))}) (pkgArtifacts details)
+                                expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "declared companion"))
+                        initial <- declared (stubBaseUrl original)
+                        writeIORef (mfSource fixture) (VersionPresent (sourceDocument initial) Nothing)
+                        runManaged fixture >>= (`shouldSatisfy` isRetried)
+                        readIORef (mfCompanions fixture) `shouldReturn` Map.empty
+                        changed <- declared (stubBaseUrl moved)
+                        writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                        outcome <- runManaged fixture
+                        if corrupt
+                            then do
+                                outcome `shouldSatisfy` isDeadLettered
+                                readIORef (mfCompanions fixture) `shouldReturn` Map.empty
+                                readIORef (mfUploads fixture) `shouldReturn` [mirrorFilename 1]
+                            else do
+                                outcome `shouldBe` Succeeded
+                                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                                record <- readIORef (mfRecord fixture)
+                                let companions = versionCompanions <$> (record >>= recordVersion mirrorVersion)
+                                fmap (notElem CompanionPending . Map.elems) companions `shouldBe` Just True
+                        captured <- allCaptured moved
+                        captured `shouldSatisfy` any ((".metadata" `T.isSuffixOf`) . decodeUtf8 . capPath)
 
         it "refuses a moved source whose current identity conflicts with the retained files" $
             withStub status404 "unavailable" $ \original ->

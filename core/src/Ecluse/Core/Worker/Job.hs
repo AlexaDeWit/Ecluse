@@ -428,7 +428,7 @@ copyRecorded charge policy job target latest record = do
         if null files
             then pure current
             else do
-                admitted <- ExceptT (admitEvaluation policy job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) upstreamLatest))
+                admitted <- ExceptT (admitEvaluation policy job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) (raUpstreamLatest latest)))
                 foldM (copyFile (raPrepared admitted)) current (toList (raLocations admitted))
     needsWork version artifact =
         let name = artFilename artifact

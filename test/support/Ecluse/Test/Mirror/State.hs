@@ -12,7 +12,7 @@ module Ecluse.Test.Mirror.State (
     withMirrorEnvelope,
 ) where
 
-import Data.Aeson (Object, Value (String), object, (.=))
+import Data.Aeson (Object, Value (String), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
@@ -57,7 +57,7 @@ mirrorSource artifacts note =
             [ ( artEntryKey artifact
               , object
                     ( ["filename" .= artFilename artifact, "url" .= artUrl artifact, "hashes" .= object [Key.fromText (renderHashAlg (hashAlg digest)) .= hashValue digest | digest <- artHashes artifact], "size" .= artSize artifact, "requires-python" .= (">=3.8" :: Text), "yanked" .= False, "note" .= note]
-                        <> ["core-metadata" .= True | isJust (artCoreMetadata artifact)]
+                        <> ["core-metadata" .= case declaration of MetadataAvailable available -> toJSON available; MetadataDigests values -> toJSON values | declaration <- maybeToList (artCoreMetadata artifact)]
                     )
               )
             | artifact <- toList artifacts

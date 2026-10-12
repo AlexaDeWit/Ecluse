@@ -28,6 +28,11 @@ spec = describe "canonical load contract" $ do
                     shortened = fixture{fixtureScenarios = filter ((/= name) . Just . scenarioName) (fixtureScenarios fixture)}
                     providers = shortened : filter ((/= fixtureEcosystem fixture) . fixtureEcosystem) fixtures
                 checkFixtureCoverage providers `shouldSatisfy` isLeft
+    it "requires every managed PyPI read comparison even when the provider omits it" $
+        for_ [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision] $ \law -> do
+            let selected = loadScenarioName PyPI law
+                shortened = filter ((/= selected) . Just) (names pypiFixture)
+            loadCoverageGaps ReadLoadFoundation PyPI shortened `shouldSatisfy` (not . null)
     it "preserves the npm complete load sequence" $
         loadCoverageGaps FullLoad Npm (names npmFixture) `shouldBe` []
     it "names the missing PyPI worker measurement without hiding its read measurements" $ do

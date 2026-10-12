@@ -17,10 +17,13 @@ benchmarks = do
     void (readManagedProject warm)
     pure $
         bgroup
-            "managed mirror read: 1000 versions, three files per version"
-            [ bench "cold record and listing" (whnfIO (newReadSession fixture >>= render))
-            , bench "warm conditional 304 and listing" (whnfIO (render warm))
-            , bench "cold listing then changed revision adding a file" (whnfIO (changed fixture))
+            "ecosystem: pypi"
+            [ bgroup
+                "managed mirror read: 1000 versions, three files per version"
+                [ bench "cold record and listing" (whnfIO (newReadSession fixture >>= render))
+                , bench "warm conditional 304 and listing" (whnfIO (render warm))
+                , bench "cold listing then changed revision adding a file" (whnfIO (changed fixture))
+                ]
             ]
   where
     render session = BS.length . readBody <$> readManagedProject session

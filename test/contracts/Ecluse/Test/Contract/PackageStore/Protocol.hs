@@ -23,8 +23,9 @@ import Data.Text.Encoding qualified as TE
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, Status, status200, status201, status400, status401, status404, status409, status503)
 
+import Ecluse.Core.Credential (bareCredential)
 import Ecluse.Core.Package (Artifact (..), HashAlg (SRI), PackageDetails (pkgArtifacts), PackageName, hashAlg, hashValue, renderPackageName)
-import Ecluse.Core.Registry (MirrorArtifact (..), RegistryResponse (..))
+import Ecluse.Core.Registry (RegistryResponse (..))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Exchange (boundedFetch, singleAttemptSettings)
@@ -44,9 +45,11 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Maintenance (testDeleteGuard)
-import Ecluse.Test.Package (npmVersion, sriSha512Of, unsafeFilename, unsafeSriHashes, unscopedNpm)
+import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
+import Ecluse.Test.Registry.Publish (publishOnlyFile)
 import Ecluse.Test.Stub (Captured (..), headerValue, stubBaseUrl, withRoutedStubIO)
 
 -- | The control-plane oracle sees only state accepted from decoded npm wire requests.
@@ -87,7 +90,7 @@ withNpmSession maintenance use = do
         let reopen = do
                 manager <- newManager (singleAttemptSettings defaultManagerSettings)
                 let origin = writeTokenNpmConfig (loopbackRegistryUrl (stubBaseUrl stub)) manager defaultLimits
-                    publisher = newMirrorPublish (MirrorTransport manager (pure (Just mirrorWriteToken)) defaultLimits) (ocBaseUrl origin) npmPublishCodec
+                    publisher = newMirrorPublish (MirrorTransport manager (pure (Just (bareCredential mirrorWriteToken))) defaultLimits passthroughTracingPort) (ocBaseUrl origin) (ocBaseUrl origin) npmPublishCodec
                 store <- maintenance origin boundary
                 pure (operations origin publisher store)
         initial <- reopen
@@ -147,11 +150,12 @@ readArtifact origin artifact = case artifactRequestByUrl (ocToken origin) (artUr
 
 writeRelease :: MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
 writeRelease publisher release' = case toList (psrArtifacts release') of
-    [artifact] ->
-        first show <$> mpPublishArtifact publisher packageName plan descriptor (psaBytes artifact)
+    [artifact] -> case first show (projectNpmVersion defaultLimits packageName version body) >>= maybeToRight "missing fixture release" . vrVersion of
+        Left fault -> pure (Left fault)
+        Right document -> first show <$> publishOnlyFile publisher document (PublishPlan version) (psaBytes artifact)
       where
-        plan = PublishPlan (npmVersion (psrVersion release')) (npmVersion (psrVersion release')) (fst npmCached (versionDocument "" release' artifact))
-        descriptor = MirrorArtifact (unsafeFilename (psaFilename artifact)) (unsafeSriHashes (psaDigest artifact)) Nothing
+        version = npmVersion (psrVersion release')
+        body = toStrict (encode (object ["name" .= packageText, "versions" .= object [Key.fromText (psrVersion release') .= versionDocument "" release' artifact]]))
     _ -> pure (Left "the shipped npm writer accepts one tarball per version")
 
 protocolMaintenance :: OriginClient -> NpmStoreBoundary -> IO StoreMaintenance

@@ -148,6 +148,8 @@ metadataFetchLaws =
     , "empty-url-fault"
     , "transport-fault"
     , "no-redirect"
+    , "selected-worker-charge"
+    , "selected-worker-refusal"
     , "held-parity"
     , "held-byte-bound"
     , "held-malformed"
