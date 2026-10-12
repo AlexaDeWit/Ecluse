@@ -7,10 +7,9 @@
 module Ecluse.Core.Registry.PyPI.Archive.Tar (TarDecode, extractTar) where
 
 import Codec.Archive.Tar qualified as Tar
-import Codec.Archive.Tar.Entry qualified as Tar
 import Conduit
 import Control.Monad (foldM)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (throwError)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -70,7 +69,7 @@ boundInflated limits = go 0
                 go next
 
 walkTar :: Limits -> PackageName -> Version -> Maybe Text -> TarState -> ConduitT ByteString o TarDecode TarState
-walkTar limits package version target state = do
+walkTar limits package version target tarState = do
     header <- takeBytes 512
     when (BS.length header /= 512) (refuse "tar archive has no complete trailer")
     if BS.all (== 0) header
@@ -78,15 +77,15 @@ walkTar limits package version target state = do
             trailer <- takeBytes 512
             unless (BS.length trailer == 512 && BS.all (== 0) trailer) (refuse "invalid tar trailer")
             awaitForever $ \chunk -> unless (BS.all (== 0) chunk) (refuse "tar archive has trailing nonzero bytes")
-            when (tsPending state) (refuse "orphan extended tar header")
-            pure state
+            when (tsPending tarState) (refuse "orphan extended tar header")
+            pure tarState
         else do
-            when (tsCount state >= maxArtifactCount limits) (refuse "archive entry count exceeds its bound")
+            when (tsCount tarState >= maxArtifactCount limits) (refuse "archive entry count exceeds its bound")
             entry <- checked (readHeader header)
             next <- case Tar.entryContent entry of
-                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits code size state
-                content -> ordinaryEntry limits package version target header content state
-            walkTar limits package version target next{tsCount = tsCount state + 1}
+                Tar.OtherEntryType code _ size | code `elem` ['x', 'g', 'L', 'K'] -> extendedEntry limits code size tarState
+                content -> ordinaryEntry limits package version target header content tarState
+            walkTar limits package version target next{tsCount = tsCount tarState + 1}
 
 readHeader :: ByteString -> Either ParseError Tar.Entry
 readHeader header = case Tar.read (BSL.fromStrict header) of
@@ -126,7 +125,7 @@ padding :: Integer -> Integer
 padding size = (512 - size `mod` 512) `mod` 512
 
 extendedEntry :: Limits -> Char -> Int64 -> TarState -> ConduitT ByteString o TarDecode TarState
-extendedEntry limits code rawSize state = do
+extendedEntry limits code rawSize tarState = do
     let size = toInteger rawSize
     payload <- readPayload (min 16384 (maxMetadataBytes limits)) size
     skipPayload (padding size)
@@ -138,38 +137,38 @@ extendedEntry limits code rawSize state = do
                     let value = BS.takeWhile (/= 0) payload
                     pure (Map.singleton (if code == 'L' then "path" else "linkpath") value)
     if code == 'g'
-        then pure state{tsGlobal = Map.filter (not . BS.null) (Map.union values (tsGlobal state))}
+        then pure tarState{tsGlobal = Map.filter (not . BS.null) (Map.union values (tsGlobal tarState))}
         else do
-            unless (Map.null (Map.intersection values (tsLocal state))) (refuse "ambiguous extended tar headers")
-            pure state{tsLocal = Map.union values (tsLocal state), tsPending = True}
+            unless (Map.null (Map.intersection values (tsLocal tarState))) (refuse "ambiguous extended tar headers")
+            pure tarState{tsLocal = Map.union values (tsLocal tarState), tsPending = True}
 
 ordinaryEntry :: Limits -> PackageName -> Version -> Maybe Text -> ByteString -> Tar.EntryContent -> TarState -> ConduitT ByteString o TarDecode TarState
-ordinaryEntry limits package version target header content state = do
-    let attrs = Map.filter (not . BS.null) (Map.union (tsLocal state) (tsGlobal state))
+ordinaryEntry limits package version target header content tarState = do
+    let attrs = Map.filter (not . BS.null) (Map.union (tsLocal tarState) (tsGlobal tarState))
     path <- checked (utf8 (Map.findWithDefault (headerPath header) "path" attrs))
     parts <- checked (checkPath path)
     when (length parts > maxNestingDepth limits) (refuse "tar path depth exceeds its bound")
     let canonical = T.copy (T.intercalate "/" parts)
     selected <- checked (metadataPath package version Sdist parts)
-    when (Map.member canonical (tsMembers state)) (refuse "duplicate archive entry")
-    when (selected && isJust (tsMetadata state)) (refuse "ambiguous archive Core Metadata")
+    when (Map.member canonical (tsMembers tarState)) (refuse "duplicate archive entry")
+    when (selected && isJust (tsMetadata tarState)) (refuse "ambiguous archive Core Metadata")
     member <- checked (memberOf canonical attrs header content)
     size <- checked (payloadSize attrs header content)
     when (size > toInteger (maxMirrorArtifactBytes limits)) (refuse "tar entry size exceeds its bound")
     let charge = BS.length (TE.encodeUtf8 canonical) + 192 + case member of Link link -> BS.length (TE.encodeUtf8 link); _ -> 0
-    when (charge > maxMetadataBytes limits - tsCharge state) (refuse "archive path inventory exceeds its bound")
+    when (charge > maxMetadataBytes limits - tsCharge tarState) (refuse "archive path inventory exceeds its bound")
     captured <- case member of
         Regular | maybe selected (== canonical) target -> Just . BS.copy <$> readPayload (maxMetadataBytes limits) size
         _ -> Nothing <$ skipPayload size
     skipPayload (padding size)
     pure
-        state
-            { tsCharge = tsCharge state + charge
-            , tsMembers = Map.insert canonical member (tsMembers state)
+        tarState
+            { tsCharge = tsCharge tarState + charge
+            , tsMembers = Map.insert canonical member (tsMembers tarState)
             , tsLocal = Map.empty
             , tsPending = False
-            , tsMetadata = if selected then Just canonical else tsMetadata state
-            , tsCaptured = captured <|> tsCaptured state
+            , tsMetadata = if selected then Just canonical else tsMetadata tarState
+            , tsCaptured = captured <|> tsCaptured tarState
             }
 
 memberOf :: Text -> Map ByteString ByteString -> ByteString -> Tar.EntryContent -> Either ParseError Member
@@ -248,18 +247,18 @@ decimal bytes
     | otherwise = Right (BS.foldl' (\n c -> n * 10 + fromIntegral c - 48) 0 bytes)
 
 resolveMetadata :: Limits -> TarState -> Either ParseError (Either ByteString Text)
-resolveMetadata limits state = do
-    for_ (Map.toList (tsMembers state)) $ \(path, member) -> do
-        for_ (prefixes path) $ \prefix -> case Map.lookup prefix (tsMembers state) of
+resolveMetadata limits tarState = do
+    for_ (Map.toList (tsMembers tarState)) $ \(path, member) -> do
+        for_ (prefixes path) $ \prefix -> case Map.lookup prefix (tsMembers tarState) of
             Just Link{} -> bad "archive member traverses a link"
             _ -> Right ()
         case member of
-            Link _ -> void (resolveMember limits (tsMembers state) Set.empty path)
+            Link _ -> void (resolveMember limits (tsMembers tarState) Set.empty path)
             _ -> Right ()
-    path <- maybe (bad "archive has no Core Metadata") Right (tsMetadata state)
-    target <- resolveMember limits (tsMembers state) Set.empty path
-    case Map.lookup target (tsMembers state) of
-        Just Regular -> pure (maybe (Right target) Left (tsCaptured state))
+    path <- maybe (bad "archive has no Core Metadata") Right (tsMetadata tarState)
+    target <- resolveMember limits (tsMembers tarState) Set.empty path
+    case Map.lookup target (tsMembers tarState) of
+        Just Regular -> pure (maybe (Right target) Left (tsCaptured tarState))
         _ -> bad "Core Metadata link does not name a regular file"
 
 resolveMember :: Limits -> Map Text Member -> Set Text -> Text -> Either ParseError Text

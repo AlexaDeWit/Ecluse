@@ -203,7 +203,7 @@ validateReadData details = \case
             refused "the source coordinates do not match the complete admitted entry set"
         case KeyMap.lookup "name" (simpleEnvelope document) of
             Nothing -> Right ()
-            Just (String name) | projectName name == Just (pkgName details) -> Right ()
+            Just (String name) | projectName name == Right (pkgName details) -> Right ()
             _ -> refused "the source envelope belongs to another package"
         traverse_ (validatePyPIEntry details entries) (pkgArtifacts details)
 
