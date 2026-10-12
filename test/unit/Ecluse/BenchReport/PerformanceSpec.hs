@@ -51,6 +51,8 @@ spec = do
         it "selects a subject without hiding unexpected rows" $
             npObservations (prNative (makePerformanceReceipt request Map.empty native))
                 `shouldBe` [PerformanceObservation "npm/unexpected/full" NativePassed]
+        it "cannot supply native floor enforcement from wrapper declarations" $
+            Map.lookup "floorEnforcement" (npConditions (prNative (makePerformanceReceipt request{requestRecordedConditions = Map.fromList [("floorEnforcement", "held"), ("floorEnforcementReasons", "")]} Map.empty native))) `shouldBe` Nothing
         it "keeps conditions observed by the harness ahead of wrapper declarations" $
             npConditions (prNative (makePerformanceReceipt request{requestRecordedConditions = Map.singleton "passes" "1"} Map.empty native)) `shouldBe` Map.singleton "passes" "5"
 

@@ -114,6 +114,11 @@ auditPerformanceReceipts expected attempt obligations receipts =
             <> ["performance identity mismatch: " <> receiptKey receipt | prIdentity receipt /= expected]
             <> ["performance attempt mismatch: " <> receiptKey receipt | prAttempt receipt /= attempt]
             <> ["native performance did not pass: " <> receiptKey receipt | npOutcome (prNative receipt) /= NativePassed]
+            <> [ "load floors were not held: " <> receiptKey receipt
+               | prKind receipt `elem` ["load", "load-foundation"]
+               , let conditions = npConditions (prNative receipt)
+               , Map.lookup "floorEnforcement" conditions /= Just "held" || Map.lookup "floorEnforcementReasons" conditions /= Just ""
+               ]
             <> ["performance artifacts missing: " <> receiptKey receipt | Map.null (prArtifacts receipt)]
             <> ["invalid performance artifact digest: " <> toText path | (path, value) <- Map.toList (prArtifacts receipt), null path || T.length value /= 64 || not (T.all isHexDigit value)]
             <> concatMap (observationsProblems receipt) (filter ((== receiptKey receipt) . obligationKey) obligations)

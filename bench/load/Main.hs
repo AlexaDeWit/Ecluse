@@ -9,7 +9,7 @@ then fails the run if any invariant broke.
 -}
 module Main (main) where
 
-import Data.Aeson (eitherDecode, encode, object, (.=))
+import Data.Aeson (eitherDecode, encode)
 import Data.ByteString.Lazy.Char8 qualified as LBSC
 import Data.Char (toLower)
 import Data.Map.Strict qualified as Map
@@ -23,6 +23,7 @@ import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProc
 import UnliftIO (bracket_)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Evidence (loadEvidence)
 import Ecluse.BenchLoad.Floors (
     Enforcement (NotHeld),
     FloorKey,
@@ -31,9 +32,7 @@ import Ecluse.BenchLoad.Floors (
     RunFacts (..),
     Unheld (ThrashProbe),
     enforce,
-    floorCheck,
     loadFloors,
-    passKey,
     patternOverridesIn,
     runnerIn,
     triggerIn,
@@ -58,7 +57,7 @@ import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
-import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict, runViolations)
+import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
@@ -158,19 +157,7 @@ writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, E
 writeLoadObservations conditions enforcement violations outcomes =
     lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode native <> "\n"))
   where
-    native =
-        object
-            [ "outcome" .= verdict (null violations)
-            , "conditions" .= conditions
-            , "observations"
-                .= [ object
-                        [ "id" .= (scenario <> "/" <> passKey whichPass)
-                        , "outcome" .= verdict (either (const False) (null . runViolations (floorCheck enforcement key)) result)
-                        ]
-                   | (key@(scenario, whichPass), result) <- outcomes
-                   ]
-            ]
-    verdict passed = if passed then ("passed" :: Text) else "failed"
+    native = loadEvidence conditions enforcement violations outcomes
 
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
 fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))

@@ -109,7 +109,8 @@ makePerformanceReceipt request artifacts native =
     PerformanceReceipt 1 (requestIdentity request) (requestAttempt request) (poKind obligation) (poSubject obligation) selected artifacts
   where
     obligation = requestObligation request
-    selected = subjectObservations obligation native{npOutcome = combined, npConditions = Map.union (npConditions native) (requestRecordedConditions request)}
+    selected = subjectObservations obligation native{npOutcome = combined, npConditions = Map.union (npConditions native) wrapperConditions}
+    wrapperConditions = foldr Map.delete (requestRecordedConditions request) ["floorEnforcement", "floorEnforcementReasons"]
     combined
         | requestOutcome request == NativeFailed || npOutcome native == NativeFailed = NativeFailed
         | requestOutcome request == NativeUnavailable || npOutcome native == NativeUnavailable = NativeUnavailable
