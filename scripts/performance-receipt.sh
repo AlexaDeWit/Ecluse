@@ -60,19 +60,51 @@ diagnostic() {
   jq -n --arg reason "$reason" --arg source "$source_revision" --arg run "$run_id" \
     --arg attempt "$attempt" --arg architecture "$architecture" --arg pod "${BENCH_LOAD_POD:-}" \
     --arg selected "${BENCH_LOAD_SCENARIOS:-}" --arg outcome "$outcome" \
+    --arg enforcement "${floor_status:-}" --arg enforcementReasons "${floor_reasons:-}" \
     --arg report "$report_digest" --arg nativeDigest "$native_digest" \
-    '{scope:"diagnostic-only",reason:$reason,source:$source,runId:$run,attempt:$attempt,architecture:$architecture,podShape:$pod,selectedScenarios:$selected,nativeOutcome:$outcome,reportDigest:$report,nativeDigest:$nativeDigest}' \
+    '{scope:"diagnostic-only",reason:$reason,source:$source,runId:$run,attempt:$attempt,architecture:$architecture,podShape:$pod,selectedScenarios:$selected,nativeOutcome:$outcome,floorEnforcement:$enforcement,floorEnforcementReasons:$enforcementReasons,reportDigest:$report,nativeDigest:$nativeDigest}' \
     > "$root/diagnostic.json"
   echo "performance receipt: $reason is diagnostic only; no full receipt" >&2
 }
 
 selected_scenarios="${BENCH_LOAD_SCENARIOS:-}"
 selected_nonspace="${selected_scenarios//[[:space:]]/}"
+floor_status=''
+floor_reasons=''
+floor_reasons_present=false
+if [ "$kind" = load-foundation ] && [ -s "$native" ]; then
+  jq -e 'type == "object"' "$native" >/dev/null
+  floor_status="$(jq -r '.conditions.floorEnforcement // "missing"' "$native")"
+  floor_reasons="$(jq -r '.conditions.floorEnforcementReasons // ""' "$native")"
+  floor_reasons_present="$(jq -r '.conditions | if type == "object" then has("floorEnforcementReasons") else false end' "$native")"
+fi
 if [ "$kind" = load-foundation ] && { [ -n "$selected_nonspace" ] || [ -n "${BENCH_LOAD_THRASH_LIMITS_MIB:-}" ]; }; then
   reason='selected scenarios'
   [ -z "${BENCH_LOAD_THRASH_LIMITS_MIB:-}" ] || reason='GC-thrash probe'
   diagnostic "$reason" bench-load-results.md
   exit 0
+fi
+if [ "$kind" = load-foundation ] && [ -s "$native" ]; then
+  case "$floor_status" in
+    held)
+      if [ "$floor_reasons_present" != true ]; then
+        diagnostic 'load floor enforcement reasons missing' bench-load-results.md
+        exit 0
+      fi
+      if [ -n "$floor_reasons" ]; then
+        diagnostic 'contradictory load floor enforcement' bench-load-results.md
+        exit 0
+      fi
+      ;;
+    not-held)
+      diagnostic 'load floors not held' bench-load-results.md
+      exit 0
+      ;;
+    *)
+      diagnostic 'load floor enforcement missing' bench-load-results.md
+      exit 0
+      ;;
+  esac
 fi
 if [ "$kind" = live-allocation ] && [ -s "$native" ] && jq -e '.outcome == "unavailable"' "$native" >/dev/null; then
   diagnostic 'live upstream unavailable' perf-acceptance-report.md

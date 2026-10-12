@@ -910,6 +910,10 @@ This postprocess step does not change the measured workload, sampling or verdict
 A selected load dispatch and the GC-thrash probe write diagnostic-only records.
 They keep their native verdicts but make no full read-load completion claim.
 Live upstream unavailability also writes a diagnostic-only record and keeps the live workflow's warning verdict.
+A complete load receipt requires the native run to hold its calibrated success floors.
+The native record names every reason when the floors are not held.
+An unheld or missing enforcement status makes diagnostic-only evidence while preserving the harness verdict.
+Benchmark and load workflows stay outside the main CI graph and the functional subject jobs.
 
 Read a red result according to its measurement:
 

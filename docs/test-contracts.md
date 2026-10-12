@@ -88,9 +88,10 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 | public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
+| artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
 | conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, matching nonempty ETag, exact Content-Length, GET and HEAD 304 with empty bodies |
 
-Seven native duplicate example bodies are removed. Eighteen shared serving examples run.
+Seven native duplicate example bodies are removed. Twenty shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
 Native PyPI media type, multi-file identity, exact mount-local URLs, sidecar-key removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.
@@ -206,9 +207,12 @@ The allocation, live acceptance, benchmark and regular load workflows produce pe
 performance receipts after native measurement. Each receipt binds actual observations and
 their outcomes to independent requirements, recorded conditions, run identity and artifact hashes.
 The allocation receipts gate inside `ci.yml`. The timed workflows retain their current cadence.
+Benchmark and load workflows stay outside the main CI gate and the functional subject jobs.
 Selected load runs and the GC-thrash probe write diagnostic-only records.
 They remain usable without claiming the missing full read-load rows.
 Live upstream unavailability also records a diagnostic result without a completion claim.
+The load receipt requires native `floorEnforcement` to be `held` with no reasons.
+An unheld or missing status produces diagnostic-only evidence and keeps the native verdict.
 
 ## Supported and deferred profiles
 

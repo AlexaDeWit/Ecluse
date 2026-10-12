@@ -88,11 +88,30 @@ jq -e '.scope == "diagnostic-only" and .reason == "live upstream unavailable"' "
 mkdir -p "$work/bench/load"
 printf '{}\n' > "$work/bench/load/floors.json"
 printf 'native load report\n' > "$work/bench-load-results.md"
-printf '{"outcome":"passed","observations":[],"conditions":{}}\n' > "$work/load-observations.json"
+printf '{"outcome":"passed","observations":[],"conditions":{"floorEnforcement":"held","floorEnforcementReasons":""}}\n' > "$work/load-observations.json"
 BENCH_LOAD_POD=2cpu-1gib BENCH_LOAD_DURATION_SECONDS=30 BENCH_LOAD_CONCURRENCY=100 \
   BENCH_LOAD_SERVE_MAX_IN_FLIGHT='' BENCH_LOAD_ISOLATE_OHA=1 PERF_ARTIFACT_DIR="$work/load-receipts" \
   bash scripts/performance-receipt.sh load-foundation
 jq -e '.requestRecordedConditions.podShape == "2cpu-1gib" and .requestRecordedConditions.serveMaxInFlight == "automatic" and .requestRecordedConditions.affinity == "taskset -c 0 oha"' "$work/load-receipts/ecosystem-npm/request.json" >/dev/null
+printf '{"outcome":"passed","observations":[],"conditions":{}}\n' > "$work/load-observations.json"
+BENCH_LOAD_POD=2cpu-1gib PERF_ARTIFACT_DIR="$work/load-receipts" \
+  bash scripts/performance-receipt.sh load-foundation
+jq -e '.scope == "diagnostic-only" and .reason == "load floor enforcement missing"' "$work/load-receipts/diagnostic.json" >/dev/null
+[ ! -e "$work/load-receipts/ecosystem-npm/receipt.json" ]
+printf '{"outcome":"passed","observations":[],"conditions":{"floorEnforcement":"not-held","floorEnforcementReasons":"ChangedDuration, WrongRunner"}}\n' > "$work/load-observations.json"
+BENCH_LOAD_POD=2cpu-1gib PERF_ARTIFACT_DIR="$work/load-receipts" \
+  bash scripts/performance-receipt.sh load-foundation
+jq -e '.scope == "diagnostic-only" and .reason == "load floors not held" and .floorEnforcementReasons == "ChangedDuration, WrongRunner" and .nativeOutcome == "passed"' "$work/load-receipts/diagnostic.json" >/dev/null
+[ ! -e "$work/load-receipts/ecosystem-pypi/receipt.json" ]
+printf '{"outcome":"passed","observations":[],"conditions":{"floorEnforcement":"held"}}\n' > "$work/load-observations.json"
+BENCH_LOAD_POD=2cpu-1gib PERF_ARTIFACT_DIR="$work/load-receipts" \
+  bash scripts/performance-receipt.sh load-foundation
+jq -e '.scope == "diagnostic-only" and .reason == "load floor enforcement reasons missing"' "$work/load-receipts/diagnostic.json" >/dev/null
+printf '{"outcome":"passed","observations":[],"conditions":{"floorEnforcement":"held","floorEnforcementReasons":"WrongRunner"}}\n' > "$work/load-observations.json"
+BENCH_LOAD_POD=2cpu-1gib PERF_ARTIFACT_DIR="$work/load-receipts" \
+  bash scripts/performance-receipt.sh load-foundation
+jq -e '.scope == "diagnostic-only" and .reason == "contradictory load floor enforcement"' "$work/load-receipts/diagnostic.json" >/dev/null
+printf '{"outcome":"passed","observations":[],"conditions":{"floorEnforcement":"held","floorEnforcementReasons":""}}\n' > "$work/load-observations.json"
 BENCH_LOAD_POD=2cpu-1gib BENCH_LOAD_SCENARIOS='npm/merge-cold' \
   PERF_ARTIFACT_DIR="$work/load-receipts" bash scripts/performance-receipt.sh load-foundation
 jq -e '.scope == "diagnostic-only" and .reason == "selected scenarios" and .selectedScenarios == "npm/merge-cold"' "$work/load-receipts/diagnostic.json" >/dev/null
