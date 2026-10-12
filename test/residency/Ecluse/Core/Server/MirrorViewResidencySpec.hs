@@ -34,7 +34,7 @@ import Ecluse.Core.Server.Cache.Types (Source (Source), fullKey)
 import Ecluse.Core.Server.MirrorView (mirrorRetentionWeight)
 import Ecluse.Test.Mirror.Read
 import Ecluse.Test.Mirror.State (mirrorPackage)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
 import Ecluse.Test.Support (expectRight)
 
 -- | Absolute counters preserve the distinction between allocation and live heap.
@@ -121,13 +121,14 @@ checkResult versions files result = do
     readUnmanagedVersions result `shouldBe` 1
     readPendingVersions result `shouldBe` 0
     readUnmanagedPreserved result `shouldBe` True
-    (info, document) <- expectRight (projectPyPIIndex readLimits mirrorPackage (readBody result))
+    (info, _) <- expectRight (projectPyPIIndex readLimits mirrorPackage (readBody result))
     Map.size (infoVersions info) `shouldBe` versions + 1
     sum (map (length . pkgArtifacts) (Map.elems (infoVersions info))) `shouldBe` files
-    let entries = [fields | (_, Object fields) <- simpleFiles document]
-    length [() | fields <- entries, KeyMap.lookup "note" fields == Just (String "retained source fields")] `shouldBe` files - 3
+    wire <- expectRight (eitherDecodeStrict (readBody result))
+    let entries = [fields | (_, Object fields) <- simpleFiles (documentFromValue wire)]
+    length [() | fields <- entries, KeyMap.lookup "requires-python" fields == Just (String ">=3.8")] `shouldBe` files - 3
     length [() | fields <- entries, KeyMap.lookup "upload-time" fields == Just (String "2020-01-01T00:00:00Z")] `shouldBe` files - 3
-    length [() | fields <- entries, KeyMap.lookup "note" fields == Just (String "native fields")] `shouldBe` 3
+    length [() | fields <- entries, KeyMap.lookup "requires-python" fields == Just (String ">=3.9")] `shouldBe` 3
 
 checkMeasurement :: Measurement -> Expectation
 checkMeasurement measured = do

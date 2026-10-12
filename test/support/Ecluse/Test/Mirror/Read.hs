@@ -133,7 +133,7 @@ inventory version file = do
 
 nativeFields :: MirrorInventory -> [Value]
 nativeFields value = case mirrorSource (pkgArtifacts (inventoryDetails value)) "native fields" of
-    PyPIMirrorRead document -> [Object (KeyMap.insert "url" (String (T.replace "https://source.test/" "https://private.test/" url)) fields) | (_, Object fields) <- simpleFiles document, Just (String url) <- [KeyMap.lookup "url" fields]]
+    PyPIMirrorRead document -> [Object (KeyMap.insert "requires-python" (String ">=3.9") (KeyMap.insert "url" (String (T.replace "https://source.test/" "https://private.test/" url)) fields)) | (_, Object fields) <- simpleFiles document, Just (String url) <- [KeyMap.lookup "url" fields]]
     _ -> []
 
 -- | Persist preparation outside the measured child process.
