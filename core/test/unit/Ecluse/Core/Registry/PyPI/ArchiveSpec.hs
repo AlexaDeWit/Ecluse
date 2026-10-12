@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE PackageImports #-}
 
 -- | Native archive fixtures exercise complete traversal and bounded metadata extraction.
 module Ecluse.Core.Registry.PyPI.ArchiveSpec (spec) where
@@ -10,13 +11,13 @@ import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.GZip qualified as GZip
-import Codec.Compression.Lzma qualified as Lzma
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 import UnliftIO.Async (waitCatch, withAsync)
 import UnliftIO.Exception (throwIO)
+import "lzma" Codec.Compression.Lzma qualified as Lzma
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (mkPackageName)

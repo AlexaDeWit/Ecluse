@@ -1,7 +1,7 @@
 cabal-version:      2.2
 name:               ecluse-lzma-managed
 version:            0.0.1.1
-synopsis:           LZMA/XZ compression and decompression
+synopsis:           Scoped LZMA/XZ decoding for Ecluse archives
 homepage:           https://github.com/hvr/lzma
 bug-reports:        https://github.com/hvr/lzma/issues
 license:            BSD-3-Clause
@@ -24,22 +24,9 @@ tested-with:
    || ==9.10.1
 
 description:
-  This package provides a pure interface for compressing and
-  decompressing
-  <https://en.wikipedia.org/wiki/LZMA LZMA (Lempel-Ziv-Markov chain algorithm)>
-  streams of data represented as lazy @ByteString@s. A
-  monadic incremental interface is provided as well. This package
-  relies on the <http://tukaani.org/xz/ liblzma C library>.
-  .
-  The following packages are based on this package and provide
-  API support for popular streaming frameworks:
-  .
-  * </package/lzma-streams lzma-streams> (for </package/io-streams io-streams>)
-  .
-  * </package/pipes-lzma pipes-lzma> (for </package/pipes pipes>)
-  .
-  * </package/lzma-conduit lzma-conduit> (for </package/conduit conduit>)
-  .
+  Private decoder fork of lzma 0.0.1.1 with callback-scoped native state.
+  The incremental IO decoder uses the upstream liblzma bindings.
+  Compression and lazy convenience APIs are omitted.
 
 extra-source-files: README.md upstream.freeze
 
@@ -55,7 +42,6 @@ source-repository head
 library
   default-language: Haskell2010
   other-extensions:
-    BangPatterns
     DeriveDataTypeable
     RecordWildCards
 

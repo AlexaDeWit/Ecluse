@@ -1190,7 +1190,7 @@ test-suite ecluse-core-unit
   build-depends:
     , tar ^>=0.6.4
     , bzlib ^>=0.5
-    , ecluse-lzma-managed ^>=0.0.1
+    , lzma ==0.0.1.1
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , ecluse:ecluse-test-contracts
@@ -1614,6 +1614,7 @@ test-suite ecluse-residency
     , directory ^>=1.3
     , filepath ^>=1.4 || ^>=1.5
     , ecluse-lzma-managed ^>=0.0.1
+    , lzma ==0.0.1.1
     , temporary ^>=1.3
     , zlib ^>=0.7
     , bytestring        ^>=0.12

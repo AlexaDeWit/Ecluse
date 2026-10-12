@@ -2,16 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE PackageImports #-}
 
 -- | Managed LZMA decoding retains its dictionary charge through early consumer exits.
 module Ecluse.Core.Registry.PyPI.Archive.LzmaSpec (spec) where
 
-import Codec.Compression.Lzma qualified as Lzma
 import Conduit
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
+import "lzma" Codec.Compression.Lzma qualified as Lzma
 
 import Ecluse.Core.Registry.PyPI.Archive.Lzma
 

@@ -12,23 +12,16 @@
 module LibLzma
     ( LzmaStream
     , LzmaRet(..)
-    , IntegrityCheck(..)
-    , CompressionLevel(..)
 
     , newDecodeLzmaStream
     , DecompressParams(..)
     , defaultDecompressParams
-
-    , newEncodeLzmaStream
-    , CompressParams(..)
-    , defaultCompressParams
 
     , runLzmaStream
     , endLzmaStream
     , LzmaAction(..)
     ) where
 
-import           Control.Applicative
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.ST.Strict (ST)
@@ -75,47 +68,6 @@ toLzmaRet i = case i of
     (#const LZMA_PROG_ERROR       ) -> Just LzmaRetProgError
     _                               -> Nothing
 
--- | Integrity check type (only supported when compressing @.xz@ files)
-data IntegrityCheck = IntegrityCheckNone   -- ^ disable integrity check (not recommended)
-                    | IntegrityCheckCrc32  -- ^ CRC32 using the polynomial from IEEE-802.3
-                    | IntegrityCheckCrc64  -- ^ CRC64 using the polynomial from ECMA-182
-                    | IntegrityCheckSha256 -- ^ SHA-256
-                    deriving (Eq,Ord,Read,Show,Typeable)
-
-fromIntegrityCheck :: IntegrityCheck -> Int
-fromIntegrityCheck lc = case lc of
-    IntegrityCheckNone   -> #const LZMA_CHECK_NONE
-    IntegrityCheckCrc32  -> #const LZMA_CHECK_CRC32
-    IntegrityCheckCrc64  -> #const LZMA_CHECK_CRC64
-    IntegrityCheckSha256 -> #const LZMA_CHECK_SHA256
-
--- | Compression level presets that define the tradeoff between
--- computational complexity and compression ratio
---
--- 'CompressionLevel0' has the lowest compression ratio as well as the
--- lowest memory requirements, whereas 'CompressionLevel9' has the
--- highest compression ratio and can require over 600MiB during
--- compression (and over 60MiB during decompression). The
--- <https://www.freebsd.org/cgi/man.cgi?query=xz&sektion=1&manpath=FreeBSD+10.2-stable&arch=default&format=html man-page for xz(1)>
--- contains more detailed information with tables describing the
--- properties of all compression level presets.
---
--- 'CompressionLevel6' is the default setting in
--- 'defaultCompressParams' as it provides a good trade-off and
--- matches the default of the @xz(1)@ tool.
-
-data CompressionLevel = CompressionLevel0
-                      | CompressionLevel1
-                      | CompressionLevel2
-                      | CompressionLevel3
-                      | CompressionLevel4
-                      | CompressionLevel5
-                      | CompressionLevel6
-                      | CompressionLevel7
-                      | CompressionLevel8
-                      | CompressionLevel9
-                      deriving (Eq,Ord,Read,Show,Enum,Typeable)
-
 -- | Set of parameters for decompression. The defaults are
 -- 'defaultDecompressParams'.
 data DecompressParams = DecompressParams
@@ -127,9 +79,7 @@ data DecompressParams = DecompressParams
     , decompressMemLimit             :: !Word64 -- ^ 'DecompressParams' field: decompressor memory limit. Set to 'maxBound' to disable memory limit.
     } deriving (Eq,Show)
 
--- | The default set of parameters for decompression. This is
--- typically used with the 'decompressWith' function with specific
--- parameters overridden.
+-- | Default decoder flags and an unlimited native memory allowance.
 defaultDecompressParams :: DecompressParams
 defaultDecompressParams = DecompressParams {..}
   where
@@ -139,29 +89,6 @@ defaultDecompressParams = DecompressParams {..}
     decompressConcatenated         = True
     decompressAutoDecoder          = False
     decompressMemLimit             = maxBound -- disables limit-check
-
--- | Set of parameters for compression. The defaults are 'defaultCompressParams'.
-data CompressParams = CompressParams
-    { compressIntegrityCheck :: !IntegrityCheck -- ^ 'CompressParams' field: Specify type of integrity check
-    , compressLevel          :: !CompressionLevel -- ^ 'CompressParams' field: See documentation of 'CompressionLevel'
-    , compressLevelExtreme   :: !Bool  -- ^ 'CompressParams' field: Enable slower variant of the
-                                       -- 'lzmaCompLevel' preset, see @xz(1)@
-                                       -- man-page for details.
-    , compressThreads        :: !Int -- ^ Number of threads to use. It must be greater than zero.
-                                     --
-                                     -- @since 0.0.1.0
-    } deriving (Eq,Show)
-
--- | The default set of parameters for compression. This is typically
--- used with the 'compressWith' function with specific parameters
--- overridden.
-defaultCompressParams :: CompressParams
-defaultCompressParams = CompressParams {..}
-  where
-    compressIntegrityCheck = IntegrityCheckCrc64
-    compressLevel          = CompressionLevel6
-    compressLevelExtreme   = False
-    compressThreads        = 1
 
 newDecodeLzmaStream :: DecompressParams -> ST s (Either LzmaRet LzmaStream)
 newDecodeLzmaStream (DecompressParams {..}) = unsafeIOToST $ mask_ $ do
@@ -181,25 +108,7 @@ newDecodeLzmaStream (DecompressParams {..}) = unsafeIOToST $ mask_ $ do
         (if decompressTellAnyCheck         then (#const LZMA_TELL_ANY_CHECK)         else 0) .|.
         (if decompressConcatenated         then (#const LZMA_CONCATENATED)           else 0)
 
-newEncodeLzmaStream :: CompressParams -> ST s (Either LzmaRet LzmaStream)
-newEncodeLzmaStream (CompressParams {..}) = unsafeIOToST $ do
-    fp <- mallocForeignPtrBytes (#size lzma_stream)
-    addForeignPtrFinalizer c_hs_lzma_done_funptr fp
-    rc <- withForeignPtr fp (\ptr -> c_hs_lzma_init_encoder ptr preset check compressThreads)
-    rc' <- maybe (fail "newDecodeLzmaStream: invalid return code") pure $ toLzmaRet rc
-
-    return $ case rc' of
-        LzmaRetOK -> Right (LS fp)
-        _         -> Left rc'
-
-  where
-    preset = fromIntegral (fromEnum compressLevel) .|.
-             (if compressLevelExtreme then (#const LZMA_PRESET_EXTREME) else 0)
-    check = fromIntegrityCheck compressIntegrityCheck
-
 data LzmaAction = LzmaRun
-                | LzmaSyncFlush
-                | LzmaFullFlush
                 | LzmaFinish
                 deriving (Eq,Show)
 
@@ -223,31 +132,20 @@ runLzmaStream (LS ls) ibs action0 buflen
           unless (ibslen >= availIn && availIn >= 0) $
               fail "runLzmaStream: invalid avail_in"
           let consumed = ibslen - availIn
-          -- print ("run", action0, BS.length ibs, buflen, rc, consumed, BS.length obuf)
 
           return (rc, fromIntegral consumed, obuf)
   where
     action = case action0 of
         LzmaRun       -> #const LZMA_RUN
-        LzmaSyncFlush -> #const LZMA_SYNC_FLUSH
-        LzmaFullFlush -> #const LZMA_FULL_FLUSH
         LzmaFinish    -> #const LZMA_FINISH
 
 
--- | Force immediate finalization of 'ForeignPtr' associated with
--- 'LzmaStream'.  This triggers a call to @lzma_end()@, therefore it's
--- a programming error to call 'runLzmaStream' afterwards.
+-- | Release native decoder state immediately. Do not run the stream afterwards.
 endLzmaStream :: LzmaStream -> ST s ()
 endLzmaStream (LS ls) = unsafeIOToST $ finalizeForeignPtr ls
 
-----------------------------------------------------------------------------
--- trivial helper wrappers defined in ../cbits/lzma_wrapper.c
-
 foreign import ccall "hs_lzma_init_decoder"
     c_hs_lzma_init_decoder :: Ptr LzmaStream -> Bool -> Word64 -> Word32 -> IO Int
-
-foreign import ccall "hs_lzma_init_encoder"
-    c_hs_lzma_init_encoder :: Ptr LzmaStream -> Word32 -> Int -> Int -> IO Int
 
 foreign import ccall "hs_lzma_run"
     c_hs_lzma_run :: Ptr LzmaStream -> Int -> Ptr Word8 -> Int -> Ptr Word8 -> Int -> IO Int

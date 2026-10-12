@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE PackageImports #-}
 
 -- | Isolated archive probes compare retained heap and native cleanup with the production workspace charges.
 module Ecluse.Core.Registry.PyPI.ArchiveResidencySpec (spec, probeMain) where
 
 import Codec.Compression.BZip qualified as BZip
 import Codec.Compression.GZip qualified as GZip
-import Codec.Compression.Lzma qualified as Lzma
 import Conduit
 import Control.Concurrent.MVar qualified as MVar
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict, encode)
@@ -21,6 +21,7 @@ import GHC.Conc (getAllocationCounter)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, gcs, max_live_bytes), getRTSStats)
 import System.Directory (getFileSize)
 import System.Environment (getExecutablePath)
+import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
@@ -28,6 +29,8 @@ import Test.Hspec
 import UnliftIO.Async (AsyncCancelled (..), cancel, race_, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, evaluate, finally, throwIO, try)
 import UnliftIO.Temporary (withSystemTempDirectory)
+import "ecluse-lzma-managed" Codec.Compression.Lzma qualified as ManagedLzma
+import "lzma" Codec.Compression.Lzma qualified as Lzma
 
 import Ecluse.Core.Registry.PyPI.Archive (archiveMetadata)
 import Ecluse.Core.Registry.PyPI.Archive.BZip (withBzipChunks)
@@ -244,23 +247,27 @@ haskellControl = withoutGC $ do
         sum (map BS.length chunks) `shouldBe` 16 * 1024 * 1024
 
 withoutGC :: IO () -> IO NativeSample
-withoutGC action = do
+withoutGC action = sampleWithoutGC (action >>)
+
+-- The callback samples before retained native scopes close. The GC check includes the memory-counter reads.
+sampleWithoutGC :: (IO NativeSample -> IO NativeSample) -> IO NativeSample
+sampleWithoutGC run = do
     finiteBitSize (0 :: Int) `shouldBe` 64
     performMajorGC
     (virtualBefore, residentBefore) <- processMemory
     before <- getRTSStats
     allocationBefore <- getAllocationCounter
-    action
-    allocationAfter <- getAllocationCounter
-    (virtualAfter, residentAfter) <- processMemory
-    after <- getRTSStats
-    gcs after `shouldBe` gcs before
-    pure
-        NativeSample
-            { sampledAllocated = toInteger allocationBefore - toInteger allocationAfter
-            , sampledVirtual = virtualAfter - virtualBefore
-            , sampledResident = residentAfter - residentBefore
-            }
+    run $ do
+        allocationAfter <- getAllocationCounter
+        (virtualAfter, residentAfter) <- processMemory
+        after <- getRTSStats
+        gcs after `shouldBe` gcs before
+        pure
+            NativeSample
+                { sampledAllocated = toInteger allocationBefore - toInteger allocationAfter
+                , sampledVirtual = virtualAfter - virtualBefore
+                , sampledResident = residentAfter - residentBefore
+                }
 
 retainedProbe :: FilePath -> IO NativeMeasurement
 retainedProbe path = do
@@ -268,21 +275,22 @@ retainedProbe path = do
     replicateM_ 4 $
         void (withLzmaChunks XzArchive (const (pure ())) [bytes] (runExceptT . runConduit . (.| await)) >>= expectRight)
     control <- haskellControl
-    retained <- newIORef []
-    sampled <- withoutGC $ replicateM_ 8 $ do
-        stream <- Lzma.decompressIO Lzma.defaultDecompressParams{Lzma.decompressMemLimit = 12 * 1024 * 1024}
-        continuation <- firstOutput bytes stream
-        modifyIORef' retained (continuation :)
-    streams <- readIORef retained
-    length streams `shouldBe` 8
-    writeIORef retained []
-    pure (nativeMeasurement control sampled (8 * 12 * 1024 * 1024) (length streams))
+    outputs <- newIORef 0
+    sampled <- sampleWithoutGC (withRetained bytes outputs 8)
+    count <- readIORef outputs
+    count `shouldBe` 8
+    pure (nativeMeasurement control sampled (8 * 12 * 1024 * 1024) count)
   where
+    withRetained :: ByteString -> IORef Int -> Int -> IO NativeSample -> IO NativeSample
+    withRetained _ _ 0 sample = sample
+    withRetained bytes outputs remaining sample =
+        ManagedLzma.withDecompressIO ManagedLzma.defaultDecompressParams{ManagedLzma.decompressMemLimit = 12 * 1024 * 1024} $ \stream -> do
+            firstOutput bytes stream
+            modifyIORef' outputs (+ 1)
+            withRetained bytes outputs (remaining - 1) sample
     firstOutput input = \case
-        Lzma.DecompressInputRequired supply -> supply input >>= firstOutput BS.empty
-        Lzma.DecompressOutputAvailable output next -> do
-            output `shouldSatisfy` (not . BS.null)
-            pure next
+        ManagedLzma.DecompressInputRequired supply -> supply input >>= firstOutput BS.empty
+        ManagedLzma.DecompressOutputAvailable output _ -> output `shouldSatisfy` (not . BS.null)
         _ -> fail "retained decoder did not reach native output"
 
 processMemory :: IO (Integer, Integer)
