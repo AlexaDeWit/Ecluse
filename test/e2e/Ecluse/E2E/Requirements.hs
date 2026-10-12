@@ -44,7 +44,7 @@ obligations =
         "pypi/install"
         Supported
         ["read", "client-install"]
-        ["pypi/install/wheel", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
+        ["pypi/install/wheel", "pypi/install/metadata-companion", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
     , Obligation
         "pypi/advisories"
         "pypi/advisories"

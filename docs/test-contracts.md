@@ -94,7 +94,7 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 
 Seven native duplicate example bodies are removed. Twenty shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
-Native PyPI media type, multi-file identity, exact mount-local URLs, sidecar-key removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
+Native PyPI media type, multi-file identity, exact mount-local URLs, canonical sidecar advertisement and legacy-alias removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.
 Native OriginIntegrationSpec and TarballIntegrationSpec retain their assertions under fixed integration case IDs. All pipeline core tests remain unchanged.
 
@@ -446,7 +446,8 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 | Case ID | Original assertion |
 |---|---|
-| `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar |
+| `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash |
+| `pypi/install/metadata-companion` | resolves with a real pip request for the advertised companion, then completes the hash-checked install |
 | `pypi/install/yanked-pin` | relays the yank reason when pip installs an exact pin |
 | `pypi/install/yank-negative-control` | rejects the yank warning assertion for a release without the member |
 | `pypi/install/sdist` | serves the source distribution beside the wheel under the shipped policy |
@@ -480,10 +481,12 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 17 complete lifecycle groups and 254 unique examples.
+The integration runner registers 17 complete lifecycle groups and 292 unique examples.
 Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 231 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The other 269 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
+The PyPI additions retain exact source authority, companion integrity, credential confinement, and no-policy or mirror assertions.
+Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
 Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
 
 The pure catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
@@ -500,10 +503,10 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | Group | Native example IDs | Canonical examples | Native module |
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
-| `integration/pypi` | `native-001` to `native-021` (27) | 9 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
-| `integration/npm-metadata` | `native-001` to `native-035` (37) | 9 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
 | `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
