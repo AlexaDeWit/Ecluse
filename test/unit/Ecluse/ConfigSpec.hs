@@ -449,7 +449,7 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
         load :: [(String, String)] -> Text -> Text -> IO Config
         load sourceEnv global mount = expectConfig (pubUrlEnv <> sourceEnv) (Just (encodeUtf8 ("{\"rules\":" <> global <> ",\"mounts\":{\"pypi\":{\"rules\":" <> mount <> "}}}")))
         off = "{\"deny-known-malicious\":{\"enabled\":false}}"
-        on = "{\"deny-known-malicious\":{\"enabled\":true}}"
+        enablePatch = "{\"deny-known-malicious\":{\"enabled\":true}}"
         partial = "{\"deny-known-malicious\":{\"precedence\":310,\"onUnavailable\":\"skip\",\"appliesTo\":[\"admission\"]}}"
         expected = PrecededRule 300 AdmissionAndRevocation (DenyIfKnownMalicious FailDeny)
     it "keeps the configured and source-free effective shared policies distinct" $ do
@@ -467,9 +467,9 @@ maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
             it ("retains disable through patches " <> show (sourceEnv, global, mount)) $
                 load sourceEnv global mount >>= (\cfg -> malRules cfg `shouldBe` [])
         it ("allows an explicit mount enable after global disable " <> show sourceEnv) $
-            load sourceEnv off on >>= (\cfg -> malRules cfg `shouldBe` [expected])
+            load sourceEnv off enablePatch >>= (\cfg -> malRules cfg `shouldBe` [expected])
         it ("retains disabled knobs when explicitly re-enabled " <> show sourceEnv) $
-            load sourceEnv partial on >>= (\cfg -> malRules cfg `shouldBe` [PrecededRule 310 AdmissionOnly (DenyIfKnownMalicious FailNoDecision)])
+            load sourceEnv partial enablePatch >>= (\cfg -> malRules cfg `shouldBe` [PrecededRule 310 AdmissionOnly (DenyIfKnownMalicious FailNoDecision)])
         it ("recognises a manual declaration " <> show sourceEnv) $
             load sourceEnv "{\"deny-known-malicious\":{\"type\":\"DenyIfKnownMalicious\"}}" "{}"
                 >>= (\cfg -> malRules cfg `shouldBe` [expected])
