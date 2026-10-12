@@ -226,8 +226,8 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Shared npm/PyPI proxy | Supported with one mount per ecosystem. Keep the existing mixed-client scenario and mount-local policy, credentials, jobs, and URLs. |
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
-| PyPI publication and mirroring | Planned under [#765](https://github.com/AlexaDeWit/Ecluse/issues/765) and [#1133](https://github.com/AlexaDeWit/Ecluse/issues/1133). Every wheel and source distribution needs complete-version evidence when activated. |
-| Hosted incremental PyPI copying | The [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639) ruling permits physical partial uploads. Future contracts must prove a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
+| PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
+| Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
 | PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | RubyGems | No shipped adapter. Measurement registration rejects it as a supported provider. |
@@ -313,7 +313,15 @@ The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-
 | [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | The mixed-client case. |
 
 Both ecosystem drivers bind concrete providers for every required family.
-PyPI mirror evidence includes whole-version copies, restart recovery, cross-target installation and retained metadata.
+PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
+Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
+
+The final functional declarations require 50 PyPI cases, 47 npm cases and one shared-system case.
+Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
+
+Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
+Its deterministic control-plane tests do not establish live AWS service guarantees.
+
 Native cases also cover partial copies, public outages and exact installed files, including executable scripts.
 Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
 The write telemetry group supplies `pypi/telemetry/domain-spans` and `pypi/telemetry/private-fetch`.

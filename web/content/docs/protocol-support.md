@@ -19,6 +19,8 @@ document it publishes as JSON, so the page and the document always agree.
 A **served** registry answers reads: the metadata a client resolves against and the artifact
 bytes it installs, both gated by the same rules, integrity floors, and egress controls.
 
+[Complete PyPI setup](@/docs/pypi-setup.md) explains how to configure these capabilities together.
+
 A `pypi` mount accepts native multipart publication when `publicationTarget` is configured.
 The upload route otherwise answers `405`. The first-party guard validates every declared project
 name before relaying the original bytes and Content-Type. Caller Basic credentials retain both

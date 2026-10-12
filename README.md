@@ -17,6 +17,7 @@ trusting it: the keyless provenance and SBOM attestations, and a rebuild from pi
 > run today and are ready for use. PyPI serves the PEP 691 Simple index, distribution files,
 > first-party publication, and whole-version mirroring. PyPI mirrors require durable state and
 > an explicit native upload endpoint. AWS-backed deployments use SQS and container-role credentials.
+> [Complete PyPI setup](https://ecluse-proxy.com/docs/pypi-setup/) connects the required roles and stores.
 > Configuration can still change before `v1.0.0`. The
 > [operator manual](https://ecluse-proxy.com/docs/) is the deployment contract.
 

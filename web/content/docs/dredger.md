@@ -443,6 +443,9 @@ reaches the other.
 
 ## Known limits
 
+**PyPI maintenance requires CodeArtifact.** The PyPI adapter supplies no protocol inventory or deletion operation for `registry` or `verdaccio`.
+Dredger refuses those configurations. Their supported read and write roles remain available.
+
 **One Dredger per store.** There is no lease. Two Dredgers against one store double the cap's blast
 radius and interleave their marker writes. On a `verdaccio` store, unpublish deletes the whole
 package when its last version is removed. Otherwise it edits the package document and deletes

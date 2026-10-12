@@ -29,6 +29,8 @@ Declare obligations independently of drivers, registrations, and current product
 A missing required family must produce a named failed outcome while other contracts execute.
 Capability flags may describe availability, but must not remove a full-contract requirement.
 npm and PyPI run the full contract with concrete providers for every required family.
+PyPI completion includes durable whole-version state and declared metadata companions.
+Cross-target checks prove file selection and installed contents, not execution of foreign architecture code.
 An incomplete provider still fails missing required behaviours by name.
 Keep blocked rule types explicit in `adapterRuleBlocks` when the protocol cannot supply their meaning.
 

@@ -8,6 +8,7 @@ weight = 1
 from them. Point your CI and developer tooling at Écluse instead of at a public registry. Écluse
 fetches from that registry on their behalf and decides which versions a build may install. npm
 and PyPI support reads, mirroring, and first-party publication.
+[Complete PyPI setup](@/docs/pypi-setup.md) connects those roles and their required stores.
 [Protocol support](@/docs/protocol-support.md) describes each protocol and its configuration requirements.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
