@@ -246,8 +246,8 @@ retainCompanionReference version (VerifiedCompanionBytes parent verified _) refe
     old <- maybeToRight StateMissingCompanion (recordVersion version record)
     file <- maybeToRight StateMissingCompanion (Map.lookup (artFilename parent) (versionFiles old))
     unless (expectedArtifact file == parent) (Left (StateCompanionConflict (artFilename parent)))
-    state <- maybeToRight StateMissingCompanion (Map.lookup (artFilename parent) (versionCompanions old))
-    case state of
+    retained <- maybeToRight StateMissingCompanion (Map.lookup (artFilename parent) (versionCompanions old))
+    case retained of
         CompanionRetained existing | existing /= reference -> Left (StateCompanionConflict (artFilename parent))
         _ ->
             let updated = old{storedCompanions = Map.insert (artFilename parent) (CompanionRetained reference) (versionCompanions old)}

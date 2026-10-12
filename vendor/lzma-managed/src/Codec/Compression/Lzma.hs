@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2015 Herbert Valerio Riedel
+--
+-- SPDX-License-Identifier: BSD-3-Clause
+
 {-# LANGUAGE BangPatterns #-}
 
 -- |

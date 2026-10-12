@@ -5,6 +5,7 @@
 -- | Isolated managed reads retain encoded input across cold, warm, and replacement renders.
 module Ecluse.Core.Server.MirrorViewResidencySpec (spec, probeMain) where
 
+import Control.Exception (evaluate)
 import Data.Aeson (FromJSON, ToJSON, Value (Object, String), eitherDecodeStrict, encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
