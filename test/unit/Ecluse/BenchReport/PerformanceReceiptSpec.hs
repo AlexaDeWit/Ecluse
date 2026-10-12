@@ -5,6 +5,7 @@
 -- | Receipt creation preserves diagnostic exclusions, native failures and stale invalidation.
 module Ecluse.BenchReport.PerformanceReceiptSpec (spec) where
 
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import System.Directory (doesFileExist, removeFile, withCurrentDirectory)
 import System.Exit (ExitCode (ExitFailure))
@@ -70,7 +71,7 @@ spec = do
                 doesFileExist ("receipts/ecosystem-" <> ecosystem <> "/receipt.json") `shouldReturn` False
         it "clears stale publication before an invalid conditions file fails" $ withFixture $ do
             writePerformanceReceipts "allocation" "receipts" "conditions.json"
-            writeFileText "conditions.json" "invalid"
+            BS.writeFile "conditions.json" "invalid"
             writePerformanceReceipts "allocation" "receipts" "conditions.json" `shouldThrow` (== ExitFailure 1)
             doesFileExist "receipts/ecosystem-npm/receipt.json" `shouldReturn` False
             doesFileExist "receipts/ecosystem-pypi/receipt.json" `shouldReturn` False
@@ -85,7 +86,7 @@ withFixture action = withSystemTempDirectory "performance-receipt" $ \root -> wi
         conditions <- readJsonFile "conditions.json"
         obligations <- traverse (expectRight . (\subject -> compileObligation "allocation" subject (Map.union allocationConditions conditions))) ["ecosystem-npm", "ecosystem-pypi"]
         writeJsonFile "perf-allocation-observations.json" (NativePerformance NativePassed [PerformanceObservation row NativePassed | obligation <- obligations, row <- poRows obligation] allocationConditions)
-        writeFileText "perf-allocation-report.md" "native report\n"
+        BS.writeFile "perf-allocation-report.md" "native report\n"
         writeJsonFile "acceptance/criteria.json" (Map.empty :: Map Text Text)
         writeJsonFile "bench/corpus/pins.json" (Map.singleton "captures" (Map.fromList [(ecosystem, Map.singleton "sample" (Map.singleton "path" (ecosystem <> "/sample.json"))) | ecosystem <- ["npm", "pypi"]]) :: Map Text (Map Text (Map Text (Map Text Text))))
         forM_ ["npm", "pypi"] $ \ecosystem -> writeJsonFile ("bench/corpus/" <> ecosystem <> "/sample.json") (Map.empty :: Map Text Text)

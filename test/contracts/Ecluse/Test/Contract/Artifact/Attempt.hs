@@ -12,6 +12,7 @@ module Ecluse.Test.Contract.Artifact.Attempt (
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import System.Directory (createDirectoryIfMissing, doesFileExist, renameFile)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
@@ -55,8 +56,8 @@ continueAttempt root shard attempt = do
     report <- readJsonFile (attempt </> "report.json")
     current <- BS.readFile (root </> "reports" </> toString shard <> ".json")
     actual <- BS.readFile (attempt </> "report.json")
-    status <- readFileText (attempt </> "status")
-    cleanup <- readFileText (attempt </> "cleanup-status")
+    status <- TE.decodeUtf8 <$> BS.readFile (attempt </> "status")
+    cleanup <- TE.decodeUtf8 <$> BS.readFile (attempt </> "cleanup-status")
     let problems =
             ["container cleanup did not pass" | T.strip cleanup /= "0"]
                 <> ["current report differs from attempt" | actual /= current]
@@ -85,4 +86,4 @@ validateShard shard = unless valid $ failRunner "invalid shard name"
     letter char = char `elem` ("abcdefghijklmnopqrstuvwxyz0123456789" :: String)
     valid = case T.uncons shard of
         Nothing -> False
-        Just (first, rest) -> letter first && T.all (\char -> letter char || char == '-') rest
+        Just (initial, rest) -> letter initial && T.all (\char -> letter char || char == '-') rest
