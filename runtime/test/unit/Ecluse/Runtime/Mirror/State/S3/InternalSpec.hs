@@ -349,7 +349,7 @@ spec = describe "conditional mirror metadata storage" $ do
         withS3 (\_ _ -> expectationFailure "unexpected write" >> fail "unexpected write") $ \env ->
             writeObject (const pass) env limits{maxMetadataBytes = 8} "records" "key" Nothing "123456789" `shouldReturn` Left (ObjectTooLarge 8)
 
-    for_ [("without truncation evidence", "<ListBucketResult><KeyCount>0</KeyCount></ListBucketResult>"), ("with a matching object", "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>key</Key></Contents></ListBucketResult>")] $ \(label, listing) ->
+    for_ [("without truncation evidence", "<ListBucketResult><KeyCount>0</KeyCount></ListBucketResult>"), ("with a matching object", populatedList)] $ \(label, listing) ->
         it ("refuses absence from a listing " <> label) $
             withS3 (listingReply listing) $ \env ->
                 readObject (const pass) env limits "records" "key" Nothing `shouldReturn` Left ObjectUnknownAbsence
@@ -449,6 +449,13 @@ xmlError code = "<Error><Code>" <> code <> "</Code><Message>refused</Message></E
 
 emptyList :: LByteString
 emptyList = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</KeyCount></ListBucketResult>"
+
+populatedList :: LByteString
+populatedList =
+    "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>1</KeyCount><Contents>"
+        <> "<ETag>&quot;one&quot;</ETag><Size>8</Size><Key>key</Key>"
+        <> "<StorageClass>STANDARD</StorageClass><LastModified>2026-10-12T00:00:00.000Z</LastModified>"
+        <> "</Contents></ListBucketResult>"
 
 shortLengthBody :: ByteString
 shortLengthBody = "Content-Length: 20\r\n\r\nshort"

@@ -370,7 +370,7 @@ spec = describe "durable mirror expectations" $ do
             original <- mirrorSample [1] False "https://first.test/" "original"
             addition <- mirrorSample [1, 2] False "https://first.test/" "original"
             record <- expectRight (extendProjectRecord defaultLimits target original Nothing)
-            reads <- newIORef (0 :: Int)
+            readCount <- newIORef (0 :: Int)
             writes <- newIORef (0 :: Int)
             let revision = StateRevision target mirrorPackage "committed"
                 store =
@@ -378,7 +378,7 @@ spec = describe "durable mirror expectations" $ do
                         { msReadProject = \_ name expected -> do
                             name `shouldBe` mirrorPackage
                             expected `shouldBe` Nothing
-                            modifyIORef' reads (+ 1)
+                            modifyIORef' readCount (+ 1)
                             pure (Right (StateLoaded revision record))
                         , msWriteProject = \_ name expected attempted -> do
                             name `shouldBe` mirrorPackage
@@ -389,7 +389,7 @@ spec = describe "durable mirror expectations" $ do
                             pure writeResult
                         }
             recordExpectedInventory defaultLimits (const pass) target store addition `shouldReturn` Left expectedFault
-            readIORef reads `shouldReturn` 8
+            readIORef readCount `shouldReturn` 8
             readIORef writes `shouldReturn` 8
             msReadProject store (const pass) mirrorPackage Nothing `shouldReturn` Right (StateLoaded revision record)
 
