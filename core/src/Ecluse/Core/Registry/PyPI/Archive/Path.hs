@@ -16,7 +16,7 @@ import Ecluse.Core.Version (Version)
 checkPath :: Text -> Either ParseError [Text]
 checkPath path = do
     let parts = T.splitOn "/" (fromMaybe path (T.stripSuffix "/" path))
-    when (T.length path > 4096 || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') path) (bad "unsafe archive path")
+    when (T.compareLength path 4096 == GT || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') path) (bad "unsafe archive path")
     when (any (`elem` ["", ".", ".."]) parts) (bad "unsafe archive path")
     pure parts
 

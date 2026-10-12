@@ -83,7 +83,7 @@ parseHeaders = go 0 "" []
                     then finish held rest
                     else do
                         when (count >= (65536 :: Int)) (bad "Core Metadata header count exceeds its bound")
-                        when (T.length rawLine > 16384) (bad "Core Metadata header line exceeds its bound")
+                        when (T.compareLength rawLine 16384 == GT) (bad "Core Metadata header line exceeds its bound")
                         when (T.null suffix && ending == "\r\n") (bad "bare carriage return in Core Metadata")
                         addLine (count + 1) previousEnding ending held line rest
     finish held body

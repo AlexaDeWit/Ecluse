@@ -197,7 +197,7 @@ memberOf path attrs header = \case
 
 normaliseLink :: [Text] -> Text -> Either ParseError Text
 normaliseLink base target = do
-    when (T.null target || T.isPrefixOf "/" target || T.length target > 4096 || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') target) (bad "unsafe tar link target")
+    when (T.null target || T.isPrefixOf "/" target || T.compareLength target 4096 == GT || T.any (\c -> c < ' ' || c == '\\' || c == ':' || c == '\DEL') target) (bad "unsafe tar link target")
     parts <- reverse <$> foldM step (reverse base) (T.splitOn "/" target)
     void (checkPath (T.intercalate "/" parts))
     pure (T.copy (T.intercalate "/" parts))
