@@ -9,6 +9,7 @@ module Ecluse.Composition.Validate (
     -- * The validate phase
     ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpProgressFloor, vpSettings),
     vetBoot,
+    vetBootWith,
     vetMirrorCapabilities,
 
     -- * What it clears
@@ -43,7 +44,7 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
+import Ecluse.Composition.Maintenance (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
 import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (
@@ -145,17 +146,21 @@ vetMirrorCapabilities role app = decided $ case missing of
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
-vetBoot config =
+vetBoot = vetBootWith adapterFor
+
+-- | Vet every adapter-dependent capability through one lookup, including absent capabilities.
+vetBootWith :: ResolveMaintenanceAdapter -> Config -> Vet ValidatedPlan
+vetBootWith resolveAdapter config =
     assemble
-        <$> vetMounts config
+        <$> vetMounts resolveAdapter config
         <*> vetPublishPolicy app
         <*> vetEndpoints (cfgMounts app)
-        <*> vetStoreBackends adapterFor (configMounts config)
-        <*> vetPrivateCaches adapterFor (cfgMounts app) (configMounts config)
+        <*> vetStoreBackends resolveAdapter (configMounts config)
+        <*> vetPrivateCaches resolveAdapter (cfgMounts app) (configMounts config)
         <*> vetProgressFloor app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
-        <* vetRuleBlocks config
+        <* vetRuleBlocks resolveAdapter config
         <* vetQuotaOverrides config
         <* vetQuotaScopes app
   where
@@ -208,14 +213,14 @@ vetAdvisoryStore config =
         | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
 
 -- A blocked declaration refuses every role, even when another rule outranks it.
-vetRuleBlocks :: Config -> Vet ()
-vetRuleBlocks config = traverse_ vetMountRules (activeMounts config)
+vetRuleBlocks :: ResolveMaintenanceAdapter -> Config -> Vet ()
+vetRuleBlocks resolveAdapter config = traverse_ vetMountRules (activeMounts config)
   where
     vetMountRules (eco, (mount, _)) =
         traverse_ (rule (const (Refuse (uncurry (RuleBlockedOnMount eco)))) blocked) (mountPolicy mount)
       where
         blocked preceded = do
-            adapter <- adapterFor eco
+            adapter <- resolveAdapter eco
             let ty = ruleType (prRule preceded)
             reason <- Map.lookup ty (adapterRuleBlocks adapter)
             pure (ty, reason)
@@ -259,8 +264,8 @@ declaredStoreUrls config =
     [registryUrlText (mtUrl target) | mount <- Map.elems (configMounts config), Just target <- [regMirrorTarget (mountRegistries mount)]]
         <> [registryUrlText (tgtUrl (preTarget endpoint)) | mcfg <- Map.elems (cfgMounts (configApp config)), Just endpoint <- [mntPrivateUpstream mcfg]]
 
-vetMounts :: Config -> Vet [VettedMount]
-vetMounts config = catMaybes <$> traverse vetMount (activeMounts config)
+vetMounts :: ResolveMaintenanceAdapter -> Config -> Vet [VettedMount]
+vetMounts resolveAdapter config = catMaybes <$> traverse (vetMount resolveAdapter) (activeMounts config)
 
 {- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for entry, so the two
 maps share a keyset and this pairing is total. -}
@@ -269,18 +274,18 @@ activeMounts config =
     Map.toAscList (Map.intersectionWith (,) (configMounts config) (cfgMounts (configApp config)))
 
 -- 'Nothing' only where the rule refused, and a refused pass yields no plan to carry it into.
-vetMount :: (Ecosystem, (Mount, MountConfig)) -> Vet (Maybe VettedMount)
-vetMount (eco, (mount, mcfg)) =
+vetMount :: ResolveMaintenanceAdapter -> (Ecosystem, (Mount, MountConfig)) -> Vet (Maybe VettedMount)
+vetMount resolveAdapter (eco, (mount, mcfg)) =
     vetted
         <$ rule (const (Refuse MissingAdapter)) unservedEcosystem eco
         <* rule (const (Refuse MirrorTargetWithoutPublish)) (declaredWithoutPublish mirrors) eco
         <* rule (const (Refuse PublicationTargetWithoutPublish)) (declaredWithoutPublish publishes) eco
         <* rule (const (Refuse FirstPartyWithoutPrivateUpstream)) firstPartyWithoutPrivateUpstream (eco, mcfg)
   where
-    vetted = adapterFor eco <&> \adapter -> VettedMount eco adapter mount mcfg
+    vetted = resolveAdapter eco <&> \adapter -> VettedMount eco adapter mount mcfg
 
     unservedEcosystem e
-        | isNothing (adapterFor e) = Just e
+        | isNothing (resolveAdapter e) = Just e
         | otherwise = Nothing
 
     mirrors = isJust (regMirrorTarget (mountRegistries mount))
@@ -288,7 +293,7 @@ vetMount (eco, (mount, mcfg)) =
 
     declaredWithoutPublish declared e = do
         guard declared
-        adapter <- adapterFor e
+        adapter <- resolveAdapter e
         guard (isNothing (adapterPublish adapter))
         pure e
 

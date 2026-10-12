@@ -343,8 +343,11 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
     -- The proxy reads its whole configuration from here, so nothing of the harness's own leaks in.
     inherited key = key /= "GHCRTS" && not (any (`isPrefixOf` key) ["ECLUSE_", "OTEL_", "AWS_", "__ECLUSE"])
     mount = T.toUpper (ecosystemName (psEcosystem settings))
-    -- The upstreams are named over https for the configuration to accept them.
-    upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://localhost:" <> show p)
+    -- Managed mirrors need distinct hostnames for public reads and mirror writes.
+    upstream leg p = ("ECLUSE_MOUNTS__" <> mount <> "__" <> leg <> "__REGISTRY__URL", "https://" <> upstreamHost leg <> ":" <> show p)
+    upstreamHost leg
+        | leg == "PUBLIC_UPSTREAM", isJust (psMirrorStatePort settings) = "127.0.0.1"
+        | otherwise = "localhost"
     fixed =
         [ ("ECLUSE_SERVER__PORT", show port)
         , ("ECLUSE_SERVER__PUBLIC_URL", "https://bench.proxy")

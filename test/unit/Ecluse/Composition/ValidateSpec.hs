@@ -50,6 +50,7 @@ import Ecluse.Composition.Validate (
     VettedMount (vmEcosystem, vmMount),
     VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
     vetBoot,
+    vetBootWith,
     vetMirrorCapabilities,
  )
 import Ecluse.Composition.Vet (runVet)
@@ -65,6 +66,7 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
@@ -296,25 +298,25 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" staticEnvVars)
             `shouldReturn` [MissingAdapter RubyGems]
 
-    it "refuses a mirror target on a mount whose ecosystem this build writes nothing for" $
-        refusalsFor
-            MirrorWriter
-            ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-                overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
-                    overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" "https://mirror.example.test/pypi/" $
-                        overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "t" staticEnvVars
-            )
-            `shouldReturn` [MirrorTargetWithoutPublish PyPI]
-
-    it "refuses a publication target on a mount whose ecosystem this build writes nothing for" $
-        refusalsFor
-            MirrorWriter
-            ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
+    forM_
+        [ ("mirror", MirrorTargetWithoutPublish PyPI, pypiMirrorEnv)
+        ,
+            ( "publication"
+            , PublicationTargetWithoutPublish PyPI
+            , overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__FIRST_PARTY" "acme-*" $
                     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
                         overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" staticEnvVars
             )
-            `shouldReturn` [PublicationTargetWithoutPublish PyPI]
+        ]
+        $ \(target, refusal, env) -> describe (target <> " publisher capability") $ do
+            it "refuses the target when its adapter has no publisher" $ do
+                config <- expectConfig env Nothing
+                let withoutPublisher PyPI = (\adapter -> adapter{adapterPublish = Nothing}) <$> adapterFor PyPI
+                    withoutPublisher eco = adapterFor eco
+                void (snd (runVet MirrorWriter (vetBootWith withoutPublisher config))) `shouldBe` Left [refusal]
+            it "clears the target with the real PyPI publisher" $
+                refusalsFor MirrorWriter env `shouldReturn` []
 
     it "refuses a publication target that leaves the anti-shadowing guard nothing to enforce" $
         refusalsFor MirrorWriter (withoutFirstParty publishingEnv)
@@ -402,15 +404,12 @@ expectVetted role envVars = do
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role envVars = fromLeft [] . vetted role <$> expectConfig envVars Nothing
 
--- | Declare an advisory store, which is what an advisory deny needs to clear the boot.
 withAdvisoryStore :: [(String, String)] -> [(String, String)]
 withAdvisoryStore = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories"
 
--- | Add the named advisory deny to the shared policy, failing closed as its own default does.
 denyingOn :: String -> [(String, String)] -> [(String, String)]
 denyingOn ruleType = denyingWith ruleType "deny"
 
--- | 'denyingOn' under a chosen @onUnavailable@, at the threshold the rule's own type reads.
 denyingWith :: String -> String -> [(String, String)] -> [(String, String)]
 denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
   where
