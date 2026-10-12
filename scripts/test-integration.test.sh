@@ -69,11 +69,11 @@ fi
 [ ! -e "$ECLTEST_SCRIPT_LOG" ]
 export ECLTEST_CONTAINER_LOCK=held
 bash scripts/test-integration.sh
-rg -q '^cabal test ecluse-integration --test-show-details=direct$' "$ECLTEST_SCRIPT_LOG"
+grep -q '^cabal test ecluse-integration --test-show-details=direct$' "$ECLTEST_SCRIPT_LOG"
 bash scripts/test-integration.sh coverage --enable-coverage --builddir=dist-coverage --test-show-details=direct
-rg -q '^cabal test ecluse-integration --enable-coverage --builddir=dist-coverage --test-show-details=direct$' "$ECLTEST_SCRIPT_LOG"
+grep -q '^cabal test ecluse-integration --enable-coverage --builddir=dist-coverage --test-show-details=direct$' "$ECLTEST_SCRIPT_LOG"
 [ "$(wc -l < "$ECLTEST_SCRIPT_LOG")" -eq 4 ]
-rg -q '^audit ' "$ECLTEST_SCRIPT_LOG"
+grep -q '^audit ' "$ECLTEST_SCRIPT_LOG"
 [ "$(cat "$ECLTEST_INTEGRATION_ARTIFACT_DIR/suite.tix")" = 'coverage ticks' ]
 for option in '--test-option=--group' '--test-options=--group integration/egress' '--test-option' \
   '--test-option=--catalogue-list' '--test-option=--report' '--test-wrapper=true' 'ecluse-unit' '--builddir=other' '--ghc-options=-fno-hpc' '--disable-coverage'; do
