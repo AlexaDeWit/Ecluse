@@ -41,6 +41,7 @@ import Ecluse.Core.Package (artFilename, artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), cpName, pypiCorpusPackages, readCorpusPins)
 import Ecluse.Test.Corpus.Subset (newestPyPIShare)
 import Ecluse.Test.Json (withKeys)
@@ -222,9 +223,10 @@ selectWarmArtifacts packages captures = do
     fmap Map.fromList $ forM packages $ \package -> either benchFail pure $ do
         let name = cpName package
         version <- maybe (Left ("missing captured PyPI pin: " <> name)) Right (Map.lookup name pins)
+        canonical <- maybe (Left ("invalid captured PyPI pin: " <> version)) (Right . renderVersion) (canonicalPep440 version)
         bytes <- maybe (Left ("missing captured PyPI body: " <> name)) Right (Map.lookup name captures)
         (info, _) <- first show (projectPyPIIndex defaultLimits (cpPackage package) (LBS.toStrict bytes))
-        details <- maybe (Left ("captured PyPI version is absent: " <> version)) Right (Map.lookup version (infoVersions info))
+        details <- maybe (Left ("captured PyPI version is absent: " <> version)) Right (Map.lookup canonical (infoVersions info))
         let artifact :| _ = pkgArtifacts details
         path <- maybe (Left "captured artifact filename has no PyPI route") Right (distributionPath (cpPackage package) (artFilename artifact))
         pure (name, SelectedArtifact path (artUrl artifact))

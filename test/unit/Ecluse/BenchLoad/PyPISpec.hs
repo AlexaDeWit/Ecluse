@@ -39,6 +39,7 @@ spec = do
             bodies <- loadCorpusBodies pypiCorpusPackages
             selected <- selectWarmArtifacts pypiCorpusPackages bodies
             Map.keys selected `shouldMatchList` ["boto3", "numpy", "requests"]
+            (saProxyPath <$> Map.lookup "numpy" selected) `shouldSatisfy` maybe False (T.isInfixOf "numpy-2.1.0-")
             for_ (Map.toList selected) $ \(name, artifact) -> do
                 saProxyPath artifact `shouldSatisfy` (("simple/" <> name <> "/") `T.isPrefixOf`)
                 saUpstreamUrl artifact `shouldSatisfy` ("https://files.pythonhosted.org/" `T.isPrefixOf`)
