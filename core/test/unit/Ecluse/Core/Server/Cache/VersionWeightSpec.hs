@@ -34,7 +34,8 @@ spec = describe "selected-release accounting" $ do
         weighVersion ((untaggedRead (Just baseline)){vrUpstreamLatest = Just v1_0_0}) `shouldBe` 18908
         weighVersion (carrying (String "abc")) `shouldBe` 18812
         weight baseline{pkgVersion = mkVersion PyPI (T.copy (T.intercalate "." (replicate 200 "1")))} `shouldBe` 120033
-        weight baseline{pkgArtifacts = oneArtifact{artUrl = T.take 1 (T.replicate 65536 "x")} :| []} `shouldBe` 84277
+        -- The slice retains 65536 bytes, replacing the baseline URL's 36-byte allocation.
+        weight baseline{pkgArtifacts = oneArtifact{artUrl = T.take 1 (T.replicate 65536 "x")} :| []} `shouldBe` 84275
 
     it "keeps a cached absence smaller than a present release" $ do
         weighVersion (untaggedRead Nothing) `shouldBe` 1024
@@ -44,8 +45,7 @@ spec = describe "selected-release accounting" $ do
         weighVersion (carrying (toJSON (T.replicate 4096 "x"))) `shouldSatisfy` (> weighVersion (untaggedRead (Just baseline)) + 4096)
 
     it "weighs the raw object by one walk of its structure, never by encoding it" $ do
-        -- Each added key costs exactly its structural allowance under the shared expansion, so
-        -- the weight is a function of the tree's shape rather than of any rendered bytes.
+        -- Keys add structural charges under the shared expansion, independent of encoded bytes.
         let withKeys n = carrying (object [Key.fromText ("dep-" <> show i) .= ("^1.0.0" :: Text) | i <- [100 .. 99 + n :: Int]])
             wireOf n = 2 + n * (4 + T.length "dep-100" + 2 + T.length "^1.0.0")
         weighVersion (withKeys 100) - weighVersion (withKeys 0) `shouldBe` expandWireBytes (wireOf 100) - expandWireBytes (wireOf 0)
@@ -104,7 +104,6 @@ spec = describe "selected-release accounting" $ do
 weight :: PackageDetails -> Int
 weight = weighVersion . untaggedRead . Just
 
--- The baseline release read carrying the given raw version object.
 carrying :: Value -> VersionRead
 carrying raw = (untaggedRead (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untaggedRead (Just baseline))}
 
