@@ -35,8 +35,7 @@ detailsFieldsWeight details =
         + installWeight (pkgInstallCode details)
         + itemsWeight artifactWeight (pkgArtifacts details)
   where
-    -- The opaque parsed version has flat token lists and bounded numeric components.
-    -- The per-byte allowance also covers RubyGems hyphen expansion and copied parser text.
+    -- Parsed tokens and bounded numeric components use this allowance, which also covers RubyGems hyphen expansion and copied parser text.
     rawVersion = renderVersion (pkgVersion details)
     rawLength = lengthWord8 rawVersion
 
