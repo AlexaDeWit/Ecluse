@@ -25,7 +25,6 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus)
 import Network.HTTP.Types (Header, Status, hContentType, status200, status404, statusCode)
 import Network.HTTP.Types.Header (hETag, hLastModified)
-import System.IO (stderr)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchLoad.Error (benchFail)

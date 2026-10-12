@@ -446,6 +446,7 @@ maliciousDefaultSpec :: Spec
 maliciousDefaultSpec = describe "the source-dependent MAL default" $ do
     let source = [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
         malRules cfg = concatMap (filter ((== "DenyIfKnownMalicious") . ruleName . prRule) . mountPolicy) . Map.elems $ configMounts cfg
+        load :: [(String, String)] -> Text -> Text -> IO Config
         load sourceEnv global mount = expectConfig (pubUrlEnv <> sourceEnv) (Just (encodeUtf8 ("{\"rules\":" <> global <> ",\"mounts\":{\"pypi\":{\"rules\":" <> mount <> "}}}")))
         off = "{\"deny-known-malicious\":{\"enabled\":false}}"
         on = "{\"deny-known-malicious\":{\"enabled\":true}}"

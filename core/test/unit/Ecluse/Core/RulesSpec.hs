@@ -1363,16 +1363,16 @@ knownMaliciousSpec = describe "DenyIfKnownMalicious" $ do
                     >>= (`shouldSatisfy` isDeny)
 
     it "shares one canonical lookup across MAL, CVSS, EPSS, remediation, and all versions" $ do
-        reads <- newIORef ([] :: [Text])
-        let lookupRows name = modifyIORef' reads (<> [name]) $> []
+        lookedUpNames <- newIORef ([] :: [Text])
+        let lookupRows name = modifyIORef' lookedUpNames (<> [name]) $> []
             deps = servingRuleDeps (DbEtag "shared") (CveLookup lookupRows (pure []))
         rules <- prepare deps (map atDefaultPrecedence [mal, denyCveAt 8, denyEpssAt 0.5, AllowIfRemediatesCve, AllowIfOlderThan 0])
         decideVersion <- newEvaluator ctx rules
         void (mapConcurrently (\v -> decideVersion evidence{evVersion = mkVersion Npm v}) ["1.0.0", "2.0.0", "3.0.0"])
-        readIORef reads `shouldReturn` ["thing"]
+        readIORef lookedUpNames `shouldReturn` ["thing"]
         void (decideVersion evidence{evName = unscopedNpm "other"})
         void (decideVersion evidence)
-        readIORef reads `shouldReturn` ["thing", "other", "thing"]
+        readIORef lookedUpNames `shouldReturn` ["thing", "other", "thing"]
     it "keeps the borrowed MAL generation after a slot changes between versions" $ do
         let rows = [("thing", AdvisoryRange "MAL-pinned" Nothing (Just "2.0.0") (LastAffected "2.0.0") Nothing)]
         held <- newIORef (Just (DbEtag "before", fakeCveLookup rows))

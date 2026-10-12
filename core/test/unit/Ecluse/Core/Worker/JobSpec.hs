@@ -53,7 +53,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), DenyIfCveParams (DenyIfCveParams), FailureAlignment (FailDeny, FailNoDecision), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfCve, DenyIfDeprecated, DenyIfKnownMalicious, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
