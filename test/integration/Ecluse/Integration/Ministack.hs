@@ -176,10 +176,7 @@ queueAttribute env queueUrl attribute = do
         Just value -> pure value
         Nothing -> fail ("ministack GetQueueAttributes returned no " <> show attribute)
 
-{- | Create a fresh SQS queue and return its URL, for a test that drives the queue through
-'Ecluse.Composition.planMirrorQueue' rather than the backend constructor. Retries
-@CreateQueue@ while the SQS service warms up.
--}
+-- | Return a fresh SQS queue URL, retrying @CreateQueue@ while the service warms up.
 freshQueueUrl :: Container -> Text -> IO Text
 freshQueueUrl container queueName = do
     env <- envFor (endpointFor container)
