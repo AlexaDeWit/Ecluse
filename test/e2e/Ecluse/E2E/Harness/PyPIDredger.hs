@@ -107,10 +107,10 @@ cacheApplication distributions mirror cache request respond = do
                 for_ (find ((== filename) . distributionFilename) distributions) $ \selected ->
                     atomically (modifyTVar' (ntFiles cache) (Map.union (Map.restrictKeys remote (fromList [distributionFilename d | d <- distributions, distributionProject d == project, distributionVersion d == distributionVersion selected]))))
         _ -> pass
-    local <- targetFiles cache
+    cachedFiles <- targetFiles cache
     case pathInfo request of
         ["simple", _] | requestMethod request `elem` ["GET", "HEAD"] -> do
-            combined <- newTVarIO (Map.union local remote)
+            combined <- newTVarIO (Map.union cachedFiles remote)
             nativeApplication (targetConfig "cache") distributions cache{ntFiles = combined} request respond
         _ -> nativeApplication (targetConfig "cache") distributions cache request respond
 

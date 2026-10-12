@@ -5,7 +5,8 @@
 -- | Isolated managed reads retain encoded input across cold, warm, and replacement renders.
 module Ecluse.Core.Server.MirrorViewResidencySpec (spec, probeMain) where
 
-import Control.Exception (evaluate)
+import Control.Concurrent (yield)
+import Control.Exception (bracket, evaluate)
 import Data.Aeson (FromJSON, ToJSON, Value (Object, String), eitherDecodeStrict, encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -15,6 +16,7 @@ import Foreign.StablePtr (deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats)
 import System.Directory (getFileSize)
 import System.Environment (getExecutablePath)
+import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
@@ -143,9 +145,9 @@ probeMain :: String -> FilePath -> IO ()
 probeMain rawPhase directory = do
     mode <- maybe (fail "unknown managed read phase") pure (readMaybe rawPhase)
     void (measure mode directory)
-    before <- sample
+    baselineSample <- sample
     (ready, result, size, paid) <- measure mode directory
-    after <- sample
+    finalSample <- sample
     fixture <- loadReadFixture directory
     oldWeight <- readRetainedCharge fixture
     newWeight <- readRetainedCharge fixture{fixtureOld = fixtureNew fixture}
@@ -159,17 +161,17 @@ probeMain rawPhase directory = do
         Measurement
             (show mode)
             wire
-            before
+            baselineSample
             ready
             result
-            after
+            finalSample
             size
             paid
             (roundUpToStep 1_048_576 (scaleCharge (cfFullReadPermille pypiChargeFactors) nativeSize))
             oldBudget
             (if mode == Replacement then newWeight else oldWeight)
             (allocated result ready)
-            (allocated ready before)
+            (allocated ready baselineSample)
 
 measure :: Phase -> FilePath -> IO (Sample, Sample, Int, Int)
 measure mode directory = do

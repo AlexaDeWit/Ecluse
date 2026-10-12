@@ -8,7 +8,7 @@ module Ecluse.Core.Registry.PyPI.Archive.TarSpec (spec) where
 
 import Codec.Archive.Tar qualified as Tar
 import Codec.Archive.Tar.Entry qualified as Tar
-import Conduit (liftIO, yield, yieldMany)
+import Conduit (yield, yieldMany)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T

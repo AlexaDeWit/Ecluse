@@ -9,11 +9,11 @@ module Ecluse.Runtime.Mirror.State.S3IntegrationSpec (spec) where
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
-import Control.Concurrent.STM (check)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Async (concurrently)
+import UnliftIO.STM (checkSTM)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -155,7 +155,7 @@ firstWriteBarrier arrivals conflicts store = do
                 initialWrite <- atomicModifyIORef' firstWrite (False,)
                 when initialWrite $ do
                     atomically (modifyTVar' arrivals (+ 1))
-                    atomically (readTVar arrivals >>= check . (>= 3))
+                    atomically (readTVar arrivals >>= checkSTM . (>= 3))
                 result <- msWriteProject store charge name revision record
                 when (result == Right StateConflict) (atomicModifyIORef' conflicts (\count -> (count + 1, ())))
                 pure result

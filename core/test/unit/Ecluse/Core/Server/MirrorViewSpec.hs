@@ -41,7 +41,7 @@ spec = do
             targetInventory <- mirrorSample [1, 2] False "https://private.test/moved/" "stripped"
             let current = Just (VersionDoc (inventoryDetails targetInventory) Nothing)
             restored <- expectRight (mirrorVersionView mirrorVersion record current)
-            let documents = [document | doc <- maybeToList restored, raw <- maybeToList (vdRaw doc), document <- maybeToList (snd pypiSimpleCached raw)]
+            let documents = [document | doc <- maybeToList restored, sourceDoc <- maybeToList (vdRaw doc), document <- maybeToList (snd pypiSimpleCached sourceDoc)]
                 values = concatMap simpleFiles documents
             map fst values `shouldBe` [ArrayEntry 0, ArrayEntry 1]
             map (field "note" . snd) values `shouldBe` [Just (String "first"), Just (String "second")]
@@ -71,9 +71,9 @@ spec = do
             inventory <- mirrorSample [1, 2] False "https://private.test/" "source"
             record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
             let private = Manifest (info inventory) (raw inventory) 1024 (digestOf "private")
-            (_, initialManifest, pending) <- expectRight (mirrorProjectViews revision record (Just private))
+            (_, initialManifest, incompleteVersions) <- expectRight (mirrorProjectViews revision record (Just private))
             (_, updatedManifest, _) <- expectRight (mirrorProjectViews (rev "new") record (Just private))
-            pending `shouldSatisfy` Map.null
+            incompleteVersions `shouldSatisfy` Map.null
             (initialManifest >>= snd pypiPacked . manifestRaw) `shouldSatisfy` isJust
             fmap manifestDigest initialManifest `shouldNotBe` fmap manifestDigest updatedManifest
 

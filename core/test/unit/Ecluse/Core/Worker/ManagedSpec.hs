@@ -51,9 +51,9 @@ spec = describe "managed worker records" $ do
                 verifyCompanions unmeteredStateBudget (pure ()) (Just (mfBinding fixture)) version `shouldReturn` Right ()
 
     it "keeps transient inventories monotonic without durable storage" $ do
-        one <- mirrorSample [1] False "https://source.test/" "first"
+        initialInventory <- mirrorSample [1] False "https://source.test/" "first"
         two <- mirrorSample [2] False "https://source.test/" "second"
-        record <- persistInventory unmeteredStateBudget defaultLimits Nothing one Nothing >>= expectRight
+        record <- persistInventory unmeteredStateBudget defaultLimits Nothing initialInventory Nothing >>= expectRight
         updated <- persistInventory unmeteredStateBudget defaultLimits Nothing two (Just record) >>= expectRight
         fmap (Map.keys . versionFiles) (recordVersion mirrorVersion updated) `shouldBe` Just (map mirrorFilename [1, 2])
 

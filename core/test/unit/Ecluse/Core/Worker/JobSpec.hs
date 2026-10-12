@@ -153,13 +153,13 @@ spec = do
                 initial <- managedInventory url False [1, 2]
                 writeIORef (mfSource fixture) (VersionPresent (sourceDocument initial) Nothing)
                 runManaged fixture `shouldReturn` Succeeded
-                before <- readIORef (mfRecord fixture)
+                priorRecord <- readIORef (mfRecord fixture)
                 added <- managedInventory url False [1, 2, 3]
                 writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
                 let requested = managedJob{jobTriggerFilename = Just (unsafeFilename (mirrorFilename 3))}
                     policy = (mfPolicy fixture){wpRules = [denyRule]}
                 runManagedWith requested fixture{mfPolicy = policy} >>= (`shouldSatisfy` isDropped)
-                readIORef (mfRecord fixture) `shouldReturn` before
+                readIORef (mfRecord fixture) `shouldReturn` priorRecord
                 readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2]
                 readIORef (mfResolves fixture) `shouldReturn` 2
 
@@ -391,10 +391,10 @@ spec = do
                     runManaged fixture >>= (`shouldSatisfy` isRetried)
                     changed <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
                     writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
-                    before <- allCaptured original
+                    priorRequests <- allCaptured original
                     let policy = (mfPolicy fixture){wpArtifactHostHonoured = (== hostPortAddress (stubBaseUrl original))}
                     runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isDropped)
-                    allCaptured original `shouldReturn` before
+                    allCaptured original `shouldReturn` priorRequests
                     allCaptured moved `shouldReturn` []
 
         it "preserves missing historic files when the new public snapshot omits them" $

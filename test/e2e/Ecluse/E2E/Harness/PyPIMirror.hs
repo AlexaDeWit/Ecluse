@@ -45,7 +45,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.Process.Typed (proc, readProcess)
 
 import UnliftIO (bracket_, timeout)
-import UnliftIO.STM (check)
+import UnliftIO.STM (checkSTM)
 
 import Ecluse.Core.Security.Limits (BodyLimit (PublishRequestBodyLimit), boundedRead)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
@@ -173,7 +173,7 @@ receiveUpload config expected target request fields file =
                     UploadStored -> pure (responseLBS status200 [] "stored")
                     UploadDuplicate -> pure (responseLBS status400 [] "File already exists.")
                     UploadHeld -> do
-                        released <- timeout 120000000 (atomically (readTVar (ntReleased target) >>= check))
+                        released <- timeout 120000000 (atomically (readTVar (ntReleased target) >>= checkSTM))
                         pure (responseLBS status503 [] (if isJust released then "interrupted upload released" else "fixture upload barrier timed out"))
                     UploadReplyLost -> pure (responseRaw (\_ _ -> pass) (responseLBS status503 [] "lost reply"))
         _ -> pure (responseLBS status400 [] "upload metadata or exact bytes differ")

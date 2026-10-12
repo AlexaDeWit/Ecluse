@@ -45,7 +45,7 @@ spec = describe "conditional mirror metadata storage" $ do
                 `shouldReturn` Just (Right (ObjectLoaded "\"one\"" "ab"))
             )
                 `finally` void (tryPutMVar release False)
-        reverse <$> readIORef payments `shouldReturn` [stateExchangeCharge 1 1]
+        reverse <$> readIORef payments `shouldReturn` [stateExchangeCharge, bufferedChunkCharge 1, bufferedChunkCharge 1]
 
     it "propagates refused chunk payment without returning a decoded project" $ do
         release <- newEmptyMVar

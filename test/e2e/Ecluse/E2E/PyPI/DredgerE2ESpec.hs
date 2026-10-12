@@ -205,9 +205,9 @@ rolloutOps =
 
 withObservedWorker :: Native.PyPISweepPlane -> Text -> (String -> IO a) -> IO a
 withObservedWorker plane queue action = do
-    before <- deletes
+    priorDeletes <- deletes
     result <- withMirrorRole (Native.pspGlobal plane) environment action
-    deletes `shouldReturn` before
+    deletes `shouldReturn` priorDeletes
     pure result
   where
     deletes = filter ((== "v1/package/versions/delete") . snd) <$> readTVarIO (cafRequests (Native.pspControl plane))

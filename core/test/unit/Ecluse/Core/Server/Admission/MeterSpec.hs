@@ -76,11 +76,11 @@ spec = describe "Ecluse.Core.Server.Admission.Meter" $ do
         blocked <- newEmptyMVar
         firstPayment <- newIORef True
         paid <- newIORef (0 :: Int)
-        charge <- newChargeRegion $ \cost -> do
+        chargeRegion <- newChargeRegion $ \cost -> do
             initial <- atomicModifyIORef' firstPayment (False,)
             if initial then putMVar entered () >> takeMVar blocked else modifyIORef' paid (+ cost)
-        withAsync (charge 1024) $ \worker -> takeMVar entered >> cancel worker
-        charge 1024
+        withAsync (chargeRegion 1024) $ \worker -> takeMVar entered >> cancel worker
+        chargeRegion 1024
         readIORef paid `shouldReturn` 1024
 
     it "keeps repeated workspace peaks separate from simultaneously retained regions" $ do

@@ -79,7 +79,7 @@ spec = describe "managed PyPI mirror reads" $ do
             simpleStatus response `shouldBe` status403
             artifact <- getPath artifactPath app
             simpleStatus artifact `shouldBe` status403
-            for_ newFilePaths $ \path -> getPath path app >>= \response -> simpleStatus response `shouldBe` status403
+            for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status403
         readIORef calls `shouldReturn` 0
 
     it (caseLabel "integration/mirror-view/native-004" "bypasses state entirely for first-party private names") $ do
@@ -107,7 +107,7 @@ spec = describe "managed PyPI mirror reads" $ do
             simpleStatus response `shouldBe` status503
             artifact <- getPath artifactPath app
             simpleStatus artifact `shouldBe` status503
-            for_ newFilePaths $ \path -> getPath path app >>= \response -> simpleStatus response `shouldBe` status503
+            for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status503
 
     it (caseLabel "integration/mirror-view/native-007" "serves completed artifacts without public reads, policy evaluation, or enqueue after fresh proxy construction") $ do
         inventory <- mirrorSample [1, 2, 3] False "https://public.test/" "original"
@@ -203,14 +203,14 @@ spec = describe "managed PyPI mirror reads" $ do
         queue <- newTestMemoryQueue
         for_ [nativeWith True "public" status200 [1, 2], native status404 []] $ \public ->
             withManagedProxyOver (queue, \deps -> deps{pdRules = rules}) view False (nativeWith True "private" status200 [1, 2, 3]) public $ \app ->
-                for_ newFilePaths $ \path -> getPath path app >>= \response -> simpleStatus response `shouldBe` status404
+                for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status404
 
     it (caseLabel "integration/mirror-view/native-013" "applies public policy to a later filename and its declared companion") $ do
         old <- mirrorSample [1, 2] False "https://public.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target old Nothing)
         view <- testView (pure (Right (StateLoaded revision record)))
         withManagedProxy view False (nativeWith True "private" status200 [1, 2, 3]) (nativeWith True "public" status200 [1, 2, 3]) $ \app ->
-            for_ newFilePaths $ \path -> getPath path app >>= \response -> simpleStatus response `shouldBe` status403
+            for_ newFilePaths $ \path -> getPath path app >>= \fileResponse -> simpleStatus fileResponse `shouldBe` status403
 
 newFilePaths :: [ByteString]
 newFilePaths = [path, path <> ".metadata"]

@@ -281,11 +281,11 @@ installedPythonGraph tree = do
         document <- first (const "installed metadata is not UTF-8") (TE.decodeUtf8' bytes)
         let headers = T.lines (fst (T.breakOn "\n\n" document))
             fields name = mapMaybe (T.stripPrefix (name <> ": ")) headers
-        name <- one "Name" (fields "Name")
-        version <- one "Version" (fields "Version")
+        name <- uniqueField "Name" (fields "Name")
+        version <- uniqueField "Version" (fields "Version")
         pure (name, (version, fields "Requires-Dist"))
-    one _ [value] = Right value
-    one name _ = Left ("installed metadata lacks one " <> name)
+    uniqueField _ [value] = Right value
+    uniqueField name _ = Left ("installed metadata lacks one " <> name)
 
 -- | Cross-target installation evidence. The target files are inspected without executing foreign code.
 data PipTargetInstall = PipTargetInstall

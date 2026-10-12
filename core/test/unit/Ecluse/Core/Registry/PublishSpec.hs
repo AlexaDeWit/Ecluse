@@ -136,7 +136,7 @@ spec = do
                     (inventory, source) <- expectRight (pcPrepareSource isOdd v1_0_0 (mirrorVersionDoc isOdd v1_0_0 isOddVersionDoc dummyArtifact))
                     let file :| _ = inventoryFiles inventory
                     verified <- expectRight (verifyMirrorBytes file "")
-                    upload <- pcPrepareUpload defaultLimits inventory source file verified >>= expectRight
+                    upload <- pcPrepareUpload defaultLimits (const pass) inventory source file verified >>= expectRight
                     request <- expectRight (pcPublishRequest "https://mirror.test" (Just (bareCredential (mkSecret "tok"))) planV1 upload)
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
