@@ -11,8 +11,11 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Hedgehog (forAll, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
-import Test.QuickCheck (NonNegative (..), property)
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State.Codec (saturatingStateCharge)
@@ -82,8 +85,12 @@ spec = describe "durable graph accounting" $ do
         retainedRecordWeight unicode `shouldSatisfy` (> retainedRecordWeight ascii + 3072)
 
     it "saturates nonnegative arithmetic monotonically" $
-        property $
-            \(NonNegative a) (NonNegative b) -> saturatingStateCharge (a + b) >= saturatingStateCharge a
+        hedgehog $ do
+            let intLimit = toInteger (maxBound :: Int)
+                term = Gen.choice [Gen.integral (Range.linear 0 (4 * intLimit)), Gen.element [0, 1, intLimit - 1, intLimit, intLimit + 1]]
+            a <- forAll term
+            b <- forAll term
+            (saturatingStateCharge (a + b) >= saturatingStateCharge a) === True
 
     it "keeps saturated entries uncacheable" $ do
         let key = fullKey (Source "test") mirrorPackage

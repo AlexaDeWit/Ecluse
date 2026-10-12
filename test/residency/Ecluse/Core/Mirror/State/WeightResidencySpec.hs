@@ -70,13 +70,13 @@ checkMeasurement measured = do
 probeMain :: String -> FilePath -> IO ()
 probeMain mode path = do
     bracket (prepare mode path) (freeStablePtr . fst) (observe . fst)
-    before <- live <$> sample
+    baselineBytes <- live <$> sample
     (held, paid) <- bracket (prepare mode path) (freeStablePtr . fst) $ \(root, paid) -> do
         measured <- live <$> sample
         observe root
         pure (measured, paid)
     released <- live <$> sample
-    LBS.putStr (encode (Measurement before held released paid))
+    LBS.putStr (encode (Measurement baselineBytes held released paid))
 
 -- Only the stable pointer and evaluated scalar leave this frame. Show visits opaque parsed keys and descriptors.
 {-# NOINLINE prepare #-}
