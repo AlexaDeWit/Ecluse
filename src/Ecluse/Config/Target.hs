@@ -2,17 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolve a mount's declared endpoints against the store tag each one names.
-
-The tag is the declaration, and the URL is checked against it. A @codeArtifact@ endpoint must carry
-the CodeArtifact host shape and, as mirror target or private upstream, address a repository under
-the mount's own package format, because a repository's per-format endpoints are separate stores.
-Every other tag admits any https registry the egress boundary cleared. Each refusal names the key,
-so a store this build cannot address is refused at load rather than at the first write.
--}
+-- | Resolve tagged registry endpoints and their CodeArtifact store identities.
 module Ecluse.Config.Target (
     -- * Resolution
     resolveStoreBackend,
+    resolveUploadBackend,
     resolvePrivateBackend,
     vetTargetTag,
     vetPrivateRepository,
@@ -42,54 +36,56 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     formatToken,
  )
 
-{- | Resolve a mirror target's store backend from the tag it declares. Only the CodeArtifact arm
-reads the URL, and it refuses one that addresses no repository this mount could mirror into.
--}
+-- | Resolve the read root and credential identity declared by a mirror target.
 resolveStoreBackend :: Ecosystem -> MirrorEndpoint -> Either ConfigError StoreBackend
-resolveStoreBackend eco endpoint = case meWrite endpoint of
+resolveStoreBackend = resolveMirrorBackend RepositoryEndpoint
+
+-- | Resolve a native upload endpoint without admitting upload paths as read roots.
+resolveUploadBackend :: Ecosystem -> MirrorEndpoint -> RegistryUrl -> Either ConfigError StoreBackend
+resolveUploadBackend eco endpoint upload = resolveMirrorBackend UploadEndpoint eco endpoint{meUrl = upload}
+
+data EndpointPurpose = RepositoryEndpoint | UploadEndpoint
+
+resolveMirrorBackend :: EndpointPurpose -> Ecosystem -> MirrorEndpoint -> Either ConfigError StoreBackend
+resolveMirrorBackend purpose eco endpoint = case meWrite endpoint of
     WriteRegistry token -> Right (BackendRegistry token)
     WriteVerdaccio token consent -> Right (BackendVerdaccio token consent)
     WriteCodeArtifact mDuration -> do
-        (domain, owner, region) <- codeArtifactHost eco mirrorTargetKey (meUrl endpoint)
-        store <- codeArtifactStore eco mirrorTargetKey (registryUrlText (meUrl endpoint)) domain owner region
+        (domain, owner, region) <- codeArtifactHost eco key (meUrl endpoint)
+        store <- codeArtifactStore purpose eco key (registryUrlText (meUrl endpoint)) domain owner region
         Right (BackendCodeArtifact (mintIdentity domain owner region mDuration) store)
+  where
+    key = case purpose of
+        RepositoryEndpoint -> mirrorTargetKey
+        UploadEndpoint -> "mirrorTarget.codeArtifact.uploadUrl"
 
-{- | Resolve a private target already classified as CodeArtifact, using the default token lifetime.
-The repository is returned beside the backend, so a caller needs no second read of the control plane.
--}
+-- | Resolve a CodeArtifact private read root with the default token lifetime.
 resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError (StoreBackend, CodeArtifactStore)
 resolvePrivateBackend eco target = do
     (domain, owner, region) <- codeArtifactHost eco privateUpstreamKey (tgtUrl target)
-    store <- codeArtifactStore eco privateUpstreamKey (registryUrlText (tgtUrl target)) domain owner region
+    store <- codeArtifactStore RepositoryEndpoint eco privateUpstreamKey (registryUrlText (tgtUrl target)) domain owner region
     pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store, store)
 
-{- | Vet a read or publish endpoint's URL against its declared tag. Only @codeArtifact@ constrains
-the host, and only a mirror target constrains the path, so this is total over the other tags.
--}
+-- | Check the host against its declared tag. Repository path checks belong to the endpoint role.
 vetTargetTag :: Ecosystem -> Text -> Target -> Either ConfigError ()
 vetTargetTag eco key target = case tgtTag target of
-    TagCodeArtifact -> void (codeArtifactHost eco key (tgtUrl target))
+    TagCodeArtifact -> void (codeArtifactHost eco (key <> ".codeArtifact.url") (tgtUrl target))
     TagRegistry -> Right ()
     TagVerdaccio -> Right ()
 
-{- | Vet a declared private upstream past its tag. A @codeArtifact@ one must address a repository
-under the mount's own format, because the boot asks that repository what content it aggregates.
--}
+-- | Require a CodeArtifact private read root for the mount format before checking its upstream chain.
 vetPrivateRepository :: Ecosystem -> Target -> Either ConfigError ()
 vetPrivateRepository eco target = case tgtTag target of
     -- The host is 'vetTargetTag''s to report, so a bad one is left to it rather than named twice.
     TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
     _ -> Right ()
 
--- The key a private upstream is declared under, which every refusal of one is reported at.
 privateUpstreamKey :: Text
-privateUpstreamKey = "privateUpstream"
+privateUpstreamKey = "privateUpstream.codeArtifact.url"
 
--- The key a mirror target is declared under, which every refusal of one is reported at.
 mirrorTargetKey :: Text
-mirrorTargetKey = "mirrorTarget"
+mirrorTargetKey = "mirrorTarget.codeArtifact.url"
 
--- The mint identity a CodeArtifact host carries, with the lifetime the operator asked for.
 mintIdentity :: Text -> Text -> Text -> Maybe Natural -> CodeArtifactConfig
 mintIdentity domain owner region mDuration =
     CodeArtifactConfig
@@ -99,21 +95,16 @@ mintIdentity domain owner region mDuration =
         , caDurationSeconds = mDuration
         }
 
--- The CodeArtifact identity a target's host carries, refused under the key it was written at.
 codeArtifactHost :: Ecosystem -> Text -> RegistryUrl -> Either ConfigError (Text, Text, Text)
 codeArtifactHost eco key url =
     maybeToRight
-        (CodeArtifactHostMismatch eco (key <> ".codeArtifact.url"))
+        (CodeArtifactHostMismatch eco key)
         (parseCodeArtifactHost (hostAddress (registryUrlText url)))
 
--- The repository an endpoint addresses, under the format token its mount's ecosystem maps to.
-codeArtifactStore :: Ecosystem -> Text -> Text -> Text -> Text -> Text -> Either ConfigError CodeArtifactStore
-codeArtifactStore eco key raw domain owner region = do
-    format <- maybeToRight (CodeArtifactFormatUnsupported eco urlPath) (codeArtifactFormat eco)
-    repository <-
-        maybeToRight
-            (CodeArtifactRepositoryMissing eco urlPath (formatToken format))
-            (repositoryOfPath (formatToken format) raw)
+codeArtifactStore :: EndpointPurpose -> Ecosystem -> Text -> Text -> Text -> Text -> Text -> Either ConfigError CodeArtifactStore
+codeArtifactStore purpose eco key raw domain owner region = do
+    format <- maybeToRight (CodeArtifactFormatUnsupported eco key) (codeArtifactFormat eco)
+    repository <- maybeToRight (repositoryError (formatToken format)) (repositoryOfPath purpose (formatToken format) raw)
     pure
         CodeArtifactStore
             { casDomain = domain
@@ -123,25 +114,28 @@ codeArtifactStore eco key raw domain owner region = do
             , casFormat = format
             }
   where
-    urlPath = key <> ".codeArtifact.url"
+    repositoryError format = case purpose of
+        RepositoryEndpoint -> CodeArtifactRepositoryMissing eco key format
+        UploadEndpoint ->
+            ParseError
+                ( "mirrorTarget.codeArtifact.uploadUrl must address /"
+                    <> format
+                    <> "/{repository}/"
+                    <> if format == "pypi" then " or /pypi/{repository}/legacy/" else ""
+                )
 
--- The repository a CodeArtifact endpoint path names, under the expected format segment.
-repositoryOfPath :: Text -> Text -> Maybe Text
-repositoryOfPath format url = case pathSegments url of
-    [pathFormat, repository] | pathFormat == format -> nonBlank repository
+repositoryOfPath :: EndpointPurpose -> Text -> Text -> Maybe Text
+repositoryOfPath purpose format url = case (purpose, pathSegments url) of
+    (_, [pathFormat, repository]) | pathFormat == format -> nonBlank repository
+    (UploadEndpoint, ["pypi", repository, "legacy"]) | format == "pypi" -> nonBlank repository
     _ -> Nothing
 
--- The non-empty path segments of an absolute URL, which the egress boundary has already vetted.
 pathSegments :: Text -> [Text]
 pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
 
-{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region).
-The owner is the 12-digit account id after the __last__ hyphen, so a domain may carry them.
--}
+-- | Parse the CodeArtifact host into domain, owner and region, allowing hyphens in the domain.
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host =
-    -- The accepted shape carries exactly one @.d.codeartifact.@ marker. Any other count is not
-    -- a CodeArtifact endpoint, refused here rather than by an implicit pattern-match failure.
     case T.splitOn ".d.codeartifact." host of
         [domainOwner, regionTail] -> do
             region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
@@ -151,8 +145,6 @@ parseCodeArtifactHost host =
             pure (domain, owner, region)
         _ -> Nothing
 
-{- | Whether a value is a 12-digit AWS account id (shared with the SQS queue-URL
-shape validation in "Ecluse.Config.QueueTarget").
--}
+-- | Recognise the 12-digit AWS account id shared by CodeArtifact and SQS URL parsing.
 isAccountId :: Text -> Bool
 isAccountId t = T.compareLength t 12 == EQ && T.all isDigit t

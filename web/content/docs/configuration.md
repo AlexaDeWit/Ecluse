@@ -186,6 +186,8 @@ different tags are refused for every role, because one store has one backend.
 
 A PyPI mirror declares the registry root, from which reads append `simple/`, and an explicit native `uploadUrl`. A generic static
 write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
+A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
+Its supported upload paths are listed in `config/default.yaml`.
 The refresh provider still owns only the secret. Client publication uses the exact configured
 publication URL and retains the caller's Basic pair when no static replacement is configured.
 

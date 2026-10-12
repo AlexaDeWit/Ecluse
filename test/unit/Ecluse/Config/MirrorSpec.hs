@@ -26,16 +26,45 @@ spec = describe "native mirror declarations" $ do
         fmap mtUsername target `shouldBe` Just (Just "publisher")
     it "refuses an upload endpoint on a public upstream host" $
         loadConfig (overrideEnv uploadKey "https://pypi.org/legacy/" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
-    it "binds CodeArtifact uploads to the configured mirror repository" $ do
-        let prefix = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__"
-            endpoint = "https://mirror-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/cache/"
-            configured =
-                [(prefix <> "CODE_ARTIFACT__URL", endpoint), (prefix <> "CODE_ARTIFACT__UPLOAD_URL", endpoint)]
-                    <> filter (not . List.isPrefixOf prefix . fst) pypiMirrorEnv
-        config <- expectConfig configured Nothing
-        let target = regMirrorTarget . mountRegistries =<< Map.lookup PyPI (configMounts config)
-        fmap mtUsername target `shouldBe` Just (Just "aws")
-        loadConfig (overrideEnv (prefix <> "CODE_ARTIFACT__UPLOAD_URL") "https://mirror-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/other/" configured) Nothing `shouldSatisfy` isLeft
+    describe "CodeArtifact upload endpoints" $ do
+        for_ ["/pypi/cache/", "/pypi/cache/legacy/"] $ \path ->
+            it ("accepts the native upload path " <> path) $ do
+                config <- expectConfig (codeArtifactEnv (codeArtifactHost <> path)) Nothing
+                let target = regMirrorTarget . mountRegistries =<< Map.lookup PyPI (configMounts config)
+                fmap mtUsername target `shouldBe` Just (Just "aws")
+                fmap (registryUrlText . mtUploadUrl) target `shouldBe` Just (toText (codeArtifactHost <> path))
+        for_
+            [ ("repository root", codeArtifactHost <> "/pypi/other/")
+            , ("repository upload path", codeArtifactHost <> "/pypi/other/legacy/")
+            , ("domain", "https://other-123456789012.d.codeartifact.us-east-1.amazonaws.com/pypi/cache/legacy/")
+            , ("account", "https://mirror-999999999999.d.codeartifact.us-east-1.amazonaws.com/pypi/cache/legacy/")
+            , ("region", "https://mirror-123456789012.d.codeartifact.eu-west-1.amazonaws.com/pypi/cache/legacy/")
+            ]
+            $ \(identity, upload) ->
+                it ("refuses an upload to another " <> identity) $
+                    loadConfig (codeArtifactEnv upload) Nothing
+                        `shouldBe` Left [ParseError "CodeArtifact uploadUrl must address the same mirror repository"]
+        for_ ["/pypi/cache/simple/", "/pypi/cache/legacy/extra/", "/npm/cache/legacy/", "/legacy/"] $ \path ->
+            it ("refuses an unsupported upload path " <> path) $
+                loadConfig (codeArtifactEnv (codeArtifactHost <> path)) Nothing
+                    `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /pypi/{repository}/ or /pypi/{repository}/legacy/"]
+        it "refuses an upload host outside CodeArtifact" $
+            loadConfig (codeArtifactEnv "https://target.example.test/pypi/cache/legacy/") Nothing
+                `shouldBe` Left [CodeArtifactHostMismatch PyPI "mirrorTarget.codeArtifact.uploadUrl"]
+        it "keeps the read root separate from the native upload path" $
+            loadConfig
+                (overrideEnv (codeArtifactPrefix <> "URL") (codeArtifactHost <> "/pypi/cache/legacy/") (codeArtifactEnv (codeArtifactHost <> "/pypi/cache/legacy/")))
+                Nothing
+                `shouldBe` Left [CodeArtifactRepositoryMissing PyPI "mirrorTarget.codeArtifact.url" "pypi"]
+        it "refuses the PyPI upload suffix on an npm mount" $
+            loadConfig
+                ( pubUrlEnv
+                    <> [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactHost <> "/npm/cache/")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__UPLOAD_URL", codeArtifactHost <> "/npm/cache/legacy/")
+                       ]
+                )
+                Nothing
+                `shouldBe` Left [ParseError "mirrorTarget.codeArtifact.uploadUrl must address /npm/{repository}/"]
     it "refuses malformed state URLs through the existing object-store parser" $
         loadConfig (overrideEnv stateKey "https://target.example.test/state" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
     it "does not require state or upload settings for a serve-only mount" $
@@ -56,3 +85,14 @@ stateKey, uploadKey, usernameKey :: String
 stateKey = "ECLUSE_MIRROR_STATE__URL"
 uploadKey = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__UPLOAD_URL"
 usernameKey = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__USERNAME"
+
+codeArtifactPrefix, codeArtifactHost :: String
+codeArtifactPrefix = "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__"
+codeArtifactHost = "https://mirror-123456789012.d.codeartifact.us-east-1.amazonaws.com"
+
+codeArtifactEnv :: String -> [(String, String)]
+codeArtifactEnv upload =
+    [ (codeArtifactPrefix <> "URL", codeArtifactHost <> "/pypi/cache/")
+    , (codeArtifactPrefix <> "UPLOAD_URL", upload)
+    ]
+        <> filter (not . List.isPrefixOf "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__" . fst) pypiMirrorEnv

@@ -7,7 +7,7 @@ module Ecluse.Config.Mirror (validateMirrorSettings) where
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
+import Ecluse.Config.Target (resolveStoreBackend, resolveUploadBackend)
 import Ecluse.Config.Types
 import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -19,11 +19,10 @@ validateMirrorSettings app = traverse_ validate (Map.toList (cfgMounts app))
     validate (eco, mount) = do
         for_ (mntMirrorTarget mount) $ \target -> do
             for_ (meUploadUrl target) $ \upload -> do
-                first pure (vetTargetTag eco "mirrorTarget.uploadUrl" (meTarget target){tgtUrl = upload})
                 case meWrite target of
                     WriteCodeArtifact{} -> do
                         original <- first pure (resolveStoreBackend eco target)
-                        uploaded <- first pure (resolveStoreBackend eco target{meUrl = upload})
+                        uploaded <- first pure (resolveUploadBackend eco target upload)
                         unless (original == uploaded) (refuse "CodeArtifact uploadUrl must address the same mirror repository")
                     _ -> pure ()
                 when (hostPortAddress (registryUrlText upload) `elem` publicHosts) $

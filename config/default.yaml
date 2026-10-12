@@ -443,6 +443,8 @@ mounts:
     # maxRequestBytes: 52428800
     # The read root and native upload endpoint are distinct. The state store above is required.
     # Generic PyPI write credentials declare their Basic username. CodeArtifact binds aws.
+    # CodeArtifact reads use /pypi/{repository}/. Its uploadUrl accepts that root or
+    # /pypi/{repository}/legacy/ for the same domain, account, region and repository.
     # mirrorTarget:
     #   registry:
     #     url: https://mirror.internal/
