@@ -146,7 +146,7 @@ heapProbe :: Text -> FilePath -> IO Measurement
 heapProbe format path = do
     size <- fromIntegral <$> getFileSize path
     performMajorGC
-    before <- getRTSStats
+    rtsBefore <- getRTSStats
     bytes <- BS.readFile path
     paid <- newIORef 0
     let charge wanted = modifyIORef' paid (max wanted)
@@ -158,15 +158,15 @@ heapProbe format path = do
     selected <- archiveMetadata defaultLimits charge (unscopedPyPI "example") (pypiVersion "1") filename bytes >>= expectRight
     bracket (newStablePtr (bytes, selected)) freeStablePtr $ \_ -> do
         performMajorGC
-        after <- getRTSStats
+        rtsAfter <- getRTSStats
         peak <- readIORef paid
         pure
             Measurement
                 { sourceBytes = size
                 , workspaceBytes = peak
-                , peakHeapBytes = toInteger (max_live_bytes after) - toInteger (gcdetails_live_bytes (gc before))
-                , retainedHeapBytes = toInteger (gcdetails_live_bytes (gc after)) - toInteger (gcdetails_live_bytes (gc before))
-                , allocatedBytes = toInteger (allocated_bytes after) - toInteger (allocated_bytes before)
+                , peakHeapBytes = toInteger (max_live_bytes rtsAfter) - toInteger (gcdetails_live_bytes (gc rtsBefore))
+                , retainedHeapBytes = toInteger (gcdetails_live_bytes (gc rtsAfter)) - toInteger (gcdetails_live_bytes (gc rtsBefore))
+                , allocatedBytes = toInteger (allocated_bytes rtsAfter) - toInteger (allocated_bytes rtsBefore)
                 }
 
 data NativeSample = NativeSample
@@ -255,13 +255,13 @@ sampleWithoutGC run = do
     finiteBitSize (0 :: Int) `shouldBe` 64
     performMajorGC
     (virtualBefore, residentBefore) <- processMemory
-    before <- getRTSStats
+    rtsBefore <- getRTSStats
     allocationBefore <- getAllocationCounter
     run $ do
         allocationAfter <- getAllocationCounter
         (virtualAfter, residentAfter) <- processMemory
-        after <- getRTSStats
-        gcs after `shouldBe` gcs before
+        rtsAfter <- getRTSStats
+        gcs rtsAfter `shouldBe` gcs rtsBefore
         pure
             NativeSample
                 { sampledAllocated = toInteger allocationBefore - toInteger allocationAfter
