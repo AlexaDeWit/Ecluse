@@ -36,6 +36,8 @@ module Ecluse.Core.Mirror.State.Internal (
     targetKey,
     projectKey,
     checkMirrorCompletion,
+    MirrorCompletion (..),
+    MirrorCompletionFault (..),
     declaredCompanion,
 ) where
 
@@ -246,17 +248,34 @@ retainVerifiedIdentity version verified record = do
     let updated = old{storedIdentities = Map.insert name digest (versionVerifiedIdentities old)}
     pure record{projectVersions = Map.insert (versionRaw version) updated (recordVersions record)}
 
+-- | A failed proof reports each missing file, conflicting identity, or pending companion.
+data MirrorCompletion = MirrorComplete | MirrorIncomplete (NonEmpty MirrorCompletionFault)
+    deriving stock (Eq, Show)
+
+-- | The worker can retry absent files without republishing a conflicting existing filename.
+data MirrorCompletionFault
+    = MissingMirrorFile Text
+    | ConflictingMirrorFile Text
+    | MissingMirrorProof Text
+    | PendingMirrorCompanion Text
+    deriving stock (Eq, Show)
+
 -- | Completion uses current authorised target identities and retained companions, never a stored Boolean.
-checkMirrorCompletion :: MirrorVersion -> [Artifact] -> Bool
+checkMirrorCompletion :: MirrorVersion -> [Artifact] -> MirrorCompletion
 checkMirrorCompletion version targetFiles =
-    all matched (Map.toList (versionFiles version)) && all retained (Map.elems (versionCompanions version))
+    maybe MirrorComplete MirrorIncomplete (nonEmpty (fileFaults <> companionFaults))
   where
     current = Map.fromListWith (<>) [(artFilename file, [file]) | file <- targetFiles]
-    matched (name, expected) = case Map.lookup name current of
-        Just files -> not (null files) && all (expectedTargetMatchesWith expected (Map.lookup name (versionVerifiedIdentities version))) files
-        Nothing -> False
-    retained CompanionPending = False
-    retained (CompanionRetained _) = True
+    fileFaults = mapMaybe checkFile (Map.toList (versionFiles version))
+    checkFile (name, expected) = case Map.lookup name current of
+        Nothing -> Just (MissingMirrorFile name)
+        Just files
+            | all (expectedTargetMatchesWith expected verified) files -> Nothing
+            | any (targetIdentityConflict expected verified) files -> Just (ConflictingMirrorFile name)
+            | otherwise -> Just (MissingMirrorProof name)
+          where
+            verified = Map.lookup name (versionVerifiedIdentities version)
+    companionFaults = [PendingMirrorCompanion name | (name, CompanionPending) <- Map.toList (versionCompanions version)]
 
 -- | The content identity used in storage keys and byte verification.
 companionDigest :: CompanionRef -> Text

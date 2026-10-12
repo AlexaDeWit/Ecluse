@@ -28,6 +28,7 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), TransportFault, transportFault)
+import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry.Progress (Watch, meteredReader, meteredUpload, watched)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (..), boundedRead)
 import Ecluse.Core.Stream (boundBytes)
@@ -212,3 +213,4 @@ boundedCall action =
         `catch` (\(ObjectLimit cap) -> pure (Left (ObjectTooLarge cap)))
         `catch` (\ObjectProgress -> pure (Left (ObjectTransport (transportFault TransportTimeout "the mirror state exchange fell below its progress floor"))))
         `catch` (\(err :: AWS.Error) -> pure (Left (ObjectTransport (classifyAwsTransport err))))
+        `catch` (\(err :: HTTP.HttpException) -> pure (Left (ObjectTransport (classifyTransport err))))

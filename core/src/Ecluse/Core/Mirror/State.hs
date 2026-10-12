@@ -35,6 +35,8 @@ module Ecluse.Core.Mirror.State (
     verifyCompanionBytes,
     verifyRetainedCompanion,
     checkMirrorCompletion,
+    MirrorCompletion (..),
+    MirrorCompletionFault (..),
     encodeProjectRecord,
     decodeProjectRecord,
     projectRecordWeight,

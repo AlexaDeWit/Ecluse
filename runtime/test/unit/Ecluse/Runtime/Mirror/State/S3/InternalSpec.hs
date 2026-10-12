@@ -9,13 +9,20 @@ import Amazonka qualified as AWS
 import Amazonka.Auth (fromKeys)
 import Data.ByteString qualified as BS
 import Network.HTTP.Types
-import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseStream, strictRequestBody)
+import Network.Wai (Application, queryString, requestHeaders, requestMethod, responseLBS, responseRaw, responseStream, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
+import UnliftIO.Async (AsyncCancelled (AsyncCancelled), cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Mirror.State (MirrorState (..), MirrorStateFault (StateTransport), stateTarget)
+import Ecluse.Core.Mirror.State.Internal (CompanionRef (..))
+import Ecluse.Core.Package (HashAlg (SHA256), mkHash, mkPackageName)
 import Ecluse.Core.Security (Limits (..), defaultLimits, mkProgressFloor)
+import Ecluse.Runtime.Mirror.State.S3 (mirrorStateForEnv)
 import Ecluse.Runtime.Mirror.State.S3.Internal
+import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -108,6 +115,60 @@ spec = describe "conditional mirror metadata storage" $ do
             )
             $ \env ->
                 readObject env limits{progressFloor = floorSpec} "records" "key" Nothing `shouldReturn` Right (ObjectLoaded "\"one\"" "xxxxxxxxxxxx")
+
+    it "propagates cancellation while a response body is blocked" $ do
+        started <- newEmptyMVar
+        release <- newEmptyMVar
+        withS3
+            ( \_ respond ->
+                respond
+                    ( responseStream
+                        status200
+                        [(hETag, "\"one\"")]
+                        ( \write flush -> do
+                            write "x"
+                            flush
+                            putMVar started ()
+                            takeMVar release
+                        )
+                    )
+            )
+            $ \env ->
+                withAsync (readObject env limits "records" "key" Nothing) $ \worker -> do
+                    takeMVar started
+                    cancel worker
+                    putMVar release ()
+                    either fromException (const Nothing) <$> waitCatch worker `shouldReturn` Just AsyncCancelled
+
+    for_ [shortLengthBody, interruptedChunkBody] $ \body -> do
+        it "returns a typed transport fault when a project GET body closes early" $
+            withS3 (brokenResponse "200 OK" body) $ \env -> do
+                let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                msReadProject store (mkPackageName PyPI Nothing "demo") Nothing >>= (`shouldSatisfy` stateTransportFailure)
+
+        it "returns a typed transport fault when a retained companion body closes early" $ do
+            digest <- expectRight (mkHash SHA256 (hexSha256Of "metadata"))
+            withS3 (brokenResponse "200 OK" body) $ \env -> do
+                let store = mirrorStateForEnv limits "records" "state" (stateTarget "https://private.test") env
+                msReadCompanion store (CompanionRef digest 8) >>= (`shouldSatisfy` stateTransportFailure)
+
+        it "returns a typed transport fault when an error body closes early" $
+            withS3 (brokenResponse "403 Forbidden" body) $ \env ->
+                readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
+
+        it "does not infer absence when the fallback list body closes early"
+            $ withS3
+                ( \request respond ->
+                    if null (queryString request)
+                        then reply status403 [] (xmlError "AccessDenied") request respond
+                        else brokenResponse "200 OK" body request respond
+                )
+            $ \env ->
+                readObject env limits "records" "key" Nothing >>= (`shouldSatisfy` objectTransportFailure)
+
+        it "returns a typed transport fault when a conditional PUT error body closes early" $
+            withS3 (brokenResponse "412 Precondition Failed" body) $ \env ->
+                writeObject env limits "records" "key" Nothing "record" >>= (`shouldSatisfy` objectTransportFailure)
 
     it "requires an ETag after a successful write" $
         withS3 (reply status200 [] "") $ \env ->
@@ -202,3 +263,25 @@ xmlError code = "<Error><Code>" <> code <> "</Code><Message>refused</Message></E
 
 emptyList :: LByteString
 emptyList = "<ListBucketResult><IsTruncated>false</IsTruncated><KeyCount>0</KeyCount></ListBucketResult>"
+
+shortLengthBody :: ByteString
+shortLengthBody = "Content-Length: 20\r\n\r\nshort"
+
+interruptedChunkBody :: ByteString
+interruptedChunkBody = "Transfer-Encoding: chunked\r\n\r\n8\r\nshort"
+
+brokenResponse :: ByteString -> ByteString -> Application
+brokenResponse status body _ respond =
+    respond
+        ( responseRaw
+            (\_ send -> send ("HTTP/1.1 " <> status <> "\r\nETag: \"one\"\r\nConnection: close\r\n" <> body))
+            (responseLBS status500 [] "raw response required")
+        )
+
+objectTransportFailure :: Either ObjectFault a -> Bool
+objectTransportFailure (Left (ObjectTransport _)) = True
+objectTransportFailure _ = False
+
+stateTransportFailure :: Either MirrorStateFault a -> Bool
+stateTransportFailure (Left (StateTransport _)) = True
+stateTransportFailure _ = False
