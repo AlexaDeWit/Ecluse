@@ -7,7 +7,6 @@
 module Ecluse.Test.Contract.Sweep.Rollout (rolloutScenarios) where
 
 import Data.ByteString.Lazy qualified as LBS
-import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Install (shouldFail, shouldSucceed)
 import Ecluse.Test.Contract.Sweep (inventoriesEmpty, refusedNext)
@@ -98,5 +97,4 @@ nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} plane queue proxy 
     void $ clientInstall proxy (packageName rolloutSentinel) Nothing >>= shouldSucceed
     withWorkerRole plane queue $ \worker -> do
         awaitPublished worker (packageName rolloutSentinel <> "@" <> packageVersion rolloutSentinel) `shouldReturn` True
-        logs <- workerLogs worker
-        logs `shouldSatisfy` (not . T.isInfixOf ("mirrored artifact published: " <> denied))
+        wasPublished worker denied `shouldReturn` False

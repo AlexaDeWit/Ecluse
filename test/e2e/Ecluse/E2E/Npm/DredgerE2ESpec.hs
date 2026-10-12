@@ -272,7 +272,7 @@ rolloutOps =
         , withServingRole = \plane queue policy -> withServeOnlyProxy plane queue (servingEnvironment policy)
         , withWorkerRole = \plane queue -> withMirrorRole plane (mirrorRoleEnv queue permissiveRules)
         , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf (publishedLine release)) 240
-        , workerLogs = containerLogs
+        , wasPublished = \worker release -> T.isInfixOf (publishedLine release) <$> containerLogs worker
         }
   where
     servingEnvironment PermissivePolicy = permissiveEnv <> publishTargetEnv

@@ -12,6 +12,7 @@ module Ecluse.E2E.PyPI.MirrorEvidence (
     getUrl,
     awaitWholeMirror,
     canonicalVersion,
+    mirrorCompleted,
     verifyDistribution,
     publicProjectDiscovery,
     verifyPlatformInstallation,
@@ -29,12 +30,14 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Version (VersionError (versionErrorMessage), parseVersionKey, renderVersionKey)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
 import Ecluse.Test.Contract.Install
 import Ecluse.Test.Contract.Serving qualified as Serving
+import Ecluse.Test.Log (lineMessage)
+import Ecluse.Test.Support (expectRightText)
 import Test.Hspec
 
 -- | Public origin records, including failed requests.
@@ -91,12 +94,17 @@ getUrl proxy url = case T.stripPrefix (e2eBaseUrl proxy) url of
 awaitWholeMirror :: E2E -> NativeTarget -> [Distribution] -> IO ()
 awaitWholeMirror proxy target distributions = do
     awaitTargetFiles target distributions `shouldReturn` True
+    version <- canonicalVersion mirrorVersion
     for_ [mirrorRoot, mirrorDependency] $ \project ->
-        awaitProxyLog proxy (T.isInfixOf ("mirror version complete: " <> project <> "@" <> canonicalVersion)) 120 `shouldReturn` True
+        awaitProxyLog proxy (mirrorCompleted project version) 120 `shouldReturn` True
 
--- | The version spelling used by worker logs and domain spans.
-canonicalVersion :: Text
-canonicalVersion = renderVersion (mkVersion PyPI mirrorVersion)
+-- | Require the canonical PyPI key used by worker logs and domain spans.
+canonicalVersion :: Text -> IO Text
+canonicalVersion = expectRightText . bimap versionErrorMessage renderVersionKey . parseVersionKey PyPI
+
+-- | Observe a complete canonical release without matching another version's text prefix.
+mirrorCompleted :: Text -> Text -> Text -> Bool
+mirrorCompleted project version = elem ("mirror version complete: " <> project <> "@" <> version) . mapMaybe lineMessage . T.lines
 
 -- | Require exact distribution bytes and complete body-free HEAD responses.
 verifyDistribution :: E2E -> [(Text, Text)] -> Distribution -> IO ()

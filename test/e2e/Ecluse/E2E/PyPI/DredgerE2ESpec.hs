@@ -33,10 +33,12 @@ import Ecluse.E2E.Harness.PyPIMirror (awaitTargetFiles)
 import Ecluse.E2E.Harness.Sweep
 import Ecluse.E2E.Harness.Types (GlobalDataPlane, PipProject, Topology (..))
 import Ecluse.E2E.Harness.Verdaccio (awaitMirrorWindow)
+import Ecluse.E2E.PyPI.MirrorEvidence (canonicalVersion, mirrorCompleted)
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Contract.Types
+import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (..))
 import Ecluse.Test.Poll (pollUntil)
 
@@ -115,7 +117,8 @@ withRecovery action global = Native.withPyPISweepPlane global $ \plane -> do
     Native.withSweepProxy plane permissiveEnv Nothing [] $ \seeder -> do
         seedMirror seeder recoveryPackages
         seedCache seeder recoveryPackages
-    let denials = (packageName siblingPackage <> "@1.0.0") : map packageName [refusedPackage, readmittedPackage, missingPackage, latePackage]
+    version <- canonicalVersion (recoveryDeniedVersion recoveryFixture)
+    let denials = (packageName siblingPackage <> "@" <> version) : map packageName [refusedPackage, readmittedPackage, missingPackage, latePackage]
     Native.withSweepProxy plane [("ECLUSE_RULES", denyingRules denials)] Nothing [] $ \proxy ->
         action (plane, proxy, Native.cacheStore proxy)
 
@@ -196,12 +199,21 @@ rolloutOps =
                 (Just queue)
                 ["proxy", "--no-worker"]
         , withWorkerRole = withObservedWorker
-        , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf ("mirrored artifact published: " <> release)) 240
-        , workerLogs = containerLogs
+        , awaitPublished = \worker release -> do
+            (name, version) <- workerRelease release
+            awaitContainerLog worker (mirrorCompleted name version) 240
+        , wasPublished = \worker release -> do
+            (name, version) <- workerRelease release
+            elem ("mirrored artifact published: " <> name <> "@" <> version) . mapMaybe lineMessage . T.lines <$> containerLogs worker
         }
   where
     servingEnvironment (IdentityPolicy names) = [("ECLUSE_RULES", denyingRules names)]
     servingEnvironment policy = policyEnvironment policy
+
+workerRelease :: Text -> IO (Text, Text)
+workerRelease release = case T.splitOn "@" release of
+    [name, version] | not (T.null name) -> (name,) <$> canonicalVersion version
+    _ -> fail "expected a PyPI package@version fixture coordinate"
 
 withObservedWorker :: Native.PyPISweepPlane -> Text -> (String -> IO a) -> IO a
 withObservedWorker plane queue action = do
