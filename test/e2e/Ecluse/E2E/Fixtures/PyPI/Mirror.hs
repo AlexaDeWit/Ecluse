@@ -9,6 +9,9 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorRoot,
     mirrorDependency,
     mirrorVersion,
+    mirrorExecutable,
+    mirrorExport,
+    mirrorGraph,
     mirrorPlatformX86,
     mirrorPlatformArm,
     mirrorWheelFile,
@@ -17,20 +20,22 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     distributionUploadBody,
     nativeUploadContentType,
     buildMirrorGraph,
-    buildPublication,
+    buildNativeProjects,
+    mirrorFileNames,
     distributionEntry,
     distributionIndex,
 ) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Info qualified as System
 import System.Process.Typed (proc, runProcess_, setWorkingDir)
 
-import Ecluse.E2E.Fixtures.PyPI (buildWheelWithFiles)
+import Ecluse.E2E.Fixtures.PyPI (WheelCompression (Bzip2Wheel, LzmaWheel), buildWheelWithCompression, pypiDistInfoFor)
 import Ecluse.Test.Package (hexSha256Of)
 
 -- | Original bytes and supported source fields for one distribution.
@@ -57,34 +62,35 @@ mirrorVersion = "1.0.0"
 
 -- | Build both projects under the existing nginx public fixture directory.
 buildMirrorGraph :: FilePath -> IO [Distribution]
-buildMirrorGraph root = concat <$> traverse (buildProject root) [mirrorRoot, mirrorDependency]
+buildMirrorGraph root = buildNativeProjects root [mirrorRoot, mirrorDependency]
 
--- | Build a separate first-party project for publication relay cases.
-buildPublication :: FilePath -> IO [Distribution]
-buildPublication root = buildProject root "e2e-published"
+-- | Build independent native projects with the same complete multi-file release shape.
+buildNativeProjects :: FilePath -> [Text] -> IO [Distribution]
+buildNativeProjects root = fmap concat . traverse (buildProject root)
 
 buildProject :: FilePath -> Text -> IO [Distribution]
 buildProject root project = do
     let projectDir = root </> "simple" </> toString project
     createDirectoryIfMissing True projectDir
-    wheels <- forM [("x86_64", mirrorPlatformX86), ("aarch64", mirrorPlatformArm)] $ \(architecture, platform) -> do
+    wheels <- forM [("x86_64", mirrorPlatformX86, Bzip2Wheel), ("aarch64", mirrorPlatformArm, LzmaWheel)] $ \(architecture, platform, compression) -> do
         let tag = "py3-none-" <> platform
             filename = mirrorWheelFile project platform
             metadata = projectMetadata project ("Wheel " <> tag)
             path = projectDir </> toString filename
-        buildWheelWithFiles
+        buildWheelWithCompression
+            compression
             project
             mirrorVersion
             metadata
             tag
-            [(toString (T.replace "-" "_" project) </> "architecture.txt", architecture <> "\n")]
+            (wheelFiles project architecture)
             (root </> toString (".build-" <> filename))
             path
         bytes <- BS.readFile path
         let companion = encodeUtf8 (metadata <> "\nPublic companion payload.\n")
         BS.writeFile (path <> ".metadata") companion
         pure (Distribution project mirrorVersion filename bytes companion (encodeUtf8 metadata))
-    sources <- forM ["tar.gz", "tgz", "tar.bz2", "tar.xz", "zip"] $ \suffix -> do
+    sources <- forM sourceFormats $ \suffix -> do
         let filename = project <> "-" <> mirrorVersion <> "." <> suffix
             metadata = projectMetadata project ("Source " <> suffix)
             work = root </> toString (".build-" <> filename)
@@ -207,3 +213,41 @@ distributionUploadBody distribution overrides =
         , ("sha256_digest", encodeUtf8 (hexSha256Of (distributionBytes distribution)))
         ]
     fieldPart (name, value) = "--fixture-upload\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
+
+-- | The wheel's installed console command, executed only in a native virtual environment.
+mirrorExecutable :: Text
+mirrorExecutable = "e2e-mirror"
+
+-- | The root must load its dependency to produce this export.
+mirrorExport :: Value
+mirrorExport = object ["root" .= mirrorVersion, "dependency" .= mirrorVersion]
+
+-- | Installed package versions and dependency declarations, read independently from METADATA.
+mirrorGraph :: Map Text (Text, [Text])
+mirrorGraph = Map.fromList [(mirrorRoot, (mirrorVersion, [mirrorDependency <> "==" <> mirrorVersion])), (mirrorDependency, (mirrorVersion, []))]
+
+wheelFiles :: Text -> Text -> [(FilePath, Text)]
+wheelFiles project architecture =
+    [ (toString escaped </> "architecture.txt", architecture <> "\n")
+    , (toString escaped </> "__init__.py", moduleBody)
+    ]
+        <> [(toString dataDirectory </> "scripts" </> toString mirrorExecutable, executableBody) | project == mirrorRoot]
+  where
+    escaped = T.replace "-" "_" project
+    dataDirectory = fromMaybe "" (T.stripSuffix ".dist-info" (pypiDistInfoFor project mirrorVersion)) <> ".data"
+    moduleBody =
+        T.unlines $
+            ["VERSION = " <> show mirrorVersion]
+                <> if project == mirrorRoot
+                    then ["from e2e_mirror_dependency import export as dependency_export", "def export():", "    return {'root': VERSION, 'dependency': dependency_export()}"]
+                    else ["def export():", "    return VERSION"]
+    executableBody = T.unlines ["#!/usr/bin/env python3", "import json", "from e2e_mirror_root import export", "print(json.dumps(export(), sort_keys=True))"]
+
+sourceFormats :: [Text]
+sourceFormats = ["tar.gz", "tgz", "tar.bz2", "tar.xz", "zip"]
+
+-- | The independent expected filenames for every supported wheel and source archive in one release.
+mirrorFileNames :: Text -> [Text]
+mirrorFileNames project =
+    map (mirrorWheelFile project) [mirrorPlatformX86, mirrorPlatformArm]
+        <> [project <> "-" <> mirrorVersion <> "." <> suffix | suffix <- sourceFormats]

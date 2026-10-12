@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Native traffic for the shared read telemetry and npm mirror telemetry contracts.
-module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily) where
+module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily, collectorDriver) where
 
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -95,6 +95,7 @@ mirrorDriver e2e =
 logDriver :: E2E -> LogDriver
 logDriver e2e = LogDriver $ \matches attempts -> pollUntil attempts 250000 matches (proxyContainerLogs e2e)
 
+-- | Observe actual collector output using the common bounded polling contract.
 collectorDriver :: E2E -> CollectorDriver
 collectorDriver e2e = CollectorDriver $ \matches attempts -> do
     name <- maybe (fail "telemetry profile requires a collector") pure (e2eCollectorContainer e2e)

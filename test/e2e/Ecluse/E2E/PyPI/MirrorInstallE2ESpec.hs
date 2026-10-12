@@ -4,36 +4,40 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | Whole-version copying, physical interruption, and fresh pip installs through the running product.
-module Ecluse.E2E.PyPI.MirrorInstallE2ESpec (spec) where
+module Ecluse.E2E.PyPI.MirrorInstallE2ESpec (pypiMirrorFamily, nativeMirrorContract) where
 
-import Data.Aeson (Value (Array, Object, String))
-import Data.Aeson qualified as Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy qualified as LBS
-import Data.List (lookup)
+import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import System.Process.Typed (proc, runProcess_)
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Version (mkVersion, renderVersion)
-import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor)
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..), concreteFamily)
+import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor, pypiProject)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
+import Ecluse.E2E.PyPI.MirrorEvidence
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Install (TargetRefusal (..))
+import Ecluse.Test.Contract.Mirror
+import Ecluse.Test.Contract.Phase (timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 import UnliftIO (finally)
 
--- | These cases run in the recurring image tier against native HTTP and emulated durable services.
-spec :: Spec
-spec = whenE2EAvailable . around withGlobalDataPlane $
-    describe "PyPI whole-version mirror installs" $ do
-        it "copies every wheel and sdist and preserves reads after public outage and proxy restart" $ \plane ->
-            withMirrorFixture plane $ \target distributions -> completeScenario plane target distributions AcceptUploads
-        it "recovers after a lost upload reply without changing installed bytes" $ \plane ->
-            withMirrorFixture plane $ \target distributions -> completeScenario plane target distributions LoseNextReply
-        it "keeps a partial target incomplete and resumes after the worker process is killed" $ \plane ->
-            withMirrorFixture plane $ \target distributions -> interruptedScenario plane target distributions
+-- | Native protocol and recovery obligations complement the full ecosystem laws.
+nativeMirrorContract :: ConcreteFixture -> DeclaredGroup
+nativeMirrorContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder ->
+    around (timedFixture recorder (withFixture fixture)) $
+        describe "PyPI whole-version mirror installs" $ do
+            it (caseLabel "pypi/mirror-native/read-roundtrip" "preserves every native file and supported field after restart") $ \plane ->
+                withMirrorFixture plane $ \target distributions -> completeScenario plane target distributions AcceptUploads
+            it (caseLabel "pypi/mirror-native/lost-reply" "recovers after a lost upload reply") $ \plane ->
+                withMirrorFixture plane $ \target distributions -> completeScenario plane target distributions LoseNextReply
+            it (caseLabel "pypi/mirror-native/interruption" "resumes an interrupted native copy") $ \plane ->
+                withMirrorFixture plane $ \target distributions -> interruptedScenario plane target distributions
 
 completeScenario :: GlobalDataPlane -> NativeTarget -> [Distribution] -> UploadFault -> IO ()
 completeScenario plane target distributions fault = do
@@ -157,116 +161,117 @@ verifyHot plane target distributions (cold, tree) =
             )
             plane
 
-publicReads :: GlobalDataPlane -> IO [StubRead]
-publicReads plane = filter ((== PyPIPublic) . srRoute) <$> stubReadsNow plane
-
-sourceView :: E2E -> IO [(Text, Value, [(Text, LByteString)])]
-sourceView proxy = forM [mirrorRoot, mirrorDependency] $ \project -> do
-    (status, bytes) <- proxyGet proxy ("/pypi/simple/" <> project)
-    status `shouldBe` 200
-    document <- either (fail . ("invalid Simple JSON: " <>)) pure (Aeson.eitherDecode bytes)
-    companions <- forM (filter (T.isSuffixOf ".whl" . fst) (fileUrls document)) $ \(filename, url) -> do
-        (companionStatus, companion) <- getUrl proxy (url <> ".metadata")
-        companionStatus `shouldBe` 200
-        pure (filename, companion)
-    pure (project, normaliseUrls document, sortOn fst companions)
-
-listedFiles :: E2E -> Text -> IO [(Text, Text)]
-listedFiles proxy project = do
-    (status, bytes) <- proxyGet proxy ("/pypi/simple/" <> project)
-    status `shouldBe` 200
-    document <- either fail pure (Aeson.eitherDecode bytes)
-    pure (fileUrls document)
-
-fileUrls :: Value -> [(Text, Text)]
-fileUrls (Object document)
-    | Just (Array entries) <- KeyMap.lookup "files" document =
-        [(filename, url) | Object entry <- toList entries, Just (String filename) <- [KeyMap.lookup "filename" entry], Just (String url) <- [KeyMap.lookup "url" entry]]
-fileUrls _ = []
-
-normaliseUrls :: Value -> Value
-normaliseUrls (Object document) = Object (KeyMap.mapWithKey (\key value -> if key == "files" then normaliseFiles value else value) document)
+-- | Supply real native installations and target observations to every shared mirror law.
+pypiMirrorFamily :: ConcreteFixture -> (MirrorFixture PythonGraph Value, FamilyFixture (MirrorDriver PythonGraph Value))
+pypiMirrorFamily fixture =
+    ( MirrorFixture
+        { mirrorExpectedGraph = mirrorGraph
+        , mirrorExpectedExport = mirrorExport
+        , mirrorExpectedVersions = [(project, [mirrorVersion]) | project <- projects]
+        , mirrorRequiredPaths =
+            Set.fromList
+                ( ["/simple/" <> project <> "/" | project <- projects]
+                    <> ["/simple/" <> project <> "/" <> filename | project <- projects, filename <- mirrorFileNames project]
+                )
+        , mirrorExpectedTargets = fmap (\((native, first), (other, second)) -> (targetExpected native first, targetExpected other second)) mirrorArchitectures
+        , mirrorExpectedSources = fmap (\((_, platform), _) -> [redactedProxy <> "/pypi/simple/" <> project <> "/" <> mirrorWheelFile project platform | project <- projects]) mirrorArchitectures
+        }
+    , concreteFamily fixture $ \recorder action plane ->
+        timedFixture recorder (withMirrorFixture plane . curry) $ \(target, distributions) -> do
+            queue <- sharedMirrorQueue plane
+            action (sharedMirrorDriver plane target distributions nativeMirrorConfig{ecQueueUrl = Just queue})
+    )
   where
-    normaliseFiles (Array entries) = Aeson.toJSON (sortOn (\value -> show value :: Text) (map normaliseEntry (toList entries)))
-    normaliseFiles value = value
-    normaliseEntry (Object entry) = Object (KeyMap.insert "url" (String "recorded source URL") entry)
-    normaliseEntry value = value
-normaliseUrls value = value
+    projects = [mirrorRoot, mirrorDependency]
 
-requireFileUrl :: Text -> [(Text, Text)] -> IO Text
-requireFileUrl filename entries = maybe (fail ("missing " <> toString filename)) pure (lookup filename entries)
-
-getUrl :: E2E -> Text -> IO (Int, LByteString)
-getUrl proxy url = case T.stripPrefix (e2eBaseUrl proxy) url of
-    Just path -> proxyGet proxy path
-    Nothing | "/" `T.isPrefixOf` url -> proxyGet proxy url
-    Nothing -> fail ("proxy returned a foreign artifact URL: " <> toString url)
-
-awaitWholeMirror :: E2E -> NativeTarget -> [Distribution] -> IO ()
-awaitWholeMirror proxy target distributions = do
-    awaitTargetFiles target distributions `shouldReturn` True
-    for_ [mirrorRoot, mirrorDependency] $ \project ->
-        awaitProxyLog proxy (T.isInfixOf ("mirror version complete: " <> project <> "@" <> canonicalVersion)) 120 `shouldReturn` True
-
-canonicalVersion :: Text
-canonicalVersion = renderVersion (mkVersion PyPI mirrorVersion)
-
-verifyDistribution :: E2E -> [(Text, Text)] -> Distribution -> IO ()
-verifyDistribution proxy entries distribution = do
-    url <- requireFileUrl (distributionFilename distribution) entries
-    (status, bytes) <- getUrl proxy url
-    status `shouldBe` 200
-    LBS.toStrict bytes `shouldBe` distributionBytes distribution
-    path <- maybe (fail "artifact URL lacks the proxy origin") pure (T.stripPrefix (e2eBaseUrl proxy) url)
-    (headStatus, headLength, headBytes) <- proxyHead proxy path
-    headStatus `shouldBe` 200
-    headLength `shouldBe` Just (fromIntegral (LBS.length bytes))
-    headBytes `shouldBe` 0
-    when (".whl" `T.isSuffixOf` distributionFilename distribution) $ do
-        (companionStatus, companion) <- getUrl proxy (url <> ".metadata")
-        companionStatus `shouldBe` 200
-        LBS.toStrict companion `shouldBe` distributionMetadata distribution
-        proxyHead proxy (path <> ".metadata") `shouldReturn` (200, Just (fromIntegral (LBS.length companion)), 0)
-
-publicProjectDiscovery :: StubRead -> Bool
-publicProjectDiscovery request =
-    srMethod request == "GET"
-        && srPath request `elem` ["/simple/" <> project <> suffix | project <- [mirrorRoot, mirrorDependency], suffix <- ["", "/"]]
-
-verifyPlatformInstallation :: E2E -> Text -> Text -> IO ()
-verifyPlatformInstallation proxy platform architecture = do
-    installed <- pipInstallForPlatform proxy mirrorRoot mirrorVersion platform
-    void (shouldSucceedThroughProxy proxy (ptiClient installed))
-    sources <- either (fail . toString) pure (ptiSources installed)
-    map fst sources `shouldMatchList` [mirrorRoot, mirrorDependency]
-    for_ [mirrorRoot, mirrorDependency] $ \project -> do
-        let marker = toString (T.replace "-" "_" project) <> "/architecture.txt"
-        Map.lookup marker (ptiTree installed) `shouldBe` Just (TreeFile False (encodeUtf8 (architecture <> "\n")))
-        source <- maybe (fail "pip omitted the installed dependency source") pure (lookup project sources)
-        source `shouldSatisfy` T.isSuffixOf ("/" <> mirrorWheelFile project platform)
-
-requestedDistribution :: Text -> StubRead -> Bool
-requestedDistribution filename request =
-    srMethod request == "GET"
-        && ("/" <> filename) `T.isSuffixOf` T.takeWhile (/= '?') (srPath request)
-
-verifyPrivateOrigins :: GlobalDataPlane -> Int -> [Distribution] -> IO ()
-verifyPrivateOrigins plane start distributions = do
-    answeredRequests <- awaitStubReads plane start complete
-    complete answeredRequests `shouldBe` True
-  where
-    expected =
-        [ (method, "/simple/" <> distributionProject distribution <> "/" <> distributionFilename distribution)
-        | distribution <- distributions
-        , method <- ["GET", "HEAD"]
-        ]
-    complete answeredRequests =
-        all
-            ( \(method, path) ->
-                any
-                    ( \request ->
-                        srRoute request == PyPIMirror && srMethod request == method && srPath request == path && srStatus request == 200
+sharedMirrorDriver :: GlobalDataPlane -> NativeTarget -> [Distribution] -> E2EConfig -> MirrorDriver PythonGraph Value
+sharedMirrorDriver plane target distributions config =
+    MirrorDriver
+        { mirrorPublicInstall = do
+            versionsBefore <- observedVersions target distributions
+            (observed, selected, reachable) <-
+                withE2EWith
+                    config{ecArgs = ["proxy", "--no-worker"]}
+                    ( \proxy -> do
+                        reachable <- publicReachable proxy
+                        (observed, _) <- pipObserveGraph proxy mirrorRoot mirrorVersion mirrorExecutable
+                        ((native, platform), (_, opposite)) <- either (fail . toString) pure mirrorArchitectures
+                        selected <- observeTarget proxy native platform
+                        sourceReads <- publicReads plane
+                        for_ [mirrorRoot, mirrorDependency] $ \project ->
+                            filter (requestedDistribution (mirrorWheelFile project opposite)) sourceReads `shouldBe` []
+                        counters <- publicWorkCounters proxy
+                        pwcRuleEvaluations counters `shouldSatisfy` (> 0)
+                        pwcMirrorEnqueues counters `shouldSatisfy` (> 0)
+                        pure (observed, selected, reachable)
                     )
-                    answeredRequests
-            )
-            expected
+                    plane
+            targetFiles target `shouldReturn` Map.empty
+            withE2EWith config (\proxy -> awaitWholeMirror proxy target distributions) plane
+            versionsAfter <- observedVersions target distributions
+            pure (PublicPhase observed selected reachable versionsBefore versionsAfter)
+        , mirrorOfflineInstall =
+            withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
+                withE2EWith nativeMirrorConfig (observeOffline plane distributions) plane
+        , mirrorEmptyInstall = do
+            stored <- targetFiles target
+            atomically (writeTVar (ntFiles target) Map.empty)
+            flip finally (atomically (writeTVar (ntFiles target) stored)) $
+                withStubFault plane (PyPIMirrorBackend (ntPort target) True) $
+                    withE2EWith
+                        nativeMirrorConfig{ecArgs = ["proxy", "--no-worker"]}
+                        ( \proxy -> do
+                            reachable <- publicReachable proxy
+                            ((_, platform), _) <- either (fail . toString) pure mirrorArchitectures
+                            attempted <- pipInstallForPlatform proxy mirrorRoot mirrorVersion platform
+                            ptiTree attempted `shouldBe` Map.empty
+                            pure (reachable, ptiClient attempted)
+                        )
+                        plane
+        }
+
+observeOffline :: GlobalDataPlane -> [Distribution] -> E2E -> IO (OfflinePhase PythonGraph Value)
+observeOffline plane distributions proxy = do
+    reachable <- publicReachable proxy
+    start <- length <$> stubReadsNow plane
+    counters <- publicWorkCounters proxy
+    (observed, report) <- pipObserveGraph proxy mirrorRoot mirrorVersion mirrorExecutable
+    (_, (architecture, platform)) <- either (fail . toString) pure mirrorArchitectures
+    selected <- observeTarget proxy architecture platform
+    refused <- pipInstallForPlatform proxy mirrorRoot mirrorVersion "manylinux_2_17_riscv64"
+    entries <- concat <$> traverse (listedFiles proxy) [mirrorRoot, mirrorDependency]
+    baseline <- publicReads plane
+    traverse_ (verifyDistribution proxy entries) distributions
+    verifyPrivateOrigins plane start distributions
+    publicReads plane `shouldReturn` baseline
+    publicWorkCounters proxy `shouldReturn` counters
+    answered <- drop start <$> stubReadsNow plane
+    sources <- either (fail . toString) pure (normaliseSources proxy report)
+    pure
+        OfflinePhase
+            { offlineObserved = observed
+            , offlineTargetObserved = selected
+            , offlineUnsupportedTarget = Just (TargetRefusal (ptiClient refused) (ptiTree refused))
+            , offlinePublicReachable = reachable
+            , offlineMirrorPaths = Set.fromList [srPath request | request <- answered, srRoute request == PyPIMirror, srMethod request == "GET", srStatus request == 200]
+            , offlinePublicAnswers = [show request | request <- answered, srRoute request == PyPIPublic, answeredByPublic request || not (publicProjectDiscovery request)]
+            , offlineLockedSources = sources
+            }
+
+observedVersions :: NativeTarget -> [Distribution] -> IO [(Text, [Text])]
+observedVersions target distributions = do
+    files <- targetFiles target
+    pure
+        [ ( project
+          , ordNub
+                [ distributionVersion distribution
+                | distribution <- distributions
+                , distributionProject distribution == project
+                , Map.member (distributionFilename distribution) files
+                ]
+          )
+        | project <- [mirrorRoot, mirrorDependency]
+        ]
+
+publicReachable :: E2E -> IO Bool
+publicReachable proxy = (== 200) <$> proxyStatus proxy ("/pypi/simple/" <> pypiProject)

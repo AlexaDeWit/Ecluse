@@ -10,6 +10,10 @@ module Ecluse.E2E.Harness.Pip (
     pipInstalled,
     pipInstallsWheel,
     pipInstallGraph,
+    pipInstallAndInspect,
+    PythonGraph,
+    installedPythonGraph,
+    pipObserveGraph,
     PipTargetInstall (..),
     pipInstallForPlatform,
 
@@ -20,10 +24,14 @@ module Ecluse.E2E.Harness.Pip (
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
-import System.FilePath ((</>))
-import Test.Hspec (Expectation, expectationFailure, shouldReturn)
+import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath (takeDirectory, (</>))
+import Test.Hspec (Expectation, expectationFailure)
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -32,7 +40,8 @@ import Ecluse.E2E.Harness.Client (runClient, withClientDir)
 import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet, shouldSucceedThroughProxy)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
-import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
+import Ecluse.Test.Contract.Mirror (Observed (..))
+import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile), snapshotTree)
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
@@ -165,18 +174,58 @@ requirementsFile = "requirements.txt"
 targetDir :: FilePath
 targetDir = "site"
 
--- | Install a root and its dependencies into a new empty virtual environment, preserving every installed byte.
+-- | Install into a new empty virtual environment and preserve every installed site-package byte.
 pipInstallGraph :: E2E -> Text -> Text -> IO InstalledTree
-pipInstallGraph proxy project version = withPipProject proxy project version "" $ \client -> do
+pipInstallGraph proxy project version = do
+    (result, tree) <- pipInstallAndInspect proxy project version
+    void (shouldSucceedThroughProxy proxy result)
+    pure tree
+
+-- | Return the actual native install outcome and its complete site-packages tree.
+pipInstallAndInspect :: E2E -> Text -> Text -> IO (ClientResult, InstalledTree)
+pipInstallAndInspect proxy project version = withInstalledGraph proxy project version $ \installed ->
+    (piClient installed,) <$> snapshotInstallation installed
+
+-- | Installed versions and dependency declarations from each package's own metadata.
+type PythonGraph = Map Text (Text, [Text])
+
+-- | Observe graph, root exports, and the installed executable through the native virtual environment.
+pipObserveGraph :: E2E -> Text -> Text -> Text -> IO (Observed PythonGraph Value, Either Text [(Text, Text)])
+pipObserveGraph proxy project version executableName = withInstalledGraph proxy project version $ \installed -> do
+    tree <- snapshotInstallation installed
+    exported <-
+        observeJson
+            installed
+            (piPython installed)
+            ["-B", "-c", "import importlib,json,sys\nprint(json.dumps(importlib.import_module(sys.argv[1]).export(), sort_keys=True))", toString (T.replace "-" "_" project)]
+    executed <- observeJson installed (takeDirectory (piPython installed) </> toString executableName) []
+    pure (Observed (installedPythonGraph tree) exported (Just executed) tree (piClient installed) (piInitial installed), piSources installed)
+
+data PipInstallation = PipInstallation
+    { piClient :: ClientResult
+    , piDirectory :: FilePath
+    , piPython :: FilePath
+    , piSite :: FilePath
+    , piEnvironment :: [(String, String)]
+    , piInitial :: [FilePath]
+    , piSources :: Either Text [(Text, Text)]
+    }
+
+withInstalledGraph :: E2E -> Text -> Text -> (PipInstallation -> IO a) -> IO a
+withInstalledGraph proxy project version use = withPipProject proxy project version "" $ \client -> do
     let virtualenv = ppDir client </> "venv"
         python = virtualenv </> "bin" </> "python"
+        report = ppDir client </> "report.json"
         run executable arguments = runClient (ppDir client) (ppEnv client) executable arguments >>= shouldSucceedThroughProxy proxy
     void $ run "python3" ["-m", "venv", "--without-pip", virtualenv]
-    location <- run python ["-c", "import sysconfig; print(sysconfig.get_path('purelib'))"]
+    location <- run python ["-B", "-c", "import sysconfig\nprint(sysconfig.get_path('purelib'))"]
     let site = toString (T.strip (crStdout location))
-    listDirectory site `shouldReturn` []
-    void $
-        run
+    initial <- listDirectory site
+    unless (null initial) (fail "new virtual environment contains installed packages")
+    result <-
+        runClient
+            (ppDir client)
+            (ppEnv client)
             "python3"
             [ "-m"
             , "pip"
@@ -191,10 +240,44 @@ pipInstallGraph proxy project version = withPipProject proxy project version "" 
             , "--only-binary=:all:"
             , "--index-url"
             , toString (ppIndex client)
+            , "--report"
+            , report
             , toString (project <> "==" <> version)
             ]
-    roots <- listDirectory site
-    snapshotTree site roots
+    reported <- doesFileExist report
+    sources <- if reported then reportSources <$> readFileBS report else pure (Left "pip wrote no installation report")
+    let environment =
+            filter ((`notElem` ["PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"]) . fst) (ppEnv client)
+                <> [("PATH", takeDirectory python <> ":" <> fromMaybe "" (lookup "PATH" (ppEnv client))), ("PYTHONDONTWRITEBYTECODE", "1")]
+    use (PipInstallation result (ppDir client) python site environment initial sources)
+
+snapshotInstallation :: PipInstallation -> IO InstalledTree
+snapshotInstallation installed = listDirectory (piSite installed) >>= snapshotTree (piSite installed)
+
+observeJson :: PipInstallation -> FilePath -> [String] -> IO (Either Text Value)
+observeJson installed executable arguments = do
+    result <- runClient (piDirectory installed) (piEnvironment installed) executable arguments
+    pure $ case crExit result of
+        ExitSuccess -> first toText (Aeson.eitherDecodeStrict (encodeUtf8 (crStdout result)))
+        _ -> Left (crCommand result <> " failed: " <> crStderr result)
+
+-- | Read the actual installed metadata, rejecting missing identities and duplicate project names.
+installedPythonGraph :: InstalledTree -> Either Text PythonGraph
+installedPythonGraph tree = do
+    packages <- traverse metadata [bytes | (path, TreeFile _ bytes) <- Map.toList tree, ".dist-info/METADATA" `T.isSuffixOf` toText path]
+    let graph = Map.fromList packages
+    unless (Map.size graph == length packages) (Left "installed metadata repeats a project")
+    pure graph
+  where
+    metadata bytes = do
+        document <- first (const "installed metadata is not UTF-8") (TE.decodeUtf8' bytes)
+        let headers = T.lines (fst (T.breakOn "\n\n" document))
+            fields name = mapMaybe (T.stripPrefix (name <> ": ")) headers
+        name <- one "Name" (fields "Name")
+        version <- one "Version" (fields "Version")
+        pure (name, (version, fields "Requires-Dist"))
+    one _ [value] = Right value
+    one name _ = Left ("installed metadata lacks one " <> name)
 
 -- | Cross-target installation evidence. The target files are inspected without executing foreign code.
 data PipTargetInstall = PipTargetInstall

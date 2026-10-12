@@ -66,7 +66,7 @@ requiredFamilyLaws scope =
         <> [ family
            | scope == FullEcosystem
            , family <-
-                [ ("mirroring", ["dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
+                [ ("mirroring", ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"])
                 , ("publication", ["publish-install", "authorisation-refusal"])
                 , ("dredger", ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
                 ]

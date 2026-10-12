@@ -19,8 +19,11 @@ module Ecluse.E2E.Fixtures.PyPI (
     buildPyPIFixtures,
     buildWheelWithMetadata,
     buildWheelWithFiles,
+    WheelCompression (..),
+    buildWheelWithCompression,
     buildWheelFor,
     metadataFileFor,
+    buildSdistFor,
 ) where
 
 import Data.Aeson (Value (Bool, Object, String), object, (.=))
@@ -29,9 +32,9 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import System.Directory (createDirectoryIfMissing)
-import System.FilePath (takeDirectory, (</>))
-import System.Process.Typed (proc, runProcess_, setWorkingDir)
+import System.Directory (createDirectoryIfMissing, executable, getPermissions, setPermissions)
+import System.FilePath (splitDirectories, takeDirectory, (</>))
+import System.Process.Typed (ProcessConfig, proc, runProcess_, setWorkingDir)
 
 import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.E2E.Harness.Stub (StubRoute (PyPIPublic), stubUrl)
@@ -116,7 +119,15 @@ buildWheelWithMetadata project version metadata tag = buildWheelWithFiles projec
 
 -- | Add fixture-owned package files to a wheel and its complete installation manifest.
 buildWheelWithFiles :: Text -> Text -> Text -> Text -> [(FilePath, Text)] -> FilePath -> FilePath -> IO ()
-buildWheelWithFiles project version metadata tag additions work wheelPath = do
+buildWheelWithFiles = buildWheelWithCompression DeflatedWheel
+
+-- | ZIP methods supported by the pinned pip client and exercised by native mirror fixtures.
+data WheelCompression = DeflatedWheel | Bzip2Wheel | LzmaWheel
+    deriving stock (Eq, Show)
+
+-- | Build original wheel bytes using the declared method, without invoking a package build backend.
+buildWheelWithCompression :: WheelCompression -> Text -> Text -> Text -> Text -> [(FilePath, Text)] -> FilePath -> FilePath -> IO ()
+buildWheelWithCompression compression project version metadata tag additions work wheelPath = do
     let escaped = T.replace "-" "_" project
         distInfo = pypiDistInfoFor project version
         moduleDir = work </> toString escaped
@@ -131,16 +142,41 @@ buildWheelWithFiles project version metadata tag additions work wheelPath = do
     for_ additions $ \(relative, contents) -> do
         createDirectoryIfMissing True (takeDirectory (work </> relative))
         writeFileText (work </> relative) contents
-    runProcess_ . setWorkingDir work $
-        proc "python3" ["-m", "zipfile", "-c", wheelPath, toString escaped, toString distInfo]
+        when (".data/scripts/" `T.isInfixOf` toText relative) $ do
+            permissions <- getPermissions (work </> relative)
+            setPermissions (work </> relative) permissions{executable = True}
+    let roots = ordNub (toString escaped : toString distInfo : mapMaybe (listToMaybe . splitDirectories . fst) additions)
+    runProcess_ . setWorkingDir work $ case compression of
+        DeflatedWheel -> proc "python3" (["-m", "zipfile", "-c", wheelPath] <> roots)
+        Bzip2Wheel -> compressedWheel 12 wheelPath roots
+        LzmaWheel -> compressedWheel 14 wheelPath roots
+
+compressedWheel :: Int -> FilePath -> [FilePath] -> ProcessConfig () () ()
+compressedWheel method wheelPath roots =
+    proc
+        "python3"
+        (["-c", T.unpack script, wheelPath, show method] <> roots)
+  where
+    script =
+        T.unlines
+            [ "import pathlib, sys, zipfile"
+            , "with zipfile.ZipFile(sys.argv[1], 'w', compression=int(sys.argv[2])) as archive:"
+            , "    for root in sys.argv[3:]:"
+            , "        for path in sorted(pathlib.Path(root).rglob('*')):"
+            , "            archive.write(path, str(path))"
+            ]
 
 buildSdist :: FilePath -> FilePath -> IO ()
-buildSdist work sdistPath = do
-    let distribution = pypiProject <> "-" <> pypiVersion
+buildSdist = buildSdistFor pypiProject pypiVersion metadataFile
+
+-- | Build a source archive for one declared release without executing its build script.
+buildSdistFor :: Text -> Text -> Text -> FilePath -> FilePath -> IO ()
+buildSdistFor project version metadata work sdistPath = do
+    let distribution = project <> "-" <> version
         sourceDir = work </> toString distribution
     createDirectoryIfMissing True sourceDir
-    writeFileText (sourceDir </> "PKG-INFO") metadataFile
-    writeFileText (sourceDir </> "setup.py") "from setuptools import setup\nsetup(name='e2e-sample', version='1.0.0')\n"
+    writeFileText (sourceDir </> "PKG-INFO") metadata
+    writeFileText (sourceDir </> "setup.py") ("from setuptools import setup\nsetup(name=" <> show project <> ", version=" <> show version <> ")\n")
     runProcess_ (proc "tar" ["-czf", sdistPath, "-C", work, toString distribution])
 
 metadataFile :: Text

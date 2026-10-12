@@ -17,8 +17,13 @@ module Ecluse.E2E.Harness.PyPIMirror (
     awaitBlockedUpload,
     releaseBlockedUpload,
     awaitTargetFiles,
+    awaitProjectFiles,
+    nativeVersions,
+    awaitNativeIdle,
     nativeMirrorConfig,
     withMirrorFixture,
+    withMirrorProjects,
+    advertiseMissingFile,
     PublicWorkCounters (..),
     publicWorkCounters,
 ) where
@@ -29,6 +34,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Types (status200, status400, status404, status413, status503, statusCode)
@@ -69,6 +75,7 @@ data NativeTarget = NativeTarget
     , ntBlocked :: TVar (Maybe Text)
     , ntReleased :: TVar Bool
     , ntInFlight :: TVar Int
+    , ntStaleListing :: TVar (Set Text)
     }
 
 -- | Native endpoint facts, independent of the product credential and URL constructors.
@@ -95,7 +102,8 @@ withConfiguredNativeTarget config expected action = do
     released <- newTVarIO False
     unless (all ((< nativeUploadLimit `div` 2) . BS.length . distributionBytes) expected) (fail "fixture artifact exceeds half the multipart bound")
     active <- newTVarIO 0
-    let target = NativeTarget 0 files attempts fault requests blocked released active
+    stale <- newTVarIO Set.empty
+    let target = NativeTarget 0 files attempts fault requests blocked released active stale
     testWithApplicationSettings (setHost "*" defaultSettings) (pure (nativeApplication config expected target)) $ \port ->
         action target{ntPort = port}
 
@@ -124,7 +132,14 @@ nativeApplication config expected target request respond
                 Right (_, body) -> parseUpload config expected target request body >>= respond
     | requestMethod request `elem` ["GET", "HEAD"] = do
         files <- targetFiles target
-        respond (nativeRead config expected request files)
+        stale <- readTVarIO (ntStaleListing target)
+        case filter (not . T.null) (pathInfo request) of
+            ["simple", _, filename]
+                | Map.notMember filename files ->
+                    atomically (modifyTVar' (ntStaleListing target) (Set.delete filename))
+            _ -> pass
+        let advertised = Map.union files (Map.fromList [(distributionFilename distribution, distributionBytes distribution) | distribution <- expected, Set.member (distributionFilename distribution) stale])
+        respond (nativeRead config expected request files advertised)
     | otherwise = respond (responseLBS status404 [] "missing")
   where
     beginUpload = atomically $ do
@@ -166,10 +181,10 @@ receiveUpload config expected target request fields file =
     filename = decodeUtf8 (fileName file)
     bytes = LBS.toStrict (fileContent file)
 
-nativeRead :: NativeTargetConfig -> [Distribution] -> Request -> Map Text ByteString -> Response
-nativeRead config expected request files = case filter (not . T.null) (pathInfo request) of
+nativeRead :: NativeTargetConfig -> [Distribution] -> Request -> Map Text ByteString -> Map Text ByteString -> Response
+nativeRead config expected request files advertised = case filter (not . T.null) (pathInfo request) of
     ["simple", project]
-        | any (\distribution -> distributionProject distribution == project && Map.member (distributionFilename distribution) files) expected -> answer status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (Aeson.encode (targetIndex config project expected files))
+        | any (\distribution -> distributionProject distribution == project && Map.member (distributionFilename distribution) advertised) expected -> answer status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (Aeson.encode (targetIndex config project expected advertised))
     ["simple", _, filename] -> maybe (answer status404 [] "missing") (answer status200 [] . LBS.fromStrict) (Map.lookup filename files)
     _ -> answer status404 [] "missing"
   where
@@ -205,8 +220,7 @@ awaitBlockedUpload target =
 releaseBlockedUpload :: NativeTarget -> IO ()
 releaseBlockedUpload target = do
     atomically (writeTVar (ntReleased target) True)
-    active <- pollUntil 120 50000 (== 0) (readTVarIO (ntInFlight target))
-    unless (active == 0) (fail "interrupted upload handlers did not settle")
+    awaitNativeIdle target
 
 validUpload :: Distribution -> [(ByteString, ByteString)] -> ByteString -> Bool
 validUpload distribution fields bytes =
@@ -265,14 +279,18 @@ nativeMirrorConfig =
 
 -- | Build the complete source graph and hold its native target behind the existing TLS route.
 withMirrorFixture :: GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
-withMirrorFixture plane action = do
-    distributions <- buildMirrorGraph (gdpWorkDir plane </> "pypi")
-    for_ [mirrorRoot, mirrorDependency] $ \project ->
+withMirrorFixture = withMirrorProjects ChangeSourceFields [mirrorRoot, mirrorDependency]
+
+-- | Build isolated mirror projects and persist their state through the shared S3 emulator.
+withMirrorProjects :: TargetFields -> [Text] -> GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
+withMirrorProjects fieldsMode projects plane action = do
+    distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") projects
+    for_ projects $ \project ->
         writeFileLBS
             (gdpWorkDir plane </> "pypi" </> "simple" </> toString project </> "index.json")
             (Aeson.encode (distributionIndex (stubUrl PyPIPublic) project distributions))
     createAdvisoryBucket plane
-    withNativeTarget ChangeSourceFields distributions $ \target ->
+    withNativeTarget fieldsMode distributions $ \target ->
         withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
 
 -- | Synchronously collected rule evaluations and mirror enqueues within one product process.
@@ -304,3 +322,28 @@ publicWorkCounters proxy = do
                 Just number -> pure (Just (T.takeWhile (/= '{') labelledName, number))
                 Nothing -> fail "metrics scrape contains a non-numeric sample"
             _ -> fail "metrics scrape contains an unsupported sample shape"
+
+-- | Await every original artifact of one fixture project, independently of its listed version name.
+awaitProjectFiles :: NativeTarget -> [Distribution] -> Text -> IO Bool
+awaitProjectFiles target expected project = do
+    when (Map.null wanted) (fail "the fixture declares no files for this project")
+    matches <$> pollUntil 120 500000 matches (targetFiles target)
+  where
+    wanted = Map.fromList [(distributionFilename distribution, distributionBytes distribution) | distribution <- expected, distributionProject distribution == project]
+    matches files = Map.restrictKeys files (Map.keysSet wanted) == wanted
+
+-- | Observe only versions whose physical files actually exist at the target.
+nativeVersions :: NativeTarget -> [Distribution] -> Text -> IO [Text]
+nativeVersions target expected project = do
+    files <- targetFiles target
+    pure (ordNub [distributionVersion distribution | distribution <- expected, distributionProject distribution == project, Map.member (distributionFilename distribution) files])
+
+-- | Wait for all received upload handlers to finish before checking destination effects.
+awaitNativeIdle :: NativeTarget -> IO ()
+awaitNativeIdle target = do
+    active <- pollUntil 120 50000 (== 0) (readTVarIO (ntInFlight target))
+    unless (active == 0) (fail "native upload handlers did not settle")
+
+-- | Advertise one absent file until its first real private request observes the missing body.
+advertiseMissingFile :: NativeTarget -> Text -> IO ()
+advertiseMissingFile target filename = atomically (modifyTVar' (ntStaleListing target) (Set.insert filename))

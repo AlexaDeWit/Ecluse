@@ -4,55 +4,91 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 
 -- | First-party multipart publication through the product image and its native target.
-module Ecluse.E2E.PyPI.PublishE2ESpec (spec) where
+module Ecluse.E2E.PyPI.PublishE2ESpec (pypiPublicationFamily, nativePublicationContract) where
 
 import Data.Map.Strict qualified as Map
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), applyBasicAuth, httpLbs, parseRequest, responseStatus)
+import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), applyBasicAuth, httpLbs, parseRequest, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
 import Test.Hspec
 
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..), concreteFamily)
+import Ecluse.E2E.Fixtures.PyPI (pypiDistInfoFor)
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Phase (timedFixture)
+import Ecluse.Test.Contract.Publication
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
 
--- | Exercise the live pathless route, ownership guard, credential pair, and disabled control.
-spec :: Spec
-spec = whenE2EAvailable . around withGlobalDataPlane $
-    describe "PyPI first-party publication" $ do
-        it "relays multipart bytes to the exact endpoint and installs the publication privately" $ \plane ->
+-- | Native boundary and disabled-route controls supplement the shared publication laws.
+nativePublicationContract :: ConcreteFixture -> DeclaredGroup
+nativePublicationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder ->
+    around (timedFixture recorder (withFixture fixture)) $ do
+        it (caseLabel "pypi/publish-native/conflicting-names" "refuses conflicting multipart names before contacting the target") $ \plane ->
             withPublicationFixture plane $ \target distributions ->
                 withE2EWith
                     publicationConfig
                     ( \proxy -> do
-                        for_ distributions $ \distribution -> sendUpload proxy distribution [] `shouldReturn` 200
-                        targetFiles target `shouldReturn` Map.fromList [(distributionFilename d, distributionBytes d) | d <- distributions]
-                        tree <- pipInstallGraph proxy "e2e-published" mirrorVersion
-                        Map.member "e2e_published-1.0.0.dist-info/METADATA" tree `shouldBe` True
-                    )
-                    plane
-        it "refuses an unowned or conflicting project before the target receives a body" $ \plane ->
-            withPublicationFixture plane $ \target distributions ->
-                withE2EWith
-                    publicationConfig
-                    ( \proxy -> do
-                        distribution <- maybe (fail "publication fixture is empty") pure (listToMaybe distributions)
+                        distribution <- requiredDistribution "e2e-published" distributions
                         sendUpload proxy distribution [("name", "unowned-project")] `shouldReturn` 403
                         sendUpload proxy distribution [("name", "e2e-published"), ("name", "e2e-published-other")] `shouldReturn` 400
                         targetFiles target `shouldReturn` Map.empty
                         readTVarIO (ntRequests target) `shouldReturn` 0
                     )
                     plane
-        it "refuses POST when no publication target is configured" $ \plane ->
+        it (caseLabel "pypi/publish-native/unconfigured" "refuses POST without a publication target") $ \plane ->
             withPublicationFixture plane $ \target distributions ->
                 withE2E
                     ( \proxy -> do
-                        distribution <- maybe (fail "publication fixture is empty") pure (listToMaybe distributions)
+                        distribution <- requiredDistribution "e2e-published" distributions
                         sendUpload proxy distribution [] `shouldReturn` 405
                         targetFiles target `shouldReturn` Map.empty
                         readTVarIO (ntRequests target) `shouldReturn` 0
                     )
                     plane
+
+-- | Bind real multipart publication and a fresh native pip installation to the common contract.
+pypiPublicationFamily :: ConcreteFixture -> FamilyFixture PublicationFixture
+pypiPublicationFamily fixture = concreteFamily fixture $ \recorder action plane ->
+    timedFixture recorder (withPublicationFixture plane . curry) $ \(target, distributions) ->
+        timedFixture recorder (\use -> withE2EWith publicationConfig use plane) $ \proxy ->
+            action
+                ( PublicationFixture
+                    mirrorVersion
+                    (publicationDriver proxy target distributions "e2e-published")
+                    (publicationDriver proxy target distributions "e2e-unowned")
+                )
+
+publicationDriver :: E2E -> NativeTarget -> [Distribution] -> Text -> PublicationDriver
+publicationDriver proxy target distributions project =
+    PublicationDriver
+        { publicationRun = publishProject proxy [distribution | distribution <- distributions, distributionProject distribution == project]
+        , publicationInstall = do
+            (result, tree) <- pipInstallAndInspect proxy project mirrorVersion
+            when (crExit result == ExitSuccess) $
+                Map.member (toString (pypiDistInfoFor project mirrorVersion) <> "/METADATA") tree `shouldBe` True
+            pure result
+        , publicationVersions = nativeVersions target distributions project
+        , publicationAwait = do
+            awaitProjectFiles target distributions project `shouldReturn` True
+            nativeVersions target distributions project
+        , publicationSettle = awaitNativeIdle target
+        }
+
+requiredDistribution :: Text -> [Distribution] -> IO Distribution
+requiredDistribution project = maybe (fail "publication fixture is empty") pure . find ((== project) . distributionProject)
+
+publishProject :: E2E -> [Distribution] -> IO ClientResult
+publishProject _ [] = fail "publication fixture is empty"
+publishProject proxy (distribution : rest) = do
+    result <- uploadClient proxy distribution []
+    case (crExit result, rest) of
+        (ExitSuccess, _ : _) -> publishProject proxy rest
+        _ -> pure result
 
 publicationConfig :: E2EConfig
 publicationConfig =
@@ -68,12 +104,17 @@ publicationConfig =
 
 withPublicationFixture :: GlobalDataPlane -> (NativeTarget -> [Distribution] -> IO a) -> IO a
 withPublicationFixture plane action = do
-    distributions <- buildPublication (gdpWorkDir plane </> "pypi")
+    distributions <- buildNativeProjects (gdpWorkDir plane </> "pypi") ["e2e-published", "e2e-unowned"]
     withNativeTarget PreserveUploadFields distributions $ \target ->
         withStubFault plane (PyPIMirrorBackend (ntPort target) False) (action target distributions)
 
 sendUpload :: E2E -> Distribution -> [(Text, Text)] -> IO Int
 sendUpload proxy distribution extra = do
+    result <- uploadClient proxy distribution extra
+    maybe (fail "upload response omitted its status") pure (readMaybe (toString (crStdout result)))
+
+uploadClient :: E2E -> Distribution -> [(Text, Text)] -> IO ClientResult
+uploadClient proxy distribution extra = do
     base <- parseRequest (toString (e2eBaseUrl proxy <> "/pypi/"))
     let request =
             applyBasicAuth
@@ -84,4 +125,12 @@ sendUpload proxy distribution extra = do
                     , requestHeaders = [("Content-Type", nativeUploadContentType)]
                     , requestBody = RequestBodyBS (distributionUploadBody distribution extra)
                     }
-    statusCode . responseStatus <$> httpLbs request (e2eManager proxy)
+    response <- httpLbs request (e2eManager proxy)
+    let status = statusCode (responseStatus response)
+    pure
+        ClientResult
+            { crCommand = "POST " <> e2eBaseUrl proxy <> "/pypi/ " <> distributionFilename distribution
+            , crExit = if status >= 200 && status < 300 then ExitSuccess else ExitFailure 1
+            , crStdout = show status
+            , crStderr = decodeUtf8 (responseBody response)
+            }

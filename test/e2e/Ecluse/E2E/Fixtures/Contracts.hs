@@ -10,6 +10,11 @@ module Ecluse.E2E.Fixtures.Contracts (
     npmInstallationFixture,
     pypiInstallationFixture,
     pypiTelemetryFixture,
+    pypiMirrorFixture,
+    pypiMirrorNativeFixture,
+    pypiPublicationFixture,
+    pypiPublicationNativeFixture,
+    pypiMirrorTelemetryFixture,
     npmMirrorFixture,
     npmPublicationFixture,
     npmDredgerFixture,
@@ -86,7 +91,8 @@ npmMirrorFixture =
                 , groupTier = E2E
                 , groupPartition = "npm"
                 , groupCases =
-                    [ Case "npm/mirror/dependency-graph" ["npm/mirror"]
+                    [ Case "npm/mirror/cross-target-install" ["npm/mirror"]
+                    , Case "npm/mirror/dependency-graph" ["npm/mirror"]
                     , Case "npm/mirror/module-exports" ["npm/mirror"]
                     , Case "npm/mirror/linked-executable" ["npm/mirror"]
                     , Case "npm/mirror/origin-evidence" ["npm/mirror"]
@@ -353,4 +359,77 @@ concreteFamily fixture acquire =
     FamilyFixture
         { familyGroup = fixtureGroup fixture
         , familyAcquire = \recorder action -> timedFixture recorder (withFixture fixture) (acquire recorder action)
+        }
+
+-- | Native PyPI mirroring uses explicit SQS and S3 services plus the upload/read fixture.
+pypiMirrorFixture :: ConcreteFixture
+pypiMirrorFixture =
+    pypiPublicFixture
+        { withFixture = withDataPlane pypiAdvisoryTopology
+        , fixtureGroup =
+            (fixtureGroup pypiPublicFixture)
+                { groupId = "pypi/mirror"
+                , groupContractId = "pypi/mirror"
+                , groupProfileId = "pypi/write"
+                , groupCases =
+                    [ Case ("pypi/mirror/" <> name) ["pypi/mirror"]
+                    | name <-
+                        ["cross-target-install", "dependency-graph", "module-exports", "linked-executable", "origin-evidence", "installed-tree", "empty-store-control"]
+                    ]
+                , groupCapabilities = ["read", "mirror", "client-install", "telemetry"]
+                , groupResources = ["proxy", "nginx", "native-target", "ministack"]
+                }
+        }
+
+-- | Native field preservation, restart and lost-response cases keep separate explicit identities.
+pypiMirrorNativeFixture :: ConcreteFixture
+pypiMirrorNativeFixture =
+    pypiMirrorFixture
+        { fixtureGroup =
+            (fixtureGroup pypiMirrorFixture)
+                { groupId = "pypi/mirror-native"
+                , groupContractId = "pypi/mirror-native"
+                , groupCases = [Case ("pypi/mirror-native/" <> name) ["pypi/mirror-native"] | name <- ["read-roundtrip", "lost-reply", "interruption"]]
+                }
+        }
+
+-- | First-party publication needs native HTTP storage and a fresh pip client, without AWS.
+pypiPublicationFixture :: ConcreteFixture
+pypiPublicationFixture =
+    pypiPublicFixture
+        { fixtureGroup =
+            (fixtureGroup pypiPublicFixture)
+                { groupId = "pypi/publish"
+                , groupContractId = "pypi/publish"
+                , groupProfileId = "pypi/publication"
+                , groupCases = [Case ("pypi/publish/" <> name) ["pypi/publish"] | name <- ["publish-install", "scope-refusal"]]
+                , groupCapabilities = ["read", "publication", "client-install"]
+                , groupResources = ["proxy", "nginx", "native-target"]
+                }
+        }
+
+-- | Multipart identity conflicts and a disabled route remain required native controls.
+pypiPublicationNativeFixture :: ConcreteFixture
+pypiPublicationNativeFixture =
+    pypiPublicationFixture
+        { fixtureGroup =
+            (fixtureGroup pypiPublicationFixture)
+                { groupId = "pypi/publish-native"
+                , groupContractId = "pypi/publish-native"
+                , groupCases = [Case ("pypi/publish-native/" <> name) ["pypi/publish-native"] | name <- ["conflicting-names", "unconfigured"]]
+                }
+        }
+
+-- | Independent native projects provide actual worker and private-fetch telemetry.
+pypiMirrorTelemetryFixture :: ConcreteFixture
+pypiMirrorTelemetryFixture =
+    pypiMirrorFixture
+        { fixtureGroup =
+            (fixtureGroup pypiMirrorFixture)
+                { groupId = "pypi/telemetry-write"
+                , groupContractId = "pypi/telemetry-write"
+                , groupProfileId = "pypi/write-telemetry"
+                , groupCases = [Case ("pypi/telemetry/" <> name) ["pypi/telemetry-write"] | name <- ["domain-spans", "private-fetch"]]
+                , groupResources = ["proxy", "nginx", "native-target", "ministack", "collector"]
+                }
         }
