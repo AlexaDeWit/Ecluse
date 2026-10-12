@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Ecluse.Test.Contract.Catalogue (duplicates, validateCatalogue)
 import Ecluse.Test.Contract.Result
 import Ecluse.Test.Contract.Types
+import Ecluse.Test.Contract.UnitCatalogue (metadataFetchLaws, metadataProjectionLaws)
 
 -- | The read-only scope never certifies full ecosystem completion.
 data CompletionScope = FullEcosystem | ReadOnlyEcosystemFoundation | FullPackageStore
@@ -56,10 +57,10 @@ requiredFamilyLaws FullPackageStore =
     , ("recovery", ["publish-retry", "reopen", "delete-retry"])
     ]
 requiredFamilyLaws scope =
-    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"])
+    [ ("proxying", ["identity-precedence", "authorised-union", "private-divergence", "artifact-integrity", "artifact-head", "conditional-coherence"] <> map ("metadata-fetch/" <>) metadataFetchLaws <> map ("metadata-projection/" <>) metadataProjectionLaws)
     , ("installation", ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"])
     , ("policy", ["default-denial", "quarantine-private-authority", "public-integrity", "trusted-integrity"])
-    , ("advisories", ["exact-fix", "deny-cve", "deny-epss"])
+    , ("advisories", ["exact-fix", "deny-cve", "deny-epss", "last-good-generation"])
     , ("telemetry", ["signals", "disabled", "export-failure", "datadog"] <> [law | scope == FullEcosystem, law <- ["domain-spans", "private-fetch"]])
     ]
         <> [ family

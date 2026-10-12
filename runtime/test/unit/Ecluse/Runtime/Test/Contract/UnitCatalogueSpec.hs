@@ -3,14 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Audit backend registrations while leaving stub servers and advisory stores unopened.
-module Ecluse.Runtime.Test.Contract.UnitCatalogueSpec (spec) where
+module Ecluse.Runtime.Test.Contract.UnitCatalogueSpec (spec, unitCatalogue) where
 
 import Ecluse.Runtime.Credential.CodeArtifactSpec qualified as Credential
 import Ecluse.Runtime.Cve.SyncSpec qualified as Advisory
 import Ecluse.Runtime.Maintenance.CodeArtifactSpec qualified as Maintenance
 import Ecluse.Runtime.Test.Contract.UnitCatalogue (runtimeUnitCatalogue)
 import Ecluse.Test.Contract.Binding (labelledCaseIds)
-import Ecluse.Test.Contract.Types (Group)
+import Ecluse.Test.Contract.Types (Catalogue, Group)
 import Ecluse.Test.Contract.UnitCatalogue
 import Test.Hspec
 
@@ -18,7 +18,11 @@ import Test.Hspec
 spec :: Spec
 spec =
     describe "runtime unit contract coverage" $
-        unitCoverageSpec (runtimeUnitCatalogue <$> registrations)
+        unitCoverageSpec unitCatalogue
+
+-- | The receipt hook shares the same independently audited registration source.
+unitCatalogue :: IO Catalogue
+unitCatalogue = runtimeUnitCatalogue <$> registrations
 
 registrations :: IO [Group]
 registrations =

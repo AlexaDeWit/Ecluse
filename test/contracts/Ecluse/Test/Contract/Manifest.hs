@@ -9,6 +9,8 @@ module Ecluse.Test.Contract.Manifest (
     auditCompletionFiles,
     readIdentity,
     jsonLine,
+    writeJsonFile,
+    readPlanIdentity,
     digest,
     failRunner,
     usesProductImage,
@@ -19,6 +21,9 @@ import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
+
+import System.Directory (createDirectoryIfMissing, renameFile)
+import System.FilePath (takeDirectory)
 
 import Ecluse.Test.Contract.Completion (Completion, auditCompletion)
 import Ecluse.Test.Contract.Result
@@ -80,6 +85,17 @@ readIdentityFields checkDeclaredDigest forceRequired imageRequired planDigest = 
     declaredDigest <- if checkDeclaredDigest then field "ECLTEST_PLAN_DIGEST" planDigest else pure planDigest
     unless (declaredDigest == planDigest) $ failRunner "plan digest differs from the compiled catalogue"
     pure $ ExecutionIdentity source image architecture planDigest runId
+
+-- | A producer binds its compiled plan directly rather than requiring a pre-existing digest variable.
+readPlanIdentity :: Bool -> Text -> IO ExecutionIdentity
+readPlanIdentity = readIdentityFields False False
+
+-- | Atomic JSON writes preserve the last complete receipt if a producer stops between writes.
+writeJsonFile :: (ToJSON a) => FilePath -> a -> IO ()
+writeJsonFile path value = do
+    createDirectoryIfMissing True $ takeDirectory path
+    BS.writeFile (path <> ".tmp") (jsonLine value)
+    renameFile (path <> ".tmp") path
 
 normaliseArchitecture :: Text -> Text
 normaliseArchitecture = \case

@@ -26,6 +26,18 @@ spec = describe "canonical ecosystem composition" $ do
             registered <- allCaseIds (declaredAction declaration recorder)
             registered `shouldMatchList` map caseId (groupCases $ declaredGroup declaration)
         validateDeclaredGroups (missingCatalogue declarations) "example" declarations
+    it "constructs available canonical cases without acquiring their provider" $ do
+        acquired <- newIORef False
+        let metadata = nativeGroup{groupId = "example/installation", groupContractId = "example/installation"}
+            fixture = FamilyFixture metadata $ \_ _ -> do
+                writeIORef acquired True
+                expectationFailure "discovery acquired the provider"
+            driver = unavailableDriver{ecosystemInstallation = Available fixture}
+        recorder <- newPhaseRecorder
+        forM_ (fullEcosystemContract driver) $ \declaration -> do
+            registered <- allCaseIds (declaredAction declaration recorder)
+            registered `shouldMatchList` map caseId (groupCases $ declaredGroup declaration)
+        readIORef acquired `shouldReturn` False
     it "registers missing capabilities as ordinary failed cases and continues through the remaining groups" $ do
         observed <- newIORef (0 :: Int)
         let native = DeclaredGroup nativeGroup $
@@ -40,10 +52,10 @@ spec = describe "canonical ecosystem composition" $ do
         failures `shouldSatisfy` (not . null)
         map crStatus failures `shouldSatisfy` all (== Failed)
         map crStatus (filter ((== "example/native") . crCaseId) (reportCases report)) `shouldBe` [Passed]
-    it "keeps full required law evidence even when every production operation is unavailable" $ do
+    it "still requires runtime advisory evidence when production operations are unavailable" $ do
         let declarations = fullEcosystemContract unavailableDriver
             completion = ecosystemCompletion FullEcosystem unavailableDriver
-        validateCompletion completion [missingCatalogue declarations] `shouldBe` Right completion
+        validateCompletion completion [missingCatalogue declarations] `shouldSatisfy` isLeft
     it "gives the read-only foundation a smaller explicit scope" $ do
         let full = fullEcosystemContract unavailableDriver
             foundation = readOnlyEcosystemFoundation unavailableDriver

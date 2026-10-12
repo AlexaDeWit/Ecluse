@@ -5,9 +5,12 @@
 -- | Independent obligations for canonical unit contracts, separate from their Hspec registrations.
 module Ecluse.Test.Contract.UnitCatalogue (
     coreUnitCatalogue,
+    expectedUnitCatalogue,
     unitRegistration,
     unitObligation,
     unitCoverageSpec,
+    metadataFetchLaws,
+    metadataProjectionLaws,
 ) where
 
 import Data.Universe.Class (Universe (universe))
@@ -36,7 +39,7 @@ coreUnitCatalogue groups =
                 "metadata-fetch"
                 "unit/metadata"
                 ["metadata-read"]
-                ["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi"], suffix <- fetchCases]
+                ["core.metadata.fetch." <> ecosystem <> "." <> suffix | ecosystem <- ["npm", "pypi"], suffix <- metadataFetchLaws]
             , unitObligation "core/metadata/projection/npm" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "npm")
             , unitObligation "core/metadata/projection/pypi" "metadata-projection" "unit/metadata" ["metadata-projection"] (projectionCases "pypi")
             , unitObligation
@@ -75,7 +78,16 @@ coreUnitCatalogue groups =
             <> ["maintenance-inventory" | isJust (maintenance >>= maintenanceListing)]
             <> ["maintenance-delete" | isJust (maintenance >>= maintenanceVersionDelete)]
 
--- | Case IDs must come from the actual specification, never the obligation table.
+-- | Pure manifest expectations use reviewed obligations, never discovered examples or execution counts.
+expectedUnitCatalogue :: ([Group] -> Catalogue) -> Catalogue
+expectedUnitCatalogue catalogue =
+    catalogue
+        [ unitRegistration (obligationId obligation) (obligationContract obligation) (obligationProfile obligation) (obligationCapabilities obligation) (obligationCases obligation)
+        | obligation <- catalogueObligations (catalogue [])
+        , obligationSupport obligation == Supported
+        ]
+
+-- | Execution registration uses discovered IDs. Expected manifests use independently required IDs.
 unitRegistration :: Text -> Text -> Text -> [Text] -> [Text] -> Group
 unitRegistration identifier contract profile capabilities identifiers =
     Group
@@ -100,10 +112,15 @@ projectionCases :: Text -> [Text]
 projectionCases ecosystem =
     map
         (("core.metadata.projection." <> ecosystem <> ".") <>)
-        ["malformed", "missing-name", "name-mismatch", "version-bound", "artifact-bound", "missing-version", "selected-parity"]
+        metadataProjectionLaws
 
-fetchCases :: [Text]
-fetchCases =
+-- | Projection requirements stay independent of each ecosystem's registered examples.
+metadataProjectionLaws :: [Text]
+metadataProjectionLaws = ["malformed", "missing-name", "name-mismatch", "version-bound", "artifact-bound", "missing-version", "selected-parity"]
+
+-- | Every registered ecosystem owes the same fetch transport and bound observations.
+metadataFetchLaws :: [Text]
+metadataFetchLaws =
     [ "status-200"
     , "status-201"
     , "status-299"

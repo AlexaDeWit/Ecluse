@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Audit the actual unit registrations without running examples or fixture hooks.
-module Ecluse.Test.Contract.UnitCatalogueSpec (spec) where
+module Ecluse.Test.Contract.UnitCatalogueSpec (spec, unitCatalogue) where
 
 import Ecluse.Core.CredentialSpec qualified as Credential
 import Ecluse.Core.Queue.MemorySpec qualified as Memory
@@ -12,7 +12,7 @@ import Ecluse.Core.Registry.Metadata.FetchSpec qualified as Fetch
 import Ecluse.Core.Registry.Npm.MetadataSpec qualified as Npm
 import Ecluse.Core.Registry.PyPI.MetadataSpec qualified as PyPI
 import Ecluse.Test.Contract.Binding (labelledCaseIds)
-import Ecluse.Test.Contract.Types (Group)
+import Ecluse.Test.Contract.Types (Catalogue, Group)
 import Ecluse.Test.Contract.UnitCatalogue
 import Test.Hspec
 
@@ -20,7 +20,11 @@ import Test.Hspec
 spec :: Spec
 spec =
     describe "core unit contract coverage" $
-        unitCoverageSpec (coreUnitCatalogue <$> registrations)
+        unitCoverageSpec unitCatalogue
+
+-- | The receipt hook shares the same independently audited registration source.
+unitCatalogue :: IO Catalogue
+unitCatalogue = coreUnitCatalogue <$> registrations
 
 registrations :: IO [Group]
 registrations =

@@ -5,6 +5,7 @@
 -- | Completion controls remove requirements and execution evidence independently.
 module Ecluse.Test.Contract.CompletionSpec (spec) where
 
+import Data.List (lookup)
 import Test.Hspec
 
 import Ecluse.Test.Contract.Completion

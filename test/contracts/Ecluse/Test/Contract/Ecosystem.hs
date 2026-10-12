@@ -16,7 +16,8 @@ module Ecluse.Test.Contract.Ecosystem (
     missingCapabilityObligations,
 ) where
 
-import Data.Map.Strict qualified as Map
+import Data.List (lookup)
+import Data.Text qualified as T
 import Test.Hspec (aroundAll, expectationFailure, it)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -31,7 +32,7 @@ import Ecluse.Test.Contract.Sweep.Composition (SweepDriver, sweepContract)
 import Ecluse.Test.Contract.Telemetry (MirrorTelemetryFixture, ReadTelemetryDriver, mirrorTelemetryContract, readTelemetryContract)
 import Ecluse.Test.Contract.Types
 
--- | An unavailable production operation fails its required laws without acquiring a fixture.
+-- | An unavailable required operation fails its required laws without acquiring a fixture.
 newtype MissingCapability = MissingCapability Text
     deriving stock (Eq, Show)
 
@@ -80,7 +81,7 @@ composeEcosystem scope driver =
         <> ecosystemNativeExtensions driver
   where
     subject = ecosystemName driver
-    laws family = Map.findWithDefault [] family (Map.fromList $ requiredFamilyLaws scope)
+    laws family = filter (/= "last-good-generation") $ fromMaybe [] $ lookup family (requiredFamilyLaws scope)
     prefix suffix = subject <> "/" <> suffix
     external family = \case
         Available _ -> []
@@ -141,7 +142,7 @@ missingGroup subject family prefix laws (MissingCapability reason) = DeclaredGro
             it (caseLabel (lawCase family prefix law) ("requires " <> family <> "/" <> law)) $
                 expectationFailure $
                     toString $
-                        "missing production capability: " <> subject <> ": " <> family <> ": " <> reason
+                        "missing required implementation: " <> subject <> ": " <> family <> ": " <> reason
   where
     identifier = subject <> "/missing/" <> family
     metadata = Group identifier "completion" (subject <> "/completion") E2E subject [Case (lawCase family prefix law) [identifier] | law <- laws] [] [] [] []
@@ -153,13 +154,18 @@ ecosystemCompletion scope driver = Completion subject scope $ concatMap familyEv
     subject = ecosystemName driver
     groups = map declaredGroup $ composeEcosystem scope driver
     familyEvidence (family, laws) = case (family, external family) of
-        (_, Just (ServingEvidence identifier)) -> [LawEvidence family law Integration identifier ("integration.serving." <> subject <> "." <> law) | law <- laws]
+        (_, Just (ServingEvidence identifier)) -> map (servingEvidence identifier family) laws
         _ -> map (localEvidence family) laws
+    servingEvidence identifier family law
+        | Just suffix <- T.stripPrefix "metadata-fetch/" law = LawEvidence family law Unit "core/metadata/fetch" ("core.metadata.fetch." <> subject <> "." <> suffix)
+        | Just suffix <- T.stripPrefix "metadata-projection/" law = LawEvidence family law Unit ("core/metadata/projection/" <> subject) ("core.metadata.projection." <> subject <> "." <> suffix)
+        | otherwise = LawEvidence family law Integration identifier ("integration.serving." <> subject <> "." <> law)
     external "proxying" = available (ecosystemProxying driver)
     external "policy" = available (ecosystemPolicy driver)
     external _ = Nothing
     available (Available value) = Just value
     available (Unavailable _) = Nothing
+    localEvidence "advisories" "last-good-generation" = LawEvidence "advisories" "last-good-generation" Unit "runtime/advisory/local" "advisory/local/last-good"
     localEvidence family law =
         let identifier = lawCase family (subject <> "/" <> familyPrefix family) law
             matching = find (any ((== identifier) . caseId) . groupCases) groups

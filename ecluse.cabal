@@ -818,6 +818,7 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Catalogue
     Ecluse.Test.Contract.Completion
     Ecluse.Test.Contract.Ecosystem
+    Ecluse.Test.Contract.Performance
     Ecluse.Test.Contract.Credential
     Ecluse.Test.Contract.Integration.Catalogue
     Ecluse.Test.Contract.Integration.Obligations
@@ -841,6 +842,7 @@ library ecluse-test-contracts
     Ecluse.Test.Contract.Serving
     Ecluse.Test.Contract.Types
     Ecluse.Test.Contract.UnitCatalogue
+    Ecluse.Test.Contract.UnitReport
     Ecluse.Test.Contract.Sweep
     Ecluse.Test.Contract.Sweep.Types
     Ecluse.Test.Contract.Sweep.Composition
@@ -916,6 +918,7 @@ test-suite ecluse-core-unit
   -- Extra roots supply declarations for coverage audits, not discovered executable examples.
   hs-source-dirs:     core/test/unit test/smoke test/residency
   other-modules:
+    SpecHook
     Ecluse.Core.Registry.NpmSmokeSpec
     Ecluse.Core.Registry.PyPISmokeSpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
@@ -925,6 +928,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.CatalogueSpec
     Ecluse.Test.Contract.CompletionSpec
     Ecluse.Test.Contract.EcosystemSpec
+    Ecluse.Test.Contract.PerformanceSpec
     Ecluse.Test.Contract.PackageStoreSpec
     Ecluse.Test.Contract.Fixtures
     Ecluse.Test.Contract.PhaseSpec
@@ -936,6 +940,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.TelemetrySpec
     Ecluse.Test.Contract.Integration.CatalogueSpec
     Ecluse.Test.Contract.UnitCatalogueSpec
+    Ecluse.Test.Contract.UnitReportSpec
     Ecluse.Test.Contract.Sweep.AdvisorySpec
     Ecluse.Test.Contract.PublicationSpec
     Ecluse.Test.Contract.QueueSpec
@@ -1200,8 +1205,10 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.AcceptanceSpec
+    Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.Contract.Driver
+    Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.AdvisoriesSpec
     Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
@@ -1245,6 +1252,7 @@ test-suite ecluse-unit
     Ecluse.BenchReport.AgainstMain.LoadSpec
     Ecluse.BenchReport.AgainstMainSpec
     Ecluse.BenchReport.MarkdownSpec
+    Ecluse.BenchReport.PerformanceSpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1376,6 +1384,7 @@ test-suite ecluse-runtime-unit
   main-is:            Spec.hs
   hs-source-dirs:     runtime/test/unit
   other-modules:
+    SpecHook
     Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Test.PackageStoreSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
@@ -1781,6 +1790,7 @@ executable ecluse-completion-npm-audit
   hs-source-dirs:   test/tools/completion-npm-audit
   build-depends:
     , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
     , ecluse:ecluse-e2e-test-support
     , text           ^>=2.1
 
@@ -1792,6 +1802,7 @@ executable ecluse-completion-pypi-audit
   hs-source-dirs:   test/tools/completion-pypi-audit
   build-depends:
     , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
     , ecluse:ecluse-e2e-test-support
     , text           ^>=2.1
 
@@ -1903,6 +1914,7 @@ executable bench-load
   other-modules:
     Ecluse.BenchLoad.Advisories
     Ecluse.BenchLoad.Contract.Driver
+    Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
@@ -1989,7 +2001,10 @@ library ecluse-bench-report
     Ecluse.BenchReport.AgainstMain.Bench
     Ecluse.BenchReport.AgainstMain.Load
     Ecluse.BenchReport.Markdown
+    Ecluse.BenchReport.Performance
   build-depends:
+    , aeson >=2.2 && <2.4
+    , ecluse:ecluse-test-contracts
     , containers  ^>=0.7
     , text        ^>=2.1
 
@@ -2001,7 +2016,14 @@ executable bench-report
   import:         shared
   main-is:        Main.hs
   hs-source-dirs: bench/report
+  other-modules: Ecluse.BenchReport.PerformanceCommand
   build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , ecluse:ecluse-core
+    , ecluse:ecluse-bench-load
+    , aeson >=2.2 && <2.4
+    , bytestring ^>=0.12
     , ecluse:ecluse-bench-report
     , filepath  ^>=1.4 || ^>=1.5
     , text      ^>=2.1
@@ -2015,7 +2037,9 @@ executable bench-report
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src
-  exposed-modules: Ecluse.Acceptance
+  exposed-modules:
+    Ecluse.Acceptance
+    Ecluse.Acceptance.Evidence
   build-depends:
     , ecluse:ecluse-core
     , aeson          >=2.2 && <2.4

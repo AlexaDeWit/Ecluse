@@ -15,6 +15,7 @@ module Ecluse.Test.Contract.Result (
     auditFullReport,
     auditPartitionReport,
     auditSelection,
+    auditExactIds,
 ) where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), defaultOptions, genericParseJSON, genericToJSON, withText)
@@ -139,8 +140,8 @@ makePlan catalogue = do
 -- | Check both group and case evidence, including each case's group ownership.
 auditSelection :: [Group] -> [GroupResult] -> [CaseResult] -> [Text]
 auditSelection groups actualGroups actualCases =
-    exact "group" (map groupId groups) (map grGroupId actualGroups)
-        <> exact "case" expectedCases (map crCaseId actualCases)
+    auditExactIds "group" (map groupId groups) (map grGroupId actualGroups)
+        <> auditExactIds "case" expectedCases (map crCaseId actualCases)
         <> [ "group did not pass: " <> grGroupId result <> ": " <> statusText (grStatus result)
            | result <- actualGroups
            , grStatus result /= Passed
@@ -161,7 +162,7 @@ auditSelection groups actualGroups actualCases =
 auditReports :: ExecutionIdentity -> Plan -> [Report] -> [Text]
 auditReports expected plan reports =
     auditPlan expected plan
-        <> exact "shard" (planPartitions plan) (map reportShard primary)
+        <> auditExactIds "shard" (planPartitions plan) (map reportShard primary)
         <> concatMap reportProblems reports
         <> auditSelection groups (concatMap reportGroups primary) (concatMap reportCases primary)
   where
@@ -191,7 +192,7 @@ auditPlan :: ExecutionIdentity -> Plan -> [Text]
 auditPlan expected plan =
     ["unsupported plan schema" | planSchemaVersion plan /= 1]
         <> fromLeft [] (validateCatalogue $ planCatalogue plan)
-        <> exact "plan partition" cataloguePartitions (planPartitions plan)
+        <> auditExactIds "plan partition" cataloguePartitions (planPartitions plan)
         <> ["empty expected identity: " <> name | (name, value) <- identityFields expected, T.null value]
   where
     cataloguePartitions = Set.toAscList $ Set.fromList $ map groupPartition $ catalogueGroups $ planCatalogue plan
@@ -214,8 +215,9 @@ identityFields executionIdentity =
     , ("runId", identityRunId executionIdentity)
     ]
 
-exact :: Text -> [Text] -> [Text] -> [Text]
-exact kind expected actual =
+-- | Report missing, unknown and duplicate identifiers without accepting duplicate evidence.
+auditExactIds :: Text -> [Text] -> [Text] -> [Text]
+auditExactIds kind expected actual =
     ["missing " <> kind <> ": " <> identifier | identifier <- Set.toAscList (expectedSet Set.\\ actualSet)]
         <> ["unknown " <> kind <> ": " <> identifier | identifier <- Set.toAscList (actualSet Set.\\ expectedSet)]
         <> ["duplicate " <> kind <> ": " <> identifier | identifier <- duplicates actual]

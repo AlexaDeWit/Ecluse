@@ -5,6 +5,7 @@
 -- | Discovery checks requirements before any provider can acquire resources.
 module Ecluse.Test.Contract.Catalogue (
     validateCatalogue,
+    combineCatalogues,
     caseLabel,
     labelCaseId,
     duplicates,
@@ -15,6 +16,15 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Test.Contract.Types
+
+-- | Combine tier declarations without hiding duplicate provider, group or case identities.
+combineCatalogues :: [Catalogue] -> Catalogue
+combineCatalogues catalogues =
+    Catalogue
+        (ordNub $ concatMap catalogueProductionEcosystems catalogues)
+        (concatMap catalogueProfiles catalogues)
+        (concatMap catalogueObligations catalogues)
+        (concatMap catalogueGroups catalogues)
 
 -- | Embed an immutable case ID without making the human description a selector.
 caseLabel :: Text -> Text -> String

@@ -10,6 +10,7 @@ module Ecluse.Test.Contract.Runner (
     contractMain,
     validateDeclaredGroups,
     executeGroups,
+    captureResult,
 ) where
 
 import Control.Exception qualified as Exception
@@ -17,9 +18,7 @@ import Data.ByteString qualified as BS
 import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
-import System.Directory (createDirectoryIfMissing, renameFile)
 import System.Environment (getProgName)
-import System.FilePath (takeDirectory)
 import System.Timeout (timeout)
 import Test.Hspec (Spec)
 import Test.Hspec.Core.Format qualified as Format
@@ -179,6 +178,7 @@ runSpec options scenarioGroup results spec = do
             observed <- readIORef results
             pure $ Right $ Hspec.specResultSuccess result && all ((== Passed) . crStatus) observed
 
+-- | Record one actual Hspec outcome with its owning group and original diagnostics.
 captureResult :: Group -> IORef [CaseResult] -> Format.Event -> IO ()
 captureResult scenarioGroup results = \case
     Format.ItemDone (_, label) item -> do
@@ -193,7 +193,4 @@ captureResult scenarioGroup results = \case
     _ -> pure ()
 
 persist :: RunSettings -> Report -> IO ()
-persist options report = forM_ (runReportPath options) $ \path -> do
-    createDirectoryIfMissing True $ takeDirectory path
-    BS.writeFile (path <> ".tmp") (jsonLine report)
-    renameFile (path <> ".tmp") path
+persist options report = forM_ (runReportPath options) $ \path -> writeJsonFile path report
