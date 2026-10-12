@@ -1,0 +1,188 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+{-# LANGUAGE ImportQualifiedPost #-}
+
+-- | Native distributions, multipart uploads, and conditional S3 objects for the PyPI worker load row.
+module Ecluse.BenchLoad.PyPI.WorkerFixture (
+    WorkerFixture (..),
+    newWorkerFixture,
+    resetWorkerFixture,
+    sourceApp,
+    targetApp,
+    stateApp,
+    fixturePackage,
+    fixtureVersion,
+    fixtureTrigger,
+) where
+
+import Codec.Compression.GZip qualified as GZip
+import Control.Concurrent (threadDelay)
+import Data.Aeson (Value, encode, object, (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Network.HTTP.Types (hContentType, status200, status304, status400, status404, status412, status503)
+import Network.Wai (Application, Request, pathInfo, rawPathInfo, requestHeaders, requestMethod, responseLBS, strictRequestBody)
+import Network.Wai.Parse (FileInfo (..), RequestBodyType (Multipart), lbsBackEnd, parseContentType, sinkRequestBody)
+
+import Ecluse.BenchLoad.Fixture (artifactBytes)
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Package (hexSha256Of)
+import Ecluse.Test.Registry.PyPI.Archive (metadata, tarBytes, zipBytes)
+import Ecluse.Test.Wai (selfBaseUrl)
+
+-- | Each reset removes both target files and durable objects before another complete copy.
+data WorkerFixture = WorkerFixture
+    { wfFiles :: Map Text ByteString
+    , wfTarget :: IORef (Map Text ByteString)
+    , wfObjects :: IORef (Map ByteString (ByteString, ByteString))
+    , wfCounts :: IORef (Map Text Int)
+    , wfReject :: IORef Bool
+    }
+
+-- | Native archive framing encloses the configured uncompressed payload in each distribution.
+newWorkerFixture :: Int -> IO WorkerFixture
+newWorkerFixture payloadBytes = do
+    let payload = LBS.toStrict (artifactBytes payloadBytes)
+    wheel <- zipBytes [("example-1.dist-info/METADATA", metadata), ("example/data", payload)]
+    sourceZip <- zipBytes [("example-1/PKG-INFO", metadata), ("example-1/data", payload)]
+    sourceTar <- LBS.toStrict . GZip.compress <$> tarBytes [("example-1/PKG-INFO", metadata), ("example-1/data", payload)]
+    let files = Map.fromList [(fixtureTrigger, wheel), ("example-1-py2-none-any.whl", wheel), ("example-1.zip", sourceZip), ("example-1.tar.gz", sourceTar)]
+    WorkerFixture files <$> newIORef mempty <*> newIORef mempty <*> newIORef mempty <*> newIORef False
+
+-- | Resets do not change the immutable source archives or injected failure switch.
+resetWorkerFixture :: WorkerFixture -> IO ()
+resetWorkerFixture fixture = do
+    writeIORef (wfTarget fixture) mempty
+    writeIORef (wfObjects fixture) mempty
+    writeIORef (wfCounts fixture) mempty
+
+-- | The demand names one wheel while the selected source version contains all four distributions.
+fixtureTrigger :: Text
+fixtureTrigger = "example-1-py3-none-any.whl"
+
+-- | Identity shared by the archives and PEP 691 document.
+fixturePackage :: PackageName
+fixturePackage = mkPackageName PyPI Nothing "example"
+
+-- | Every archive belongs to the same release.
+fixtureVersion :: Version
+fixtureVersion = mkVersion PyPI "1"
+
+-- | Only declared distributions exist, so an incorrect worker URL fails before publication.
+sourceApp :: Int -> WorkerFixture -> Application
+sourceApp latency fixture request respond = do
+    threadDelay latency
+    case route request of
+        ["simple", "example"] -> do
+            count fixture "source-index"
+            respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (indexValue (selfBaseUrl request) (wfFiles fixture))))
+        ["files", filename] | Just bytes <- Map.lookup filename (wfFiles fixture) -> do
+            count fixture "source-file"
+            respond (responseLBS status200 [(hContentType, "application/octet-stream")] (LBS.fromStrict bytes))
+        _ -> respond (responseLBS status404 [] "missing")
+
+-- | The target advertises only exact bytes accepted by its independent multipart decoder.
+targetApp :: Int -> WorkerFixture -> Application
+targetApp latency fixture request respond = do
+    threadDelay latency
+    case (requestMethod request, route request) of
+        ("GET", ["simple", "example"]) -> do
+            count fixture "target-index"
+            files <- readIORef (wfTarget fixture)
+            respond (responseLBS status200 [(hContentType, simpleIndexMediaType)] (encode (indexValue (selfBaseUrl request) files)))
+        ("POST", ["upload"]) -> do
+            body <- LBS.toStrict <$> strictRequestBody request
+            accepted <- decodeUpload fixture request body
+            reject <- readIORef (wfReject fixture)
+            case accepted of
+                Just (filename, bytes) -> do
+                    count fixture "upload-attempt"
+                    if reject
+                        then respond (responseLBS status503 [] "injected upload rejection")
+                        else do
+                            objects <- readIORef (wfObjects fixture)
+                            if Map.null objects
+                                then respond (responseLBS status400 [] "upload preceded durable inventory")
+                                else do
+                                    modifyIORef' (wfTarget fixture) (Map.insert filename bytes)
+                                    count fixture "upload"
+                                    respond (responseLBS status200 [] "stored")
+                Nothing -> respond (responseLBS status400 [] "upload fields or bytes differ")
+        _ -> respond (responseLBS status404 [] "missing")
+
+decodeUpload :: WorkerFixture -> Request -> ByteString -> IO (Maybe (Text, ByteString))
+decodeUpload fixture request bytes = case parseContentType <$> lookup hContentType (requestHeaders request) of
+    Just ("multipart/form-data", attributes)
+        | Just boundary <- lookup "boundary" attributes -> do
+            chunks <- newIORef bytes
+            (fields, files) <- sinkRequestBody lbsBackEnd (Multipart boundary) (atomicModifyIORef' chunks (BS.empty,))
+            pure $ case files of
+                [("content", file)]
+                    | let filename = decodeUtf8 (fileName file)
+                    , let content = LBS.toStrict (fileContent file)
+                    , Map.lookup filename (wfFiles fixture) == Just content
+                    , all (\(key, value) -> lookup key fields == Just value) (uploadFields filename content) ->
+                        Just (filename, content)
+                _ -> Nothing
+    _ -> pure Nothing
+
+uploadFields :: Text -> ByteString -> [(ByteString, ByteString)]
+uploadFields filename bytes =
+    [ (":action", "file_upload")
+    , ("protocol_version", "1")
+    , ("name", "example")
+    , ("version", "1")
+    , ("sha256_digest", encodeUtf8 (hexSha256Of bytes))
+    , ("filetype", if wheel then "bdist_wheel" else "sdist")
+    , ("pyversion", if filename == fixtureTrigger then "py3" else if wheel then "py2" else "source")
+    ]
+  where
+    wheel = ".whl" `T.isSuffixOf` filename
+
+-- | Opaque revisions and conditional writes retain S3's compare-and-swap behaviour.
+stateApp :: Int -> WorkerFixture -> Application
+stateApp latency fixture request respond = do
+    threadDelay latency
+    count fixture "state"
+    let key = rawPathInfo request
+        headers = requestHeaders request
+    objects <- readIORef (wfObjects fixture)
+    case (requestMethod request, Map.lookup key objects) of
+        ("GET", Nothing) -> respond (responseLBS status404 [(hContentType, "application/xml")] "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>")
+        ("GET", Just (revision, bytes))
+            | lookup "If-None-Match" headers == Just revision -> respond (responseLBS status304 [("ETag", revision)] "")
+            | otherwise -> respond (responseLBS status200 [("ETag", revision)] (LBS.fromStrict bytes))
+        ("PUT", previous) -> do
+            bytes <- LBS.toStrict <$> strictRequestBody request
+            let condition = case previous of
+                    Nothing -> lookup "If-None-Match" headers == Just "*"
+                    Just (revision, _) -> lookup "If-Match" headers == Just revision
+                revision = "\"" <> encodeUtf8 (hexSha256Of bytes) <> "\""
+            if condition
+                then do
+                    modifyIORef' (wfObjects fixture) (Map.insert key (revision, bytes))
+                    count fixture "state-write"
+                    respond (responseLBS status200 [("ETag", revision)] "")
+                else respond (responseLBS status412 [(hContentType, "application/xml")] "<Error><Code>PreconditionFailed</Code></Error>")
+        _ -> respond (responseLBS status400 [] "unexpected object request")
+
+indexValue :: Text -> Map Text ByteString -> Value
+indexValue base files =
+    object
+        [ "name" .= ("example" :: Text)
+        , "meta" .= object ["api-version" .= ("1.4" :: Text)]
+        , "files" .= [object ["filename" .= filename, "url" .= (base <> "/files/" <> filename), "hashes" .= object ["sha256" .= hexSha256Of bytes], "size" .= BS.length bytes, "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)] | (filename, bytes) <- Map.toList files]
+        ]
+
+route :: Request -> [Text]
+route = filter (not . T.null) . pathInfo
+
+count :: WorkerFixture -> Text -> IO ()
+count fixture name = atomicModifyIORef' (wfCounts fixture) (\counts -> (Map.insertWith (+) name 1 counts, ()))

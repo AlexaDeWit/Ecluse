@@ -32,6 +32,7 @@ import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
+import Ecluse.BenchLoad.PyPI.Worker (pypiWorkerScenario)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -50,7 +51,7 @@ import Ecluse.Test.Wai (localhost, selfBaseUrl)
 
 -- | Recurring PyPI reads through the measured proxy and HTTP upstream fixtures.
 pypiFixture :: UpstreamFixture
-pypiFixture = readLoadContract pypiReadDriver managedMirrorScenarios
+pypiFixture = readLoadContract pypiReadDriver (managedMirrorScenarios <> [pypiWorkerScenario])
 
 pypiReadDriver :: LoadReadDriver
 pypiReadDriver =

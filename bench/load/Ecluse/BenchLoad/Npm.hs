@@ -21,7 +21,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import GHC.Clock (getMonotonicTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404)
@@ -37,6 +36,7 @@ import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
+import Ecluse.BenchLoad.Worker (runWorkerLoad)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageDetails (pkgVersion), PackageInfo (..), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
@@ -323,8 +323,7 @@ workerScenario =
 
 runWorkerLoop :: LoadKnobs -> LogEnv -> WorkerRuntime -> MirrorQueue -> MirrorJob -> IORef Int -> IO [Double]
 runWorkerLoop knobs logEnv runtime queue job counter = do
-    deadline <- (+ fromIntegral (lkDurationSeconds knobs)) <$> getMonotonicTime
-    latencies <- go deadline []
+    latencies <- runWorkerLoad knobs prepare (runWorkerM logEnv mempty runtime . processBatch) (const pass)
     published <- readIORef counter
     when (published /= length latencies) $
         benchFail
@@ -336,18 +335,9 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
             )
     pure latencies
   where
-    go :: Double -> [Double] -> IO [Double]
-    go deadline acc = do
-        nowT <- getMonotonicTime
-        if nowT >= deadline
-            then pure (reverse acc)
-            else do
-                enqueue queue job >>= either (\f -> fail ("bench enqueue faulted: " <> show f)) pure
-                messages <- receive queue >>= either (\f -> fail ("bench receive faulted: " <> show f)) pure
-                t0 <- getMonotonicTime
-                runWorkerM logEnv mempty runtime (processBatch messages)
-                t1 <- getMonotonicTime
-                go deadline ((t1 - t0) : acc)
+    prepare = do
+        enqueue queue job >>= either (\f -> fail ("bench enqueue faulted: " <> show f)) pure
+        receive queue >>= either (\f -> fail ("bench receive faulted: " <> show f)) pure
 
 mirrorJob :: MirrorJob
 mirrorJob =
