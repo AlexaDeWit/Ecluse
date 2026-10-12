@@ -34,13 +34,13 @@ import Ecluse.Test.Support (expectRight)
 spec :: Spec
 spec = describe "durable graph accounting" $ do
     it "grows with admitted files and fragments but leaves repeated admission unchanged" $ do
-        first <- mirrorSample [1] False "https://first.test/" "original"
+        initialInventory <- mirrorSample [1] False "https://first.test/" "original"
         next <- mirrorSample [2] False "https://first.test/" "original"
-        before <- expectRight (extendProjectRecord defaultLimits target first Nothing)
-        repeated <- expectRight (extendProjectRecord defaultLimits target first (Just before))
-        added <- expectRight (extendProjectRecord defaultLimits target next (Just before))
-        retainedRecordWeight repeated `shouldBe` retainedRecordWeight before
-        retainedRecordWeight added `shouldSatisfy` (> retainedRecordWeight before)
+        previousRecord <- expectRight (extendProjectRecord defaultLimits target initialInventory Nothing)
+        repeated <- expectRight (extendProjectRecord defaultLimits target initialInventory (Just previousRecord))
+        added <- expectRight (extendProjectRecord defaultLimits target next (Just previousRecord))
+        retainedRecordWeight repeated `shouldBe` retainedRecordWeight previousRecord
+        retainedRecordWeight added `shouldSatisfy` (> retainedRecordWeight previousRecord)
 
     it "charges repeated expected descriptors even when their complete payloads alias" $ do
         record <- sampleRecord
@@ -54,10 +54,10 @@ spec = describe "durable graph accounting" $ do
         record <- sampleRecord
         digest <- expectRight (mkHash SHA256 (T.take 64 (T.replicate 65536 "a")))
         let withHashes n = record{projectVersions = fmap (\version -> version{storedIdentities = Map.fromList [(show k, digest) | k <- [1 .. n :: Int]]}) (projectVersions record)}
-            pending = record{projectVersions = fmap (\version -> version{storedCompanions = Map.singleton "file" CompanionPending}) (projectVersions record)}
+            pendingRecord = record{projectVersions = fmap (\version -> version{storedCompanions = Map.singleton "file" CompanionPending}) (projectVersions record)}
             retained = record{projectVersions = fmap (\version -> version{storedCompanions = Map.singleton "file" (CompanionRetained (CompanionRef digest 5))}) (projectVersions record)}
         retainedRecordWeight (withHashes 2) - retainedRecordWeight (withHashes 1) `shouldSatisfy` (>= 65536)
-        retainedRecordWeight retained - retainedRecordWeight pending `shouldSatisfy` (>= 65536)
+        retainedRecordWeight retained - retainedRecordWeight pendingRecord `shouldSatisfy` (>= 65536)
 
     it "charges one envelope per project and the full backing of JSON keys and values" $ do
         record <- sampleRecord
@@ -77,8 +77,8 @@ spec = describe "durable graph accounting" $ do
         retainedFragmentWeight expanded - retainedFragmentWeight original `shouldSatisfy` (>= 256 * 1022)
 
     it "charges UTF-8 backing growth" $ do
-        first <- mirrorSample [1] False "https://first.test/" "original"
-        let details = inventoryDetails first
+        initialInventory <- mirrorSample [1] False "https://first.test/" "original"
+        let details = inventoryDetails initialInventory
             withNote note = restoreMirrorInventory details (mirrorSource (pkgArtifacts details) note)
         ascii <- expectRight (withNote (T.replicate 1024 "a")) >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         unicode <- expectRight (withNote (T.replicate 1024 "\x1f600")) >>= \inventory -> expectRight (extendProjectRecord defaultLimits target inventory Nothing)

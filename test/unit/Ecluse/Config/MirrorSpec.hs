@@ -40,8 +40,8 @@ spec = describe "native mirror declarations" $ do
             , ("account", "https://mirror-999999999999.d.codeartifact.us-east-1.amazonaws.com/pypi/cache/legacy/")
             , ("region", "https://mirror-123456789012.d.codeartifact.eu-west-1.amazonaws.com/pypi/cache/legacy/")
             ]
-            $ \(identity, upload) ->
-                it ("refuses an upload to another " <> identity) $
+            $ \(identityPart, upload) ->
+                it ("refuses an upload to another " <> identityPart) $
                     loadConfig (codeArtifactEnv upload) Nothing
                         `shouldBe` Left [ParseError "CodeArtifact uploadUrl must address the same mirror repository"]
         for_ ["/pypi/cache/simple/", "/pypi/cache/legacy/extra/", "/npm/cache/legacy/", "/legacy/"] $ \path ->
