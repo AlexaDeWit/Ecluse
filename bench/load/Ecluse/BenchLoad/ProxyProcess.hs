@@ -2,19 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Start, observe, and stop the proxy process a scenario measures. The proxy is this executable
-under 'serveProxyFlag', configured through @ECLUSE_*@ variables, and @AWS_*@ ones for an advisory
-store, as a deployment would be. Under a pod shape it runs in its own child of the cgroup named by
-@BENCH_LOAD_CGROUP@, so the limit bounds it alone. The cgroup outlives the process, so an OOM kill
-stays readable after it. The proxy logs into pipes the harness drains into bounded memory, so no
-log page is charged to the limit.
--}
+-- | Run each measured proxy in its own cgroup with bounded log drains and explicit fixture configuration.
 module Ecluse.BenchLoad.ProxyProcess (
     -- * Configuration
     ProxySettings (..),
     proxySettings,
     AdvisoryFeed (..),
     advisoryBucket,
+    mirrorStateBucket,
     podShapeFromEnv,
     serveProxyFlag,
     proxyEnvironment,
@@ -120,9 +115,7 @@ import Ecluse.Test.Wai (freePort)
 serveProxyFlag :: String
 serveProxyFlag = "--serve-proxy"
 
-{- | The configuration a scenario gives its proxy. 'Nothing' leaves a bound to the boot's own
-computation, which is what an unconfigured pod gets.
--}
+-- | 'Nothing' leaves each bound to the proxy's boot-time calculation.
 data ProxySettings = ProxySettings
     { psEcosystem :: Ecosystem
     , psCacheTtlSeconds :: Int
@@ -134,12 +127,14 @@ data ProxySettings = ProxySettings
     , psPrivateConnections :: Maybe Int
     , psClock :: Maybe UTCTime
     -- ^ A fixed evaluation clock for the rules, 'Nothing' for the wall clock.
+    , psMirrorStatePort :: Maybe Int
+    -- ^ An optional S3-compatible fixture for durable managed mirror reads.
     , psAdvisories :: Maybe AdvisoryFeed
     }
 
 -- | Settings for one mount with the given cache TTL, every bound left to the boot.
 proxySettings :: Ecosystem -> Int -> ProxySettings
-proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+proxySettings ecosystem ttl = ProxySettings ecosystem ttl Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | The loopback object store serving the advisory database, and the named rules the policy adds to read it.
 data AdvisoryFeed = AdvisoryFeed
@@ -151,6 +146,10 @@ data AdvisoryFeed = AdvisoryFeed
 -- | The bucket the proxy syncs its advisory database from.
 advisoryBucket :: Text
 advisoryBucket = "ecluse-bench-advisories"
+
+-- | The bucket holding the managed-read fixture's project record.
+mirrorStateBucket :: Text
+mirrorStateBucket = "ecluse-bench-mirror-state"
 
 -- | The pod shape in @BENCH_LOAD_POD@, unlimited when unset.
 podShapeFromEnv :: IO PodShape
@@ -212,9 +211,7 @@ data ProxyEnd = ProxyEnd
     , peCgroup :: Maybe CgroupReading
     }
 
-{- | Boot a proxy in front of the stub upstreams, run the action, then stop it. A failed boot fails
-the harness with the proxy's output, after one retry when the RTS could not start a thread.
--}
+-- | Boot and stop a measured proxy. Retry once only when the RTS cannot start a thread.
 withProxyProcess :: ProxySettings -> Int -> Maybe Int -> (ProxyProcess -> IO a) -> IO a
 withProxyProcess settings publicPort privatePort body = do
     shape <- podShapeFromEnv
@@ -311,9 +308,7 @@ launch settings shape root dir publicPort privatePort = do
         idleCgroup <- proxyCgroupNow booted
         pure booted{ppBootLines = bootMessages logged, ppRuleLines = ruleMessages logged, ppIdleRts = idle, ppIdleCgroupBytes = crMemoryCurrent =<< idleCgroup}
 
-{- | Wait a minute of wall clock for the first advisory sync, so every reading includes the database.
-A proxy that exits or never installs one is stopped, and the failure carries both streams' tails.
--}
+-- | Wait at most a minute for advisory installation, stopping failed proxies and reporting both output tails.
 awaitAdvisoryDatabase :: ProxyProcess -> Ecosystem -> IO ()
 awaitAdvisoryDatabase proxy ecosystem = do
     void (awaitUntil 60_000_000 100_000 (settled <$> installation))
@@ -340,9 +335,7 @@ distinctPorts = do
     c <- freePort
     if a /= b && b /= c && a /= c then pure (a, b, c) else distinctPorts
 
-{- | The proxy's environment: the harness's own, less its RTS flags and any proxy configuration,
-plus the RTS statistics flag and the scenario's.
--}
+-- | Replace inherited proxy settings and RTS flags with this scenario's explicit environment.
 proxyEnvironment :: ProxySettings -> PodShape -> Int -> FilePath -> (Int, Int, Int) -> Int -> Maybe Int -> [(String, String)] -> [(String, String)]
 proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort) publicPort privatePort base =
     filter (inherited . fst) base <> map (bimap toString toString) (fixed <> pinned)
@@ -374,6 +367,14 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
         ]
             <> map (bimap toText toText) ambientAwsEntries
             <> [("ECLUSE_RULES", decodeUtf8 (encode (object (afRules feed)))) | not (null (afRules feed))]
+    mirrorState endpoint =
+        [ ("ECLUSE_MIRROR_STATE__URL", "s3://" <> mirrorStateBucket)
+        , ("AWS_ENDPOINT_URL", "http://127.0.0.1:" <> show endpoint)
+        , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__TOKEN", "fixture-token")
+        , ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__USERNAME", "fixture-user")
+        ]
+            <> map (bimap toText toText) ambientAwsEntries
+            <> foldMap (\p -> [upstream "MIRROR_TARGET" p, ("ECLUSE_MOUNTS__" <> mount <> "__MIRROR_TARGET__REGISTRY__UPLOAD_URL", "https://localhost:" <> show p <> "/upload")]) privatePort
     pinned =
         catMaybes
             [ upstream "PRIVATE_UPSTREAM" <$> privatePort
@@ -388,6 +389,7 @@ proxyEnvironment settings shape capabilities dir (port, controlPort, scrapePort)
               ("ECLUSE_RUNTIME__CORES", show capabilities) <$ guard (shape == Unlimited)
             ]
             <> foldMap advisories (psAdvisories settings)
+            <> foldMap mirrorState (psMirrorStatePort settings)
 
 -- | RTS counters from the proxy after the given collection. 'Nothing' once it has gone.
 proxySnapshot :: ProxyProcess -> Collection -> IO (Maybe RtsSnapshot)
@@ -434,9 +436,7 @@ readCgroup dir = do
   where
     bytesAt file = (>>= parseMemoryMax) <$> readIfExists (dir </> file)
 
-{- | Stop the proxy and read how it ended. SIGTERM starts its graceful drain. A process still
-alive after thirty seconds is killed. The result is kept, so a second call returns it unchanged.
--}
+-- | Request graceful shutdown, kill after thirty seconds, and retain the result for later callers.
 stopProxy :: ProxyProcess -> IO ProxyEnd
 stopProxy proxy = modifyMVar (ppEnd proxy) $ \case
     Just end -> pure (Just end, end)
@@ -483,9 +483,7 @@ renderBootFailure :: BootFailure -> Text
 renderBootFailure failure =
     "the proxy " <> bfReason failure <> "\nstderr:\n" <> bfStderr failure <> "\nlog tail:\n" <> bfLog failure
 
-{- | Start a process on drained pipes and wait, 100 ms per attempt, for @/readyz@ on the port. A
-process that exits or never answers is stopped, and the failure carries both streams' tails.
--}
+-- | Drain process output while polling readiness every 100 ms, returning bounded diagnostics on failure.
 bootDrained :: Manager -> Int -> Int -> ProcessConfig () () () -> IO (Either BootFailure Drained)
 bootDrained manager attempts port command = do
     process <- startProcess (setStdin nullStream (setStdout createPipe (setStderr createPipe command)))
@@ -513,9 +511,7 @@ bootDrained manager attempts port command = do
         void (stopDrained drained)
         BootFailure reason <$> capturedTailText (drStderr drained) <*> capturedTailText (drStdout drained)
 
-{- | Run boot attempt 1, and attempt 2 after the delay when the RTS could not start an OS thread: a
-task limit outside the harness. Each failure carries its diagnostic, and the notes keep them all.
--}
+-- | Retry once after an RTS thread-start failure, preserving diagnostics from both attempts.
 retryingBoot :: Int -> (Text -> IO ()) -> (Int -> IO (Either (BootFailure, Text) a)) -> IO ([Text], Either BootFailure a)
 retryingBoot delayMicros announce boot = attempt 1 []
   where
@@ -537,9 +533,7 @@ guardDiagnostic :: IO Text -> IO Text
 guardDiagnostic diagnose =
     either (\err -> "diagnostic: could not be read: " <> toText (displayException err)) id <$> tryAny diagnose
 
-{- | The task and memory limits a thread start meets, read just after a failed boot: the process
-limits, this user's tasks, the system's, and the proxy cgroup with any sibling left behind.
--}
+-- | Report the failed process and parent cgroup limits alongside host memory and task counts.
 bootDiagnostic :: Maybe FilePath -> IO Text
 bootDiagnostic cgroup = do
     limits <- readIfExists "/proc/self/limits"
@@ -589,8 +583,7 @@ settled = \case
     Booting -> False
     _ -> True
 
-{- The waits poll rather than use 'timeout': a cleanup handler runs under 'uninterruptibleMask',
-where a timeout cannot fire. -}
+-- Polling keeps cleanup outside timeout cancellation while subprocess handlers hold an uninterruptible mask.
 stopDrained :: Drained -> IO (ExitCode, Bool)
 stopDrained drained = do
     let process = drProcess drained

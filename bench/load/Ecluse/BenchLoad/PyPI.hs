@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PEP 691 index, private copy, wheel relay, cache, and advisory database load scenarios over
-local upstreams. PyPI worker-mirroring remains a named gap until #765 supplies the async mirror
-worker.
--}
+-- | PyPI index, managed mirror, private copy, artifact, cache, and advisory HTTP load scenarios.
 module Ecluse.BenchLoad.PyPI (
     pypiFixture,
     pypiPrivateCopy,
@@ -28,6 +25,7 @@ import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
+import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveHttp, DriveRamp), Load (Load), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
@@ -50,9 +48,9 @@ import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 
--- | The supported PyPI read paths, with no mirror worker or publishing stand-in.
+-- | Recurring PyPI reads through the measured proxy and HTTP upstream fixtures.
 pypiFixture :: UpstreamFixture
-pypiFixture = readLoadContract pypiReadDriver []
+pypiFixture = readLoadContract pypiReadDriver managedMirrorScenarios
 
 pypiReadDriver :: LoadReadDriver
 pypiReadDriver =

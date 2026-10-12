@@ -66,5 +66,8 @@ spec = do
                 ordNub cold `shouldSatisfy` ((== 2) . length)
                 ordNub warm `shouldSatisfy` ((== 1) . length)
                 fetchBody port "/simple/requests/requests-9999.0.2-py3-none-any.whl" `shouldReturn` "trusted"
+    describe "managed mirror comparisons" $
+        it "keeps the native baseline beside warm and changed state reads" $
+            names `shouldSatisfy` isInfixOf ["mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision"]
   where
     names = map scenarioName (fixtureScenarios pypiFixture)

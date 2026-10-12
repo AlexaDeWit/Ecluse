@@ -9,9 +9,12 @@ module Ecluse.Test.Mirror.Read (
     ReadResult (..),
     readUnmanagedPreserved,
     makeReadFixture,
+    makeReadFixtureFor,
     writeReadFixture,
     loadReadFixture,
     newReadSession,
+    newReadSessionFromFiles,
+    validateManagedProject,
     advanceReadSession,
     readManagedProject,
     readExchanges,
@@ -27,11 +30,12 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import System.Directory (getFileSize)
 import System.FilePath ((</>))
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Mirror.State
-import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, stateWireChunkCharge)
+import Ecluse.Core.Mirror.State.Codec (chargedDecodeProjectRecord, stateExchangeCharge, stateWireChunkCharge)
 import Ecluse.Core.Mirror.State.Internal (StateRevision (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge (Provenance (TrustedSource), mergePackuments)
@@ -62,7 +66,8 @@ import Ecluse.Test.Support (expectRight, testMemoryMeter)
 
 -- | Encoded state revisions and the same authorised native listing for both revisions.
 data ReadFixture = ReadFixture
-    { fixtureOld :: ByteString
+    { fixtureTarget :: StateTarget
+    , fixtureOld :: ByteString
     , fixtureNew :: ByteString
     , fixturePrivate :: ByteString
     }
@@ -90,7 +95,11 @@ readLimits = defaultLimits
 
 -- | Every version has three separately admitted fragments whose original coordinate is zero.
 makeReadFixture :: Int -> IO ReadFixture
-makeReadFixture count = do
+makeReadFixture = makeReadFixtureFor defaultTarget
+
+-- | Bind recorded identity to the actual configured mirror in an HTTP fixture.
+makeReadFixtureFor :: StateTarget -> Int -> IO ReadFixture
+makeReadFixtureFor target count = do
     inventories <- traverse (uncurry inventory) [(version, file) | version <- [1 .. count], file <- [1 .. 3]]
     previous <- foldM add Nothing inventories >>= maybe (fail "empty fixture") pure
     addition <- inventory 1 4
@@ -100,7 +109,7 @@ makeReadFixture count = do
     new <- expectRight (encodeProjectRecord readLimits updated)
     let fields = concatMap nativeFields (inventories <> [addition] <> unmanaged)
         private = LBS.toStrict (encode (object ["name" .= ("demo" :: Text), "meta" .= object ["api-version" .= ("1.0" :: Text)], "files" .= fields]))
-    evaluate (BS.length old + BS.length new + BS.length private) $> ReadFixture old new private
+    evaluate (BS.length old + BS.length new + BS.length private) $> ReadFixture target old new private
   where
     add previous value = Just <$> expectRight (extendProjectRecord readLimits target value previous)
 
@@ -133,40 +142,66 @@ writeReadFixture directory fixture = do
 
 -- | Load encoded input without retaining fixture construction trees.
 loadReadFixture :: FilePath -> IO ReadFixture
-loadReadFixture directory = ReadFixture <$> BS.readFile (directory </> "old.json") <*> BS.readFile (directory </> "new.json") <*> BS.readFile (directory </> "private.json")
+loadReadFixture directory = ReadFixture defaultTarget <$> BS.readFile (directory </> "old.json") <*> BS.readFile (directory </> "new.json") <*> BS.readFile (directory </> "private.json")
 
 -- | Compute the old record's retention allowance outside the measured request.
 readRetainedCharge :: ReadFixture -> IO Int
-readRetainedCharge fixture = expectRight (decodeProjectRecord readLimits target mirrorPackage (fixtureOld fixture) >>= projectRecordWeight readLimits)
+readRetainedCharge fixture = expectRight (decodeProjectRecord readLimits (fixtureTarget fixture) mirrorPackage (fixtureOld fixture) >>= projectRecordWeight readLimits)
 
 -- | The backend decodes only loaded revisions and records every conditional state exchange.
 newReadSession :: ReadFixture -> IO ReadSession
-newReadSession fixture = do
+newReadSession fixture = newSession (fixtureTarget fixture) limits (fixturePrivate fixture) $ \pay newer -> do
+    let bytes = if newer then fixtureNew fixture else fixtureOld fixture
+    pay (stateWireChunkCharge (BS.length bytes))
+    pure bytes
+  where
+    limits = readLimits{maxMetadataBytes = max (BS.length (fixtureOld fixture)) (BS.length (fixtureNew fixture))}
+
+-- | Allocate each transport body inside its request after charging its actual file size.
+newReadSessionFromFiles :: FilePath -> IO ReadSession
+newReadSessionFromFiles directory = do
+    private <- BS.readFile (directory </> "private.json")
+    newSession defaultTarget readLimits private $ \pay newer -> do
+        let path = directory </> if newer then "new.json" else "old.json"
+        size <- getFileSize path
+        when (size > toInteger (maxMetadataBytes readLimits)) (fail "state fixture exceeds the metadata limit")
+        pay (stateWireChunkCharge (fromInteger size))
+        BS.readFile path
+
+newSession :: StateTarget -> Limits -> ByteString -> (StateCharge -> Bool -> IO ByteString) -> IO ReadSession
+newSession target limits privateBytes load = do
     changed <- newIORef False
     exchanges <- newIORef (0, [])
     pool <- newLocalPool 4 (256 * 1024 * 1024)
     retention <- newMirrorRetention pool 3600 (StoreBudget 0 0)
     meter <- testMemoryMeter
-    streamed <- expectRight (projectPyPIPackedChunks readLimits mirrorPackage [fixturePrivate fixture])
+    streamed <- expectRight (projectPyPIPackedChunks readLimits mirrorPackage [privateBytes])
     (info, packed) <- expectRight (projectPyPIPacked readLimits mirrorPackage streamed)
-    let private = Manifest info (fst pypiPacked packed) (BS.length (fixturePrivate fixture)) (digestFromContext (hashUpdate hashInit (fixturePrivate fixture)))
+    let private = Manifest info (fst pypiPacked packed) (BS.length privateBytes) (digestFromContext (hashUpdate hashInit privateBytes))
         store = MirrorState (fetch changed exchanges) (\_ _ _ _ -> pure (Left StateRetryExhausted)) (\_ _ -> pure (Left StateMissingCompanion)) (\_ _ -> pure (Left StateMissingCompanion))
     pure (ReadSession (newMirrorView limits target store retention) meter private changed exchanges)
   where
-    limits = readLimits{maxMetadataBytes = max (BS.length (fixtureOld fixture)) (BS.length (fixtureNew fixture))}
     fetch changed exchanges pay name held = do
         modifyIORef' exchanges $ \(count, history) ->
             let total = count + 1
                 recent = take 3 (held : history)
              in total `seq` length recent `seq` (total, recent)
+        pay stateExchangeCharge
         newer <- readIORef changed
-        let revision = revisionFor newer
+        let revision = StateRevision target mirrorPackage (if newer then "two" else "one")
         if held == Just revision
             then pure (Right (StateUnchanged revision))
             else do
-                let bytes = if newer then fixtureNew fixture else fixtureOld fixture
-                pay (stateWireChunkCharge (BS.length bytes))
+                bytes <- load pay newer
                 fmap (StateLoaded revision) <$> chargedDecodeProjectRecord pay limits target name bytes
+
+-- | Observe validation alone so the 304 accounting contract excludes listing output work.
+validateManagedProject :: ReadSession -> IO Int
+validateManagedProject (ReadSession view meter _ _ _) = do
+    _ <- takeLargestCharge meter
+    outcome <- withMemoryEntry noopMetricsPort meter $ \ticket -> validateMirrorProject view ticket mirrorPackage >>= expectRight
+    when (isNothing (join outcome)) (fail "missing validated mirror project")
+    takeLargestCharge meter
 
 -- | Advance the remote revision without clearing the retained old record.
 advanceReadSession :: ReadSession -> IO ()
@@ -199,8 +234,5 @@ readManagedProject (ReadSession view meter private _ _) = do
     contribution manifest = Contribution TrustedSource (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)
     metadata = adapterMetadata pypiAdapter
 
-target :: StateTarget
-target = stateTarget "https://private.test"
-
-revisionFor :: Bool -> StateRevision
-revisionFor changed = StateRevision target mirrorPackage (if changed then "two" else "one")
+defaultTarget :: StateTarget
+defaultTarget = stateTarget "https://private.test"
