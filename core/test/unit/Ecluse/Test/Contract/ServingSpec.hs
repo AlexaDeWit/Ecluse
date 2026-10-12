@@ -6,6 +6,7 @@
 module Ecluse.Test.Contract.ServingSpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Network.HTTP.Types qualified
 import Test.Hspec
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
@@ -13,6 +14,13 @@ import Ecluse.Test.Contract.Serving
 
 spec :: Spec
 spec = do
+    it "accepts an artifact HEAD with a nonempty advertised representation" $
+        artifactHeadCase (headResponse "" [("Content-Length", "12")])
+    it "rejects an artifact HEAD that transfers body bytes" $
+        artifactHeadCase (headResponse "body" [("Content-Length", "12")]) `shouldThrow` anyException
+    it "rejects an artifact HEAD with no positive representation size" $
+        for_ [[], [("Content-Length", "0")], [("Content-Length", "invalid")]] $ \headers ->
+            artifactHeadCase (headResponse "" headers) `shouldThrow` anyException
     it (caseLabel "core.contract.serving.valid-observations" "accepts matching independently observed bytes and advertised digest") $
         artifactIntegrityCase (observedDriver id id)
     it (caseLabel "core.contract.serving.corrupt-bytes" "rejects changed artifact bytes even when the status is successful") $
@@ -36,8 +44,11 @@ observedDriver changeDigest changeBytes =
             action
                 ServingSession
                     { requestMetadata = \_ _ -> pure response
-                    , requestArtifact = \_ -> pure response{responseBody = changeBytes (responseBody response)}
+                    , requestArtifact = \_ _ -> pure response{responseBody = changeBytes (responseBody response)}
                     }
         , servingIdentity = ("thing@" <>)
         , servingDigest = decodeUtf8
         }
+
+headResponse :: LByteString -> [Network.HTTP.Types.Header] -> ServingResponse
+headResponse body headers = ServingResponse 200 body headers [] mempty

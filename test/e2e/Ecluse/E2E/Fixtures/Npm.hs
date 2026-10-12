@@ -3,14 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | npm fixtures for the nginx upstream in end-to-end tests.
-Versions predate quarantine, and artifact integrity matches the served bytes
-except in the tampering fixture.
+Most versions predate quarantine. Advisory fixes use the creation time, and
+the tampering fixture serves bytes that differ from its advertised integrity.
 -}
 module Ecluse.E2E.Fixtures.Npm (
     PkgSpec (..),
     defaultPkgSpec,
     psVersions,
     allowPkg,
+    advisoryPkg,
     denyPkg,
     mirrorPkg,
     mirrorAuthorFields,
@@ -53,10 +54,13 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (proc, runProcess_)
 
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -69,6 +73,8 @@ data PkgSpec = PkgSpec
     -- ^ The version @dist-tags.latest@ points at.
     , psOlderVersions :: [Text]
     -- ^ Further versions the packument publishes, all below 'psVersion'.
+    , psRecentVersions :: [Text]
+    -- ^ Versions whose publication time is the fixture creation time.
     , psInstallScript :: Bool
     -- ^ Declare an install script: the @DenyInstallTimeExecution@ trigger.
     , psTamper :: Bool
@@ -89,6 +95,7 @@ defaultPkgSpec name =
         { psName = name
         , psVersion = "1.0.0"
         , psOlderVersions = []
+        , psRecentVersions = []
         , psInstallScript = False
         , psTamper = False
         , psVersionFields = []
@@ -99,6 +106,10 @@ defaultPkgSpec name =
 -- | Every version the packument publishes, newest first.
 psVersions :: PkgSpec -> [Text]
 psVersions spec = psVersion spec : psOlderVersions spec
+
+-- | The advisory proof has an old affected version and a quarantined exact fix.
+advisoryPkg :: PkgSpec
+advisoryPkg = (defaultPkgSpec "e2e-advisory"){psVersion = "1.19.0", psOlderVersions = ["1.18.0"], psRecentVersions = ["1.19.0"]}
 
 -- | An allow-listed package for the install path.
 allowPkg :: PkgSpec
@@ -298,6 +309,7 @@ compatibleWith pkg = Key.fromText (psName pkg) .= ("^" <> psVersion pkg)
 fixturePackages :: [PkgSpec]
 fixturePackages =
     [ allowPkg
+    , advisoryPkg
     , denyPkg
     , mirrorPkg
     , deprecatedPkg
@@ -336,9 +348,8 @@ buildOne root spec = do
     let pkgDir = root </> toString (psName spec)
     createDirectoryIfMissing True (pkgDir </> "-")
     digests <- traverse (buildArtifact root spec) (psVersions spec)
-    -- @<name>@ cannot be both a file and a directory, so the packument sits inside the package
-    -- directory and the nginx stub config maps @/<name>@ to it.
-    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec digests))
+    now <- renderIso8601Utc <$> getCurrentTime
+    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec now digests))
 
 -- Archive one version's package tree and return the integrity its packument entry declares.
 buildArtifact :: FilePath -> PkgSpec -> Text -> IO (Text, Text)
@@ -386,14 +397,14 @@ tarballPackageJson spec version =
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
             <> filter (not . T.isPrefixOf "_" . Key.toText . fst) (psVersionFields spec)
 
-packument :: PkgSpec -> [(Text, Text)] -> Value
-packument spec digests =
+packument :: PkgSpec -> Text -> [(Text, Text)] -> Value
+packument spec now digests =
     packumentValue
         (psName spec)
         (psVersion spec)
         [(version, versionMeta version sri) | (version, sri) <- digests]
         ( ["created" .= backdated, "modified" .= backdated]
-            <> [fromString (toString version) .= backdated | (version, _) <- digests]
+            <> [fromString (toString version) .= (if version `elem` psRecentVersions spec then now else backdated) | (version, _) <- digests]
         )
         []
   where

@@ -2,17 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Fixed pypi E2E contracts and concrete fixtures.
+-- | The explicitly read-only PyPI foundation, pending the separate full-parity activation.
 module Ecluse.E2E.Suites.PyPI (declarations) where
 
-import Ecluse.E2E.Fixtures.Contracts (pypiPilotFixture, pypiPublicFixture)
-import Ecluse.E2E.PyPI.AdvisoriesE2ESpec (advisoryContract)
-import Ecluse.E2E.PyPI.InstallE2ESpec (installationContract)
+import Ecluse.E2E.Drivers.PyPI (pypiDriver)
+import Ecluse.Test.Contract.Ecosystem (readOnlyEcosystemFoundation)
 import Ecluse.Test.Contract.Runner (DeclaredGroup)
 
--- | The complete executable contract list for this suite.
+-- | This foundation does not certify full ecosystem conformance.
 declarations :: [DeclaredGroup]
-declarations =
-    [ installationContract pypiPublicFixture
-    , advisoryContract pypiPilotFixture
-    ]
+declarations = readOnlyEcosystemFoundation pypiDriver

@@ -5,7 +5,7 @@
 {- | npm policy, artifact protocol responses, and mirror metadata on the base topology. Fresh public
 and mirror-only installation parity lives in "Ecluse.E2E.Npm.MirrorInstallE2ESpec".
 -}
-module Ecluse.E2E.Npm.InstallE2ESpec (installationContract) where
+module Ecluse.E2E.Npm.InstallE2ESpec (nativeInstallationContract) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -40,8 +40,8 @@ import Ecluse.Test.Contract.Mirror (MirrorTagDriver (..), preservesLatest)
 import Ecluse.Test.Contract.Serving (artifactHeadCase)
 
 -- | Drive the product image with a real npm client and local stores.
-installationContract :: ConcreteFixture -> DeclaredGroup
-installationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
+nativeInstallationContract :: ConcreteFixture -> DeclaredGroup
+nativeInstallationContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
 scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
 scenarios recorder = do
@@ -85,24 +85,21 @@ scenarios recorder = do
                     installed <- npmInstallIn proj (psName allowPkg) >>= shouldSucceedThroughProxy e2e
                     shouldWarn ("npm warn deprecated " <> psName allowPkg <> "@" <> psVersion allowPkg <> ": " <> deprecationNotice) installed `shouldThrow` anyException
 
-        describe "server↔worker -- the integrity gate" $
+        describe "server and worker -- the integrity gate" $
             it (caseLabel "npm/install/integrity-refusal" "refuses to mirror an artifact whose bytes fail the integrity gate") $ \e2e -> do
-                -- A tarball request enqueues a mirror on demand. The worker's digest gate must
-                -- reject the tampered bytes, so the version never reaches the private mirror.
                 _ <- proxyGet e2e (npmTarballPath (psName tamperPkg) (psVersion tamperPkg))
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName tamperPkg) (psVersion tamperPkg)
                 mirrored `shouldBe` False
 
         describe "protocol behaviours" $
             it (caseLabel "npm/install/head-no-effect" "answers HEAD on a tarball with its size but no body, and enqueues no mirror") $ \e2e -> do
-                -- A HEAD relays the upstream headers with no body, so it declares a
-                -- Content-Length yet enqueues no mirror. Only this case touches headPkg.
+                -- Only this case touches headPkg.
                 response <- proxyHead e2e (npmTarballPath (psName headPkg) (psVersion headPkg))
                 artifactHeadCase response
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
-        describe "server↔worker -- mirror metadata" $ do
+        describe "server and worker -- mirror metadata" $ do
             it (caseLabel "npm/install/metadata-preservation" "mirrors supported installation metadata and omits unknown and public-registry fields") $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
@@ -145,7 +142,5 @@ scenarios recorder = do
                             }
         describe "first-party publish -- opt-in posture" $
             it (caseLabel "npm/install/publication-unconfigured" "answers a publish with 405 when no publication target is configured") $ \e2e -> do
-                -- The base topology declares no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET, so PUT is not an allowed
-                -- method. A raw PUT suffices because the 405 precedes any body read.
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
                 status `shouldBe` 405

@@ -5,11 +5,15 @@
 -- | Authorised publication and refusal without destination effects.
 module Ecluse.Test.Contract.Publication (
     PublicationDriver (..),
+    PublicationFixture (..),
+    publicationContract,
     publishesAndInstalls,
     refusesWithoutPublication,
 ) where
 
-import Test.Hspec (Expectation, shouldBe)
+import Test.Hspec (Expectation, SpecWith, it, shouldBe)
+
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Contract.Install (ClientResult, shouldFail, shouldSucceed)
 
@@ -21,6 +25,21 @@ data PublicationDriver = PublicationDriver
     , publicationAwait :: IO [Text]
     , publicationSettle :: IO ()
     }
+
+-- | Two independent names exercise accepted and refused publication.
+data PublicationFixture = PublicationFixture
+    { publicationVersion :: Text
+    , publicationAdmitted :: PublicationDriver
+    , publicationRefused :: PublicationDriver
+    }
+
+-- | Publication must install back, and refusal must leave the target unchanged.
+publicationContract :: Text -> SpecWith PublicationFixture
+publicationContract prefix = do
+    it (caseLabel (prefix <> "/publish-install") "publishes an authorised package and installs it back") $ \fixture ->
+        publishesAndInstalls (publicationVersion fixture) (publicationAdmitted fixture)
+    it (caseLabel (prefix <> "/scope-refusal") "refuses an unauthorised package without a destination write") $ \fixture ->
+        refusesWithoutPublication (publicationVersion fixture) (publicationRefused fixture)
 
 -- | An admitted publication reaches its target and supplies a fresh installation.
 publishesAndInstalls :: Text -> PublicationDriver -> Expectation

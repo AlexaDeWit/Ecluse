@@ -51,14 +51,14 @@ obligations =
         "pypi/advisories"
         Supported
         ["read", "advisories", "client-install"]
-        ["pypi/advisories/exact-fix", "pypi/advisories/canonical-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss"]
+        ["pypi/advisories/exact-fix", "pypi/advisories/deny-cve", "pypi/advisories/deny-epss"]
     , Obligation
-        "telemetry"
+        "npm/telemetry-read"
         "npm/telemetry"
-        "telemetry"
+        "npm/telemetry-read"
         Supported
         ["read", "mirror", "telemetry", "client-install"]
-        ["telemetry/signals", "telemetry/domain-spans", "telemetry/private-fetch", "telemetry/disabled", "telemetry/export-failure", "telemetry/datadog"]
+        ["npm/telemetry/signals", "npm/telemetry/disabled", "npm/telemetry/export-failure", "npm/telemetry/datadog"]
     , Obligation
         "mixed"
         "mixed/registry"
@@ -66,6 +66,48 @@ obligations =
         Supported
         ["read", "mirror", "client-install"]
         ["mixed/alternating-clients"]
+    , Obligation
+        "npm/installation"
+        "npm/read"
+        "npm/installation"
+        Supported
+        ["read", "client-install"]
+        ["npm/installation/accepted-install", "npm/installation/default-denial", "npm/installation/artifact-integrity", "npm/installation/artifact-head"]
+    , Obligation
+        "pypi/installation"
+        "pypi/read"
+        "pypi/installation"
+        Supported
+        ["read", "client-install"]
+        ["pypi/installation/accepted-install", "pypi/installation/default-denial", "pypi/installation/artifact-integrity", "pypi/installation/artifact-head"]
+    , Obligation
+        "npm/advisories"
+        "npm/advisories"
+        "npm/advisories"
+        Supported
+        ["read", "advisories", "client-install"]
+        ["npm/advisories/deny-cve", "npm/advisories/deny-epss", "npm/advisories/exact-fix"]
+    , Obligation
+        "pypi/advisory-native"
+        "pypi/advisories"
+        "pypi/advisory-native"
+        Supported
+        ["read", "advisories", "client-install"]
+        ["pypi/advisories/canonical-fix"]
+    , Obligation
+        "npm/telemetry-write"
+        "npm/telemetry"
+        "npm/telemetry-write"
+        Supported
+        ["read", "mirror", "telemetry", "client-install"]
+        ["npm/telemetry/domain-spans", "npm/telemetry/private-fetch"]
+    , Obligation
+        "pypi/telemetry"
+        "pypi/telemetry"
+        "pypi/telemetry"
+        Supported
+        ["read", "telemetry", "client-install"]
+        ["pypi/telemetry/signals", "pypi/telemetry/disabled", "pypi/telemetry/export-failure", "pypi/telemetry/datadog"]
     , Obligation "pypi/mirror" "pypi/write" "mirror" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/765") ["mirror"] []
     , Obligation "pypi/publication" "pypi/write" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1133") ["publication"] []
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []

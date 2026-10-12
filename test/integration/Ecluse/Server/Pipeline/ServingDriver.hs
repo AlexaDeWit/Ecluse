@@ -13,7 +13,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (methodGet, status200, status404, statusCode)
+import Network.HTTP.Types (status200, status404, statusCode)
 import Network.Wai (rawPathInfo, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -67,7 +67,7 @@ nativeDriver ecosystem adapter mount metadataPath artifactPath document observe 
                     action
                         ServingSession
                             { requestMetadata = (`request` metadataPath)
-                            , requestArtifact = \version -> request methodGet (artifactPath version) []
+                            , requestArtifact = \method version -> request method (artifactPath version) []
                             }
         , servingIdentity = ("thing@" <>)
         , servingDigest = digest

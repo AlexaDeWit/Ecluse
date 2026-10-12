@@ -5,14 +5,12 @@
 {- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed trees,
 lockfiles, dependency resolution, module exports, and the linked executable's output.
 -}
-module Ecluse.E2E.Npm.MirrorInstallE2ESpec (mirrorContract) where
+module Ecluse.E2E.Npm.MirrorInstallE2ESpec (npmMirrorFamily) where
 
 import Data.Aeson (Value)
 import Data.Set qualified as Set
-import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
-import Ecluse.Test.Contract.Phase (timedFixture)
-import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
-import Test.Hspec
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
 
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
@@ -27,25 +25,20 @@ import Ecluse.E2E.Fixtures.Npm (
     psVersion,
  )
 import Ecluse.E2E.Harness
-import Ecluse.Test.Contract.Mirror hiding (mirrorContract)
-import Ecluse.Test.Contract.Mirror qualified as Mirror
+import Ecluse.Test.Contract.Mirror
 
--- | Compare a mirror-only install with its control, using a real npm client and local stores.
-mirrorContract :: ConcreteFixture -> DeclaredGroup
-mirrorContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) scenarios
-
-scenarios :: SpecWith GlobalDataPlane
-scenarios =
-    beforeAllWith (pure . mirrorDriver) $
-        Mirror.mirrorContract
-            "npm/mirror"
-            MirrorFixture
-                { mirrorExpectedGraph = expectedGraph
-                , mirrorExpectedExport = graphExport
-                , mirrorExpectedVersions = [(psName pkg, [psVersion pkg]) | pkg <- graphPackages]
-                , mirrorRequiredPaths = neededOfMirror
-                , mirrorExpectedSources = [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
-                }
+-- | Supply native observations and independent expectations to the canonical mirror contract.
+npmMirrorFamily :: ConcreteFixture -> (MirrorFixture (Set Resolved) Value, FamilyFixture (MirrorDriver (Set Resolved) Value))
+npmMirrorFamily fixture =
+    ( MirrorFixture
+        { mirrorExpectedGraph = expectedGraph
+        , mirrorExpectedExport = graphExport
+        , mirrorExpectedVersions = [(psName pkg, [psVersion pkg]) | pkg <- graphPackages]
+        , mirrorRequiredPaths = neededOfMirror
+        , mirrorExpectedSources = [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
+        }
+    , concreteFamily fixture (\_ action plane -> action (mirrorDriver plane))
+    )
 
 mirrorDriver :: GlobalDataPlane -> MirrorDriver (Set Resolved) Value
 mirrorDriver plane =

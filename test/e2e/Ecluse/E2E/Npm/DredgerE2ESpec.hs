@@ -3,15 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 -- | npm and Verdaccio providers for the maintenance business contracts.
-module Ecluse.E2E.Npm.DredgerE2ESpec (dredgerContract) where
+module Ecluse.E2E.Npm.DredgerE2ESpec (npmSweepDriver) where
 
 import Data.Aeson (encode, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
-import Ecluse.Test.Contract.Phase (timedFixture)
-import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
@@ -35,21 +34,33 @@ import Ecluse.E2E.Fixtures.Npm (
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
 import Ecluse.Test.Contract.Sweep (listed)
-import Ecluse.Test.Contract.Sweep.Advisory qualified as Advisory
-import Ecluse.Test.Contract.Sweep.Identity qualified as Identity
-import Ecluse.Test.Contract.Sweep.Recovery qualified as Recovery
-import Ecluse.Test.Contract.Sweep.Rollout qualified as Rollout
+import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
 import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
--- | Keep each lifecycle group atomic and retain the catalogue identities.
-dredgerContract :: ConcreteFixture -> DeclaredGroup
-dredgerContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> do
-    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withSeededStore) (Identity.identityScenarios identityFixture storeOps clientOps guardedSweepOps))
-    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withAdvisoryStore) (Advisory.advisoryScenario advisoryFixture storeOps clientOps sweepOps advisoryOps))
-    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withRecoveryStores) (Recovery.recoveryScenarios recoveryFixture storeOps clientOps sweepOps recoveryOps))
-    aroundAll (timedFixture recorder (withFixture fixture)) (aroundAllWith (timedFixtureWith recorder withRolloutStores) (Rollout.rolloutScenarios rolloutFixture storeOps clientOps guardedSweepOps recoveryOps rolloutOps))
+-- | Preserve four independent store lifetimes under the canonical Dredger composition.
+npmSweepDriver :: ConcreteFixture -> PhaseRecorder -> SweepDriver GlobalDataPlane E2E NpmProject
+npmSweepDriver fixture recorder =
+    SweepDriver
+        { withIdentitySweep = acquire withSeededStore
+        , withAdvisorySweep = acquire withAdvisoryStore
+        , withRecoverySweep = acquire withRecoveryStores
+        , withRolloutSweep = acquire withRolloutStores
+        , sweepIdentityFixture = identityFixture
+        , sweepAdvisoryFixture = advisoryFixture
+        , sweepRecoveryFixture = recoveryFixture
+        , sweepRolloutFixture = rolloutFixture
+        , sweepStoreOps = storeOps
+        , sweepClientOps = clientOps
+        , sweepGuardedOps = guardedSweepOps
+        , sweepPlainOps = sweepOps
+        , sweepAdvisoryOps = advisoryOps
+        , sweepRecoveryOps = recoveryOps
+        , sweepRolloutOps = rolloutOps
+        }
+  where
+    acquire resource action = timedFixture recorder (withFixture fixture) (timedFixtureWith recorder resource action)
 
 withSeededStore :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
 withSeededStore action plane =

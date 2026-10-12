@@ -46,7 +46,7 @@ data ServingResponse = ServingResponse
 -- | Requests against one isolated proxy and its upstreams.
 data ServingSession = ServingSession
     { requestMetadata :: Method -> [Header] -> IO ServingResponse
-    , requestArtifact :: Text -> IO ServingResponse
+    , requestArtifact :: Method -> Text -> IO ServingResponse
     }
 
 -- | Native fixture encoding, resource ownership, requests and digest spelling.
@@ -63,7 +63,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         run [] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
-            artifact <- requestArtifact session "1.2.3"
+            artifact <- requestArtifact session methodGet "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "identity-precedence" "admits an explicit identity and lets denial take precedence" $ do
         let packageIdentity = servingIdentity driver "1.2.3"
@@ -74,7 +74,7 @@ servingContract provider driver = describe "shared serving contract" $ do
         run [AllowByIdentity packageIdentity, DenyByIdentity packageIdentity] [] [old] $ \session -> do
             response <- requestMetadata session methodGet []
             responseStatus response `shouldBe` 403
-            artifact <- requestArtifact session "1.2.3"
+            artifact <- requestArtifact session methodGet "1.2.3"
             responseStatus artifact `shouldBe` 403
     contractExample "authorised-union" "serves the union of trusted-private and gated-public versions" $
         run agePolicy [old] [old, other] $ \session -> do
@@ -92,7 +92,7 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseStatus response `shouldBe` 200
             responseVersions response `shouldBe` ["1.2.3"]
             Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver "private bytes"]
-            artifact <- requestArtifact session "1.2.3"
+            artifact <- requestArtifact session methodGet "1.2.3"
             responseStatus artifact `shouldBe` 200
             responseBody artifact `shouldBe` "private bytes"
     contractExample "public-integrity" "filters a hashless public version from the listing" $
@@ -106,6 +106,9 @@ servingContract provider driver = describe "shared serving contract" $ do
             responseStatus response `shouldBe` 403
     contractExample "artifact-integrity" "serves the exact artifact bytes and advertised integrity" $
         artifactIntegrityCase driver
+    contractExample "artifact-head" "serves artifact HEAD without transferring bytes" $
+        run agePolicy [] [old] $ \session ->
+            requestArtifact session methodHead "1.2.3" >>= artifactHeadCase
     contractExample "conditional-coherence" "keeps GET, HEAD and conditional responses coherent" $
         run agePolicy [] [old] $ \session -> do
             initial <- requestMetadata session methodGet []
@@ -135,7 +138,7 @@ artifactIntegrityCase driver =
         response <- requestMetadata session methodGet []
         responseStatus response `shouldBe` 200
         Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver (releaseBytes release)]
-        artifact <- requestArtifact session "1.2.3"
+        artifact <- requestArtifact session methodGet "1.2.3"
         artifactDigestCase (servingDigest driver) (servingDigest driver (releaseBytes release)) artifact
         responseBody artifact `shouldBe` LBS.fromStrict (releaseBytes release)
         Map.lookup "1.2.3" (responseDigests response) `shouldBe` Just [servingDigest driver (toStrict (responseBody artifact))]

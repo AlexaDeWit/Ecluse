@@ -6,6 +6,8 @@
 module Ecluse.Test.Contract.Install (
     ClientResult (..),
     InstallDriver (..),
+    InstallationDriver (..),
+    installationContract,
     RefusalDriver (..),
     refusesWithoutEffects,
     installsObserved,
@@ -17,7 +19,10 @@ module Ecluse.Test.Contract.Install (
 ) where
 
 import System.Exit (ExitCode (ExitSuccess))
-import Test.Hspec (Expectation, expectationFailure, shouldBe)
+import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe)
+
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Serving (ServingResponse, artifactDigestCase, artifactHeadCase)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -33,6 +38,30 @@ data InstallDriver observation = InstallDriver
     { installRun :: IO (ClientResult, observation)
     , installExpected :: observation
     }
+
+-- | Native operations for the same admission and artifact scenarios on each ecosystem.
+data InstallationDriver = InstallationDriver
+    { installationAccepted :: IO (ClientResult, Bool)
+    , installationDenied :: IO (ClientResult, Bool)
+    , installationArtifact :: IO (Text, ServingResponse)
+    , installationDigest :: ByteString -> Text
+    , installationHead :: IO ServingResponse
+    }
+
+-- | Require a fresh installation, refusal without files, and intact artifact representations.
+installationContract :: Text -> SpecWith InstallationDriver
+installationContract prefix = do
+    it (label "accepted-install" "installs the admitted release into a fresh client directory") $ \driver ->
+        installsObserved (InstallDriver (installationAccepted driver) True)
+    it (label "default-denial" "refuses an unadmitted release without installing files") $ \driver ->
+        refusesObserved (InstallDriver (installationDenied driver) False)
+    it (label "artifact-integrity" "serves bytes matching the digest advertised in metadata") $ \driver -> do
+        (digest, response) <- installationArtifact driver
+        artifactDigestCase (installationDigest driver) digest response
+    it (label "artifact-head" "advertises an admitted artifact without transferring its body") $
+        installationHead >=> artifactHeadCase
+  where
+    label name = caseLabel (prefix <> "/" <> name)
 
 -- | An attempted install and an independent destination observation after its write window.
 data RefusalDriver evidence = RefusalDriver

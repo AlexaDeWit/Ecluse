@@ -5,25 +5,36 @@
 -- | Concrete topology acquisition and case declarations for E2E contracts.
 module Ecluse.E2E.Fixtures.Contracts (
     ConcreteFixture (..),
+    concreteFamily,
     npmRegistryFixture,
+    npmInstallationFixture,
+    pypiInstallationFixture,
+    pypiTelemetryFixture,
     npmMirrorFixture,
     npmPublicationFixture,
     npmDredgerFixture,
     pypiPublicFixture,
     pypiPilotFixture,
+    npmPilotFixture,
+    pypiAdvisoryNativeFixture,
+    npmMirrorTelemetryFixture,
     npmTelemetryFixture,
     mixedRegistryFixture,
 ) where
 
 import Ecluse.E2E.Harness (
     GlobalDataPlane,
+    Topology (..),
     dredgerTopology,
     mixedTopology,
+    npmTopology,
     pypiAdvisoryTopology,
     pypiTopology,
     withDataPlane,
     withGlobalDataPlane,
  )
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture (..))
+import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import Ecluse.Test.Contract.Types
 
 -- | Each acquisition owns the complete data plane for one lifecycle.
@@ -43,7 +54,7 @@ npmRegistryFixture =
                 , groupContractId = "npm/install"
                 , groupProfileId = "npm/registry"
                 , groupTier = E2E
-                , groupPartition = "npm-serving"
+                , groupPartition = "npm"
                 , groupCases =
                     [ Case "npm/install/default-denial" ["npm/install"]
                     , Case "npm/install/lifecycle-script-control" ["npm/install"]
@@ -73,7 +84,7 @@ npmMirrorFixture =
                 , groupContractId = "npm/mirror"
                 , groupProfileId = "npm/registry"
                 , groupTier = E2E
-                , groupPartition = "npm-writes"
+                , groupPartition = "npm"
                 , groupCases =
                     [ Case "npm/mirror/dependency-graph" ["npm/mirror"]
                     , Case "npm/mirror/module-exports" ["npm/mirror"]
@@ -100,7 +111,7 @@ npmPublicationFixture =
                 , groupContractId = "npm/publish"
                 , groupProfileId = "npm/registry"
                 , groupTier = E2E
-                , groupPartition = "npm-writes"
+                , groupPartition = "npm"
                 , groupCases =
                     [ Case "npm/publish/publish-install" ["npm/publish"]
                     , Case "npm/publish/scope-refusal" ["npm/publish"]
@@ -123,7 +134,7 @@ npmDredgerFixture =
                 , groupContractId = "npm/dredger"
                 , groupProfileId = "npm/maintenance"
                 , groupTier = E2E
-                , groupPartition = "npm-writes"
+                , groupPartition = "npm"
                 , groupCases =
                     [ Case "npm/dredger/inventory" ["npm/dredger"]
                     , Case "npm/dredger/admission-only" ["npm/dredger"]
@@ -189,7 +200,6 @@ pypiPilotFixture =
                 , groupPartition = "pypi"
                 , groupCases =
                     [ Case "pypi/advisories/exact-fix" ["pypi/advisories"]
-                    , Case "pypi/advisories/canonical-fix" ["pypi/advisories"]
                     , Case "pypi/advisories/deny-cve" ["pypi/advisories"]
                     , Case "pypi/advisories/deny-epss" ["pypi/advisories"]
                     ]
@@ -207,18 +217,16 @@ npmTelemetryFixture =
         { withFixture = withGlobalDataPlane
         , fixtureGroup =
             Group
-                { groupId = "telemetry"
-                , groupContractId = "telemetry"
+                { groupId = "npm/telemetry-read"
+                , groupContractId = "npm/telemetry-read"
                 , groupProfileId = "npm/telemetry"
                 , groupTier = E2E
-                , groupPartition = "shared-system"
+                , groupPartition = "npm"
                 , groupCases =
-                    [ Case "telemetry/signals" ["telemetry"]
-                    , Case "telemetry/domain-spans" ["telemetry"]
-                    , Case "telemetry/private-fetch" ["telemetry"]
-                    , Case "telemetry/disabled" ["telemetry"]
-                    , Case "telemetry/export-failure" ["telemetry"]
-                    , Case "telemetry/datadog" ["telemetry"]
+                    [ Case "npm/telemetry/signals" ["npm/telemetry-read"]
+                    , Case "npm/telemetry/disabled" ["npm/telemetry-read"]
+                    , Case "npm/telemetry/export-failure" ["npm/telemetry-read"]
+                    , Case "npm/telemetry/datadog" ["npm/telemetry-read"]
                     ]
                 , groupCapabilities = ["read", "mirror", "telemetry", "client-install"]
                 , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
@@ -247,4 +255,101 @@ mixedRegistryFixture =
                 , groupResources = ["proxy", "nginx", "verdaccio"]
                 , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
                 }
+        }
+
+-- | npm read contracts have no private copy that can bypass public admission.
+npmInstallationFixture :: ConcreteFixture
+npmInstallationFixture =
+    ConcreteFixture
+        (installationGroup "npm" "npm/read" ["npm", "node"])
+        (withDataPlane npmTopology{topologyStore = False})
+
+-- | PyPI uses the same required read scenarios with a real pip client.
+pypiInstallationFixture :: ConcreteFixture
+pypiInstallationFixture =
+    ConcreteFixture
+        (installationGroup "pypi" "pypi/read" ["python3", "pip"])
+        (withDataPlane pypiTopology)
+
+installationGroup :: Text -> Text -> [Text] -> Group
+installationGroup ecosystem profile tools =
+    Group
+        { groupId = ecosystem <> "/installation"
+        , groupContractId = ecosystem <> "/installation"
+        , groupProfileId = profile
+        , groupTier = E2E
+        , groupPartition = ecosystem
+        , groupCases = [Case (ecosystem <> "/installation/" <> name) [ecosystem <> "/installation"] | name <- ["accepted-install", "default-denial", "artifact-integrity", "artifact-head"]]
+        , groupCapabilities = ["read", "client-install"]
+        , groupPrerequisites = ["docker", "image", "openssl", "tar"] <> tools
+        , groupResources = ["proxy", "nginx"]
+        , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+        }
+
+-- | PyPI read traffic exercises telemetry without a mirror target.
+pypiTelemetryFixture :: ConcreteFixture
+pypiTelemetryFixture =
+    ConcreteFixture
+        { withFixture = withDataPlane pypiTopology
+        , fixtureGroup =
+            Group
+                { groupId = "pypi/telemetry"
+                , groupContractId = "pypi/telemetry"
+                , groupProfileId = "pypi/telemetry"
+                , groupTier = E2E
+                , groupPartition = "pypi"
+                , groupCases = [Case ("pypi/telemetry/" <> name) ["pypi/telemetry"] | name <- ["signals", "disabled", "export-failure", "datadog"]]
+                , groupCapabilities = ["read", "telemetry", "client-install"]
+                , groupPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
+                , groupResources = ["proxy", "nginx", "collector"]
+                , groupIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+                }
+        }
+
+-- | Worker and private-fetch telemetry retains its own mutable mirror lifetime.
+npmMirrorTelemetryFixture :: ConcreteFixture
+npmMirrorTelemetryFixture =
+    npmTelemetryFixture
+        { fixtureGroup =
+            (fixtureGroup npmTelemetryFixture)
+                { groupId = "npm/telemetry-write"
+                , groupContractId = "npm/telemetry-write"
+                , groupCases = [Case ("npm/telemetry/" <> name) ["npm/telemetry-write"] | name <- ["domain-spans", "private-fetch"]]
+                }
+        }
+
+-- | npm's public advisory proof avoids trusted-private reads masking the policy.
+npmPilotFixture :: ConcreteFixture
+npmPilotFixture =
+    ConcreteFixture
+        { withFixture = withDataPlane npmTopology{topologyStore = False, topologyAws = True}
+        , fixtureGroup =
+            (fixtureGroup pypiPilotFixture)
+                { groupId = "npm/advisories"
+                , groupContractId = "npm/advisories"
+                , groupProfileId = "npm/advisories"
+                , groupPartition = "npm"
+                , groupCases = [Case ("npm/advisories/" <> name) ["npm/advisories"] | name <- ["deny-cve", "deny-epss", "exact-fix"]]
+                , groupPrerequisites = ["docker", "image", "openssl", "tar", "npm", "node"]
+                }
+        }
+
+-- | PEP 440 canonicalisation remains explicit beside the common advisory laws.
+pypiAdvisoryNativeFixture :: ConcreteFixture
+pypiAdvisoryNativeFixture =
+    pypiPilotFixture
+        { fixtureGroup =
+            (fixtureGroup pypiPilotFixture)
+                { groupId = "pypi/advisory-native"
+                , groupContractId = "pypi/advisory-native"
+                , groupCases = [Case "pypi/advisories/canonical-fix" ["pypi/advisory-native"]]
+                }
+        }
+
+-- | Acquire native observations inside the canonical family's measured data-plane lifetime.
+concreteFamily :: ConcreteFixture -> (PhaseRecorder -> (a -> IO ()) -> GlobalDataPlane -> IO ()) -> FamilyFixture a
+concreteFamily fixture acquire =
+    FamilyFixture
+        { familyGroup = fixtureGroup fixture
+        , familyAcquire = \recorder action -> timedFixture recorder (withFixture fixture) (acquire recorder action)
         }

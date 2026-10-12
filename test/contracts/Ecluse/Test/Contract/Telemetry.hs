@@ -5,9 +5,15 @@
 -- | Correlated telemetry and continued service when an exporter fails.
 module Ecluse.Test.Contract.Telemetry (
     TrafficDriver (..),
+    ReadTelemetryDriver (..),
+    TelemetryMode (..),
+    TelemetrySession (..),
+    readTelemetryContract,
     LogDriver (..),
     CollectorDriver (..),
     MirrorTelemetryDriver (..),
+    MirrorTelemetryFixture (..),
+    mirrorTelemetryContract,
     TelemetryIdentity (..),
     exportsSignals,
     exportsDomainSpans,
@@ -20,10 +26,50 @@ module Ecluse.Test.Contract.Telemetry (
 
 import Data.Char (isDigit)
 import Data.Text qualified as T
-import Test.Hspec (Expectation, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Expectation, SpecWith, it, shouldBe, shouldReturn, shouldSatisfy)
+
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 
 import Ecluse.Test.Collector
 import Ecluse.Test.Contract.Install (ClientResult, shouldSucceed)
+
+-- | Exporter configurations required for read-only service conformance.
+data TelemetryMode = EnabledTelemetry | DisabledTelemetry | FailedExporter | IdentityTelemetry
+    deriving stock (Eq, Show)
+
+-- | Operations scoped to one configured running service.
+data TelemetrySession = TelemetrySession
+    { sessionTraffic :: TrafficDriver
+    , sessionLogs :: LogDriver
+    , sessionCollector :: CollectorDriver
+    }
+
+-- | Acquire a service per configuration, keeping native clients and fixtures in the driver.
+data ReadTelemetryDriver = ReadTelemetryDriver
+    { withReadTelemetry :: TelemetryMode -> (TelemetrySession -> IO ()) -> IO ()
+    , readTelemetryPackage :: Text
+    , readTelemetrySecondPackage :: Text
+    , readTelemetryIdentityPackage :: Text
+    , readTelemetryIdentity :: TelemetryIdentity
+    }
+
+-- | All ecosystems must export signals and retain service without a working exporter.
+readTelemetryContract :: Text -> SpecWith ReadTelemetryDriver
+readTelemetryContract prefix = do
+    it (label "signals" "exports metrics and a span") $ \driver ->
+        withReadTelemetry driver EnabledTelemetry $ \session ->
+            exportsSignals (readTelemetryPackage driver) (sessionTraffic session) (sessionCollector session)
+    it (label "disabled" "serves and logs without a collector") $ \driver ->
+        withReadTelemetry driver DisabledTelemetry $ \session ->
+            logsWithoutCollector (readTelemetryPackage driver) (sessionTraffic session) (sessionLogs session)
+    it (label "export-failure" "warns and keeps serving after export failure") $ \driver ->
+        withReadTelemetry driver FailedExporter $ \session ->
+            servesAfterExportFailure (readTelemetryPackage driver) (readTelemetrySecondPackage driver) (sessionTraffic session) (sessionLogs session)
+    it (label "datadog" "exports the configured identity and log correlation") $ \driver ->
+        withReadTelemetry driver IdentityTelemetry $ \session ->
+            exportsIdentity (readTelemetryIdentityPackage driver) (readTelemetryIdentity driver) (sessionTraffic session) (sessionLogs session) (sessionCollector session)
+  where
+    label name = caseLabel (prefix <> "/" <> name)
 
 -- | A fresh real-client request and the process readiness endpoint.
 data TrafficDriver = TrafficDriver
@@ -46,6 +92,39 @@ data MirrorTelemetryDriver = MirrorTelemetryDriver
     { telemetryVersions :: Text -> IO [Text]
     , telemetryAwaitVersion :: Text -> Text -> IO [Text]
     }
+
+-- | Independent coordinates for worker spans and private miss-to-hit observations.
+data MirrorTelemetryFixture = MirrorTelemetryFixture
+    { mirrorTelemetryTraffic :: TrafficDriver
+    , mirrorTelemetryStore :: MirrorTelemetryDriver
+    , mirrorTelemetryCollector :: CollectorDriver
+    , mirrorTelemetryPackage :: Text
+    , mirrorTelemetryVersion :: Text
+    , mirrorTelemetryPrivatePackage :: Text
+    , mirrorTelemetryPrivateVersion :: Text
+    , mirrorTelemetryHost :: Text
+    , mirrorTelemetryTarget :: Text
+    }
+
+-- | Write-capable ecosystems must correlate worker activity and subsequent private fetches.
+mirrorTelemetryContract :: Text -> SpecWith MirrorTelemetryFixture
+mirrorTelemetryContract prefix = do
+    it (caseLabel (prefix <> "/domain-spans") "correlates rule, enqueue and worker spans") $ \fixture ->
+        exportsDomainSpans
+            (mirrorTelemetryPackage fixture)
+            (mirrorTelemetryVersion fixture)
+            (mirrorTelemetryTraffic fixture)
+            (mirrorTelemetryStore fixture)
+            (mirrorTelemetryCollector fixture)
+    it (caseLabel (prefix <> "/private-fetch") "records the private miss and subsequent success") $ \fixture ->
+        exportsPrivateFetch
+            (mirrorTelemetryPrivatePackage fixture)
+            (mirrorTelemetryPrivateVersion fixture)
+            (mirrorTelemetryHost fixture)
+            (mirrorTelemetryTarget fixture)
+            (mirrorTelemetryTraffic fixture)
+            (mirrorTelemetryStore fixture)
+            (mirrorTelemetryCollector fixture)
 
 -- | Expected resource and log identity from the configured telemetry provider.
 data TelemetryIdentity = TelemetryIdentity

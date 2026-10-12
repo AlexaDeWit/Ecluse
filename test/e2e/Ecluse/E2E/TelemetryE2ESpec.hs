@@ -2,69 +2,88 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Product-image telemetry under OTLP, disabled, failed-exporter, and Datadog configurations.
-module Ecluse.E2E.TelemetryE2ESpec (telemetryContract) where
+-- | Native traffic for the shared read telemetry and npm mirror telemetry contracts.
+module Ecluse.E2E.TelemetryE2ESpec (npmReadTelemetryFamily, pypiReadTelemetryFamily, npmMirrorTelemetryFamily) where
 
+import Data.List (lookup)
 import Data.Text qualified as T
 
-import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
-import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
-import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
-import Test.Hspec
-
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
 import Ecluse.E2E.Fixtures.Npm (allowPkg, mirrorPkg, psName, psVersion, telemetryDdPkg, telemetryPkg, telemetryPrivatePkg)
+import Ecluse.E2E.Fixtures.PyPI (pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture)
+import Ecluse.Test.Contract.Phase (PhaseRecorder)
 import Ecluse.Test.Contract.Telemetry
 import Ecluse.Test.Poll (pollUntil)
 
--- | Drive the product image under each telemetry configuration and read what it exported.
-telemetryContract :: ConcreteFixture -> DeclaredGroup
-telemetryContract fixture = DeclaredGroup (fixtureGroup fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
+-- | npm traffic and configuration acquisition for the canonical read telemetry scenarios.
+npmReadTelemetryFamily :: ConcreteFixture -> FamilyFixture ReadTelemetryDriver
+npmReadTelemetryFamily fixture = concreteFamily fixture $ \recorder action plane ->
+    action (npmReadDriver recorder plane)
 
-scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
-scenarios recorder = do
-    describe "telemetry with an OTLP collector" $
-        aroundAllWith (timedFixtureWith recorder (withE2EWith defaultE2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv})) $ do
-            it (caseLabel "telemetry/signals" "exports metrics and a span") $ \e2e ->
-                exportsSignals (psName allowPkg) (trafficDriver e2e) (collectorDriver e2e)
-            it (caseLabel "telemetry/domain-spans" "correlates rule, enqueue and worker spans") $ \e2e ->
-                exportsDomainSpans
-                    (psName telemetryPkg)
-                    (psVersion telemetryPkg)
-                    (trafficDriver e2e)
-                    (mirrorDriver e2e)
-                    (collectorDriver e2e)
-            it (caseLabel "telemetry/private-fetch" "records the private miss and subsequent success") $ \e2e ->
-                exportsPrivateFetch
-                    (psName telemetryPrivatePkg)
-                    (psVersion telemetryPrivatePkg)
-                    mirrorHost
-                    (T.drop (T.length "/npm") (npmTarballPath (psName telemetryPrivatePkg) (psVersion telemetryPrivatePkg)))
-                    (trafficDriver e2e)
-                    (mirrorDriver e2e)
-                    (collectorDriver e2e)
-    describe "telemetry disabled" $
-        aroundAllWith (timedFixtureWith recorder (withE2EWith defaultE2EConfig{ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]})) $
-            it (caseLabel "telemetry/disabled" "serves and logs without a collector") $ \e2e ->
-                logsWithoutCollector (psName allowPkg) (trafficDriver e2e) (logDriver e2e)
-    describe "telemetry exporter unavailable" $
-        aroundAllWith (timedFixtureWith recorder (withE2EWith defaultE2EConfig{ecExtraEnv = otlpCollectorEnv})) $
-            it (caseLabel "telemetry/export-failure" "warns and keeps serving after export failure") $ \e2e ->
-                servesAfterExportFailure (psName allowPkg) (psName mirrorPkg) (trafficDriver e2e) (logDriver e2e)
-    describe "Datadog identity" $
-        aroundAllWith (timedFixtureWith recorder (withE2EWith defaultE2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv})) $
-            it (caseLabel "telemetry/datadog" "exports the configured identity and log correlation") $ \e2e ->
-                exportsIdentity
-                    (psName telemetryDdPkg)
-                    (TelemetryIdentity ddTagService ddTagEnv ddTagVersion)
-                    (trafficDriver e2e)
-                    (logDriver e2e)
-                    (collectorDriver e2e)
+-- | pip traffic uses the same four required service telemetry scenarios.
+pypiReadTelemetryFamily :: ConcreteFixture -> FamilyFixture ReadTelemetryDriver
+pypiReadTelemetryFamily fixture = concreteFamily fixture $ \recorder action plane ->
+    action (pypiReadDriver recorder plane)
 
-trafficDriver :: E2E -> TrafficDriver
-trafficDriver e2e = TrafficDriver (npmInstall e2e) (proxyStatus e2e "/readyz")
+-- | npm supplies worker and private-fetch observations to the common write telemetry laws.
+npmMirrorTelemetryFamily :: ConcreteFixture -> FamilyFixture MirrorTelemetryFixture
+npmMirrorTelemetryFamily fixture = concreteFamily fixture $ \recorder action ->
+    timedFixtureWith recorder (withE2EWith (telemetryConfig EnabledTelemetry)) $ \e2e ->
+        action
+            MirrorTelemetryFixture
+                { mirrorTelemetryTraffic = npmTraffic e2e
+                , mirrorTelemetryStore = mirrorDriver e2e
+                , mirrorTelemetryCollector = collectorDriver e2e
+                , mirrorTelemetryPackage = psName telemetryPkg
+                , mirrorTelemetryVersion = psVersion telemetryPkg
+                , mirrorTelemetryPrivatePackage = psName telemetryPrivatePkg
+                , mirrorTelemetryPrivateVersion = psVersion telemetryPrivatePkg
+                , mirrorTelemetryHost = mirrorHost
+                , mirrorTelemetryTarget = T.drop (T.length "/npm") (npmTarballPath (psName telemetryPrivatePkg) (psVersion telemetryPrivatePkg))
+                }
+
+npmReadDriver :: PhaseRecorder -> GlobalDataPlane -> ReadTelemetryDriver
+npmReadDriver recorder plane =
+    readDriver recorder plane npmTraffic (psName allowPkg) (psName mirrorPkg) (psName telemetryDdPkg)
+
+pypiReadDriver :: PhaseRecorder -> GlobalDataPlane -> ReadTelemetryDriver
+pypiReadDriver recorder plane = readDriver recorder plane pypiTraffic pypiProject pypiProject pypiProject
+
+readDriver :: PhaseRecorder -> GlobalDataPlane -> (E2E -> TrafficDriver) -> Text -> Text -> Text -> ReadTelemetryDriver
+readDriver recorder plane traffic primary secondary identityPackage =
+    ReadTelemetryDriver
+        { withReadTelemetry = \mode action ->
+            timedFixtureWith
+                recorder
+                (withE2EWith (telemetryConfig mode))
+                (\e2e -> action (TelemetrySession (traffic e2e) (logDriver e2e) (collectorDriver e2e)))
+                plane
+        , readTelemetryPackage = primary
+        , readTelemetrySecondPackage = secondary
+        , readTelemetryIdentityPackage = identityPackage
+        , readTelemetryIdentity = TelemetryIdentity ddTagService ddTagEnv ddTagVersion
+        }
+
+telemetryConfig :: TelemetryMode -> E2EConfig
+telemetryConfig = \case
+    EnabledTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}
+    DisabledTelemetry -> defaultE2EConfig{ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}
+    FailedExporter -> defaultE2EConfig{ecExtraEnv = otlpCollectorEnv}
+    IdentityTelemetry -> defaultE2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}
+
+npmTraffic :: E2E -> TrafficDriver
+npmTraffic e2e = TrafficDriver (npmInstall e2e) (proxyStatus e2e "/readyz")
+
+pypiTraffic :: E2E -> TrafficDriver
+pypiTraffic e2e = TrafficDriver install (proxyStatus e2e "/readyz")
+  where
+    install name = do
+        files <- advertisedFiles e2e name
+        digest <- maybe (fail "telemetry index advertised no wheel digest") pure (lookup pypiWheelFile files)
+        withPipProject e2e name pypiVersion digest pipInstallIn
 
 mirrorDriver :: E2E -> MirrorTelemetryDriver
 mirrorDriver e2e =
