@@ -57,12 +57,16 @@ mirrorSource artifacts note =
             [ ( artEntryKey artifact
               , object
                     ( ["filename" .= artFilename artifact, "url" .= artUrl artifact, "hashes" .= object [Key.fromText (renderHashAlg (hashAlg digest)) .= hashValue digest | digest <- artHashes artifact], "size" .= artSize artifact, "requires-python" .= (">=3.8" :: Text), "yanked" .= False, "note" .= note]
-                        <> ["core-metadata" .= case declaration of MetadataAvailable available -> toJSON available; MetadataDigests values -> toJSON values | declaration <- maybeToList (artCoreMetadata artifact)]
+                        <> ["core-metadata" .= companionValue declaration | declaration <- maybeToList (artCoreMetadata artifact)]
                     )
               )
             | artifact <- toList artifacts
             ]
         )
+
+companionValue :: CoreMetadata -> Value
+companionValue (MetadataAvailable available) = toJSON available
+companionValue (MetadataDigests values) = toJSON values
 
 -- | Replace project fields while preserving the checked file-to-source pairing.
 withMirrorEnvelope :: Object -> MirrorInventory -> IO MirrorInventory

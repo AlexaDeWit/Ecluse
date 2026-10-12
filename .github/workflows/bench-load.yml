@@ -133,7 +133,7 @@ jobs:
         if: always()
         env:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
-        run: nix develop .#ci --command bash scripts/performance-receipt.sh load-foundation
+        run: nix develop .#ci --command bash scripts/performance-receipt.sh load
 
       # Off main only: the runs on main are the baseline, and each pod shape takes the
       # newest run that measured it. The GC-thrash probe has no scenario table to compare. A
@@ -166,5 +166,5 @@ jobs:
             bench-load-results.md
             load-observations.json
             against-main.md
-            scratchpad/performance/load-foundation/
+            scratchpad/performance/load/
           if-no-files-found: warn

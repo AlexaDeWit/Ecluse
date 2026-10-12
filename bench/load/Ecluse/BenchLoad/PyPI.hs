@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | PyPI index, managed mirror, private copy, artifact, cache, and advisory HTTP load scenarios.
+-- | PyPI HTTP reads and whole-version worker load scenarios over native local fixtures.
 module Ecluse.BenchLoad.PyPI (
     pypiFixture,
     pypiPrivateCopy,
@@ -49,7 +49,7 @@ import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 
--- | Recurring PyPI reads through the measured proxy and HTTP upstream fixtures.
+-- | Recurring PyPI reads and whole-version worker measurements through native upstream fixtures.
 pypiFixture :: UpstreamFixture
 pypiFixture = readLoadContract pypiReadDriver (managedMirrorScenarios <> [pypiWorkerScenario])
 

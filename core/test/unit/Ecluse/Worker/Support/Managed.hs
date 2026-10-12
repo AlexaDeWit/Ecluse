@@ -12,6 +12,7 @@ module Ecluse.Worker.Support.Managed (
     unmeteredStateBudget,
     managedJob,
     runManaged,
+    runManagedWith,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -170,7 +171,11 @@ managedJob = MirrorJob mirrorPackage mirrorVersion Nothing Nothing
 
 -- | Recreate the worker runtime while preserving the fixture's durable store and native target.
 runManaged :: ManagedFixture -> IO JobOutcome
-runManaged fixture = do
+runManaged = runManagedWith managedJob
+
+-- | Explicit filename demand must extend an older complete record when the source adds a file.
+runManagedWith :: MirrorJob -> ManagedFixture -> IO JobOutcome
+runManagedWith job fixture = do
     queue <- newTestMemoryQueue
     withWiredRuntime queue (Map.singleton PyPI (mfPolicy fixture)) noopWorkerMetricsPort $ \runtime ->
-        runWM runtime (processJob managedJob)
+        runWM runtime (processJob job)

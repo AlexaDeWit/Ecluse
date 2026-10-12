@@ -3,6 +3,7 @@
 set -euo pipefail
 
 kind="${1:-}"
+load_kind=false
 [ "$#" -eq 1 ] || { echo 'performance receipt: expected one fixed kind' >&2; exit 2; }
 case "$kind" in
   allocation)
@@ -17,7 +18,8 @@ case "$kind" in
     native=bench-results.csv
     artifacts=("$native" bench-output.txt bench/corpus/pins.json)
     ;;
-  load-foundation)
+  load|load-foundation)
+    load_kind=true
     native=load-observations.json
     artifacts=("$native" bench-load-results.md bench/load/floors.json bench/corpus/pins.json)
     ;;
@@ -72,19 +74,19 @@ selected_nonspace="${selected_scenarios//[[:space:]]/}"
 floor_status=''
 floor_reasons=''
 floor_reasons_present=false
-if [ "$kind" = load-foundation ] && [ -s "$native" ]; then
+if [ "$load_kind" = true ] && [ -s "$native" ]; then
   jq -e 'type == "object"' "$native" >/dev/null
   floor_status="$(jq -r '.conditions.floorEnforcement // "missing"' "$native")"
   floor_reasons="$(jq -r '.conditions.floorEnforcementReasons // ""' "$native")"
   floor_reasons_present="$(jq -r '.conditions | if type == "object" then has("floorEnforcementReasons") else false end' "$native")"
 fi
-if [ "$kind" = load-foundation ] && { [ -n "$selected_nonspace" ] || [ -n "${BENCH_LOAD_THRASH_LIMITS_MIB:-}" ]; }; then
+if [ "$load_kind" = true ] && { [ -n "$selected_nonspace" ] || [ -n "${BENCH_LOAD_THRASH_LIMITS_MIB:-}" ]; }; then
   reason='selected scenarios'
   [ -z "${BENCH_LOAD_THRASH_LIMITS_MIB:-}" ] || reason='GC-thrash probe'
   diagnostic "$reason" bench-load-results.md
   exit 0
 fi
-if [ "$kind" = load-foundation ] && [ -s "$native" ]; then
+if [ "$load_kind" = true ] && [ -s "$native" ]; then
   case "$floor_status" in
     held)
       if [ "$floor_reasons_present" != true ]; then
@@ -124,7 +126,7 @@ case "$kind" in
     jq -n --arg compiler "$compiler" \
       '{compiler:$compiler,optimisation:"-O1",profiling:"off",rts:"-T",stdev:"10"}' > "$root/conditions.json"
     ;;
-  load-foundation)
+  load|load-foundation)
     pod="${BENCH_LOAD_POD:-}"
     duration="${BENCH_LOAD_DURATION_SECONDS:-}"
     concurrency="${BENCH_LOAD_CONCURRENCY:-}"

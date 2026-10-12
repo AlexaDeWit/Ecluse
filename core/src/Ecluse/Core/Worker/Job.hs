@@ -174,18 +174,21 @@ mirrorUnlessPresent :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM
 mirrorUnlessPresent charge policy job = do
     result <- runExceptT $ do
         target <- ExceptT (probeInventory charge policy job)
-        if isNothing (wpMirrorState policy) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
+        if isNothing (wpMirrorState policy) && triggerPresent (\name -> any ((== name) . artFilename) (targetFiles job target)) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
             then pure ()
             else do
                 previous <- readRecord charge policy job Nothing
                 case previous >>= recordVersion (jobVersion job) of
                     Just version
-                        | checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
+                        | triggerPresent (`Map.member` versionFiles version)
+                        , checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
                             verifyRecordedCompanions charge policy version
                     _ -> completePass charge policy job 3 target previous
     case result of
         Left failure -> pure failure
         Right () -> Succeeded <$ logFM InfoS (ls ("mirror version complete: " <> renderJob job))
+  where
+    triggerPresent contains = maybe True (contains . unFilename) (jobTriggerFilename job)
 
 -- A pass rereads native inventory before state, so concurrent additions cannot hide behind an old proof.
 completePass :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()

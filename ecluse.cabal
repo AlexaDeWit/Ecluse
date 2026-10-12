@@ -1275,6 +1275,9 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.FixtureSpec
     Ecluse.BenchLoad.Npm
+    Ecluse.BenchLoad.Worker
+    Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
     Ecluse.BenchLoad.PrivateCopySpec
@@ -1368,6 +1371,8 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , zlib ^>=0.7
+    , amazonka ^>=2.0
     , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-bench-load
@@ -2007,6 +2012,9 @@ executable bench-load
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
+    Ecluse.BenchLoad.Worker
+    Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyServe
@@ -2020,6 +2028,9 @@ executable bench-load
     Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
+    , zlib ^>=0.7
+    , wai-extra ^>=3.1
+    , amazonka ^>=2.0
     , ecluse
     , ecluse:ecluse-bench-load
     , ecluse:ecluse-core

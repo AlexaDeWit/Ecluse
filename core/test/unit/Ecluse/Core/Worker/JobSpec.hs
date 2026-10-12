@@ -131,6 +131,38 @@ spec = do
                 runManaged fixture{mfPolicy = policy} `shouldReturn` Succeeded
                 readIORef (mfResolves fixture) `shouldReturn` resolved
 
+        it "extends an already complete record for an explicitly requested later file" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                initial <- managedInventory url False [1, 2]
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument initial) Nothing)
+                runManaged fixture `shouldReturn` Succeeded
+                added <- managedInventory url False [1, 2, 3]
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
+                let requested = managedJob{jobTriggerFilename = Just (unsafeFilename (mirrorFilename 3))}
+                runManagedWith requested fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                readIORef (mfResolves fixture) `shouldReturn` 2
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                runManagedWith requested fixture `shouldReturn` Succeeded
+                readIORef (mfResolves fixture) `shouldReturn` 2
+
+        it "does not call a denied later filename complete or alter the earlier mirrored files" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                initial <- managedInventory url False [1, 2]
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument initial) Nothing)
+                runManaged fixture `shouldReturn` Succeeded
+                before <- readIORef (mfRecord fixture)
+                added <- managedInventory url False [1, 2, 3]
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
+                let requested = managedJob{jobTriggerFilename = Just (unsafeFilename (mirrorFilename 3))}
+                    policy = (mfPolicy fixture){wpRules = [denyRule]}
+                runManagedWith requested fixture{mfPolicy = policy} >>= (`shouldSatisfy` isDropped)
+                readIORef (mfRecord fixture) `shouldReturn` before
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2]
+                readIORef (mfResolves fixture) `shouldReturn` 2
+
         it "keeps a partial release incomplete during a public outage" $
             withUpstream $ \url -> do
                 fixture <- managedFixture url False
