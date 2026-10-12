@@ -47,6 +47,7 @@ maliciousEntries eco targets withdrawn = do
         Left err -> fail err
     pure (("MAL-2025-46969.json", captured) : derived fields Nothing 0 ("malicious-fixture-control", ["1.0.0"]) : zipWith (derived fields withdrawn) [1 :: Int ..] targets)
   where
+    derived :: KM.KeyMap Value -> Maybe Value -> Int -> (Text, [Text]) -> (Text, LByteString)
     derived fields withdrawal n (name, versions) =
         let ident = "MAL-derived-" <> show n
             affected = object ["package" .= object ["name" .= name, "ecosystem" .= osvExportDirectory (osvEcosystemFor eco)], "versions" .= versions]
