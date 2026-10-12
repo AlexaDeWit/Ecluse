@@ -242,7 +242,7 @@ tasks:
           support_exclude+=(-x "$module")
         done < <(find test/support test/contracts runtime/test-support -name '*.hs' | sed -e 's#^\(test/support\|test/contracts\|runtime/test-support\)/##' -e 's#/#.#g' -e 's#\.hs$##')
         
-        hpc-codecov "${mix_args[@]}" -s . -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
+        hpc-codecov "${mix_args[@]}" -s . -s vendor/lzma-managed -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
         echo "coverage: wrote coverage/combined.json (combined core-unit + runtime-unit + app-unit + integration, matches Codecov's merged total)"
   coverage-unit:
     desc: Fast, Docker-free unit-only coverage
