@@ -31,13 +31,12 @@ spec = describe "installation contract rejects broken observations" $ do
     for_ [("node_modules", "unexpected/package.json", "{\"version\":\"2.0.0\"}"), ("site", "unexpected-2.0.0.dist-info/METADATA", "Version: 2.0.0\n")] $ \(root, relativePath, bytes) ->
         it ("rejects a failed client that leaves unexpected output in " <> root) $
             withSystemTempDirectory "refused-installation" $ \directory -> do
-                let installation = do
-                        let path = directory </> root </> relativePath
-                        createDirectoryIfMissing True (takeDirectory path)
-                        writeFileText path bytes
-                        tree <- snapshotTree directory [root]
-                        pure (ClientResult "fake failed client" (ExitFailure 1) "" "", (Nothing :: Maybe Text, tree))
-                refusesObserved (InstallDriver installation (Nothing, mempty)) `shouldThrow` anyException
+                let path = directory </> root </> relativePath
+                createDirectoryIfMissing True (takeDirectory path)
+                writeFileText path bytes
+                tree <- snapshotTree directory [root]
+                tree `shouldSatisfy` (not . null)
+                refusesObserved (driver (ExitFailure 1) (Nothing :: Maybe Text, tree) (Nothing, mempty)) `shouldThrow` anyException
     it "accepts refusal without an installation" $
         refusesObserved (driver (ExitFailure 1) False False)
   where
