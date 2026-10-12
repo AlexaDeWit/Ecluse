@@ -4,6 +4,14 @@ name: Load test
 on:
   workflow_dispatch:
     inputs:
+      paired-arm-diagnostic:
+        description: "Diagnostic only: compare frozen A/B builds on one ARM64 runner"
+        type: boolean
+        default: false
+      paired-full-grid:
+        description: "After paired direct children, run four complete grids on the same runner"
+        type: boolean
+        default: true
       pod-shape:
         description: "Proxy CPU-time quota and memory limit (2cpu means two CPUs' worth of time), or thrash for the GC-thrash probe"
         type: choice
@@ -68,6 +76,7 @@ env:
 
 jobs:
   bench-load:
+    if: ${{ !inputs.paired-arm-diagnostic }}
     name: Load test (${{ matrix.pod-shape }}, inform-only)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
@@ -167,4 +176,108 @@ jobs:
             load-observations.json
             against-main.md
             scratchpad/performance/load-foundation/
+          if-no-files-found: warn
+
+  paired-arm-diagnostic:
+    name: Frozen ARM64 comparison (diagnostic only)
+    if: ${{ inputs.paired-arm-diagnostic }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Checkout diagnostic harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Build and archive both frozen revisions
+        id: builds
+        run: bash scripts/ci-build-diagnostics.sh nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml build
+
+      - name: Upload binaries and build provenance
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-builds-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            scratchpad/paired-arm-load/builds/
+            scratchpad/paired-arm-load/provenance/
+          compression-level: 0
+          if-no-files-found: warn
+
+      - name: Delegate proxy cgroups
+        if: ${{ !cancelled() && steps.builds.outcome == 'success' }}
+        id: delegate
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml delegate
+
+      - name: Compare native children in ABBA BAAB order
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' }}
+        id: children
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml children
+
+      - name: Upload direct child evidence before the grids
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-children-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/children/
+          if-no-files-found: warn
+
+      - name: Full grid 1 (A)
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=A ORDINAL=1
+
+      - name: Upload full grid 1
+        if: ${{ always() && inputs.paired-full-grid }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-grid-1-A-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/grid/1-A/
+          if-no-files-found: warn
+
+      - name: Full grid 2 (B)
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=B ORDINAL=2
+
+      - name: Upload full grid 2
+        if: ${{ always() && inputs.paired-full-grid }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-grid-2-B-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/grid/2-B/
+          if-no-files-found: warn
+
+      - name: Full grid 3 (B)
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=B ORDINAL=3
+
+      - name: Upload full grid 3
+        if: ${{ always() && inputs.paired-full-grid }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-grid-3-B-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/grid/3-B/
+          if-no-files-found: warn
+
+      - name: Full grid 4 (A)
+        if: ${{ !cancelled() && steps.delegate.outcome == 'success' && inputs.paired-full-grid }}
+        run: nix develop .#ci --command task --taskfile scripts/bench-load-paired.Taskfile.yml grid SIDE=A ORDINAL=4
+
+      - name: Upload full grid 4
+        if: ${{ always() && inputs.paired-full-grid }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paired-arm-grid-4-A-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/paired-arm-load/results/grid/4-A/
           if-no-files-found: warn

@@ -1,0 +1,39 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Prepare and archive both frozen binaries before any measurement
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash scripts/bench-load-paired.sh prepare
+      - bash scripts/bench-load-paired.sh build A
+      - bash scripts/bench-load-paired.sh build B
+      - bash scripts/bench-load-paired.sh seal
+  delegate:
+    desc: Delegate the existing harness and proxy cgroup layout
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash scripts/bench-load-paired.sh delegate
+  children:
+    desc: Run ABBA BAAB for both native scenarios and concurrency-one controls
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash scripts/bench-load-paired.sh children
+  grid:
+    desc: Run one complete native grid with an archived binary
+    dir: '{{.TASKFILE_DIR}}/..'
+    requires:
+      vars: [SIDE, ORDINAL]
+    env:
+      PAIRED_SIDE: '{{.SIDE}}'
+      PAIRED_ORDINAL: '{{.ORDINAL}}'
+    cmds:
+      - bash scripts/bench-load-paired.sh grid "$PAIRED_SIDE" "$PAIRED_ORDINAL"
+  check:
+    desc: Check the diagnostic scripts and workflow without building Haskell
+    dir: '{{.TASKFILE_DIR}}/..'
+    cmds:
+      - bash -n scripts/bench-load-paired.sh scripts/bench-load-sample.sh
+      - shellcheck scripts/bench-load-paired.sh scripts/bench-load-sample.sh
+      - actionlint .github/workflows/bench-load.yml
+
