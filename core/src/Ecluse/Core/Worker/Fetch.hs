@@ -6,7 +6,6 @@
 The worker outcome classifies exchange faults for retry or drop.
 -}
 module Ecluse.Core.Worker.Fetch (
-    fetchArtifactBytes,
     fetchArtifactBytesCharged,
 ) where
 
@@ -19,14 +18,6 @@ import Ecluse.Core.Registry.Exchange (boundedChargedRead, formThen, withSuccessB
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progressFloor), maxMirrorArtifactBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
-
--- | Buffer the whole artifact for verification before publication, under its mirror-artifact cap.
-fetchArtifactBytes ::
-    Limits ->
-    (Maybe ClientCredential -> Text -> Either UrlFormationError Request) ->
-    RegistryUrl ->
-    WorkerM (Either FetchFault ByteString)
-fetchArtifactBytes = fetchArtifactBytesCharged (const (pure ()))
 
 -- | Charge actual buffered source bytes and refuse non-success statuses before integrity verification.
 fetchArtifactBytesCharged ::

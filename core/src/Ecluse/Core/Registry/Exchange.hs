@@ -12,8 +12,8 @@ closes rather than returning to the pool. The serve path also wraps its exchange
 module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
     boundedExchange,
+    runExchange,
     singleAttemptSettings,
-    boundedFetch,
     boundedJsonFetch,
     withSuccessBody,
     boundedRelay,
@@ -58,9 +58,7 @@ import Ecluse.Core.Registry (
     BodyOutcome (SuccessBody, UnreadStatus),
     FetchFault (FetchBoundExceeded, FetchTransport),
     PublishRelayResponse (..),
-    RegistryResponse (RegistryResponse),
     UrlFormationError,
-    isAuthorisationFailure,
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
@@ -86,6 +84,7 @@ boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> ProgressFloor -
 boundedExchange project manager progress limits request =
     runExchange manager progress request (readBounded project limits)
 
+-- | Consume a response under the progress watchdog, classifying transport and body-limit failures.
 runExchange :: Manager -> ProgressFloor -> Request -> (Response BodyReader -> IO (Either LimitError a)) -> IO (Either FetchFault a)
 runExchange manager progress request readResponse =
     watched progress (\watch -> try (withResponse (metered watch) manager (readResponse . fmap (meteredReader watch))))
@@ -120,14 +119,6 @@ seconds :: Int -> Text
 seconds micros = case micros `divMod` 1_000_000 of
     (whole, 0) -> show whole
     _ -> show (fromIntegral micros / 1_000_000 :: Double)
-
--- | Preserve explicit auth refusals without reading their untrusted error bodies.
-boundedFetch :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
-boundedFetch manager progress limits request = runExchange manager progress request $ \response ->
-    let code = statusCode (responseStatus response)
-     in if isAuthorisationFailure code
-            then pure (Right (RegistryResponse code 0 ""))
-            else readBounded RegistryResponse limits response
 
 -- | The exchange keeping the answered status alongside the body, for the first-party relay.
 boundedRelay :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)

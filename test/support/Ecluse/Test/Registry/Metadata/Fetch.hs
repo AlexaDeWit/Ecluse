@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Held bytes read through the production read driver, with fixed chunks in place of a socket.
+-- | Test bodies and capture reads through the production transport and read driver.
 module Ecluse.Test.Registry.Metadata.Fetch (
     -- * Bodies
+    fetchTestBody,
     heldBody,
     sourceBody,
     captureChunks,
@@ -16,18 +17,29 @@ module Ecluse.Test.Registry.Metadata.Fetch (
 ) where
 
 import Data.ByteString qualified as BS
+import Network.HTTP.Client (Manager, Request, Response (responseStatus), brRead, responseBody)
+import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundExceeded))
+import Ecluse.Core.Registry (BodyOutcome (SuccessBody), FetchFault (FetchBoundExceeded), RegistryResponse (RegistryResponse), isAuthorisationFailure)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
+import Ecluse.Core.Registry.Exchange (runExchange)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError, VersionRead)
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body (Body), EcosystemRead, ReadTerms (..))
-import Ecluse.Core.Security (LimitError, Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Security (BodyLimit, LimitError, Limits (maxMetadataBytes), ProgressFloor, boundedRead, defaultLimits)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (CaptureUpstream (upstreamOrigin))
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
+
+-- | Preserve authorisation refusals without reading their bodies. Bound every other smoke or contract response.
+fetchTestBody :: Manager -> ProgressFloor -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
+fetchTestBody manager progress limit request = runExchange manager progress request $ \response ->
+    let code = statusCode (responseStatus response)
+     in if isAuthorisationFailure code
+            then pure (Right (RegistryResponse code 0 ""))
+            else fmap (uncurry (RegistryResponse code)) <$> boundedRead limit (brRead (responseBody response))
 
 -- | A 200 response whose body is the chunks, which the read driver takes in place of a socket.
 heldBody :: [ByteString] -> Body

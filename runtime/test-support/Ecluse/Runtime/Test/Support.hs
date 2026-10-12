@@ -18,12 +18,11 @@ import Katip (LogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Runtime.Env (Env, newEnvWithAdmission, newWorkerHeartbeat)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Support (testMemoryMeter, testServeAdmission)
 
 {- | The default test environment: the memory queue, a standard HTTP manager, and

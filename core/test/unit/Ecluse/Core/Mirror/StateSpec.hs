@@ -99,7 +99,7 @@ spec = describe "durable mirror expectations" $ do
         version <- getVersion updated
         map (map artEntryKey . toList . pkgArtifacts . fragmentDetails) (toList (versionFragments version)) `shouldBe` [[ArrayEntry 0], [ArrayEntry 0]]
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
 
     it "does not replace original fields when only source URLs change" $ do
         a <- mirrorSample [1] False "https://first.test/" "original"
@@ -139,8 +139,8 @@ spec = describe "durable mirror expectations" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        decodeProjectRecord defaultLimits (stateTarget "https://other.test") mirrorPackage bytes `shouldBe` Left StateIdentityMismatch
-        decodeProjectRecord defaultLimits target (mkPackageName PyPI Nothing "other") bytes `shouldBe` Left StateIdentityMismatch
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits (stateTarget "https://other.test") mirrorPackage bytes `shouldReturn` Left StateIdentityMismatch
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target (mkPackageName PyPI Nothing "other") bytes `shouldReturn` Left StateIdentityMismatch
 
     it "requires all current target identities and rejects digestless target presence" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
@@ -188,7 +188,7 @@ spec = describe "durable mirror expectations" $ do
         checkMirrorCompletion verifiedVersion [targetFile{artHashes = [wrong]}] `shouldBe` MirrorIncomplete (ConflictingMirrorFile (mirrorFilename 1) :| [])
         recordEnvelope updated `shouldBe` recordEnvelope record
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
 
     it "updates one project envelope across versions without replacing earlier file fields" $ do
         let firstEnvelope = KeyMap.singleton "project-status" (object ["status" .= ("active" :: Text)])
@@ -207,7 +207,7 @@ spec = describe "durable mirror expectations" $ do
                 PyPIMirrorRead document -> simpleEnvelope document `shouldBe` mempty
                 NpmMirrorRead _ -> expectationFailure "unexpected npm fragment"
         encoded <- expectRight (encodeProjectRecord defaultLimits updated)
-        decodeProjectRecord defaultLimits target mirrorPackage encoded `shouldBe` Right updated
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage encoded `shouldReturn` Right updated
         Map.keys (recordVersions updated) `shouldBe` ["1", "2"]
         recordVersion mirrorVersion updated `shouldBe` recordVersion mirrorVersion old
 
@@ -242,7 +242,7 @@ spec = describe "durable mirror expectations" $ do
         version <- getVersion updated
         checkMirrorCompletion version [expectedArtifact file] `shouldBe` MirrorComplete
         bytes <- expectRight (encodeProjectRecord defaultLimits updated)
-        decodeProjectRecord defaultLimits target mirrorPackage bytes `shouldBe` Right updated
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right updated
 
     it "refuses undeclared and oversized companion retention" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"
@@ -256,25 +256,25 @@ spec = describe "durable mirror expectations" $ do
         inventory <- mirrorSample [1, 2] False "https://first.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        decodeProjectRecord defaultLimits{maxArtifactCount = 1} target mirrorPackage bytes `shouldSatisfy` isLeft
-        decodeProjectRecord defaultLimits{maxVersionCount = 0} target mirrorPackage bytes `shouldSatisfy` isLeft
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxArtifactCount = 1} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxVersionCount = 0} target mirrorPackage bytes >>= (`shouldSatisfy` isLeft)
 
     it "round trips every admission fact and original source field" $ do
         inventory <- mirrorSample [1, 2] True "https://first.test/" "original"
         record <- expectRight (extendProjectRecord defaultLimits target inventory Nothing)
         bytes <- expectRight (encodeProjectRecord defaultLimits record)
-        decodeProjectRecord defaultLimits target mirrorPackage bytes `shouldBe` Right record
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage bytes `shouldReturn` Right record
 
     it "rejects unsupported schema, malformed JSON, and excessive nesting" $ do
-        decodeProjectRecord defaultLimits target mirrorPackage "{\"schema\":999}" `shouldSatisfy` isLeft
-        decodeProjectRecord defaultLimits target mirrorPackage "{" `shouldSatisfy` isLeft
-        decodeProjectRecord defaultLimits{maxNestingDepth = 2} target mirrorPackage "{\"a\":{\"b\":{}}}" `shouldSatisfy` isLeft
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{\"schema\":999}" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{" >>= (`shouldSatisfy` isLeft)
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxNestingDepth = 2} target mirrorPackage "{\"a\":{\"b\":{}}}" >>= (`shouldSatisfy` isLeft)
 
     it "rejects trailing non-JSON data" $
-        decodeProjectRecord defaultLimits target mirrorPackage "{}trailing" `shouldSatisfy` isLeft
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits target mirrorPackage "{}trailing" >>= (`shouldSatisfy` isLeft)
 
     it "rejects a response above its byte cap before record decoding" $
-        decodeProjectRecord defaultLimits{maxMetadataBytes = 2} target mirrorPackage "{broken" `shouldSatisfy` isLeft
+        chargedDecodeProjectRecord (const (pure ())) defaultLimits{maxMetadataBytes = 2} target mirrorPackage "{broken" >>= (`shouldSatisfy` isLeft)
 
     it "reconciles an ambiguous successful write by rereading its union" $ do
         inventory <- mirrorSample [1] False "https://first.test/" "original"

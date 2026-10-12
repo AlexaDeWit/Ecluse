@@ -45,7 +45,6 @@ import Ecluse.Acceptance (
 import Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
@@ -59,7 +58,7 @@ import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackag
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
-import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, fetchTestBody)
 import Ecluse.Test.Rules (inertRuleDeps)
 import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSizeUnder)
 
@@ -132,7 +131,7 @@ fetchDocument manager eco pkg = case liveRequest eco pkg of
     Left reason -> pure (Refused reason)
     Right request ->
         classifyFetch
-            <$> boundedFetch manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
+            <$> fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
 
 liveRequest :: Ecosystem -> PackageName -> Either Text Request
 liveRequest eco pkg = case eco of

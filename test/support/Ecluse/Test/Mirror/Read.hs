@@ -149,7 +149,9 @@ loadReadFixture directory = ReadFixture defaultTarget <$> BS.readFile (directory
 
 -- | Compute the old record's retention allowance outside the measured request.
 readRetainedCharge :: ReadFixture -> IO Int
-readRetainedCharge fixture = expectRight (decodeProjectRecord readLimits (fixtureTarget fixture) mirrorPackage (fixtureOld fixture) >>= projectRecordWeight readLimits)
+readRetainedCharge fixture = do
+    decoded <- chargedDecodeProjectRecord (const (pure ())) readLimits (fixtureTarget fixture) mirrorPackage (fixtureOld fixture)
+    expectRight (decoded >>= projectRecordWeight readLimits)
 
 -- | The backend decodes only loaded revisions and records every conditional state exchange.
 newReadSession :: ReadFixture -> IO ReadSession

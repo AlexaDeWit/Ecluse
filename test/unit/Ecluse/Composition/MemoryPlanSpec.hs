@@ -21,7 +21,6 @@ import Ecluse.Composition.MemoryPlan (
     QueueTenantDemand (MemoryQueueTenant, MirroringWithoutMemoryQueue, NoQueueTenant),
     mirrorArtifactEnvelopeMultiplier,
     planCacheConfig,
-    resolveMemoryPlan,
     resolveMemoryPlanForMounts,
  )
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
@@ -30,7 +29,7 @@ import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (Fr
 
 -- | Verify the resolved plan and its operator-facing report.
 spec :: Spec
-spec = describe "resolveMemoryPlan" $ do
+spec = describe "resolveMemoryPlanForMounts" $ do
     it "falls back to the shipped bounds with no heap-ceiling datapoint" $ do
         let (plan, lines') = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) MemoryQueueTenant False
         mpMaxResponseBytes plan `shouldBe` 134217728
@@ -240,7 +239,7 @@ spec = describe "resolveMemoryPlan" $ do
                 demand <- forAll (Gen.element [NoQueueTenant, MirroringWithoutMemoryQueue, MemoryQueueTenant])
                 pub <- forAll Gen.bool
                 let runtime = (planWith (Just h)){erpCapabilities = enforcedAxis caps}
-                    (plan, _) = resolveMemoryPlan bareCache bareLimits bareQueue Nothing runtime demand pub
+                    (plan, _) = resolveMemoryPlanForMounts bareCache bareLimits bareQueue Nothing runtime demand [Nothing | pub]
                 -- Without explicit overrides the plan never refuses and admits at least one
                 -- operation. It either fits the ceiling or names the irreducible overshoot.
                 mpOverrideViolations plan === []
@@ -261,7 +260,8 @@ spec = describe "resolveMemoryPlan" $ do
                 `shouldBe` replicate 2 (StoreBudget 0 0)
             lines' `shouldContain` ["metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"]
   where
-    resolve = resolveMemoryPlan
+    resolve cache limits queue admission runtime demand publish =
+        resolveMemoryPlanForMounts cache limits queue admission runtime demand [Nothing | publish]
 
     -- Every tenant the combined invariant sums.
     tenantSum :: MemoryPlan -> Int

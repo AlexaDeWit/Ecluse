@@ -40,7 +40,6 @@ module Ecluse.Core.Mirror.State (
     MirrorCompletion (..),
     MirrorCompletionFault (..),
     encodeProjectRecord,
-    decodeProjectRecord,
     projectRecordWeight,
     recordExpectedInventory,
     retainProjectCompanion,

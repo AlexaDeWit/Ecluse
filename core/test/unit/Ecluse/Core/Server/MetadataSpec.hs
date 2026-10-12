@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCalle
 import Ecluse.Core.Security (defaultLimits, mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), newMetadataCache, newMetadataCacheWithProvider)
+import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), newMetadataCacheWithProvider)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion, withinRequestCap)
@@ -49,7 +49,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetc
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations)
+import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations, newMetadataCache)
 import Ecluse.Test.Snapshot (digestOf, readDetails)
 
 -- | Selected reads use the chosen provider without hydrating a full document.

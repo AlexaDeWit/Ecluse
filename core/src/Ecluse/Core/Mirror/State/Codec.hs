@@ -5,7 +5,6 @@
 -- | Bounded durable records recheck stored source fragments rather than reconstructing policy facts.
 module Ecluse.Core.Mirror.State.Codec (
     encodeProjectRecord,
-    decodeProjectRecord,
     projectRecordWeight,
     chargedDecodeProjectRecord,
     chargedEncodeProjectRecord,
@@ -49,12 +48,6 @@ encodeProjectRecord limits record = do
     checkRecord limits (BS.length bytes) record
     void (boundedValue limits bytes)
     pure bytes
-
--- | Bytes and nesting are bounded before building the value tree. Identity and fragments are then checked.
-decodeProjectRecord :: Limits -> StateTarget -> PackageName -> ByteString -> Either MirrorStateFault ProjectMirrorRecord
-decodeProjectRecord limits target name bytes = do
-    value <- decodeProjectValue limits bytes
-    restoreProjectValue limits target name (BS.length bytes) value
 
 decodeProjectValue :: Limits -> ByteString -> Either MirrorStateFault Value
 decodeProjectValue limits bytes = checkDimensions limits bytes >> boundedValue limits bytes

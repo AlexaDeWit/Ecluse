@@ -16,7 +16,6 @@ module Ecluse.Composition.MemoryPlan (
     TransientBudget (..),
 
     -- * Resolution
-    resolveMemoryPlan,
     resolveMemoryPlanForMounts,
     planCacheConfig,
     mirrorArtifactEnvelopeMultiplier,
@@ -59,21 +58,6 @@ import Ecluse.Composition.Sizing (resolveServeAdmission, resolveSized)
 import Ecluse.Config (CacheSettings (..), LimitsSettings, QueueSettings)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, provenanceClause)
-
-{- | Resolve the memory plan and its boot lines. The caller selects the mirror-queue
-backend first, since 'QueueTenantDemand' projects from that choice.
--}
-resolveMemoryPlan ::
-    CacheSettings ->
-    LimitsSettings ->
-    QueueSettings ->
-    Maybe Int ->
-    EffectiveRuntimePlan ->
-    QueueTenantDemand ->
-    Bool ->
-    (MemoryPlan, [Text])
-resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission runtime queueDemand publishConfigured =
-    resolveMemoryPlanForMounts cacheSettings limitsSettings queueSettings explicitAdmission runtime queueDemand [Nothing | publishConfigured]
 
 -- | Reserve the largest mount override without changing the inherited request cap.
 resolveMemoryPlanForMounts :: CacheSettings -> LimitsSettings -> QueueSettings -> Maybe Int -> EffectiveRuntimePlan -> QueueTenantDemand -> [Maybe Int] -> (MemoryPlan, [Text])

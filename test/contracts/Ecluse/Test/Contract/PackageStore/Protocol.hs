@@ -28,7 +28,7 @@ import Ecluse.Core.Package (Artifact (..), HashAlg (SRI), PackageDetails (pkgArt
 import Ecluse.Core.Registry (RegistryResponse (..))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Exchange (boundedFetch, singleAttemptSettings)
+import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance (..), StoreManifestRead, VersionOutcome (VersionRemoved), collectPages, storeFaultOfMetadata, storedVersion)
 import Ecluse.Core.Registry.Maintenance.NameSpace (wholeNameSpace)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), ProtocolStore (..), newProtocolMaintenance)
@@ -47,6 +47,7 @@ import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Maintenance (testDeleteGuard)
 import Ecluse.Test.Package (npmVersion, sriSha512Of, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Registry.Npm (mirrorWriteToken, writeTokenNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Test.Registry.Publish (publishOnlyFile)
@@ -141,7 +142,7 @@ readArtifact :: OriginClient -> Artifact -> IO (Either Text PackageStoreArtifact
 readArtifact origin artifact = case artifactRequestByUrl (ocToken origin) (artUrl artifact) of
     Left fault -> pure (Left (show fault))
     Right request -> do
-        response <- boundedFetch (ocManager origin) (progressFloor (ocLimits origin)) (MirrorArtifactBodyLimit 4096) request
+        response <- fetchTestBody (ocManager origin) (progressFloor (ocLimits origin)) (MirrorArtifactBodyLimit 4096) request
         pure $ do
             received <- first show response
             unless (responseStatusCode received == 200) (Left "stored artifact did not answer HTTP 200")

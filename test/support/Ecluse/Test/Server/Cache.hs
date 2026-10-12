@@ -6,6 +6,8 @@
 module Ecluse.Test.Server.Cache (
     -- * Cache configuration fixtures
     defaultCacheConfig,
+    newMetadataCache,
+    localCacheProvider,
     externalBackend,
     externalOperations,
     newLocalBackend,
@@ -27,9 +29,10 @@ import Data.Time (NominalDiffTime)
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
-import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), resolveMetadata, resolveVersion)
+import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), newMetadataCacheWithProvider, resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
+import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProviderWithPool)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend)
 import Ecluse.Core.Server.Cache.Types (CacheKey, assembledKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey)
@@ -38,6 +41,16 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Registry.PyPI.Metadata (simpleValue)
+
+-- | Isolate a fixture's cache from other stores while preserving the configured local bounds.
+newMetadataCache :: CacheConfig -> IO MetadataCache
+newMetadataCache config = localCacheProvider config >>= newMetadataCacheWithProvider
+
+-- | Give a fixture its own pool for selected versions and assembled responses.
+localCacheProvider :: CacheConfig -> IO CacheProvider
+localCacheProvider config = do
+    pool <- newLocalPool (cacheMaxEntries config) (cacheMaxBytes config)
+    localCacheProviderWithPool pool config
 
 -- | A 60-second TTL and 256 MiB shared by locally eligible stores.
 defaultCacheConfig :: CacheConfig

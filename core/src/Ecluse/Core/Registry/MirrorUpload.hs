@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.MirrorUpload (
     checkedMirrorInventory,
     splitMirrorInventory,
     expectedIdentityMatches,
-    expectedTargetMatches,
     expectedTargetMatchesWith,
     targetIdentityConflict,
     inventoryPackage,

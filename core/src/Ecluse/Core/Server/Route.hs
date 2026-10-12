@@ -26,7 +26,6 @@ module Ecluse.Core.Server.Route (
 
     -- * Building a route table
     answering,
-    refusing,
     safeSegment,
     isHead,
 ) where
@@ -198,12 +197,6 @@ literal routes an ecosystem answers itself, rather than through the data plane, 
 -}
 answering :: response -> Method -> [v] -> Maybe (ResponseAction response)
 answering answer _method _captures = Just (AnswerLocally answer)
-
-{- | 'answering' for a refusal: the route decides it, and the site holding the mount's
-dependencies renders it under the configured help message.
--}
-refusing :: (Maybe HelpMessage -> response) -> Method -> [v] -> Maybe (ResponseAction response)
-refusing render _method _captures = Just (AnswerRefusal render)
 
 {- | A 'capConsume' that claims one leading segment, and only when it is a safe path component.
 A traversal, separator, or control character therefore fails the match before the value exists.

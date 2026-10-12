@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.MirrorUpload.Internal (
     restoreMirrorFragment,
     splitMirrorInventory,
     expectedIdentityMatches,
-    expectedTargetMatches,
     expectedTargetMatchesWith,
     targetIdentityConflict,
     inventoryPackage,
@@ -263,10 +262,6 @@ expectedIdentityMatches left right =
     b = expectedDescriptor right
     aHashes = digestIdentities (toList (maHashes a))
     bHashes = digestIdentities (toList (maHashes b))
-
--- | Current target metadata must prove the strongest expected digest.
-expectedTargetMatches :: ExpectedMirrorFile -> Artifact -> Bool
-expectedTargetMatches expected = expectedTargetMatchesWith expected Nothing
 
 -- | A persisted SHA-256 computed from verified bytes can bridge different source and target algorithms.
 expectedTargetMatchesWith :: ExpectedMirrorFile -> Maybe Hash -> Artifact -> Bool

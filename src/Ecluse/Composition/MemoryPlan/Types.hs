@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The memory plan's public vocabulary: the resolved plan and the tenants that carry a
-shape of their own. 'Ecluse.Composition.MemoryPlan.resolveMemoryPlan' solves for these, and
-the composition root builds every byte-valued bound from them.
+{- | Memory tenants and resolved bounds from 'Ecluse.Composition.MemoryPlan.resolveMemoryPlanForMounts'.
+The composition root builds each byte bound from this plan.
 -}
 module Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),

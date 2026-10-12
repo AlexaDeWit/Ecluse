@@ -10,7 +10,7 @@ import Test.Hspec
 import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, scopedName, staticEnvVars, testLimits)
-import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
+import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesWithState)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionDenied), admitArtifact)
@@ -29,10 +29,10 @@ import Ecluse.Test.Rules (blockedBy, inertRuleDeps)
 every bundle field is a closure the worker applies later.
 -}
 spec :: Spec
-spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)" $ do
+spec = describe "workerPoliciesWithState (config plus adapters in, WorkerPolicies out)" $ do
     it "builds one bundle per served mount, keyed by its ecosystem" $ do
         (env, bindings, targets) <- composedFixtures
-        Map.keys (workerPoliciesFor env bindings targets testArtifactCap) `shouldBe` [Npm]
+        Map.keys (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) `shouldBe` [Npm]
 
     it "reuses the mount's own serve-side policy inputs on the bundle" $ do
         -- The floor and every sibling input is the mount's own 'PackumentDeps' value, so the
@@ -41,7 +41,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
-        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+        case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 wpMinIntegrity policy `shouldBe` pdMinIntegrity deps
@@ -55,7 +55,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         deps <- case bindings of
             [binding] -> pure (bindingPackumentDeps binding)
             _ -> fail "expected exactly one served binding"
-        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+        case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 map (wpFirstParty policy) names `shouldBe` [True, False, False]
@@ -65,7 +65,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         -- The pin below the deny would admit the version to a reader of the revocation rules alone.
         let rules = "{\"withdrawn\":{\"type\":\"DenyByIdentity\",\"identity\":\"thing\",\"appliesTo\":[\"admission\"]},\"pin\":{\"type\":\"AllowByIdentity\",\"identity\":\"thing\"}}"
         (env, bindings, targets) <- composedFixturesFrom (overrideEnv "ECLUSE_RULES" rules staticEnvVars) testLimits
-        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+        case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 now <- wpNow policy
@@ -77,13 +77,11 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         -- The bundle is whole or absent: with no publish target to marry, a job for that
         -- ecosystem fails closed at the worker rather than publishing nowhere.
         (env, bindings, _) <- composedFixtures
-        Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
+        Map.keys (workerPoliciesWithState env Map.empty bindings [] testArtifactCap) `shouldBe` []
 
     it "sizes the bundle's artifact fetch cap from the supplied plan value" $ do
-        -- The per-artifact byte cap comes from the memory plan's mirror-artifact tenant, not a
-        -- hard-coded constant.
         (env, bindings, targets) <- composedFixtures
-        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+        case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> maxMirrorArtifactBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
@@ -106,7 +104,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         -- mount's resolved limits would drop the configured floor on the worker's largest transfer.
         tightFloor <- either (fail . show) pure (mkProgressFloor 50 5 4096)
         (env, bindings, targets) <- composedFixturesWith defaultLimits{progressFloor = tightFloor}
-        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+        case Map.lookup Npm (workerPoliciesWithState env Map.empty bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
             Just policy -> do
                 progressFloor (wpArtifactLimits policy) `shouldBe` tightFloor
@@ -132,7 +130,6 @@ testArtifactCap = 40 * 1024 * 1024
 probeLimits :: Limits
 probeLimits = defaultLimits{maxMetadataBytes = 3 * 1024 * 1024}
 
--- The composed inputs the production boot path derives, over no-network doubles.
 composedFixtures :: IO (Env, [MountBinding], [PublishTarget])
 composedFixtures = composedFixturesWith testLimits
 

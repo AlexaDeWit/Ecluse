@@ -6,7 +6,6 @@
 The composition root owns adapter lookup and credential binding.
 -}
 module Ecluse.Composition.Worker (
-    workerPoliciesFor,
     workerPoliciesWithState,
     mirrorTransportFor,
 ) where
@@ -54,12 +53,6 @@ import Ecluse.Runtime.Env (Env, envManager, envMemoryMeter, envMetadataCache, en
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
-
-{- | Build the worker's per-ecosystem bundles from the served mounts and the resolved publish
-targets, keyed by the ecosystem each mount's path prefix names. An absent ecosystem fails closed.
--}
-workerPoliciesFor :: Env -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies
-workerPoliciesFor env = workerPoliciesWithState env Map.empty
 
 -- | Hold one ticket across managed retries, with separate charges for overlapping state and byte regions.
 workerPoliciesWithState :: Env -> Map Ecosystem MirrorStateBinding -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies

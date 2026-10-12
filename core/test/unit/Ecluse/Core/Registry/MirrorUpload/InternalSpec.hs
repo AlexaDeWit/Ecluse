@@ -103,17 +103,17 @@ spec = do
         inventory <- expectRight (sourceInventory (wheel :| []))
         let file :| _ = inventoryFiles inventory
             target = (expectedArtifact file){artUrl = "https://private.example/wheel"}
-        expectedTargetMatches file target `shouldBe` True
-        expectedTargetMatches file target{artHashes = []} `shouldBe` False
-        expectedTargetMatches file target{artHashes = [unsafeHash SHA1 validSha1]} `shouldBe` False
-        expectedTargetMatches file target{artHashes = [unsafeHash SHA256 (hexSha256Of "other")]} `shouldBe` False
+        expectedTargetMatchesWith file Nothing target `shouldBe` True
+        expectedTargetMatchesWith file Nothing target{artHashes = []} `shouldBe` False
+        expectedTargetMatchesWith file Nothing target{artHashes = [unsafeHash SHA1 validSha1]} `shouldBe` False
+        expectedTargetMatchesWith file Nothing target{artHashes = [unsafeHash SHA256 (hexSha256Of "other")]} `shouldBe` False
 
     it "proves a SHA-512 source against a SHA-256 target using only the digest computed from verified bytes" $ do
         inventory <- expectRight (sourceInventoryWith (\bytes -> [unsafeHash SHA512 (hexSha512Of bytes), unsafeHash SHA256 (hexSha256Of "unverified weaker claim")]) (wheel :| []))
         let file :| _ = inventoryFiles inventory
             target = (expectedArtifact file){artHashes = [unsafeHash SHA256 (hexSha256Of "wheel")]}
         verified <- expectRight (verifyMirrorBytes file "wheel")
-        expectedTargetMatches file target `shouldBe` False
+        expectedTargetMatchesWith file Nothing target `shouldBe` False
         expectedTargetMatchesWith file (Just (verifiedTargetHash verified)) target `shouldBe` True
         expectedTargetMatchesWith file (Just (verifiedTargetHash verified)) target{artHashes = [unsafeHash SHA512 (hexSha512Of "wheel")]} `shouldBe` True
         targetIdentityConflict file (Just (verifiedTargetHash verified)) target{artHashes = []} `shouldBe` False
