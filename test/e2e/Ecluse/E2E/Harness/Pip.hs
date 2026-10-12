@@ -174,14 +174,14 @@ requirementsFile = "requirements.txt"
 targetDir :: FilePath
 targetDir = "site"
 
--- | Install into a new empty virtual environment and preserve every installed site-package byte.
+-- | Capture every site-package file and package-installed script from a fresh virtual environment.
 pipInstallGraph :: E2E -> Text -> Text -> IO InstalledTree
 pipInstallGraph proxy project version = do
     (result, tree) <- pipInstallAndInspect proxy project version
     void (shouldSucceedThroughProxy proxy result)
     pure tree
 
--- | Return the actual native install outcome and its complete site-packages tree.
+-- | Return the native install outcome, all site packages, and the installed package scripts.
 pipInstallAndInspect :: E2E -> Text -> Text -> IO (ClientResult, InstalledTree)
 pipInstallAndInspect proxy project version = withInstalledGraph proxy project version $ \installed ->
     (piClient installed,) <$> snapshotInstallation installed
@@ -206,6 +206,7 @@ data PipInstallation = PipInstallation
     , piDirectory :: FilePath
     , piPython :: FilePath
     , piSite :: FilePath
+    , piScriptRoots :: [FilePath]
     , piEnvironment :: [(String, String)]
     , piInitial :: [FilePath]
     , piSources :: Either Text [(Text, Text)]
@@ -219,7 +220,10 @@ withInstalledGraph proxy project version use = withPipProject proxy project vers
         run executable arguments = runClient (ppDir client) (ppEnv client) executable arguments >>= shouldSucceedThroughProxy proxy
     void $ run "python3" ["-m", "venv", "--without-pip", virtualenv]
     location <- run python ["-B", "-c", "import sysconfig\nprint(sysconfig.get_path('purelib'))"]
+    scriptLocation <- run python ["-B", "-c", "import os,sysconfig\nprint(os.path.relpath(sysconfig.get_path('scripts'),sysconfig.get_path('purelib')))"]
     let site = toString (T.strip (crStdout location))
+        scriptDirectory = toString (T.strip (crStdout scriptLocation))
+    bootstrapScripts <- listDirectory (site </> scriptDirectory)
     initial <- listDirectory site
     unless (null initial) (fail "new virtual environment contains installed packages")
     result <-
@@ -244,15 +248,19 @@ withInstalledGraph proxy project version use = withPipProject proxy project vers
             , report
             , toString (project <> "==" <> version)
             ]
+    scriptNames <- listDirectory (site </> scriptDirectory)
+    let scriptRoots = [scriptDirectory </> name | name <- scriptNames, name `notElem` bootstrapScripts]
     reported <- doesFileExist report
     sources <- if reported then reportSources <$> readFileBS report else pure (Left "pip wrote no installation report")
     let environment =
             filter ((`notElem` ["PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"]) . fst) (ppEnv client)
                 <> [("PATH", takeDirectory python <> ":" <> fromMaybe "" (lookup "PATH" (ppEnv client))), ("PYTHONDONTWRITEBYTECODE", "1")]
-    use (PipInstallation result (ppDir client) python site environment initial sources)
+    use (PipInstallation result (ppDir client) python site scriptRoots environment initial sources)
 
 snapshotInstallation :: PipInstallation -> IO InstalledTree
-snapshotInstallation installed = listDirectory (piSite installed) >>= snapshotTree (piSite installed)
+snapshotInstallation installed = do
+    roots <- listDirectory (piSite installed)
+    snapshotTree (piSite installed) (roots <> piScriptRoots installed)
 
 observeJson :: PipInstallation -> FilePath -> [String] -> IO (Either Text Value)
 observeJson installed executable arguments = do

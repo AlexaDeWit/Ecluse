@@ -8,7 +8,7 @@ module Ecluse.Test.InstalledTreeSpec (spec) where
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Directory (createDirectory, createFileLink, getPermissions, setOwnerExecutable, setPermissions)
+import System.Directory (createDirectory, createDirectoryIfMissing, createFileLink, getPermissions, listDirectory, setOwnerExecutable, setPermissions)
 import System.FilePath ((</>))
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
@@ -55,7 +55,7 @@ spec = do
             for_ [(TreeFile False "x", TreeFile True "x"), (TreeLink "x", TreeLink "y"), (TreeDirectory, TreeFile False "x")] $ \(left, right) ->
                 treeDifferences ("cold", Map.singleton "path" left) ("hot", Map.singleton "path" right) `shouldSatisfy` (not . null)
             treeDifferences ("cold", mempty) ("hot", file "new" "x") `shouldSatisfy` (not . null)
-    describe "snapshotTree" $
+    describe "snapshotTree" $ do
         it "records file bytes, owner executable permission, and dangling links without following them" $
             withSystemTempDirectory "installed-tree" $ \dir -> do
                 createDirectory (dir </> "node_modules")
@@ -64,6 +64,39 @@ spec = do
                 setPermissions (dir </> "node_modules/bin") (setOwnerExecutable True permissions)
                 createFileLink "../absent" (dir </> "node_modules/link")
                 snapshotTree dir ["node_modules", "absent"] `shouldReturn` Map.fromList [("node_modules", TreeDirectory), ("node_modules/bin", TreeFile True (BS.pack [0, 255])), ("node_modules/link", TreeLink "../absent")]
+
+        it "detects installed script mutations while excluding virtual-environment bootstrap files" $
+            withSystemTempDirectory "installed-python-tree" $ \dir -> do
+                let site = dir </> "lib" </> "python3.13" </> "site-packages"
+                    scripts = dir </> "bin"
+                    script = scripts </> "e2e-mirror"
+                    relativeScript = "../../../bin/e2e-mirror"
+                    original = "#!/usr/bin/env python3\nprint('same output')\n"
+                    capture = do
+                        roots <- listDirectory site
+                        snapshotTree site (roots <> [relativeScript])
+                createDirectoryIfMissing True (site </> "example.dist-info")
+                createDirectory scripts
+                BS.writeFile (site </> "example.py") "VALUE = 1\n"
+                BS.writeFile (site </> "example.dist-info" </> "RECORD") "../../../bin/e2e-mirror,,\n"
+                BS.writeFile (scripts </> "python") "bootstrap interpreter"
+                BS.writeFile script original
+                permissions <- getPermissions script
+                setPermissions script (setOwnerExecutable True permissions)
+                coldTree <- capture
+                Map.lookup relativeScript coldTree `shouldBe` Just (TreeFile True original)
+                Map.lookup "example.py" coldTree `shouldBe` Just (TreeFile False "VALUE = 1\n")
+                Map.lookup "example.dist-info/RECORD" coldTree `shouldBe` Just (TreeFile False "../../../bin/e2e-mirror,,\n")
+                BS.writeFile (scripts </> "python") "different bootstrap interpreter"
+                capture `shouldReturn` coldTree
+                BS.writeFile script (original <> "# changed package bytes\n")
+                changedBytes <- capture
+                Map.delete relativeScript changedBytes `shouldBe` Map.delete relativeScript coldTree
+                treeDifferences ("cold", coldTree) ("hot", changedBytes) `shouldSatisfy` any (T.isPrefixOf (toText relativeScript <> "\n"))
+                BS.writeFile script original
+                setPermissions script (setOwnerExecutable False permissions)
+                changedMode <- capture
+                treeDifferences ("cold", coldTree) ("hot", changedMode) `shouldSatisfy` any (T.isPrefixOf (toText relativeScript <> "\n"))
 
 cold :: Text
 cold = "http://127.0.0.1:10001"
