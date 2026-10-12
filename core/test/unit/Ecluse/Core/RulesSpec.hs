@@ -346,32 +346,55 @@ evidenceSpec = describe "skipped-check evidence on an admission" $ do
 
 sourceHealthSpec :: Spec
 sourceHealthSpec = describe "advisory source health reporting" $ do
-    it "reports an absent database as unavailable, and a loaded one as answered, once per advisory rule" $ do
-        (absent, absentReports) <- observedDeps inertRuleDeps
-        void (decideWith absent skipPolicy (pkg Nothing 30))
-        reported absentReports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
-        (loaded, loadedReports) <- observedDeps (depsWith [])
-        void (decideWith loaded skipPolicy (pkg Nothing 30))
-        reported loadedReports `shouldReturn` [SourceAnswered "DenyIfCve"]
-
-    it "reports under a fail-closed alignment too, so a refusing outage is observed" $ do
-        (deps, reports) <- observedDeps inertRuleDeps
-        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
-        reported reports `shouldReturn` [SourceUnavailable "DenyIfCve" NoDatabaseLoaded]
-
-    it "reports an expired push as unavailable with its cause" $ do
-        (deps, reports) <- observedDeps (expired (depsWith []))
-        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
-        reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" cause] -> renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
-            other -> expectationFailure ("expected one unavailability, got " <> show other)
-
-    it "reports a lookup fault once, with its detail, and nothing again for the decided verdict" $ do
-        (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
-        void (decideWith deps skipPolicy (pkg Nothing 30))
-        reported reports >>= \case
-            [SourceUnavailable "DenyIfCve" detail] -> renderInability detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
-            other -> expectationFailure ("expected one unavailability, got " <> show other)
+    for_ [FailDeny, FailNoDecision] $ \alignment ->
+        for_ [DenyIfCve (DenyIfCveParams 8 alignment), DenyIfKnownMalicious alignment] $ \rule ->
+            describe (toString (ruleName rule) <> " under " <> show alignment) $ do
+                let name = ruleName rule
+                    policy = map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)]
+                    malRows = [("thing", AdvisoryRange "MAL-health-control" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing)]
+                it "reports an absent database as unavailable before and after source configuration" $
+                    for_ [inertRuleDeps, unloadedDeps] $ \absent -> do
+                        (deps, reports) <- observedDeps absent
+                        void (decideWith deps policy (pkg Nothing 30))
+                        reported reports `shouldReturn` [SourceUnavailable name NoDatabaseLoaded]
+                it "reports an answered read when no advisory matches" $ do
+                    (deps, reports) <- observedDeps (depsWith [])
+                    decision <- decideWith deps policy (pkg Nothing 30)
+                    admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+                    reported reports `shouldReturn` [SourceAnswered name]
+                it "reports an answered read when the named MAL control denies" $ do
+                    (deps, reports) <- observedDeps (depsWith malRows)
+                    decision <- decideWith deps policy (pkg Nothing 30)
+                    blockedBy decision `shouldBe` Just name
+                    reported reports `shouldReturn` [SourceAnswered name]
+                it "reports an expired push as unavailable with its cause" $ do
+                    (deps, reports) <- observedDeps (expired (depsWith malRows))
+                    void (decideWith deps policy (pkg Nothing 30))
+                    reported reports >>= \case
+                        [SourceUnavailable reportedName cause] -> do
+                            reportedName `shouldBe` name
+                            renderInability cause `shouldSatisfy` T.isInfixOf "past the maximum"
+                        other -> expectationFailure ("expected one unavailability, got " <> show other)
+                it "reports a lookup fault once with its detail" $ do
+                    (deps, reports) <- observedDeps (faultingDeps "advisory database exploded")
+                    void (decideWith deps policy (pkg Nothing 30))
+                    reported reports >>= \case
+                        [SourceUnavailable reportedName detail] -> do
+                            reportedName `shouldBe` name
+                            renderInability detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
+                        other -> expectationFailure ("expected one unavailability, got " <> show other)
+                it "reports an open breaker once and applies its alignment to every version" $ do
+                    (deps, reports) <- observedDeps (depsWith malRows)
+                    prepared <- prepare deps policy
+                    opened <- traverse openBreakerOn prepared
+                    decideVersion <- newEvaluator ctx opened
+                    decisions <- traverse decideVersion [(pkg Nothing 30){evVersion = mkVersion Npm version} | version <- ["1.0.0", "1.1.0"]]
+                    for_ decisions $ \decision -> case alignment of
+                        FailDeny -> decision `shouldSatisfy` isUndecidable
+                        FailNoDecision -> do
+                            admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+                            skippedChecks decision `shouldBe` [SkippedUnavailable name SourceBreakerOpen]
+                    reported reports `shouldReturn` [SourceUnavailable name SourceBreakerOpen]
 
     it "reports nothing for a pure rule, which reads no source" $ do
         (deps, reports) <- observedDeps inertRuleDeps
