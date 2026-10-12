@@ -111,9 +111,14 @@ objectSpec = describe "typed one-pass object fields" $ do
         let body = "{\"known\":\"ok\",\"unknown\":\"" <> BS.singleton invalidUtf8Byte <> "\"}"
         expectEveryCut (J.objectOf ("known" J..: J.string)) body (Right ["ok"])
 
-    it "rejects duplicate declarations before mixing their distinct field types" $
-        Exception.evaluate (J.objectOf ((,) <$> "same" J..: J.string <*> "same" J..: (J.integer :: J.Parser Int)))
+    it "rejects duplicate declarations before mixing their distinct field types" $ do
+        let fields = (,) <$> "same" J..: J.string <*> "same" J..: (J.integer :: J.Parser Int)
+        Exception.evaluate fields
             `shouldThrow` hasErrorMessage "JStream Object - duplicate field access: same"
+        -- GHC eta expansion can defer validation until the parser function runs.
+        for_ ["", "{}", "null", "{\"other\":0}", "{\"same\":1}", "{\"same\":\"x\"}"] $ \body ->
+            Exception.evaluate (J.runParser' (J.objectOf fields) body)
+                `shouldThrow` hasErrorMessage "JStream Object - duplicate field access: same"
 
     it "preserves lazy field values until the caller demands them" $ do
         let deferred = fmap (const (Exception.throw DeferredField)) J.string :: J.Parser Text
