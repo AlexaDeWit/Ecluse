@@ -14,7 +14,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artFilename), HashAlg (SRI), PackageDetails (pkgArtifacts), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
-    MirrorQueue (ack, enqueue, receive),
+    MirrorQueue (enqueue, receive),
     Seconds (Seconds),
  )
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation (VersionPresent))
@@ -30,6 +30,7 @@ import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
+    observeAcknowledgement,
     publishedAtLeast,
     runLoopFor,
     runLoopUntil,
@@ -53,10 +54,12 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         policies <- faithfulPolicies mirrorUrl
                         expectRightIO (enqueue queue job)
-                        runLoopUntil (workerSourceAt upstreamUrl policies) env (publishedAtLeast publishLog 1)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
+                        acknowledged `shouldReturn` True
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The worker acked the job, so it does not redeliver.
@@ -67,19 +70,12 @@ spec =
                 withStub status200 "artifact bytes" $ \upstream ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-incomplete-upload-data" defaultQueueOptions
-                        acknowledged <- newIORef False
-                        let observedQueue =
-                                queue
-                                    { ack = \receipt -> do
-                                        result <- ack queue receipt
-                                        when (isRight result) (writeIORef acknowledged True)
-                                        pure result
-                                    }
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
                         env <- newQueueEnv observedQueue
                         policies <- Map.map duplicateInventory <$> faithfulPolicies mirrorUrl
                         expectRightIO (enqueue queue job)
-                        runLoopUntil (workerSourceAt (stubBaseUrl upstream) policies) env (readIORef acknowledged)
-                        readIORef acknowledged `shouldReturn` True
+                        runLoopUntil (workerSourceAt (stubBaseUrl upstream) policies) env acknowledged
+                        acknowledged `shouldReturn` True
                         readIORef publishLog `shouldReturn` []
                         allCaptured upstream `shouldReturn` []
                         expectRightIO (receive queue) `shouldReturn` []
@@ -97,16 +93,16 @@ spec =
                         published <- readIORef publishLog
                         published `shouldBe` []
 
-            it (caseLabel "integration/worker/native-003" "treats a 409 (version already present) as idempotent success and acks") $ \container ->
+            it (caseLabel "integration/worker/native-003" "requires target identity proof after a 409 and acknowledges the whole version") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    -- The mirror target answers 409 (the version is already present). 409-is-
-                    -- success, so the worker acks and the job does not redeliver.
-                    withMirrorTarget status409 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status409 $ \mirrorUrl _publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         policies <- faithfulPolicies mirrorUrl
                         expectRightIO (enqueue queue job)
-                        runLoopUntil (workerSourceAt upstreamUrl policies) env (publishedAtLeast publishLog 1)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
+                        acknowledged `shouldReturn` True
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 

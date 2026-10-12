@@ -282,7 +282,8 @@ recording double ('withPublish'), so any effectful use here fails loudly.
 unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
-        { mpProbeInventory = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
+        { mpNativeComplete = \_ _ _ -> False
+        , mpProbeInventory = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
         , mpPrepareVersion = \name version doc -> do
             (inventory, _) <- prepareNpmSource name version doc
             pure (PreparedMirrorVersion inventory (\_ _ -> pure (Right (PreparedMirrorUpload (\_ -> throwIO (TestContractEscape "unwiredPublish: publish consulted"))))))

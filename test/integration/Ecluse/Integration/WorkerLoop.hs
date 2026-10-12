@@ -18,20 +18,22 @@ module Ecluse.Integration.WorkerLoop (
 
     -- * Fixtures the loop runs against
     withMirrorTarget,
+    observeAcknowledgement,
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
 ) where
 
+import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Status, status404)
-import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
+import Network.HTTP.Types (Status, status200, status404, statusCode)
+import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (timeout)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (Hash)
-import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue (MirrorQueue (ack))
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing), newMirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
@@ -65,20 +67,37 @@ publishedAtLeast logRef n = (>= n) . length <$> readIORef logRef
 loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
 
-{- | A WAI mirror-target stub answering each publish @PUT@ with @replyStatus@ and recording its
-path. The inventory @GET@ answers @404@, so no job takes the presence short-circuit.
--}
+-- | Observe successful acknowledgement without changing the queue's receipt or failure behaviour.
+observeAcknowledgement :: MirrorQueue -> IO (MirrorQueue, IO Bool)
+observeAcknowledgement queue = do
+    acknowledged <- newIORef False
+    let observed =
+            queue
+                { ack = \receipt -> do
+                    result <- ack queue receipt
+                    when (isRight result) (writeIORef acknowledged True)
+                    pure result
+                }
+    pure (observed, readIORef acknowledged)
+
+-- | Accepted native publication documents become visible to subsequent inventory probes.
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget replyStatus body = do
     logRef <- newIORef []
-    testWithApplication (pure (app logRef)) $ \port -> body (localhost port) logRef
+    stored <- newIORef Nothing
+    testWithApplication (pure (app logRef stored)) $ \port -> body (localhost port) logRef
   where
-    app :: IORef [ByteString] -> Application
-    app logRef request respond
+    app :: IORef [ByteString] -> IORef (Maybe LBS.ByteString) -> Application
+    app logRef stored request respond
         | requestMethod request == "PUT" = do
+            publication <- strictRequestBody request
             atomicModifyIORef' logRef (\xs -> (rawPathInfo request : xs, ()))
+            when (statusCode replyStatus `elem` [200, 201, 409]) (writeIORef stored (Just publication))
             respond (responseLBS replyStatus [] "{}")
-        | otherwise = respond (responseLBS status404 [] "{}")
+        | otherwise =
+            readIORef stored >>= \case
+                Nothing -> respond (responseLBS status404 [] "{}")
+                Just publication -> respond (responseLBS status200 [("Content-Type", "application/json")] publication)
 
 {- | Admit-everything policies publishing through the production marriage (npm's codec over
 the shared transport) at @mirrorUrl@. A 'Just' caps the fetch: an artifact past it is dropped.

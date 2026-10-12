@@ -9,6 +9,8 @@ module Ecluse.Core.Worker.Types (
     -- * The runtime and its policy bundles
     WorkerRuntime (..),
     WorkerPolicy (..),
+    WorkerMirrorState (..),
+    WorkerStateBudget (..),
     WorkerPolicies,
 
     -- * The worker monad
@@ -28,6 +30,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Mirror.State (MirrorState, StateCharge, StateTarget)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
@@ -92,8 +95,26 @@ data WorkerPolicy = WorkerPolicy
     {- ^ The bounded-fetch budget for the artifact download, set from the memory plan's
     mirror-artifact tenant so a publish envelope cannot breach the heap ceiling.
     -}
+    , wpMirrorState :: Maybe WorkerMirrorState
+    -- ^ Durable inventory storage within the worker admission reservation.
     , wpNow :: IO UTCTime
     -- ^ Wall-clock now for the rules, injected so the quarantine rule is deterministic.
+    }
+
+-- | Composition owns the admission ticket until the managed job returns.
+data WorkerMirrorState = WorkerMirrorState
+    { wmsStore :: MirrorState
+    , wmsTarget :: StateTarget
+    , wmsLimits :: Limits
+    , wmsWithinBudget :: forall a. (WorkerStateBudget -> IO a) -> IO (Maybe a)
+    -- ^ Keep all admission regions alive until final proof finishes.
+    }
+
+-- | Independent regions keep transient state work separate from live records and companion input.
+data WorkerStateBudget = WorkerStateBudget
+    { wsbState :: StateCharge
+    , wsbRecords :: StateCharge
+    , wsbCompanions :: StateCharge
     }
 
 {- | The bundles keyed by a job's package ecosystem. A job whose ecosystem is absent is

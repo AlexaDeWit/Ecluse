@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpEgressUrl, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpEgressUrl, wpFirstParty, wpMinIntegrity, wpMirrorState, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Rules (admitRule)
@@ -58,6 +58,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
         , wpEgressUrl = Right . loopbackRegistryUrl
         , wpPublish = publish
         , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
+        , wpMirrorState = Nothing
         , wpNow = clock
         }
 

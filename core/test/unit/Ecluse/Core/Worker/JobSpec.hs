@@ -13,12 +13,14 @@ import UnliftIO.Exception (impureThrow)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Mirror.State
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     Availability (Deprecated, Yanked),
     Hash,
-    HashAlg (Blake2b, SHA1, SHA256, SRI),
+    HashAlg (Blake2b, SHA1, SHA256, SHA512, SRI),
     PackageDetails (pkgArtifacts, pkgAvailability, pkgPublishedAt),
+    PackageInfo (..),
     PackageName,
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
@@ -36,9 +38,11 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
  )
+import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish,
+    MirrorPublish (mpProbeInventory),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing),
     PublishPlan (ppLatest),
     newMirrorPublish,
@@ -47,29 +51,240 @@ import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpPublish),
+    WorkerPolicy (wpArtifact, wpFirstParty, wpMirrorState, wpPublish, wpRules),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
+import Ecluse.Core.Worker.Types (WorkerMirrorState (..))
 import Ecluse.Test.Json (fieldAt)
+import Ecluse.Test.Mirror.State
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, admitRule, atDefaultPrecedence, cannotVetRule, constRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Snapshot (versionDocOf)
-import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
-import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail)
+import Ecluse.Test.Stub (allCaptured, capMethod, capPath, stubBaseUrl, withStub)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape), decodeJsonOrFail, expectRight)
 import Ecluse.Worker.Support
+import Ecluse.Worker.Support.Managed
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404)
 
 spec :: Spec
 spec = do
+    describe "processJob: complete managed releases" $ do
+        it "copies every file with exactly two native inventory probes" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                readIORef (mfProbes fixture) `shouldReturn` 2
+
+        it "does not treat unavailable state as a smaller expected inventory" $ do
+            fixture <- managedFixture unreachableUrl False
+            writeIORef (mfStateFault fixture) (Just StateRevisionMismatch)
+            runManaged fixture >>= (`shouldSatisfy` isRetried)
+            readIORef (mfUploads fixture) `shouldReturn` []
+            readIORef (mfRecord fixture) `shouldReturn` Nothing
+
+        it "does not upload before the expected record persists" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                let binding = mfBinding fixture
+                    store = (wmsStore binding){msWriteProject = \_ _ _ _ -> pure (Left StateRetryExhausted)}
+                    policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
+                runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isRetried)
+                readIORef (mfUploads fixture) `shouldReturn` []
+
+        it "restarts after a partial failure and fetches only missing distributions" $
+            withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                fixture <- managedFixture (stubBaseUrl upstream) False
+                writeIORef (mfRejectFile fixture) (Just (mirrorFilename 2))
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                writeIORef (mfRejectFile fixture) Nothing
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 2, 3]
+                length <$> allCaptured upstream `shouldReturn` 4
+
+        it "recovers a lost publish response through current target identity" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfLoseReply fixture) True
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                writeIORef (mfLoseReply fixture) False
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+
+        it "acknowledges a complete restart without public reads or current admission" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                runManaged fixture `shouldReturn` Succeeded
+                resolved <- readIORef (mfResolves fixture)
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                let policy = (mfPolicy fixture){wpRules = [denyRule]}
+                runManaged fixture{mfPolicy = policy} `shouldReturn` Succeeded
+                readIORef (mfResolves fixture) `shouldReturn` resolved
+
+        it "keeps a partial release incomplete during a public outage" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfRejectFile fixture) (Just (mirrorFilename 2))
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2]
+
+        it "shares a verified SHA-256 bridge with completion for a SHA-512-only source" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                initial <- managedInventory url False [1, 2, 3]
+                let details = inventoryDetails initial
+                    files = fmap (\file -> file{artHashes = [unsafeHash SHA512 trueSha512Hex]}) (pkgArtifacts details)
+                changed <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "sha512 source"))
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                writeIORef (mfTargetTransform fixture) (\file -> file{artHashes = [unsafeHash SHA256 trueSha256]})
+                runManaged fixture `shouldReturn` Succeeded
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                runManaged fixture `shouldReturn` Succeeded
+
+        it "rereads and unions a conflicting state update before any upload" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                competing <- managedInventory url False [4]
+                collided <- newIORef False
+                let binding = mfBinding fixture
+                    original = wmsStore binding
+                    store =
+                        original
+                            { msWriteProject = \charge name revision record -> do
+                                already <- atomicModifyIORef' collided (True,)
+                                if already
+                                    then msWriteProject original charge name revision record
+                                    else do
+                                        _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) original competing >>= expectRight
+                                        pure (Right StateConflict)
+                            }
+                    policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
+                runManaged fixture{mfPolicy = policy} `shouldReturn` Succeeded
+                sort <$> readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3, 4]
+
+        it "refuses digestless target listings despite successful physical writes" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfTargetTransform fixture) (\file -> file{artHashes = []})
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                readIORef (mfProbes fixture) `shouldReturn` 2
+
+        it "refuses a contradictory final target digest" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfTargetTransform fixture) (\file -> file{artHashes = [unsafeHash SHA256 someSha256]})
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                readIORef (mfProbes fixture) `shouldReturn` 2
+
+        it "refuses a missing final file without repeated upload passes" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfOnProbe fixture) $ \number ->
+                    when (number == 2) $
+                        modifyIORef' (mfTarget fixture) (filter ((/= mirrorFilename 3) . artFilename))
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                readIORef (mfProbes fixture) `shouldReturn` 2
+
+        it "retains and validates declared companions before whole-version success" $
+            withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                fixture <- managedFixture (stubBaseUrl upstream) True
+                runManaged fixture `shouldReturn` Succeeded
+                length <$> allCaptured upstream `shouldReturn` 6
+                writeIORef (mfSource fixture) VersionMetadataUnavailable
+                runManaged fixture `shouldReturn` Succeeded
+                length <$> allCaptured upstream `shouldReturn` 6
+
+        for_ ["missing", "corrupt"] $ \failure ->
+            it ("refuses a " <> failure <> " retained companion after restart") $
+                withUpstream $ \url -> do
+                    fixture <- managedFixture url True
+                    runManaged fixture `shouldReturn` Succeeded
+                    modifyIORef' (mfCompanions fixture) (if failure == "missing" then const mempty else fmap (const "corrupt"))
+                    runManaged fixture >>= (`shouldSatisfy` (\outcome -> isRetried outcome || isDeadLettered outcome))
+
+        it "recovers pending companions without fetching an already copied archive" $
+            withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                fixture <- managedFixture (stubBaseUrl upstream) True
+                let binding = mfBinding fixture
+                    store = (wmsStore binding){msRetainCompanion = \_ _ -> pure (Left StateRetryExhausted)}
+                    policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
+                runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isRetried)
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                requests <- allCaptured upstream
+                length (filter ((== encodeUtf8 ("/" <> mirrorFilename 1)) . capPath) requests) `shouldBe` 1
+
+        it "adds a bounded pass for a concurrent expected file missing from the final target" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                added <- managedInventory url False [1, 2, 3, 4]
+                let binding = mfBinding fixture
+                writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
+                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument added) Nothing)
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3, 4]
+                readIORef (mfProbes fixture) `shouldReturn` 3
+
+        it "does not add a pass when concurrent expected files already have target proof" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                added <- managedInventory url False [1, 2, 3, 4]
+                let binding = mfBinding fixture
+                writeIORef (mfOnProbe fixture) $ \number -> when (number == 2) $ do
+                    _ <- recordExpectedInventory defaultLimits (const (pure ())) (wmsTarget binding) (wmsStore binding) added >>= expectRight
+                    writeIORef (mfTarget fixture) (toList (pkgArtifacts (inventoryDetails added)))
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 3]
+                readIORef (mfProbes fixture) `shouldReturn` 2
+
+        it "uses original admitted locations when a later public snapshot moves them" $
+            withStub status200 (toLazy tarballBytes) $ \original ->
+                withStub status404 "unavailable" $ \moved -> do
+                    fixture <- managedFixture (stubBaseUrl original) False
+                    writeIORef (mfRejectFile fixture) (Just (mirrorFilename 2))
+                    runManaged fixture >>= (`shouldSatisfy` isRetried)
+                    changed <- managedInventory (stubBaseUrl moved) False [1, 2, 3]
+                    writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                    writeIORef (mfRejectFile fixture) Nothing
+                    runManaged fixture `shouldReturn` Succeeded
+                    allCaptured moved `shouldReturn` []
+
+        it "preserves missing historic files when the new public snapshot omits them" $
+            withUpstream $ \url -> do
+                fixture <- managedFixture url False
+                writeIORef (mfRejectFile fixture) (Just (mirrorFilename 2))
+                runManaged fixture >>= (`shouldSatisfy` isRetried)
+                reduced <- managedInventory url False [1]
+                writeIORef (mfSource fixture) (VersionPresent (sourceDocument reduced) Nothing)
+                writeIORef (mfRejectFile fixture) Nothing
+                runManaged fixture `shouldReturn` Succeeded
+                readIORef (mfUploads fixture) `shouldReturn` map mirrorFilename [1, 2, 2, 3]
+
+        it "refuses first-party work before the target or state probe" $ do
+            fixture <- managedFixture unreachableUrl False
+            let policy = (mfPolicy fixture){wpFirstParty = const True}
+            runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isDropped)
+            readIORef (mfProbes fixture) `shouldReturn` 0
+
+        it "reserves managed memory before reading native or retained inventories" $ do
+            fixture <- managedFixture unreachableUrl False
+            let binding = (mfBinding fixture){wmsWithinBudget = const (pure Nothing)}
+                policy = (mfPolicy fixture){wpMirrorState = Just binding}
+            runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isRetried)
+            readIORef (mfProbes fixture) `shouldReturn` 0
+
     describe "outcomeOfFetchFault (the worker's one retry-versus-drop table)" $ do
         -- One table serves the artifact fetch and the mirror write, so no exchange fault can
         -- drop on one leg and retry on the other.
@@ -452,15 +667,26 @@ spec = do
     describe "processJob: the mirror inventory probe" $ do
         -- The default 'recordingPublish' answers 404, the known-empty store every other test
         -- in this file rides. These cover the present skip and the unreadable arms.
-        it "acks an already-mirrored version without fetching or publishing" $
+        it "acks a complete native npm version during public outage without new admission" $
             -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
-            withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+            withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [denyRule]) noopWorkerMetricsPort $ \runtime queue logRef -> do
                 job <- enqueueAndReceive queue sampleMirrorJob
                 outcome <- runWM (sourceAt unreachableUrl runtime) (processJob job)
                 outcome `shouldBe` Succeeded
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
+
+        for_ [("digestless", \details -> details{pkgArtifacts = fmap (\file -> file{artHashes = []}) (pkgArtifacts details)}), ("multiple files", \details -> details{pkgArtifacts = pkgArtifacts details <> fmap (\file -> file{artFilename = "another.tgz"}) (pkgArtifacts details)})] $ \(label, change) ->
+            it ("does not acknowledge " <> label <> " native npm inventory during public outage")
+                $ withRuntimeRegistry
+                    (\logRef -> (recordingPublish logRef (Right ())){mpProbeInventory = \name -> pure (Right (PackageInfo name (Map.singleton (renderVersion ver) (change (sampleDetails name ver))) mempty []))})
+                    (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule])
+                    noopWorkerMetricsPort
+                $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue sampleMirrorJob
+                    runWM runtime (processJob job) >>= (`shouldSatisfy` isRetried)
+                    plDocuments <$> readIORef logRef `shouldReturn` []
 
         it "retries without publishing when the probe cannot reach the mirror" $
             -- The release tag is chosen over the inventory, so an unreachable mirror is a

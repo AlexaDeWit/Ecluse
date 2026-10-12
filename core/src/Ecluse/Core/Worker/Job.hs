@@ -14,12 +14,14 @@ module Ecluse.Core.Worker.Job (
     processJob,
 ) where
 
+import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError)
 import Data.Map.Strict qualified as Map
 import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (tfCause)
+import Ecluse.Core.Mirror.State
 import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash, PackageDetails (pkgArtifacts, pkgVersion), PackageInfo (..), pkgEcosystem)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -50,7 +52,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.MirrorUpload
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpPrepareVersion, mpProbeInventory),
+    MirrorPublish (mpNativeComplete, mpPrepareVersion, mpProbeInventory),
     PreparedMirrorUpload,
     PreparedMirrorVersion,
     PublishPlan (PublishPlan),
@@ -58,23 +60,25 @@ import Ecluse.Core.Registry.Publish (
     pmvPrepareUpload,
     publishPrepared,
  )
+import Ecluse.Core.Registry.Request (sidecarUrl)
 import Ecluse.Core.Rules.Render (renderReason)
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
-import Ecluse.Core.Security (authorityLabel, hostPortAddress)
+import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 import Ecluse.Core.Worker.Fetch (fetchArtifactBytes)
+import Ecluse.Core.Worker.Managed
 import Ecluse.Core.Worker.Types
 
 {- | The terminal outcome of processing one mirror job. It decides whether the worker
 acks the message or leaves it to redeliver.
 -}
 data JobOutcome
-    = {- | The publish succeeded or the mirror already held the version.
-      The worker acknowledges either result, including idempotent redelivery.
+    = {- | Every expected file and companion has current completion proof.
+      The worker acknowledges the whole version, including idempotent redelivery.
       -}
       Succeeded
     | {- | A __non-retryable__ rejection (a tampered artifact, an unformable request URL).
@@ -109,7 +113,7 @@ data RetryLeg
       AfterPublish
     deriving stock (Eq, Show)
 
--- The failure detail marks the span errored, so only a job that did not publish carries one.
+-- Incomplete versions mark the span errored even if some physical uploads succeeded.
 jobSpanOutcome :: JobOutcome -> JobSpanOutcome
 jobSpanOutcome = \case
     Succeeded -> JobSpanOutcome "succeeded" Nothing
@@ -143,7 +147,15 @@ reevaluateThenMirror job = do
             -- An operator can declare the namespace after the enqueue, so the privilege is read
             -- ahead of the mirror probe: the public leg is never entered for a name it owns.
             | wpFirstParty policy (jobPackage job) -> pure (Dropped (firstPartyReason job))
-            | otherwise -> mirrorUnlessPresent policy job
+            | otherwise -> withMirrorBudget policy (\charge -> mirrorUnlessPresent charge policy job)
+
+withMirrorBudget :: WorkerPolicy -> (WorkerStateBudget -> WorkerM JobOutcome) -> WorkerM JobOutcome
+withMirrorBudget policy action = case wpMirrorState policy of
+    Nothing -> action (WorkerStateBudget ignore ignore ignore)
+      where
+        ignore = const (pure ())
+    Just binding -> withRunInIO $ \run ->
+        fromMaybe (Retried BeforePublish "worker memory admission refused managed mirror job") <$> wmsWithinBudget binding (run . action)
 
 noPolicyReason :: MirrorJob -> Text
 noPolicyReason job =
@@ -158,15 +170,75 @@ firstPartyReason job =
         <> renderJob job
         <> "; refusing to mirror public content under a first-party name"
 
-mirrorUnlessPresent :: WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
-mirrorUnlessPresent policy job =
-    probeInventory policy job >>= \case
-        Left outcome -> pure outcome
-        Right inventory
-            | Map.member (renderVersion (jobVersion job)) (infoVersions inventory) -> do
-                logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
-                pure Succeeded
-            | otherwise -> reevaluatePolicy policy job >>= either pure (publishAdmitted policy job inventory)
+mirrorUnlessPresent :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
+mirrorUnlessPresent charge policy job = do
+    result <- runExceptT $ do
+        target <- ExceptT (probeInventory policy job)
+        if isNothing (wpMirrorState policy) && mpNativeComplete (wpPublish policy) (jobPackage job) (jobVersion job) target
+            then pure ()
+            else do
+                previous <- readRecord charge policy job Nothing
+                case previous >>= recordVersion (jobVersion job) of
+                    Just version
+                        | checkMirrorCompletion version (targetFiles job target) == MirrorComplete ->
+                            verifyRecordedCompanions charge policy version
+                    _ -> completePass charge policy job 3 target previous
+    case result of
+        Left failure -> pure failure
+        Right () -> Succeeded <$ logFM InfoS (ls ("mirror version complete: " <> renderJob job))
+
+-- A pass rereads native inventory before state, so concurrent additions cannot hide behind an old proof.
+completePass :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Int -> PackageInfo -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ()
+completePass charge policy job attempts target previous = do
+    admitted <- ExceptT (reevaluatePolicy policy job)
+    record <- stateAction (persistInventory charge (wpArtifactLimits policy) (wpMirrorState policy) (pmvInventory (raPrepared admitted)) previous)
+    copied <- copyRecorded charge policy job target (raUpstreamLatest admitted) record
+    finalTarget <- ExceptT (probeInventory policy job)
+    latest <- readRecord charge policy job (Just copied)
+    current <- maybe (throwError (Retried AfterPublish "mirror record disappeared before completion")) pure latest
+    version <- requiredVersion job current
+    let copiedNames = maybe mempty versionFiles (recordVersion (jobVersion job) record)
+    case checkMirrorCompletion version (targetFiles job finalTarget) of
+        MirrorComplete -> verifyRecordedCompanions charge policy version
+        MirrorIncomplete faults
+            | attempts > 1 && any (newlyRequired copiedNames) faults -> completePass charge policy job (attempts - 1) finalTarget (Just current)
+            | otherwise -> throwError (Retried AfterPublish ("mirror remains incomplete: " <> show faults))
+  where
+    newlyRequired known (MissingMirrorFile name) = Map.notMember name known
+    newlyRequired known (PendingMirrorCompanion name) = Map.notMember name known
+    newlyRequired _ _ = False
+
+readRecord :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> Maybe ProjectMirrorRecord -> ExceptT JobOutcome WorkerM (Maybe ProjectMirrorRecord)
+readRecord charge policy job fallback = case wpMirrorState policy of
+    Nothing -> pure fallback
+    Just binding -> stateAction (readMirrorRecord charge binding (jobPackage job))
+
+verifyRecordedCompanions :: WorkerStateBudget -> WorkerPolicy -> MirrorVersion -> ExceptT JobOutcome WorkerM ()
+verifyRecordedCompanions charge policy version = ExceptT $ withRunInIO $ \run ->
+    first stateOutcome <$> verifyCompanions charge (run recordWorkerProgress) (wpMirrorState policy) version
+
+stateAction :: IO (Either MirrorStateFault a) -> ExceptT JobOutcome WorkerM a
+stateAction action = ExceptT (fmap (first stateOutcome) (liftIO action))
+
+stateOutcome :: MirrorStateFault -> JobOutcome
+stateOutcome fault = case fault of
+    StateBound _ -> DeadLettered detail
+    StateInvalid _ -> DeadLettered detail
+    StateIdentityMismatch -> DeadLettered detail
+    StateFileConflict _ -> Dropped detail
+    StateCompanionConflict _ -> Dropped detail
+    StateTransport _ -> Retried BeforePublish detail
+    StateRevisionMismatch -> Retried BeforePublish detail
+    StateMissingCompanion -> Retried BeforePublish detail
+    StateRetryExhausted -> Retried BeforePublish detail
+  where
+    detail = "mirror state unavailable: " <> show fault
+
+requiredVersion :: MirrorJob -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM MirrorVersion
+requiredVersion job = maybe (throwError (Retried BeforePublish "missing recorded mirror version")) pure . recordVersion (jobVersion job)
+
+targetFiles :: MirrorJob -> PackageInfo -> [Artifact]
+targetFiles job target = maybe [] (toList . pkgArtifacts) (Map.lookup (renderVersion (jobVersion job)) (infoVersions target))
 
 {- An unreadable answer is not an empty store, so it reports a fault rather than let the write
 declare a tag chosen without the inventory. A 404 is a store holding this package not at all. -}
@@ -339,30 +411,69 @@ mirrorLatest :: Maybe Version -> [Version] -> Version -> Version
 mirrorLatest upstreamLatest inventory published =
     fromMaybe published (selectLatest upstreamLatest (published : inventory))
 
-{- Fix the release tag before the write, over the post-write inventory, so no job makes its own
-version latest merely by finishing last. -}
-publishAdmitted :: WorkerPolicy -> MirrorJob -> PackageInfo -> Readmitted -> WorkerM JobOutcome
-publishAdmitted policy job target readmitted = copyFiles (toList (raLocations readmitted))
+-- Each fragment retains its original source and is readmitted under the current policy before a new write.
+copyRecorded :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PackageInfo -> Maybe Version -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+copyRecorded charge policy job target upstreamLatest record = do
+    version <- requiredVersion job record
+    foldM copyFragment record (toList (versionFragments version))
   where
-    plan = PublishPlan (mirrorLatest (raUpstreamLatest readmitted) (map pkgVersion (Map.elems (infoVersions target))) (jobVersion job))
-    copyFiles [] = pure Succeeded
-    copyFiles ((file, location) : rest) =
-        mirrorArtifact policy job plan (raPrepared readmitted) file location >>= \case
-            Succeeded -> copyFiles rest
-            failed -> pure failed
+    plan = PublishPlan (mirrorLatest upstreamLatest (map pkgVersion (Map.elems (infoVersions target))) (jobVersion job))
+    currentFiles = targetFiles job target
+    copyFragment current fragment = do
+        version <- requiredVersion job current
+        let files = filter (needsWork version) (toList (pkgArtifacts (fragmentDetails fragment)))
+        if null files
+            then pure current
+            else do
+                admitted <- ExceptT (admitEvaluation policy job{jobTriggerFilename = Nothing} (VersionPresent (fragmentDocument fragment) upstreamLatest))
+                foldM (copyFile (raPrepared admitted)) current (toList (raLocations admitted))
+    needsWork version artifact =
+        Map.lookup (artFilename artifact) (versionCompanions version) == Just CompanionPending
+            || not (any ((== artFilename artifact) . artFilename) currentFiles)
+    copyFile prepared current (file, location) = do
+        version <- requiredVersion job current
+        let name = artFilename (expectedArtifact file)
+            matches = filter ((== name) . artFilename) currentFiles
+            verified = Map.lookup name (versionVerifiedIdentities version)
+        unless (all (expectedTargetMatchesWith file verified) matches) $
+            throwError (Retried BeforePublish ("mirror file lacks compatible current identity: " <> name))
+        uploaded <- if null matches then mirrorArtifact charge policy job plan prepared file location current else pure current
+        retained <- retainPending charge policy job file uploaded
+        lift recordWorkerProgress
+        pure retained
 
-mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirrorVersion -> ExpectedMirrorFile -> RegistryUrl -> WorkerM JobOutcome
-mirrorArtifact policy job plan prepared file location = do
-    fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) location
-    case fetched of
-        Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason location) fault)
-        Right bytes -> case verifyMirrorBytes file bytes of
-            Left fault -> outcomeOfPublish job (Left fault)
-            Right verified -> do
-                upload <- liftIO (pmvPrepareUpload prepared file verified)
-                case upload of
-                    Left fault -> outcomeOfPublish job (Left fault)
-                    Right ready -> publishVerified job plan ready
+retainPending :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> ExpectedMirrorFile -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+retainPending charge policy job file record = do
+    version <- requiredVersion job record
+    case Map.lookup (artFilename (expectedArtifact file)) (versionCompanions version) of
+        Just CompanionPending -> case wpMirrorState policy of
+            Nothing -> throwError (Retried BeforePublish "declared companion requires durable mirror state")
+            Just binding -> do
+                location <- either throwError pure (sourceLocation policy (expectedArtifact file){artUrl = sidecarUrl (artUrl (expectedArtifact file))})
+                let limits = (wmsLimits binding){maxMirrorArtifactBytes = maxMetadataBytes (wmsLimits binding)}
+                liftIO (wsbCompanions charge (fromInteger (min (toInteger (maxBound :: Int)) (2 * toInteger (maxMetadataBytes limits)))))
+                bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytes limits (artifactByUrl (wpArtifact policy)) location)
+                verified <- either (throwError . stateOutcome) pure (verifyCompanionBytes (wmsLimits binding) file bytes)
+                stateAction (retainCompanion charge binding (jobVersion job) verified record)
+        _ -> pure record
+
+mirrorArtifact :: WorkerStateBudget -> WorkerPolicy -> MirrorJob -> PublishPlan -> PreparedMirrorVersion -> ExpectedMirrorFile -> RegistryUrl -> ProjectMirrorRecord -> ExceptT JobOutcome WorkerM ProjectMirrorRecord
+mirrorArtifact charge policy job plan prepared file location record = do
+    bytes <- ExceptT (first (outcomeOfFetchFault BeforePublish (artifactFetchReason location)) <$> fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) location)
+    verified <- publishAction job (pure (verifyMirrorBytes file bytes))
+    retained <- stateAction (persistVerified charge (wpMirrorState policy) (jobVersion job) verified record)
+    ready <- publishAction job (liftIO (pmvPrepareUpload prepared file verified))
+    outcome <- lift (publishVerified job plan ready)
+    case outcome of
+        Succeeded -> pure retained
+        failure -> throwError failure
+
+publishAction :: MirrorJob -> WorkerM (Either PublishFault a) -> ExceptT JobOutcome WorkerM a
+publishAction job action =
+    ExceptT $
+        action >>= \case
+            Right value -> pure (Right value)
+            Left fault -> Left <$> outcomeOfPublish job (Left fault)
 
 artifactFetchReason :: RegistryUrl -> FetchFault -> Text
 artifactFetchReason location = \case

@@ -50,7 +50,7 @@ import Network.HTTP.Types (status200)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
-import Ecluse.Core.Package (PackageInfo (PackageInfo))
+import Ecluse.Core.Package (PackageDetails, PackageInfo (PackageInfo))
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (ack, deadLetter, extendVisibility, receive),
@@ -65,9 +65,9 @@ import Ecluse.Core.Registry (
     PublishFault,
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
-import Ecluse.Core.Registry.MirrorUpload (expectedDescriptor, uploadBytes)
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, prepareNpmSource, prepareNpmUpload)
-import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..), PublishPlan)
+import Ecluse.Core.Registry.MirrorUpload (expectedDescriptor, inventoryDetails, uploadBytes)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument, prepareNpmSource, prepareNpmUpload)
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..), PublishCodec (pcNativeComplete), PublishPlan)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -80,13 +80,13 @@ import Ecluse.Core.Worker (
     runWorkerM,
  )
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Package (sampleDetails)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Worker (workerSourceAt)
 import Ecluse.Worker.Support.Fixtures (admitPolicies, tarballBytes, withPublish)
+import Ecluse.Worker.Support.Fixtures qualified as Fixtures
 
 -- | Capture what publication was handed: the verified bytes, the descriptor, and the plan.
 data PublishLog = PublishLog
@@ -94,19 +94,23 @@ data PublishLog = PublishLog
     -- ^ The verified tarball bytes, not the assembled publish document the codec renders.
     , plArtifacts :: [MirrorArtifact]
     , plPublications :: [ByteString]
+    , plTargets :: Map Text PackageDetails
     , plPlans :: [PublishPlan]
     -- ^ The release tag each write declared.
     }
 
 -- | A log that has recorded nothing, so a new field never has to be spelled at every call site.
 emptyPublishLog :: PublishLog
-emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPublications = [], plPlans = []}
+emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPublications = [], plPlans = [], plTargets = mempty}
 
--- | Record publications with a fixed outcome. The inventory probe answers @404@, a known-empty store.
+-- | Successful writes become visible in the next native inventory probe.
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeInventory = const (pure (Left MetadataAbsent))
+        { mpNativeComplete = pcNativeComplete npmPublishCodec
+        , mpProbeInventory = \name -> do
+            targets <- plTargets <$> readIORef logRef
+            pure (Right (PackageInfo name targets mempty []))
         , mpPrepareVersion = \name version doc -> do
             (inventory, metadata) <- prepareNpmSource name version doc
             pure $ PreparedMirrorVersion inventory $ \file verified -> pure $ do
@@ -115,6 +119,7 @@ recordingPublish logRef outcome =
                     let document = uploadBytes upload
                         artifact = expectedDescriptor file
                     atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPublications = npmPublishDocument plan upload : plPublications l, plPlans = plan : plPlans l}, ()))
+                    when (isRight outcome) $ atomicModifyIORef' logRef (\l -> (l{plTargets = Map.insert (renderVersion version) (inventoryDetails inventory) (plTargets l)}, ()))
                     pure outcome
         }
 
@@ -122,7 +127,9 @@ recordingPublish logRef outcome =
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpProbeInventory = \name -> pure (Right (PackageInfo name (Map.fromList [(renderVersion version, sampleDetails name version) | version <- versions]) mempty []))
+        { mpProbeInventory = \name -> do
+            targets <- plTargets <$> readIORef logRef
+            pure (Right (PackageInfo name (targets <> Map.fromList [(renderVersion version, Fixtures.sampleDetails name version) | version <- versions]) mempty []))
         }
 
 -- | 'recordingPublish' whose inventory probe reports a mirror outage as the typed 'FetchTransport' value, for the unreadable-inventory cases.
