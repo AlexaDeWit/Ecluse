@@ -41,7 +41,7 @@ import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Service (runWorker)
 import Ecluse.Test.Poll (runUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Support (decodeJsonOrFail)
+import Ecluse.Test.Support (decodeJsonOrFail, expectRightText)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
 import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped, mirrorPoliciesUnder)
 
@@ -92,7 +92,8 @@ withMirrorTarget replyStatus body = do
             when (statusCode replyStatus `elem` [200, 201, 409]) $ do
                 let fields = documentObject publication
                     artifactUrl filename = Just (selfBaseUrl request <> decodeUtf8 (rawPathInfo request) <> "/-/" <> filename)
-                    versions = Object (fmap (rewriteVersion artifactUrl) (objectField "versions" fields))
+                nativeVersions <- expectRightText (maybeToRight "publication has no versions object" (objectField "versions" fields))
+                let versions = Object (fmap (rewriteVersion artifactUrl) nativeVersions)
                 writeIORef stored (Just (Object (KeyMap.insert "versions" versions fields)))
             respond (responseLBS replyStatus [] "{}")
         | otherwise =
