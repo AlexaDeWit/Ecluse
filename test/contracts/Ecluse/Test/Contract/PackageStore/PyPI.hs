@@ -31,6 +31,7 @@ import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
 import Ecluse.Core.Registry.PyPI.Request (artifactRequestByUrl)
 import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Version (Version, canonicalPep440, renderVersion)
 import Ecluse.Test.Contract.PackageStore
 import Ecluse.Test.Contract.PackageStore.Provider
 import Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
@@ -89,19 +90,21 @@ readPyPIStoreManifestOver :: OriginClient -> StoreManifestRead
 readPyPIStoreManifestOver origin name = first storeFaultOfMetadata <$> fetchManifest pypiRead passthroughTracingPort origin name
 
 readRelease :: OriginClient -> Text -> IO (Either Text (Maybe PackageStoreRelease))
-readRelease origin version =
-    fetchVersion pypiMirrorRead passthroughTracingPort origin packageName (pypiVersion version) >>= \case
-        Left MetadataAbsent -> pure (Right Nothing)
-        Left fault -> pure (Left (show fault))
-        Right found -> case vrVersion found of
-            Nothing -> pure (Right Nothing)
-            Just document -> do
-                artifacts <- traverse (readArtifact origin) (pkgArtifacts (vdDetails document))
-                pure $ do
-                    files <- sequence artifacts
-                    raw <- maybeToRight "production read lost PyPI metadata" (vdRaw document >>= snd pypiSimpleCached)
-                    metadata <- Map.fromList <$> traverse (metadataOf . snd) (simpleFiles raw)
-                    pure (Just (PackageStoreRelease version metadata (NE.sortWith psaFilename files)))
+readRelease origin version = case canonicalReleaseVersion version of
+    Left fault -> pure (Left fault)
+    Right selected ->
+        fetchVersion pypiMirrorRead passthroughTracingPort origin packageName selected >>= \case
+            Left MetadataAbsent -> pure (Right Nothing)
+            Left fault -> pure (Left (show fault))
+            Right found -> case vrVersion found of
+                Nothing -> pure (Right Nothing)
+                Just document -> do
+                    artifacts <- traverse (readArtifact origin) (pkgArtifacts (vdDetails document))
+                    pure $ do
+                        files <- sequence artifacts
+                        raw <- maybeToRight "production read lost PyPI metadata" (vdRaw document >>= snd pypiSimpleCached)
+                        metadata <- Map.fromList <$> traverse (metadataOf . snd) (simpleFiles raw)
+                        pure (Just (PackageStoreRelease version metadata (NE.sortWith psaFilename files)))
   where
     metadataOf (Object fields) = case (KeyMap.lookup "filename" fields, KeyMap.lookup "requires-python" fields) of
         (Just (String filename), Just (String requirement)) -> Right (filename, requirement)
@@ -120,7 +123,7 @@ readArtifact origin artifact = do
 writeRelease :: MirrorPublish -> PackageStoreRelease -> IO (Either Text ())
 writeRelease publisher release = case prepare of
     Left fault -> pure (Left fault)
-    Right prepared -> fmap (void . sequence) $ forM (inventoryFiles (pmvInventory prepared)) $ \file ->
+    Right (version, prepared) -> fmap (void . sequence) $ forM (inventoryFiles (pmvInventory prepared)) $ \file ->
         case find ((== artFilename (expectedArtifact file)) . psaFilename) (psrArtifacts release) of
             Nothing -> pure (Left "prepared upload names an absent source file")
             Just artifact -> case first show (verifyMirrorBytes file (psaBytes artifact)) of
@@ -130,11 +133,15 @@ writeRelease publisher release = case prepare of
                         Left fault -> pure (Left (show fault))
                         Right upload -> first show <$> publishPrepared upload (PublishPlan version)
   where
-    version = pypiVersion (psrVersion release)
     prepare = do
+        version <- canonicalReleaseVersion (psrVersion release)
         (info, raw) <- first show (projectPyPIIndex defaultLimits packageName (LBS.toStrict (encode (sourceIndex release))))
-        details <- maybeToRight "source fixture has no version" (Map.lookup (psrVersion release) (infoVersions info))
-        first show (mpPrepareVersion publisher packageName version (VersionDoc details (Just (fst pypiSimpleCached raw))))
+        details <- maybeToRight "source fixture has no version" (Map.lookup (renderVersion version) (infoVersions info))
+        prepared <- first show (mpPrepareVersion publisher packageName version (VersionDoc details (Just (fst pypiSimpleCached raw))))
+        pure (version, prepared)
+
+canonicalReleaseVersion :: Text -> Either Text Version
+canonicalReleaseVersion = maybeToRight "fixture version is not PEP 440" . canonicalPep440
 
 sourceIndex :: PackageStoreRelease -> Value
 sourceIndex release =
