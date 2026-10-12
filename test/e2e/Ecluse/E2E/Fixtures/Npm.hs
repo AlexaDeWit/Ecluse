@@ -119,9 +119,7 @@ allowPkg = defaultPkgSpec "e2e-allow"
 denyPkg :: PkgSpec
 denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 
-{- | A package used to exercise the mirror round-trip (served, then mirrored). Its version object
-carries the author fields the mirror write keeps and the registry fields it strips.
--}
+-- | The mirror must retain supported author fields and omit registry-owned fields.
 mirrorPkg :: PkgSpec
 mirrorPkg =
     (defaultPkgSpec "e2e-mirror")
@@ -167,9 +165,7 @@ deprecatedPkg = (defaultPkgSpec "e2e-deprecated"){psVersionFields = ["deprecated
 deprecationNotice :: Text
 deprecationNotice = "superseded by a later release"
 
-{- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
-must not retag the store.
--}
+-- | Mirroring an older version must not replace the upstream latest tag.
 latestPkg :: PkgSpec
 latestPkg = (defaultPkgSpec "e2e-latest"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
 
@@ -197,9 +193,7 @@ dredgerKeepPkg = defaultPkgSpec "e2e-dredger-keep"
 dredgerDryRunPkg :: PkgSpec
 dredgerDryRunPkg = defaultPkgSpec "e2e-dredger-dry-run"
 
-{- | A two-version package for the recovery cases. A deny names @1.0.0@ alone, so @2.0.0@ is the
-sibling a next read must still serve.
--}
+-- | Deleting the denied version must leave its admitted sibling readable.
 recoveryPkg :: PkgSpec
 recoveryPkg = (defaultPkgSpec "e2e-recovery"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
 
@@ -219,9 +213,7 @@ recoveryLostPkg = defaultPkgSpec "e2e-recovery-lost"
 recoveryLatePkg :: PkgSpec
 recoveryLatePkg = defaultPkgSpec "e2e-recovery-late"
 
-{- | The package the OSV corpus names in its V2 delta alone. The name matches that advisory, so a
-generation swap condemns @1.0.0@ and leaves @1.2.0@, its stated fix.
--}
+-- | The V2 advisory generation revokes @1.0.0@ and names @1.2.0@ as its fix.
 corpusRevokedPkg :: PkgSpec
 corpusRevokedPkg = (defaultPkgSpec "corpus-revoked"){psVersion = "1.2.0", psOlderVersions = ["1.0.0"]}
 
@@ -237,9 +229,7 @@ telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 telemetryPrivatePkg :: PkgSpec
 telemetryPrivatePkg = defaultPkgSpec "e2e-telemetry-private"
 
-{- | The root of the graph the mirror-only install resolves: a dependency with a dependency of its
-own, a peer, and an executable. Loading its module loads every package of the graph.
--}
+-- | Loading the root must load its transitive dependency and peer.
 graphRootPkg :: PkgSpec
 graphRootPkg =
     root{psFiles = psFiles root <> [("bin/report.js", reportScript)]}
@@ -277,9 +267,7 @@ graphPackages = [graphRootPkg, graphDepPkg, graphLeafPkg, graphPeerPkg]
 graphExecutable :: Text
 graphExecutable = "e2e-graph-report"
 
-{- | What the root's module exports once the whole graph loads, which is also what its executable
-prints: each package's name, nested under the field that loaded it.
--}
+-- | The module and executable must expose the same nested package identities.
 graphExport :: Value
 graphExport =
     object
@@ -332,9 +320,7 @@ fixturePackages =
     ]
         <> graphPackages
 
-{- | Where the stub serves one version's artifact, under the root 'buildFixtures' writes into.
-A case that withholds an artifact brackets this path.
--}
+-- | Fault injection withholds bytes at this fixture artifact path.
 artifactFile :: FilePath -> Text -> Text -> FilePath
 artifactFile root name version =
     root </> toString name </> "-" </> toString (name <> "-" <> version <> ".tgz")
