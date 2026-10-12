@@ -314,7 +314,8 @@ consent marker. Ordinary metadata reads can cause a cache to retain upstream con
 reads do not prove local presence. Only the actual inventory determines which versions participate.
 
 CodeArtifact resolves each repository from its own declared URL and authenticates through its
-own domain identity. Matching mint identities share a credential provider. Verdaccio preview uses
+own domain identity. PyPI metadata reads pair that repository token with the `aws` username in
+both Dredger modes. Matching mint identities share a credential provider. Verdaccio preview uses
 its own optional maintenance token. It supports anonymous reads and reports missing consent separately. A generic `registry`
 private target has no inventory backend and refuses both Dredger modes. An inventory read that cannot
 authenticate makes the preview incomplete. No mirror, publication, or caller token is borrowed
