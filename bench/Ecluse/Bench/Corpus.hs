@@ -29,7 +29,7 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCach
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution))
 import Ecluse.Core.Snapshot (Snapshot (Snapshot, snapshotValue))
-import Ecluse.Test.Corpus (CorpusTier (Heavy, Large, Medium), cpName, cpTier)
+import Ecluse.Test.Corpus (corpusLabel)
 import Ecluse.Test.EcosystemBench.Types (EcosystemBench (..), LoadedEntry)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Snapshot (digestOf)
@@ -40,12 +40,7 @@ entryInfo (_, _, info, _) = info
 
 -- | A package identity and its declared corpus size tier.
 entryName :: LoadedEntry -> String
-entryName (package, _, _, _) = toString (cpName package) <> " (" <> tierName (cpTier package) <> ")"
-  where
-    tierName = \case
-        Medium -> "medium"
-        Large -> "large"
-        Heavy -> "heavy"
+entryName (package, _, _, _) = toString (corpusLabel package)
 
 -- | A document held as aeson's tree and forced when prepared. Only 'forcedTree' builds one.
 newtype HeldTree = HeldTree CachedDoc

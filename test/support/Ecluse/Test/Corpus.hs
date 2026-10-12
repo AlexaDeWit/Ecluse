@@ -11,6 +11,7 @@ module Ecluse.Test.Corpus (
     corpusPackages,
     pypiCorpusPackages,
     cpName,
+    corpusLabel,
     CaptureUpstream (..),
     npmCaptureUpstream,
     pypiCaptureUpstream,
@@ -91,6 +92,15 @@ pypiCorpusPackages =
 -- | A corpus package's wire name, both the request path and the body's self-reported name.
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
+
+-- | The stable corpus label used in native benchmark rows.
+corpusLabel :: CorpusPackage -> Text
+corpusLabel package = cpName package <> " (" <> tier <> ")"
+  where
+    tier = case cpTier package of
+        Medium -> "medium"
+        Large -> "large"
+        Heavy -> "heavy"
 
 -- | The registry a capture came from, which production enforces artifact locations against.
 data CaptureUpstream = CaptureUpstream

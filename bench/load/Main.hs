@@ -9,7 +9,7 @@ then fails the run if any invariant broke.
 -}
 module Main (main) where
 
-import Data.Aeson (eitherDecode, encode)
+import Data.Aeson (eitherDecode, encode, object, (.=))
 import Data.ByteString.Lazy.Char8 qualified as LBSC
 import Data.Char (toLower)
 import Data.Map.Strict qualified as Map
@@ -31,14 +31,16 @@ import Ecluse.BenchLoad.Floors (
     RunFacts (..),
     Unheld (ThrashProbe),
     enforce,
+    floorCheck,
     loadFloors,
+    passKey,
     patternOverridesIn,
     runnerIn,
     triggerIn,
     unheldViolations,
  )
 import Ecluse.BenchLoad.Harness (
-    LoadKnobs (lkUpstreamLatencyMicros),
+    LoadKnobs (..),
     Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (srName),
     UpstreamFixture (fixtureEcosystem, fixtureScenarios),
@@ -56,7 +58,7 @@ import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
 import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
-import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
+import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict, runViolations)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
@@ -120,12 +122,55 @@ runPasses environment knobs shape selected = do
                 , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
                 }
         enforcement = enforce floors facts
-    ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement baselineOf self capabilities processors)) fixtures
+        setup = Setup knobs shape selected enforcement baselineOf self capabilities processors
+    ran <- catMaybes <$> traverse (fixturePasses setup) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
+    let outcomes = concatMap snd ran
+        violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
+    writeLoadObservations (measurementConditions setup facts) enforcement violations outcomes
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
-        , runVerdict (triggerIn environment) enforcement (checkedCounts shape) (concatMap snd ran)
+        , violations
         )
+
+measurementConditions :: Setup -> RunFacts -> Map Text Text
+measurementConditions setup facts =
+    Map.fromList
+        [ ("podShape", renderPodShape (setupShape setup))
+        , ("operatingPoint", show (rfSettings facts))
+        , ("capabilities", show (setupCapabilities setup))
+        , ("processors", show (setupProcessors setup))
+        , ("npmLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Npm)))
+        , ("pypiLatencyMs", show (baselineInjectedMs (setupBaselineOf setup PyPI)))
+        , ("durationSeconds", show (lkDurationSeconds knobs))
+        , ("concurrency", show (lkConcurrency knobs))
+        , ("payloadBytes", show (lkPayloadBytes knobs))
+        , ("cacheMaxEntries", show (lkCacheMaxEntries knobs))
+        , ("workingSet", show (lkWorkingSet knobs))
+        , ("serveMaxInFlight", maybe "automatic" show (lkServeMaxInFlight knobs))
+        , ("publicConnectionsPerHost", maybe "automatic" show (lkPublicConnectionsPerHost knobs))
+        , ("privateConnectionsPerHost", maybe "automatic" show (lkPrivateConnectionsPerHost knobs))
+        ]
+  where
+    knobs = setupKnobs setup
+
+writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> IO ()
+writeLoadObservations conditions enforcement violations outcomes =
+    lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode native <> "\n"))
+  where
+    native =
+        object
+            [ "outcome" .= verdict (null violations)
+            , "conditions" .= conditions
+            , "observations"
+                .= [ object
+                        [ "id" .= (scenario <> "/" <> passKey whichPass)
+                        , "outcome" .= verdict (either (const False) (null . runViolations (floorCheck enforcement key)) result)
+                        ]
+                   | (key@(scenario, whichPass), result) <- outcomes
+                   ]
+            ]
+    verdict passed = if passed then ("passed" :: Text) else "failed"
 
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
 fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))

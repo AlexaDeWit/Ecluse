@@ -5,7 +5,7 @@
 {- | Run work-per-request benchmarks and generator contracts for every registered ecosystem.
 Cache and stream measurements share no format-specific inputs and run once.
 -}
-module Main (main) where
+module Main (main, fullBenchmarkContract) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -47,12 +47,13 @@ main = do
             defaultMain
                 [ bgroup
                     "ecluse-core (work-per-request)"
-                    (map ecosystemGroup ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
+                    (map fullBenchmarkContract ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks])
                 , testGroup "synthetic generators" (map generatorTests ecosystems)
                 ]
 
-ecosystemGroup :: EcosystemBench -> TestTree
-ecosystemGroup ecosystem =
+-- | Compose the eight required operation families for one ecosystem.
+fullBenchmarkContract :: EcosystemBench -> TestTree
+fullBenchmarkContract ecosystem =
     bgroup
         ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem)))
         [ benchmarkGroup ecosystem

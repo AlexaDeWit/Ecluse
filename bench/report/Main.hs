@@ -2,13 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @bench-report@ entry point. Its first form renders the work-per-request CSV, with the
-console log when captured ("Ecluse.BenchReport"). Its @against-main@ form sets one report
-beside the results @scripts/perf-baseline.sh@ fetched from @main@
-("Ecluse.BenchReport.AgainstMain"). Both print Markdown and append it to
-@GITHUB_STEP_SUMMARY@ when set. A missing or malformed file becomes a note in the output,
-so the only non-zero exit is a usage error.
--}
+-- | Render native reports and bind their observations to independently compiled obligations.
 module Main (main) where
 
 import Control.Exception qualified as Exception
@@ -21,10 +15,14 @@ import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing 
 import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
 import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
+import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 
 main :: IO ()
 main =
     getArgs >>= \case
+        ["performance-obligation", kind, subject, conditionsPath] -> Performance.writeObligation (toText kind) (toText subject) conditionsPath
+        ["performance-receipt", requestPath, nativePath, receiptPath] -> Performance.writeReceipt requestPath nativePath receiptPath
+        ["performance-audit", requestPath, receiptPath] -> Performance.auditReceipt requestPath receiptPath
         [csvPath] -> run csvPath Nothing
         [csvPath, logPath] -> run csvPath (Just logPath)
         ["against-main", kind, baselineDir, reportPath]
@@ -32,6 +30,9 @@ main =
         _ ->
             die . toString . unlines $
                 [ "usage: bench-report <results.csv> [<console-log>]"
+                , "       bench-report performance-obligation <kind> <subject> <conditions.json>"
+                , "       bench-report performance-receipt <request.json> <native-results> <receipt.json>"
+                , "       bench-report performance-audit <request.json> <receipt.json>"
                 , "       bench-report against-main (bench | acceptance | load) <baseline-dir> <report>"
                 ]
 
