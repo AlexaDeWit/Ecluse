@@ -6,12 +6,13 @@
 @captures@ measures each leg over the committed captures and holds its allocation to a budget.
 @live@ measures the same legs over freshly fetched registry documents and reports them.
 -}
-module Main (main) where
+module Main (main, fullAllocationContract) where
 
 -- relude's prelude exports a Bounded/Enum-based `universe`. The Generic-derived one is used here.
 import Prelude hiding (universe)
 
 import Control.Exception qualified as Exception
+import Data.Aeson (Value, encode)
 import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
@@ -41,6 +42,7 @@ import Ecluse.Acceptance (
     renderCapturesReport,
     renderLiveReport,
  )
+import Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Exchange (boundedFetch)
@@ -78,10 +80,11 @@ captures = do
         outcomes <- forM (ebCorpus bench) $ \(package, raw, _, _) ->
             case crCapturedAt <$> Map.lookup (cpName package) records of
                 Nothing -> pure (Failed (cpName package) "bench/corpus/pins.json records no capture time")
-                Just clock -> outcomeFrom (cpName package) Nothing <$> measureDocument bench advisories (EvalContext clock Nothing) (cpPackage package) raw
+                Just clock -> outcomeFrom (cpName package) Nothing <$> fullAllocationContract bench advisories (EvalContext clock Nothing) (cpPackage package) raw
         pure (ebEcosystem bench, outcomes)
     let report = assessCaptures criteria runs
     op <- operatingPoint
+    writeObservations (capturesEvidence op report)
     publish (renderCapturesReport op report)
     traverse_ putTextLn (capturesAnnotations report)
     exitWith (capturesExitCode report)
@@ -95,6 +98,7 @@ live = do
     runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
         (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
+    writeObservations (liveEvidence op runs)
     publish (renderLiveReport op runs)
     traverse_ putTextLn (liveAnnotations runs)
     exitWith (liveExitCode runs)
@@ -118,7 +122,7 @@ measureLive manager advisories ctx bench package = do
     case fetched of
         Unreachable reason -> pure (Unavailable name reason)
         Refused reason -> pure (Failed name reason)
-        Fetched raw -> outcomeFrom name (Just ((t1 - t0) * 1000)) <$> measureDocument bench advisories ctx pkg raw
+        Fetched raw -> outcomeFrom name (Just ((t1 - t0) * 1000)) <$> fullAllocationContract bench advisories ctx pkg raw
   where
     pkg = cpPackage package
     name = cpName package
@@ -141,11 +145,9 @@ outcomeFrom name upstreamMs = \case
     Left reason -> Failed name reason
     Right (versions, legs) -> Measured (Sample name versions upstreamMs legs)
 
-{- | Measure every leg over one document, the advisory legs reading the served advisories: the
-version count and each leg's figures, or why the document could not be measured.
--}
-measureDocument :: EcosystemBench -> RuleDeps -> EvalContext -> PackageName -> ByteString -> IO (Either Text (Int, [(Leg, Measurement)]))
-measureDocument bench advisories ctx pkg raw =
+-- | Compose all four measured operations over one document with the served corpus advisories.
+fullAllocationContract :: EcosystemBench -> RuleDeps -> EvalContext -> PackageName -> ByteString -> IO (Either Text (Int, [(Leg, Measurement)]))
+fullAllocationContract bench advisories ctx pkg raw =
     case ebDecode bench pkg raw >>= maybe (Left "the document lists no versions") Right . nonEmpty of
         Left reason -> pure (Left reason)
         Right versions -> do
@@ -215,3 +217,6 @@ median :: (Ord a) => NonEmpty a -> a
 median xs = fromMaybe (NE.head sorted) (toList sorted !!? (length xs `div` 2))
   where
     sorted = NE.sort xs
+
+writeObservations :: Value -> IO ()
+writeObservations value = lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode value <> "\n"))

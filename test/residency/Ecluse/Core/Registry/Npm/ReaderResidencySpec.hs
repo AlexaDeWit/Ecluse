@@ -18,6 +18,8 @@ import Ecluse.Core.Registry.Json.WalkProbe (allowance, heldDuring, heldWritingDu
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, keepsTreeRelease, treeStep)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Retention (boundedRetention)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonStream (testTable)
 import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk)
@@ -25,19 +27,15 @@ import Ecluse.Test.Registry.Npm.Metadata (npmFullTestWalk)
 -- | Eight times more dropped releases may not raise the bytes a read holds.
 spec :: Spec
 spec = describe "npmWalk live bytes" $ do
-    forM_ [("a selected read", selectedRead), ("a full read", fullRead)] $ \(label, heldBy) -> do
-        it (label <> " holds the same bytes however often a release's key repeats") $
-            heldFor heldBy repeatedKeys >>= (`shouldSatisfy` level)
-        it (label <> " holds the same bytes however often a kept release repeats a member") $
-            heldFor heldBy repeatedMember >>= (`shouldSatisfy` level)
-        it (label <> " holds the same bytes however often a kept release's dependencies repeat a name") $
-            heldFor heldBy repeatedDependency >>= (`shouldSatisfy` level)
-    it "a selected read holds the same bytes however many versions objects repeat the release" $
-        heldFor selectedRead repeatedContainers >>= (`shouldSatisfy` level)
-
--- The bytes held with 2,000 and with 16,000 repeats.
-heldFor :: (ByteString -> IO Integer) -> (Int -> ByteString) -> IO (Integer, Integer)
-heldFor heldBy body = (,) <$> heldBy (body 2000) <*> heldBy (body 16000)
+    forM_ [("selected", "a selected read", selectedRead), ("full", "a full read", fullRead)] $ \(mode, label, heldBy) -> do
+        it (caseLabel ("retention/npm/" <> mode <> "/keys") (label <> " holds the same bytes however often a release's key repeats")) $
+            boundedRetention allowance (heldBy . repeatedKeys)
+        it (caseLabel ("retention/npm/" <> mode <> "/members") (label <> " holds the same bytes however often a kept release repeats a member")) $
+            boundedRetention allowance (heldBy . repeatedMember)
+        it (caseLabel ("retention/npm/" <> mode <> "/dependencies") (label <> " holds the same bytes however often a kept release's dependencies repeat a name")) $
+            boundedRetention allowance (heldBy . repeatedDependency)
+    it (caseLabel "retention/npm/selected/containers" "a selected read holds the same bytes however many versions objects repeat the release") $
+        boundedRetention allowance (selectedRead . repeatedContainers)
 
 -- A selected read builds aeson's tree, and a full read packs each release as production does.
 selectedRead, fullRead :: ByteString -> IO Integer
@@ -46,9 +44,6 @@ fullRead = heldWritingDuring (npmFullTestWalk defaultLimits thing "https://regis
 
 thing :: PackageName
 thing = unscopedNpm "thing"
-
-level :: (Integer, Integer) -> Bool
-level (few, repeated) = repeated - few < allowance
 
 -- One versions object that repeats the release key, each copy with its own main entry.
 repeatedKeys :: Int -> ByteString

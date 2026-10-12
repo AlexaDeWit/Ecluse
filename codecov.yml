@@ -1,20 +1,4 @@
-# Codecov configuration. See docs/testing.md -> "Coverage".
-#
-# Each gating test suite generates its own coverage (HPC -> hpc-codecov, native
-# Codecov JSON) and uploads it under a flag. Codecov then merges the tiers into one
-# project total while still tracking each. Both the `unit` and `integration` tiers
-# upload, each under its own flag. The smoke tier stays out: it is non-gating and
-# network-bound.
-
-# The gating coverage job uploads four coverage reports per commit, one per matrix leg:
-# `ecluse-core-unit` (flag: unit), `ecluse-runtime-unit` (flag: unit), `ecluse-unit`
-# (flag: unit), and `ecluse-integration` (flag: integration). The legs run on their own
-# runners and finish minutes apart.
-#
-# `manual_trigger` holds every status and comment until the `codecov-notify` job calls
-# the CLI's send-notifications, which it does only once all four legs are green. A
-# count-based wait (`after_n_builds`) fired on a partial report here and posted a
-# "coverage decreased" status that it corrected a minute later.
+# Codecov statuses wait for all four instrumented suites to upload.
 codecov:
   notify:
     manual_trigger: true
@@ -27,26 +11,9 @@ coverage:
         threshold: 1% # absorb rounding and noise, block real drops
     patch:
       default:
-        # New and changed lines must be at least 85% covered. That floor checks
-        # behaviour without grinding on the number. Coverage confirms behaviour, so
-        # reason about the code, test the branches, and let this status flag the
-        # genuine gaps. About 95% is a long-term goal, not a per-PR gate, because
-        # chasing it per PR is wasteful. The project status above stays on
-        # no-regression, so the baseline still ratchets up as well-covered changes
-        # land.
         target: 85%
 
-# Flags let one combined gate span multiple suites. The three unit suites upload under
-# the same `unit` flag, so Codecov merges their reports into one flag total. The `unit`
-# paths cover src/ (composition shell), runtime/src/ (effectful edge), and core/src/
-# (core), so the merged flag view excludes no layer.
-#
-# `carryforward` here is a SAFETY NET, not an active path. Every leg uploads with no
-# `if:` guard and `fail_ci_if_error: true`, and a status posts only once all four legs
-# are green, so a posted number is always built from four fresh reports. A PR that adds
-# a module cannot show it uncovered from a stale carried-forward report. Carryforward
-# takes effect only on a commit whose statuses never post, where keeping the last-known
-# number beats dropping the flag to 0%.
+# Carry-forward never replaces a required upload on a successful CI run.
 flags:
   unit:
     paths:
@@ -61,24 +28,14 @@ flags:
       - core/src/
     carryforward: true
 
-# Out of scope for coverage: the thin executable entry point, the inform-only
-# benchmark harness, and the tests. The bench/ harness measures time and
-# allocations. It is never application code under test, so its new files must not
-# count toward project or patch coverage. The `test/**` glob already covers the
-# shared ecluse-test-support library under test/support/. The list below still names
-# it, because that library is a first-class cabal component, and the coverage build
-# instruments its Ecluse.Test.* modules. Codecov must never attribute it as software
-# under test. The core/test/unit/** glob covers the ecluse-core-unit spec files
-# (under test, not under test). The generation side enforces this too.
-# `scripts/coverage.sh` excludes every
-# Ecluse.Test.* module from the HPC report, so the support library never reaches
-# Codecov in the first place. The `src/` and `core/src/` paths in `flags.*.paths`
-# above are the matching positive constraint.
+# Test contracts and drivers stay outside the product denominator.
 ignore:
   - "app/**"
   - "bench/**"
   - "test/**"
   - "test/support/**"
+  - "test/contracts/**"
+  - "runtime/test-support/**"
   - "core/test/**"
   - "runtime/test/**"
 

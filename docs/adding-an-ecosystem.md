@@ -11,6 +11,35 @@ testing side is in
 and the checklist of tests, benchmarks and fixtures is in
 [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem).
 
+## Full ecosystem completion
+
+A passing `fullEcosystemContract` with a concrete driver defines completion for an ecosystem.
+The full contract requires proxying, installation, policy, advisories, mirroring, publication, Dredger, and telemetry.
+Give the suite a direct call such as `fullEcosystemContract npmDriver`.
+The driver supplies clients, fixtures, native observations, and resource acquisition.
+The contract owns common business assertions and the required family list.
+
+Supply fixtures and operation records to the shared contracts in `test/contracts/Ecluse/Test/Contract/`.
+Keep protocol decoding, request construction, native observations, and raw-wire oracles in the ecosystem's provider.
+Do not copy a shared business assertion into a new spec.
+Keep native extensions for facts that have no common meaning, such as npm lifecycle and scope rules or PyPI yanks.
+Use equivalent native fixtures for a shared obligation, and keep each native assertion in its own test.
+
+Declare obligations independently of drivers, registrations, and current production capability flags.
+A missing required family must produce a named failed outcome while other contracts execute.
+Capability flags may describe availability, but must not remove a full-contract requirement.
+PyPI runs the full contract and fails missing required behaviours by name.
+Those failures identify incomplete conformance and do not claim production write support.
+Keep blocked rule types explicit in `adapterRuleBlocks` when the protocol cannot supply their meaning.
+
+Register stable case IDs, lifecycle groups, and concrete drivers for each supported family.
+Check the declared IDs against actual Hspec registration and execution reports.
+Add negative controls for omitted registrations and wrong observations.
+The [contract coverage map](test-contracts.md) identifies common laws, native extensions, and retained lower-tier evidence.
+Run `cabal run ecluse-e2e-manifest` to inspect the plan without services.
+Run the ecosystem's fixed E2E task after `task test-e2e-prepare` and `task test-e2e-load` with an explicit `ECLTEST_ARTIFACT_DIR`.
+Unit, integration, residency, allocation, load, and smoke duties remain in their proper tiers.
+
 Declare every rule type the adapter blocks in `adapterRuleBlocks`, each with its reason.
 Block a type when its meaning does not fit the ecosystem or the ecosystem can never determine its required fact.
 Boot refuses each blocked entry in an active mount's resolved policy.
@@ -366,6 +395,9 @@ describes the legs, the part of a read they cover, the margin, and what fails th
 ecosystem joins the gate through its registered `EcosystemBench` corpus, because the gate measures
 every capture there and fails on one with no calibrated figure. To calibrate the new ecosystem,
 open the pull request that adds its captures, and follow the recalibration steps in that section.
+Update the independent measurement obligation list as well as its concrete provider registration.
+The benchmark and allocation loaders reject a missing, duplicate, or unshipped provider before measuring work.
+Preserve corpus bytes, allocation and forcing boundaries, RTS flags, quotas, affinity, refusal rows, floors, and verdicts during contract extraction.
 
 Two of the gate's legs repeat the full read with the corpus advisories served: one under the
 shipped policy, and one under the shipped policy with both advisory denies.

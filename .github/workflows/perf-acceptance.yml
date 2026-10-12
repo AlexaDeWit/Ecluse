@@ -49,11 +49,15 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run performance acceptance
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task perf-acceptance 2>&1 | tee perf-acceptance-report.md
+        id: measure
+        run: nix develop .#ci --command task performance:live-allocation-measure
+
+      - name: Audit per-ecosystem live allocation receipts
+        if: always()
+        env:
+          PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
+        run: nix develop .#ci --command task performance:live-allocation-receipt
 
       # Off main only: the runs on main are the baseline. A missing baseline renders as
       # "no baseline". Both steps continue on error and stop after five minutes, so neither
@@ -82,5 +86,7 @@ jobs:
           name: perf-acceptance-report-${{ runner.arch }}-${{ github.sha }}
           path: |
             perf-acceptance-report.md
+            perf-acceptance-observations.json
             against-main.md
+            scratchpad/performance/live-allocation/
           if-no-files-found: warn

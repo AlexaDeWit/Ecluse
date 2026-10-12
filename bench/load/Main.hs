@@ -23,6 +23,7 @@ import System.Process.Typed (ExitCode (ExitFailure, ExitSuccess), proc, readProc
 import UnliftIO (bracket_)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Evidence (loadEvidence)
 import Ecluse.BenchLoad.Floors (
     Enforcement (NotHeld),
     FloorKey,
@@ -38,7 +39,7 @@ import Ecluse.BenchLoad.Floors (
     unheldViolations,
  )
 import Ecluse.BenchLoad.Harness (
-    LoadKnobs (lkUpstreamLatencyMicros),
+    LoadKnobs (..),
     Scenario (scenarioName, scenarioServiceTime),
     ScenarioReport (srName),
     UpstreamFixture (fixtureEcosystem, fixtureScenarios),
@@ -54,7 +55,7 @@ import Ecluse.BenchLoad.ProxyServe (runServeProxy)
 import Ecluse.BenchLoad.PyPI (pypiLoadNotes)
 import Ecluse.BenchLoad.Report (Section (..), renderFloors, renderLoadSaturation, renderReports, renderServiceTime, renderThrash, renderVerdict)
 import Ecluse.BenchLoad.RtsProbe (rtsStatsFlag)
-import Ecluse.BenchLoad.Scenarios (checkedCounts, findScenario, fixtures, runsUnder)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, findScenario, fixtures, runsUnder)
 import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey)
 import Ecluse.BenchLoad.Verdict (RunEvidence, runVerdict)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -73,6 +74,7 @@ main =
 -- Proxy cgroups a killed run left behind are retired before and after, so none outlives a run.
 runDriver :: IO ()
 runDriver = bracket_ sweepProxyCgroups sweepProxyCgroups $ do
+    either benchFail pure (checkFixtureCoverage fixtures)
     knobs <- loadKnobsFromEnv
     shape <- podShapeFromEnv
     selected <- selectedKeys
@@ -119,12 +121,43 @@ runPasses environment knobs shape selected = do
                 , rfNpmLatencyMs = baselineInjectedMs (baselineOf Npm)
                 }
         enforcement = enforce floors facts
-    ran <- catMaybes <$> traverse (fixturePasses (Setup knobs shape selected enforcement baselineOf self capabilities processors)) fixtures
+        setup = Setup knobs shape selected enforcement baselineOf self capabilities processors
+    ran <- catMaybes <$> traverse (fixturePasses setup) fixtures
     when (null ran) (benchFail "no scenario matched BENCH_LOAD_SCENARIOS under this pod shape")
+    let outcomes = concatMap snd ran
+        violations = runVerdict (triggerIn environment) enforcement (checkedCounts shape) outcomes
+    writeLoadObservations (measurementConditions setup facts) enforcement violations outcomes
     pure
         ( map fst ran <> [renderFloors (floorsCalibration floors) enforcement]
-        , runVerdict (triggerIn environment) enforcement (checkedCounts shape) (concatMap snd ran)
+        , violations
         )
+
+measurementConditions :: Setup -> RunFacts -> Map Text Text
+measurementConditions setup facts =
+    Map.fromList
+        [ ("podShape", renderPodShape (setupShape setup))
+        , ("operatingPoint", show (rfSettings facts))
+        , ("capabilities", show (setupCapabilities setup))
+        , ("processors", show (setupProcessors setup))
+        , ("npmLatencyMs", show (baselineInjectedMs (setupBaselineOf setup Npm)))
+        , ("pypiLatencyMs", show (baselineInjectedMs (setupBaselineOf setup PyPI)))
+        , ("durationSeconds", show (lkDurationSeconds knobs))
+        , ("concurrency", show (lkConcurrency knobs))
+        , ("payloadBytes", show (lkPayloadBytes knobs))
+        , ("cacheMaxEntries", show (lkCacheMaxEntries knobs))
+        , ("workingSet", show (lkWorkingSet knobs))
+        , ("serveMaxInFlight", maybe "automatic" show (lkServeMaxInFlight knobs))
+        , ("publicConnectionsPerHost", maybe "automatic" show (lkPublicConnectionsPerHost knobs))
+        , ("privateConnectionsPerHost", maybe "automatic" show (lkPrivateConnectionsPerHost knobs))
+        ]
+  where
+    knobs = setupKnobs setup
+
+writeLoadObservations :: Map Text Text -> Enforcement -> [Text] -> [(FloorKey, Either Text RunEvidence)] -> IO ()
+writeLoadObservations conditions enforcement violations outcomes =
+    lookupEnv "ECLUSE_PERFORMANCE_OBSERVATIONS" >>= traverse_ (`writeFileLBS` (encode native <> "\n"))
+  where
+    native = loadEvidence conditions enforcement violations outcomes
 
 -- One ecosystem's loaded and concurrency-one passes: its report section, and what each pass of each scenario produced.
 fixturePasses :: Setup -> UpstreamFixture -> IO (Maybe (Text, [(FloorKey, Either Text RunEvidence)]))

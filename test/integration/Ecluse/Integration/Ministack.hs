@@ -44,31 +44,22 @@ import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Exception (try)
 
-import System.Environment (setEnv)
-
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (..), newAwsEnv)
 import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (..), defaultSqsConfig, newSqsQueue)
 import Ecluse.Test.Container.Image (PinnedImageRef, ministackImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
+import Ecluse.Test.Env (withEnvOverrides)
 import Ecluse.Test.Poll (pollUntil)
 
 -- | The SQS gateway port @ministack@ serves on.
 ministackPort :: TC.Port
 ministackPort = 4566
 
-{- | An @hspec@ resource hook for a @ministack@ container, used with @aroundAll@ so one
-container serves a whole spec while each case isolates on its own queue ('freshQueue').
-
-A derived build re-labels the image with ASCII, because the upstream
-@ministackorg/ministack@ @description@ label is non-ASCII and testcontainers 0.5.3.0
-corrupts multi-byte bytes when it parses @docker inspect@ output.
--}
+-- | One emulator per spec. A derived ASCII image label avoids a testcontainers decoding fault.
 withMinistack :: (Container -> IO ()) -> IO ()
-withMinistack body = do
-    setEnv "AWS_ACCESS_KEY_ID" "test"
-    setEnv "AWS_SECRET_ACCESS_KEY" "test"
+withMinistack body = withEnvOverrides [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test")] $ do
     labels <- testContainerLabels "integration"
     -- Fail the suite if the pin does not validate, so no mutable tag reaches @FROM@.
     image <- either (fail . toString) pure ministackImage
@@ -140,9 +131,7 @@ on the log.
 quietLogEnv :: IO LogEnv
 quietLogEnv = newTestLogEnv
 
-{- | Create a fresh SQS queue in the @ministack@ container and bind a 'MirrorQueue' to it.
-The SQS service may not be up the instant the port opens, so this retries @CreateQueue@.
--}
+-- | Create the named queue, retrying while the emulator finishes startup.
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
     queueUrl <- freshQueueUrl container queueName
@@ -162,10 +151,7 @@ freshQueue container queueName options = do
             , sqsTerminalBackoff = qoTerminalBackoff options
             }
 
-{- | Attach a redrive policy to an existing queue, capturing at the given
-@maxReceiveCount@. A policy names its target by ARN, so this creates the sibling queue and
-reads its ARN first.
--}
+-- | Attach a sibling dead-letter queue by ARN at the given capture count.
 attachDeadLetterQueue :: Container -> Text -> Text -> Int -> IO ()
 attachDeadLetterQueue container queueName queueUrl captureAt = do
     env <- envFor (endpointFor container)
@@ -190,10 +176,7 @@ queueAttribute env queueUrl attribute = do
         Just value -> pure value
         Nothing -> fail ("ministack GetQueueAttributes returned no " <> show attribute)
 
-{- | Create a fresh SQS queue and return its URL, for a test that drives the queue through
-'Ecluse.Composition.planMirrorQueue' rather than the backend constructor. Retries
-@CreateQueue@ while the SQS service warms up.
--}
+-- | Return a fresh SQS queue URL, retrying @CreateQueue@ while the service warms up.
 freshQueueUrl :: Container -> Text -> IO Text
 freshQueueUrl container queueName = do
     env <- envFor (endpointFor container)

@@ -6,6 +6,7 @@
 module Ecluse.Core.Security.EgressIntegrationSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200, status302)
 import Network.HTTP.Types.Header (hLocation)
@@ -27,13 +28,13 @@ import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 spec :: Spec
 spec = do
     describe "egress over the validating manager (loopback http opt-in)" $ do
-        it "reaches a loopback upstream addressed through the test-only http opt-in" $
+        it (caseLabel "integration/egress/native-001" "reaches a loopback upstream addressed through the test-only http opt-in") $
             withUpstream $ \port -> do
                 manager <- newManager defaultManagerSettings
                 response <- fetchMetadata manager port Nothing
                 fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
-        it "uses the same validating manager for a credential-forwarding (private-origin) fetch" $
+        it (caseLabel "integration/egress/native-002" "uses the same validating manager for a credential-forwarding (private-origin) fetch") $
             -- The split is the credential, not the manager: a token-forwarding read reaches
             -- the same loopback upstream over the same validating manager.
             withUpstream $ \port -> do
@@ -42,7 +43,7 @@ spec = do
                 fmap responseBody response `shouldBe` Right (toStrict (encode packument))
 
     describe "no upstream redirect is followed (redirectCount = 0)" $
-        it "does not chase a 302 to an off-allowlist location" $
+        it (caseLabel "integration/egress/native-003" "does not chase a 302 to an off-allowlist location") $
             -- The upstream answers 302 to an off-allowlist host. With redirect-following
             -- disabled the fetch never reaches it, so no hop escapes the allowlist.
             withRedirector $ \port -> do

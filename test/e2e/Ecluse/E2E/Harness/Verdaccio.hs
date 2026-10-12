@@ -20,10 +20,9 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioSnapshot,
 ) where
 
-import Data.Aeson (Object, Value (Object, String), decodeStrict, eitherDecodeStrict, (.:))
+import Data.Aeson (Object, Value (Object, String), decodeStrict)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -56,10 +55,11 @@ import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing)
+import Ecluse.Test.Registry.Npm.StoredVersions (storedObjectResponse, storedVersionKeys)
 import Ecluse.Test.Support (expectRightText)
 
-{- | Wait out the window a worker would need to mirror a version, so an absence read after it is
-an absence rather than a race.
+{- | Wait out the window a worker would need to mirror a version, so an absence read after it
+is an absence rather than a race.
 -}
 awaitMirrorWindow :: IO ()
 awaitMirrorWindow = threadDelay 1500000
@@ -77,15 +77,9 @@ verdaccioMirroredWithinWindow e2e pkg version = do
     awaitMirrorWindow
     verdaccioHasVersionNow e2e pkg version
 
--- | Probe once for a version, returning 'False' on HTTP or transport failure.
+-- | Probe the exact version key. Only a readable document or HTTP 404 proves absence.
 verdaccioHasVersionNow :: E2E -> Text -> Text -> IO Bool
-verdaccioHasVersionNow e2e pkg version =
-    handleAny (\_ -> pure False) $ do
-        resp <- fetchPackument e2e pkg
-        pure
-            ( statusCode (responseStatus resp) == 200
-                && version `T.isInfixOf` decodeUtf8 (LBS.toStrict (responseBody resp))
-            )
+verdaccioHasVersionNow e2e pkg version = elem version <$> verdaccioVersions e2e pkg
 
 -- | Project package names from the store's @\/-\/all@ document, failing on an unreadable listing.
 verdaccioListing :: E2E -> IO [Text]
@@ -130,7 +124,8 @@ packumentReport e2e pkg =
 
 fetchPackument :: E2E -> Text -> IO (Response LBS.ByteString)
 fetchPackument e2e pkg = do
-    req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> pkg))
+    store <- serviceUrl <$> packageStore e2e
+    req <- parseRequest (toString (store <> "/" <> pkg))
     httpLbs req (e2eManager e2e)
 
 -- Verdaccio's listing entries all carry @time@, so its absence is worth reporting.
@@ -145,11 +140,11 @@ verdaccioNamesUnder e2e raw = do
     names <- expectRightText (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
     pure (sort (map renderPackageName names))
 
-{- | Preserve every raw version key, rejecting unreadable or malformed packuments.
-Only HTTP 404 means the package is absent.
+{- | Preserve every raw version key, rejecting unreadable or malformed packuments. Only HTTP
+404 means the package is absent.
 -}
 verdaccioVersions :: E2E -> Text -> IO [Text]
-verdaccioVersions e2e name = maybe [] (sort . map Key.toText . KeyMap.keys) <$> storedObject "versions" e2e name
+verdaccioVersions = readStored storedVersionKeys
 
 -- | One stored version's object as the store serves it. 'Nothing' for an absent package or version.
 verdaccioVersionObject :: E2E -> Text -> Text -> IO (Maybe Object)
@@ -164,39 +159,39 @@ verdaccioVersionObject e2e name version = do
 {- Read one top-level object field of the stored packument, rejecting an unreadable or malformed
 document. Only HTTP 404 means the package is absent. -}
 storedObject :: Key.Key -> E2E -> Text -> IO (Maybe Object)
-storedObject field e2e name = do
+storedObject field = readStored (storedObjectResponse field)
+
+readStored :: (Int -> ByteString -> Either Text a) -> E2E -> Text -> IO a
+readStored parse e2e name = do
     resp <- fetchPackument e2e name
     let status = statusCode (responseStatus resp)
         body = LBS.toStrict (responseBody resp)
-        decoded = eitherDecodeStrict body >>= parseEither (.: field) :: Either String Object
-    case status of
-        404 -> pure Nothing
-        200 -> Just <$> expectRightText (first (\err -> name <> ": " <> toText err) decoded)
-        _ -> fail (toString name <> ": packument returned HTTP " <> show status)
+    expectRightText (first (\err -> name <> ": " <> err) (parse status body))
 
-{- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns
-them. It yields what it last read, so a failure names the versions the store actually held.
+{- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns them.
+It yields what it last read, so a failure names the versions the store actually held.
 -}
 verdaccioAwaitVersions :: E2E -> Text -> [Text] -> IO [Text]
 verdaccioAwaitVersions e2e name wanted =
-    pollUntil 40 500000 (== wanted) (handleAny (\_ -> pure []) (verdaccioVersions e2e name))
+    pollUntil 40 500000 (== wanted) (verdaccioVersions e2e name)
 
 -- | 'verdaccioArtifactBytes' reduced to the status and the body size.
 verdaccioArtifact :: E2E -> Text -> Text -> IO (Int, Int64)
 verdaccioArtifact e2e name version =
     second LBS.length <$> verdaccioArtifactBytes e2e name version
 
-{- | Read one version's artifact straight from the store, returning the status and the body bytes.
-It bypasses the proxy, so a case can tell a stored artifact from a public-leg fallback.
+{- | Read one version's artifact straight from the store, returning the status and the body bytes. It
+bypasses the proxy, so a case can tell a stored artifact from a public-leg fallback.
 -}
 verdaccioArtifactBytes :: E2E -> Text -> Text -> IO (Int, LByteString)
 verdaccioArtifactBytes e2e name version = do
-    req <- parseRequest (toString (e2eVerdaccio e2e <> npmArtifactPath name version))
+    store <- serviceUrl <$> packageStore e2e
+    req <- parseRequest (toString (store <> npmArtifactPath name version))
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), responseBody resp)
 
-{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent tag,
-and a failure for an unreadable packument.
+{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent
+tag, and a failure for an unreadable packument.
 -}
 verdaccioLatest :: E2E -> Text -> IO (Maybe Text)
 verdaccioLatest e2e name = do
@@ -216,7 +211,8 @@ verdaccioSnapshot e2e = do
 verdaccioObservation :: E2E -> IO StoreObservation
 verdaccioObservation e2e = do
     listing <- expectRightText (maybeToRight "npm has no listing capability" (maintenanceListing npmMaintenance))
-    let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl (e2eVerdaccio e2e)) Nothing
+    store <- serviceUrl <$> packageStore e2e
+    let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl store) Nothing
     pure . newProtocolObservation $
         ProtocolRead
             { prOrigin = origin
@@ -235,7 +231,8 @@ verdaccioPackages e2e = do
 
 verdaccioListingBody :: E2E -> IO ByteString
 verdaccioListingBody e2e = do
-    req <- parseRequest (toString (e2eVerdaccio e2e <> "/-/all"))
+    store <- serviceUrl <$> packageStore e2e
+    req <- parseRequest (toString (store <> "/-/all"))
     resp <- httpLbs req (e2eManager e2e)
     when (statusCode (responseStatus resp) /= 200) (fail "the store served no package listing")
     pure (LBS.toStrict (responseBody resp))

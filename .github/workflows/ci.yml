@@ -127,18 +127,26 @@ jobs:
         run: nix develop .#ci --command task update
 
       # The harness links the shipped RTS options, so every run measures under the same
-      # runtime. pipefail keeps the harness exit code through tee.
+      # runtime. Task retains the native status and output before receipt publication.
       - name: Hold each leg's allocation to its budget
-        run: |
-          set -eo pipefail
-          nix develop .#ci --command task perf-allocation 2>&1 | tee perf-allocation-report.md
+        id: measure
+        run: nix develop .#ci --command task performance:allocation-measure
+
+      - name: Audit per-ecosystem allocation receipts
+        if: always()
+        env:
+          PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
+        run: nix develop .#ci --command task performance:allocation-receipt
 
       - name: Upload the report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-allocation-report-${{ runner.arch }}-${{ github.sha }}
-          path: perf-allocation-report.md
+          path: |
+            perf-allocation-report.md
+            perf-allocation-observations.json
+            scratchpad/performance/allocation/
           if-no-files-found: warn
 
   coverage:
@@ -171,6 +179,11 @@ jobs:
             flag: integration
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
+      ECLTEST_UNIT_PLAN_PATH: unit-plan.json
+      ECLTEST_UNIT_REPORT_PATH: unit-report.json
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -213,6 +226,26 @@ jobs:
           COVERAGE_TASK: ${{ matrix.coverage-task }}
           SUITE: ${{ matrix.suite }}
         run: nix develop .#ci --command task "$COVERAGE_TASK" SUITE="$SUITE"
+
+      - name: Upload unit execution evidence
+        if: ${{ always() && (matrix.suite == 'ecluse-core-unit' || matrix.suite == 'ecluse-runtime-unit') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unit-evidence-${{ matrix.suite }}
+          path: |
+            unit-plan.json
+            unit-report.json
+          if-no-files-found: error
+
+      - name: Upload integration execution evidence
+        if: ${{ always() && matrix.suite == 'ecluse-integration' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-evidence
+          path: |
+            scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}/plan.json
+            scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}/report.json
+          if-no-files-found: error
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -286,26 +319,25 @@ jobs:
       - name: Smoke tests
         run: nix develop .#ci --command task test-smoke
 
-  e2e:
-    name: End-to-end tests (whole-system, real clients)
+  e2e-prepare:
+    name: Prepare E2E image and plan
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     permissions:
       contents: read
-    # Real npm and pip clients exercise the OCI image against an nginx stub and Verdaccio.
-    # This hermetic tier gates. Drop it from the gate only as a last resort.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # `.#dockerImage` links the Nix-built Haskell closure the docs job roots, and the
-      # suite runs in `.#ci`. The Nix-store cache carries both.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
@@ -316,8 +348,73 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # One throttled pull in the suite's setup hook cascades every case to pending. The
-      # refs copy the pins in test/support/Ecluse/Test/Container/Image.hs verbatim.
+      - name: Prepare image and catalogue
+        run: nix develop .#ci --command task test-e2e-prepare
+
+      - name: Upload immutable plan and identity
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-plan
+          path: |
+            scratchpad/e2e/plan.json
+            scratchpad/e2e/identity.json
+          if-no-files-found: error
+
+      - name: Upload image archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-image
+          path: scratchpad/e2e/docker-image.tar
+          compression-level: 0
+          if-no-files-found: error
+
+  e2e-conformance:
+    name: Conformance (${{ matrix.subject }})
+    needs: [changes, coverage, e2e-prepare]
+    # Run after a coverage failure, but do not start subjects on a cancelled run.
+    if: ${{ !cancelled() && needs.changes.outputs.docs-only != 'true' && needs.e2e-prepare.result == 'success' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        subject: [npm, pypi, shared-system]
+    permissions:
+      contents: read
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Download plan and identity
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-plan
+          path: scratchpad/e2e
+
+      - name: Download exact image archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-image
+          path: scratchpad/e2e
+
       - name: Pre-pull pinned e2e images (Docker Hub throttle resilience)
         run: >-
           bash scripts/docker-prepull.sh
@@ -326,8 +423,153 @@ jobs:
           verdaccio/verdaccio@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
           nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
 
-      - name: End-to-end suite (builds + loads the image, drives the real clients)
-        run: nix develop .#ci --command task test-e2e
+      - name: Verify and load exact image
+        run: nix develop .#ci --command task test-e2e-load
+
+      - name: Run fixed subject
+        env:
+          SUBJECT: ${{ matrix.subject }}
+        run: nix develop .#ci --command task "test-e2e-$SUBJECT"
+
+      - name: Download integration execution evidence
+        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-evidence
+          path: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Download core unit execution evidence
+        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unit-evidence-ecluse-core-unit
+          path: scratchpad/unit/core
+
+      - name: Download runtime unit execution evidence
+        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unit-evidence-ecluse-runtime-unit
+          path: scratchpad/unit/runtime
+
+      - name: Audit ecosystem completion across tiers
+        if: ${{ !cancelled() && matrix.subject != 'shared-system' }}
+        env:
+          SUBJECT: ${{ matrix.subject }}
+          ECLTEST_CORE_UNIT_ARTIFACT_DIR: scratchpad/unit/core
+          ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR: scratchpad/unit/runtime
+          ECLTEST_INTEGRATION_ARTIFACT_DIR: scratchpad/integration/${{ github.run_id }}-${{ github.run_attempt }}
+        run: nix develop .#ci --command task "test-e2e-$SUBJECT-completion"
+
+      - name: Record shard outcome
+        if: always()
+        env:
+          ECLTEST_COMPONENT: ${{ matrix.subject }}
+          ECLTEST_JOB_STATUS: ${{ job.status }}
+        run: nix develop .#ci --command task test:e2e-diagnostics
+
+      - name: Upload execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-${{ matrix.subject }}
+          path: scratchpad/e2e/reports/
+          if-no-files-found: error
+
+  e2e:
+    name: E2E execution completeness
+    needs: [changes, e2e-prepare, e2e-conformance]
+    # Audit failed subjects without starting a new audit after cancellation.
+    if: ${{ !cancelled() && needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_ARTIFACT_DIR: scratchpad/e2e
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Download plan and identity
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: e2e-plan
+          path: scratchpad/e2e
+
+      - name: Download shard reports
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: e2e-report-*
+          merge-multiple: true
+          path: scratchpad/e2e/reports
+
+      - name: Audit all required groups and cases
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task test-e2e-audit
+
+  backend-conformance:
+    name: Conformance (package store ${{ matrix.subject }})
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        subject: [verdaccio, codeartifact]
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      ECLTEST_SOURCE: ${{ github.sha }}
+      ECLTEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ECLTEST_ARCHITECTURE: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      - name: Run the fixed package-store contract
+        env:
+          SUBJECT: ${{ matrix.subject }}
+        run: nix develop .#ci --command task "test-conformance-$SUBJECT"
+
+      - name: Upload package-store evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-store-report-${{ matrix.subject }}
+          path: scratchpad/backend-conformance/
+          if-no-files-found: error
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
@@ -675,6 +917,7 @@ jobs:
     name: CI gate
     # Add a gating job to both `needs` and scripts/ci-gate-verdict.sh.
     # smoke and grype do not gate. Required contexts are in .agents/orchestration-strategy.md.
+    # Keep the required context so its verdict can reject skipped jobs on cancelled runs.
     needs:
       - changes
       - build
@@ -683,7 +926,10 @@ jobs:
       - codecov-notify
       - static-checks
       - docs
+      - e2e-prepare
+      - e2e-conformance
       - e2e
+      - backend-conformance
       - weeder
       - stan
       - release-dry-run
@@ -712,7 +958,10 @@ jobs:
           COVERAGE: ${{ needs.coverage.result }}
           CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}
           DOCS: ${{ needs.docs.result }}
+          E2E_PREPARE: ${{ needs.e2e-prepare.result }}
+          E2E_CONFORMANCE: ${{ needs.e2e-conformance.result }}
           E2E: ${{ needs.e2e.result }}
+          BACKEND_CONFORMANCE: ${{ needs.backend-conformance.result }}
           WEEDER: ${{ needs.weeder.result }}
           STAN: ${{ needs.stan.result }}
           RELEASE_DRY_RUN: ${{ needs.release-dry-run.result }}

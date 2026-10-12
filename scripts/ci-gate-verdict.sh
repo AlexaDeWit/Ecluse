@@ -40,7 +40,10 @@ else
   echo "ok      codecov-notify: not run, coverage did not succeed"
 fi
 require docs "${DOCS:-missing}" docs
+require e2e-prepare "${E2E_PREPARE:-missing}" docs
+require e2e-conformance "${E2E_CONFORMANCE:-missing}" docs
 require e2e "${E2E:-missing}" docs
+require backend-conformance "${BACKEND_CONFORMANCE:-missing}" docs
 require weeder "${WEEDER:-missing}" docs
 require stan "${STAN:-missing}" docs
 

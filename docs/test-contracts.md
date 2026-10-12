@@ -1,0 +1,549 @@
+# Test contract coverage
+
+This map records the assertion-preserving extraction for [#1657](https://github.com/AlexaDeWit/Ecluse/issues/1657).
+The suite boundary follows the real collaborator. A shared contract does not move an emulator test into the unit tier.
+Case IDs identify Hspec examples, each of which can contain several assertions.
+`Contract.*` below abbreviates `Ecluse.Test.Contract.*` under `test/contracts/`.
+E2E execution reports audit those IDs against the fixed execution manifest.
+Lower-tier catalogues validate registration independently of fixture availability.
+Performance runners keep their native sampling and verdict paths.
+
+`fullEcosystemContract` requires proxying, installation, policy, advisories, mirroring,
+publication, Dredger, and telemetry. `fullPackageStoreContract` requires reads, writes,
+inventory, deletion, integrity, and recovery. These lists are normative for each subject.
+Driver capability flags cannot shrink them. Independent obligations detect a family omitted
+from registration, while actual Hspec execution proves the registered laws ran.
+Each missing required family must fail by name, and unrelated families continue.
+PyPI runs the same full composition as npm. Missing write drivers produce named failed cases.
+These failures expose incomplete conformance without claiming production write support.
+
+## Metadata and serving
+
+### Metadata transport
+
+Original: core/test/unit/Ecluse/Core/Registry/Metadata/FetchSpec.hs.
+Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Fetch.hs.
+Both npm and PyPI run the same body with their original raw documents and builders.
+The original adapter-completeness example and native fixture registration remain in FetchSpec.
+Each prefix below expands to core.metadata.fetch.npm and core.metadata.fetch.pypi.
+
+| Case suffix | Preserved assertions |
+| --- | --- |
+| status-200, status-201, status-299, status-401, status-403, status-404, status-301, status-304, status-400, status-408, status-410, status-429, status-500, status-503, status-599 | Full and selected result classification, fetch/decode tracing sequence, complete body lengths and digest on success |
+| full-charge | Selected reads charge zero, full reads charge every byte |
+| oversized-auth-401, oversized-auth-403 | Authorisation classification precedes oversized error-body parsing |
+| exact-byte-bound | Whole-source digest at exact maxMetadataBytes |
+| gzip-bytes | Decompressed byte count and digest |
+| gzip-charge | Decompressed byte charges |
+| gzip-bound | Compressed negative control remains below 1024, inflated body exceeds bound |
+| decode-span-empty-url, decode-span-refused-connection | Request failure opens no decode span |
+| empty-url-fault | Typed FetchUrlUnformable EmptyBaseUrl |
+| transport-fault | Typed transport refusal |
+| no-redirect | HTTP 302 and exact single captured request path |
+| held-parity | Held three-chunk/full HTTP equality, selected equality, version presence and byte charge |
+| held-byte-bound | Full and selected BodyTooLarge MetadataBodyLimit 64 |
+| held-malformed | Full and selected undecodable |
+| held-name-mismatch | Full and selected self-reported other identity |
+| held-version-bound | Full TooManyVersions 2 1 |
+
+The full and selected held-read versus response assertions remain inside the contract's bothWays helper for every held case. These were not moved into a provider callback.
+There are 32 cases per ecosystem, 64 total.
+
+### Metadata projection
+
+Originals: core/test/unit/Ecluse/Core/Registry/Npm/MetadataSpec.hs and PyPI/MetadataSpec.hs.
+Replacement: test/contracts/Ecluse/Test/Contract/Metadata/Projection.hs.
+Each suffix expands to core.metadata.projection.npm and core.metadata.projection.pypi.
+
+| Case suffix | Original examples and assertions |
+| --- | --- |
+| malformed | Both native full and selected "reports an undecodable body" examples |
+| missing-name | Native full and npm selected "reports an absent top-level name as undecodable". PyPI selected counterpart added |
+| name-mismatch | Native full and selected self-reported different-name errors remain MetadataNameMismatch, not decode errors |
+| version-bound | Native full and selected version/release/file count examples remain TooManyVersions 2 1. Both selected present versions now run |
+| artifact-bound | npm full artifact-count breach and exact ceiling. PyPI counterpart added alongside its unchanged file-grouping bound test |
+| missing-version | Both native missing-release examples remain Right Nothing |
+| selected-parity | Exact domain PackageDetails equality with full map lookup, nonempty expected two-version map. Native rich/corpus and grouping parity remain |
+
+Ten npm and eight PyPI duplicate example bodies are removed. Fourteen shared projection examples run.
+Native raw-document identity and exact filename observations remain in both specs.
+PyPI keeps the full read's artifact count, distinct-release count, selected file count over unselected and unusable entries, and absence of a selected-artifact ceiling.
+PyPI keeps API-version refusal, duplicate-key order, original array entry keys, multiple wheels/sdists, normalised version names and release timestamps.
+npm keeps packed/tree/reference-reader properties, damaged/raw duplicate wire inputs, source document retention, optional containers, rich version projection, real express corpus and nesting limits.
+Independent readers in both ReaderSpec and StreamingSpec trees are unchanged.
+
+### Serving
+
+Replacement: test/contracts/Ecluse/Test/Contract/Serving.hs.
+Drivers: test/integration/Ecluse/Server/Pipeline/ServingDriver.hs.
+Registrations: existing npm PackumentIntegrationSpec and PyPI AdapterIntegrationSpec.
+Each suffix expands to integration.serving.npm and integration.serving.pypi.
+
+| Case suffix | Assertions and original home |
+| --- | --- |
+| default-denial | Listing and artifact denial without allow rules, added paired coverage |
+| identity-precedence | Explicit identity permits a young release, explicit deny defeats allow on listing and artifact, added paired coverage |
+| authorised-union | npm "serves the union of trusted-private and gated-public versions" moves here, with PyPI counterpart |
+| quarantine-private-authority | Shared private young-release authority with old public survivor and rejected young public version. npm native latest-tag assertion remains in its existing gate case |
+| private-divergence | Shared private digest and exact bytes on same-version divergence. npm native latest-tag/divergence cases remain |
+| public-integrity | npm "filters a hashless public version out of the served listing" moves here, with PyPI counterpart |
+| trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
+| artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
+| artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
+| conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, ETag presence and equality, exact Content-Length, GET and HEAD 304 with empty bodies |
+
+Seven native duplicate example bodies are removed. Twenty shared serving examples run.
+Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
+Native PyPI media type, multi-file identity, exact mount-local URLs, sidecar-key removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
+Native deprecation/yank policy tests from the current baseline remain unchanged.
+Native OriginIntegrationSpec and TarballIntegrationSpec retain their assertions under fixed integration case IDs. All pipeline core tests remain unchanged.
+
+### Contract controls
+
+core/test/unit/Ecluse/Test/Contract/ServingSpec.hs runs the exact artifactIntegrityCase used by both integration providers.
+
+- core.contract.serving.valid-observations passes matching bytes and advertised digest.
+- core.contract.serving.corrupt-bytes requires failure from successful HTTP carrying changed bytes.
+- core.contract.serving.corrupt-digest requires failure from a false advertised digest with matching fixture bytes.
+
+The shared contract library imports core/test support only. Runtime/application resource and HTTP wiring stay in the integration driver.
+The native driver uses existing serveDepsFor, newTestEnvWithQueue, testWithApplication, requestAt, package fixture builders and digest helpers.
+Its independent Aeson readers inspect native wire version and artifact digest fields, never the production metadata projector.
+
+## Backend laws
+
+| Original assertions | Canonical case IDs | Evidence retained or strengthened |
+| --- | --- | --- |
+| Core Queue.MemorySpec enqueue/receive/ack round trip and every payload field | queue/memory/payload | Same production memory handle, exact job, every field, acknowledgement and empty follow-up poll |
+| Core Queue.MemorySpec terminal drop | queue/memory/terminal-drop | Same production terminal action and empty follow-up poll |
+| New memory profile distinction | queue/memory/destructive-receive | Receipt itself removes a job without acknowledgement, first delivery count |
+| SqsIntegrationSpec enqueue/receive/ack | queue/sqs/payload | Same canonical body as memory, real emulator and production SQS handle |
+| SqsIntegrationSpec unacknowledged redelivery and ApproximateReceiveCount | queue/sqs/redelivery | Exact payload on both deliveries and counts 1 then 2, acknowledgement cleanup |
+| Core CredentialSpec static token, repeated token and expiry | credential/static/permanent/token and credential/static/expiring/token | Two independent expected reads, expiry and secret preservation, token Show redaction |
+| Runtime Credential.CodeArtifactSpec token and expiry | credential/codeartifact-stub/token | Same shared token law over real mint request/parser with HTTP stub, no claim of live mint coverage |
+| ProtocolSpec backend name, delete ceiling, refill, completion, alphabet, absent cursor | maintenance/protocol/facts/identity-ceiling, maintenance/protocol/facts/completion-refill, maintenance/protocol/facts/inventory-capability | Explicit Verdaccio protocol profile, no calls to infer capabilities |
+| CodeArtifactSpec corresponding facts plus present cursor | maintenance/codeartifact/facts/identity-ceiling, maintenance/codeartifact/facts/completion-refill, maintenance/codeartifact/facts/inventory-capability | Production handle built with real SDK environment, no claim of actual remote API coverage |
+| ProtocolSpec consent granted/classification and consent withheld/classification | maintenance/protocol/consented/consent and maintenance/protocol/withheld/consent | Exact verdict and provider reason retained |
+| CodeArtifactSpec granted consent/classification | maintenance/codeartifact/consented/consent | Shared law over the production handle and typed control plane, original request sequencing cases retained |
+| ProtocolSpec served versions | maintenance/protocol/inventory/versions | Exact versions, presence and revision. The old check omitted revision |
+| Protocol exact package listing and new shared CodeArtifact inventory | maintenance/protocol/inventory/packages, maintenance/codeartifact/inventory/packages, maintenance/codeartifact/inventory/versions | Full inventory against independent names/versions, pagination remains native too |
+| Additional successful deletion law | maintenance/protocol/delete/removed and maintenance/codeartifact/delete/removed | Exact submitted version identities, order and one VersionRemoved per version. CodeArtifact crosses its 100-version ceiling |
+| Runtime Cve.SyncSpec refused artifact retains last-good generation | advisory/local/last-good | Full byte, ETag, provenance, install age, remediation and temporary-file snapshot before/after exact epoch refusal |
+| Additional real S3 conformance | advisory/s3/last-good | Same canonical body through production exportToS3, raw SDK producer HEAD identity, real S3 fetch and syncStep |
+
+### Full package-store subjects
+
+Verdaccio and CodeArtifact each run the same ten cases through `fullPackageStoreContract`.
+Each ID below has the prefix `package-store/<subject>/`, where `<subject>` is `verdaccio` or `codeartifact`.
+The six family names come from an independent completion definition, so removing a family
+from the provider catalogue cannot make its absence pass.
+
+| Family | Case suffixes | Required observation |
+|---|---|---|
+| `reads` | `present`, `absent` | Read both stored versions and distinguish absence from a failed read. |
+| `writes` | `complete`, `idempotent` | Publish a complete release beside a sibling and preserve it on retry. |
+| `inventory` | `exact` | List exactly the published package and versions. |
+| `deletion` | `selected` | Remove one version while its sibling stays readable and listed. |
+| `integrity` | `bytes-and-digests` | Preserve all artifact bytes and their verified digests. |
+| `recovery` | `publish-retry`, `reopen`, `delete-retry` | Report failed work, finish a later attempt, and read completed work from a fresh handle. |
+
+Both subjects use production handles through deterministic service boundaries.
+The CodeArtifact result does not claim live AWS operations.
+The npm E2E subject supplies separate Verdaccio service evidence.
+
+All other original assertions remain in their native specs. This includes memory FIFO and overflow accounting, SQS visibility extension and active lease renewal, terminal redrive and dead-letter capture budget, unreachable endpoint classification, secret representation, refresh/expiry/cancellation policy, provider mint mapping, maintenance raw JSON preservation, pagination tokens, request credentials, per-version refusals, uncertain/unreached outcomes, upstream classification, cursor persistence and bounds, advisory HEAD/GET race, republication identity, EPSS policy, last-good age, cancellation, and the compile/publish/serve integration.
+
+Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
+No automatic test verifies a real AWS token mint or the Datadog SaaS.
+Credential tests use local HTTP stubs. Telemetry tests use the local Collector and process logs.
+
+### Negative controls and lifecycle
+
+New Ecluse.Test.Contract.QueueSpec runs the same queuePayloadLaw with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
+
+Ecluse.Test.Poll.runUntil replaces discarded timeout/poll results in Integration.WorkerLoop. It throws TestContractEscape on progress timeout or early normal worker exit, propagates worker errors, and cancels the worker after progress. Ecluse.Test.PollSpec covers all four outcomes including cleanup.
+
+Ecluse.Test.Env.withEnvOverrides hoists Collector save/apply/restore, saves unique keys, preserves override order and restores absent values. Collector, Ministack and withAmbientAws use it. Existing withEnvVars clear/apply/clear semantics stay intact. EnvSpec checks success, typed action failure, assignment failure, cancellation and duplicate override order. Environment callers remain serial. Retrieved #1349, #1182 and #1329 bodies/comments before changes. Boot refusal timing and compiler-output isolation remain in their existing issues and were not changed.
+
+## Smoke and measurement
+
+`Ecluse.Test.Contract.Measurement` holds independent obligations and provider metadata for the migrated smoke and reader-retention cases.
+Its independent obligation rows require every listed case before a live fetch or a heap probe can count as registered coverage.
+The core-unit `MeasurementSpec` reads the four actual npm/PyPI smoke and reader-retention declaration trees through `Binding.labelledCaseIds`.
+It checks their labels against independent obligations without executing network calls, fixture hooks, GC samples, or reader probes.
+Mutation controls delete each real provider or example and replace each case label with malformed or unknown text.
+Each mutation must fail validation. Genuine unlabelled native smoke examples remain outside the migrated inventory.
+`RegistrySmokeSpec` and `RetentionSpec` supply deliberately wrong observations to test the shared verdicts.
+
+| Original assertion | Replacement case IDs | Preserved conditions |
+|---|---|---|
+| npm live trusted package identity, non-empty versions, default version ceiling | `live/npm/react`, `live/npm/types-node`, `live/npm/lodash`, `live/npm/typescript` through `Contract.RegistrySmoke` | The same public packages, production full read, default limits, and transport-only pending classification. |
+| PyPI live index identity and wheel evidence | `live/pypi/sampleproject` through `Contract.RegistrySmoke`, followed by its native wheel checks | `sampleproject` 4.0.0, exact filename, package/version identity, SHA-256 presence, status 200, non-empty bytes, integrity verification, 65,536-byte wheel bound. |
+| npm repeated release keys, members, dependencies, and selected containers | `retention/npm/{selected,full}/{keys,members,dependencies}` and `retention/npm/selected/containers` through `Contract.Retention` | Original generators, 2,000 and 16,000 repeats, original read operations, chunking, GC sampling, and strict 256 KiB growth allowance. |
+| PyPI repeated containers/members, unselected releases, and past-limit files | `retention/pypi/selected/{containers,members,other-releases}`, `retention/pypi/full/{members,past-limit}` through `Contract.Retention` | Original generators and read modes. Each selected input still proves exactly one kept file before sampling. The past-limit case still uses `maxArtifactCount = 2`. |
+| Benchmark and allocation provider registration | `Ecluse.Test.EcosystemBench.checkBenchmarkCoverage`, enforced by `ecosystemBenches` | Reviewed npm/PyPI obligations and concrete providers must match the production adapter registry. Missing, duplicate, and unshipped providers fail before corpus loading. Empty corpora fail. |
+| Load read and stress registration | `readLoadContract` with `LoadReadDriver`, checked by `Ecluse.BenchLoad.Scenarios.checkFixtureCoverage` before `runDriver` | Each ecosystem owes 25 shared read and stress laws. `requiredLoadLaws` supplies independent requirements, and `loadCoverageGaps` names omitted scenarios. Existing native extensions, floor checks, and verdicts remain. |
+
+These measurement paths retain their native sampling and verdict logic:
+
+| Tier | Existing canonical path | Evidence preserved |
+|---|---|---|
+| Residency | `MemoryModel.Probe` and `MemoryModelResidencySpec` | Adapter coverage, authenticated captures, isolated child processes, retained shapes, peak limits, charge envelopes, regression limits, and adverse results. |
+| Read evaluation | `Registry/MetadataResidencySpec.hs` | Weak-head versus fully forced allowance, weak references, document release, and held typed facts. |
+| Allocation | `acceptance/app/Main.hs` over `EcosystemBench` | Four measured legs, fresh timed input allocation, forcing boundaries, corpus/advisory setup, per-capture criteria, refusals, unavailable rows, and report verdicts. |
+| Benchmarks | `bench/Main.hs` and `Ecluse/Core/*Bench.hs` over `EcosystemBench` | Native operations and synthetic checks, committed captures, independent expected output fixtures, calibration, and benchmark group order. |
+| Load | `BenchLoad.Harness`, native fixtures, `Scenarios`, and `Verdict` | Process isolation, quotas, affinity, RTS flags, upstream latency, request patterns, concurrency-one passes, success floors, refused/unavailable rows, and gating semantics. |
+| Live native protocol | npm and PyPI registry smoke specs | npm abbreviated parsing, bounded abbreviated fetch, raw SHA-1/SRI syntax, and PyPI exact wheel observations remain native. |
+
+Existing corpus bytes, expected outputs, floor values, and RTS settings stay fixed.
+Provider coverage runs outside measured operations. New PyPI stress rows add samples without changing that boundary.
+
+The `ReadLoadFoundation` scope requires the 25 shared read and stress laws for npm and PyPI.
+`FullLoad` adds `MirrorWorker` as a separate requirement.
+PyPI currently reports `MissingLoadScenario MirrorWorker "worker-mirroring"` for that full scope.
+The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
+Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
+The existing floors and measured settings stay fixed.
+
+The allocation, live acceptance, benchmark and regular load workflows produce per-ecosystem
+performance receipts after native measurement. Each receipt binds actual observations and
+their outcomes to independent requirements, recorded conditions, run identity and artifact hashes.
+The allocation receipts gate inside `ci.yml`. The timed workflows retain their current cadence.
+Benchmark and load workflows stay outside the main CI gate and the functional subject jobs.
+Selected load runs and the GC-thrash probe write diagnostic-only records.
+They remain usable without claiming the missing full read-load rows.
+Live upstream unavailability also records a diagnostic result without a completion claim.
+The load receipt requires native `floorEnforcement` to be `held` with no reasons.
+An unheld or missing status produces diagnostic-only evidence and keeps the native verdict.
+
+## Supported and deferred profiles
+
+| Profile or capability | State and obligation |
+|---|---|
+| npm read, mirror, and first-party publication | Supported. Keep public/private authority, exact package bytes, fresh-client parity, native installation observations, and origin evidence. |
+| PyPI read and advisory decisions | Supported. Keep Simple JSON, wheel and source distribution bytes, selected-read limits, exact remediation semantics, and client isolation. |
+| Shared npm/PyPI proxy | Supported with one mount per ecosystem. Keep the existing mixed-client scenario and mount-local policy, credentials, jobs, and URLs. |
+| Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
+| SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
+| PyPI publication and mirroring | Planned under [#765](https://github.com/AlexaDeWit/Ecluse/issues/765) and [#1133](https://github.com/AlexaDeWit/Ecluse/issues/1133). Every wheel and source distribution needs complete-version evidence when activated. |
+| Hosted incremental PyPI copying | The [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639) ruling permits physical partial uploads. Future contracts must prove a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
+| Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
+| PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
+| RubyGems | No shipped adapter. Measurement registration rejects it as a supported provider. |
+| Missing external service in smoke | Unavailable evidence, never a passing conformance result. Deterministic mirrors remain gating. |
+| Missing image, client, ownership, or Docker in required E2E | Failed setup. Pending or absent cases cannot satisfy the execution audit. |
+
+## Reproduction
+
+Run commands inside `env -u IN_NIX_SHELL nix develop`.
+Use `task test` for core/runtime/application contract checks, `task test-residency` for unchanged heap probes, and `task test-smoke` for live drift checks.
+Use `task perf-allocation` for the allocation gate and the documented benchmark/load targets for measured runs.
+
+Each test entrypoint runs its fixed declaration list. It accepts no custom selection arguments.
+Separate manifest tools print fixed coverage metadata without Docker or credentials:
+
+```bash
+cabal run ecluse-e2e-manifest
+cabal run ecluse-integration-manifest
+```
+
+Both print JSON to stdout. The audit tools accept the plan and report paths:
+
+```bash
+cabal run ecluse-e2e-audit -- PLAN REPORT...
+cabal run ecluse-integration-audit -- PLAN REPORT
+```
+
+Run `task test-e2e` for fresh artifacts, all three fixed subjects, and the full audit.
+The task prints its artifact directory. Set `ECLTEST_ARTIFACT_DIR` to that path for later runs or auditing.
+For staged preparation, choose a fresh directory explicitly:
+
+```bash
+mkdir -p scratchpad/e2e
+export ECLTEST_ARTIFACT_DIR="$(mktemp -d scratchpad/e2e/run.XXXXXXXXXX)"
+task test-e2e-prepare
+task test-e2e-load
+task test-e2e-npm
+task test-e2e-pypi
+task test-e2e-shared-system
+task test-e2e-audit
+```
+
+Preparation cannot overwrite an existing artifact directory. Commands sharing that directory hold the same lock.
+Rerun a fixed subject with its named task. It reuses the prepared image and immutable plan.
+Before checking prerequisites, each attempt invalidates its previous published report and preserves it under `reports/attempts/`.
+Every nonempty current report publishes to `reports/<subject>.json`, including failed results.
+Publication preserves the command's failure status. Failed reports cannot satisfy completion.
+Attempt reports, logs, and status remain available for diagnosis.
+The full audit requires every group and case exactly once, with matching execution identities.
+`ECLTEST_SEED` defaults to 1. `ECLTEST_TIMEOUT` accepts positive seconds. Neither changes the declaration list.
+
+For a local cross-tier completion audit, give all tiers the same `ECLTEST_SOURCE`
+and `ECLTEST_RUN_ID`. Set `ECLTEST_ARCHITECTURE` to `arm64` or `amd64` for the host.
+Run `task test-unit-core-receipt`, `task test-unit-runtime-receipt`, and `task test-integration`.
+Then run the staged E2E commands above.
+Set `ECLTEST_CORE_UNIT_ARTIFACT_DIR` to `scratchpad/unit/core`.
+Set `ECLTEST_RUNTIME_UNIT_ARTIFACT_DIR` to `scratchpad/unit/runtime`.
+Set `ECLTEST_INTEGRATION_ARTIFACT_DIR` to `scratchpad/integration/$ECLTEST_RUN_ID`.
+Run `task test-e2e-npm-completion` or `task test-e2e-pypi-completion`.
+The completion audit reads the actual reports from all four tiers.
+It checks required laws and execution identities against their compiled plans.
+
+The `task test-integration` wrapper supplies container ownership and daemon exclusion controls.
+Unit declaration audits run through `task test`. Smoke and residency retain their existing commands.
+Integration coverage runs and audits the complete manifest.
+`COVERAGE_FLAGS` cannot select cases, bypass execution, or change the report path.
+
+Run `task test-conformance-verdaccio` and `task test-conformance-codeartifact` for the fixed
+package-store subjects. Each runs its own manifest, full contract, and audit with an
+execution identity. A missing report, failed law, or incomplete subject fails the task.
+CodeArtifact uses the production adapter with deterministic control-plane doubles.
+Its result does not claim live AWS service coverage.
+
+## Fixed E2E entrypoints
+
+Read each suite's declaration list to see the contracts and concrete fixtures it runs.
+The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
+
+| Subject entrypoint | Composition | Active cases |
+|---|---|---|
+| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | 46: former serving and write cases, six moved telemetry cases, four shared installation laws, and three advisory laws. |
+| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | 43: the 17 existing cases and 26 named missing-capability cases below. |
+| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | 1: the mixed-client case. |
+
+The active plan registers 90 E2E cases in 18 groups, including 43 PyPI cases in nine groups.
+It retains all 49 prior observations and the 15 observations added by the green foundation.
+The historical green foundation ran 64 E2E cases before the 26 missing-capability cases were activated.
+Six telemetry IDs gain an `npm/` prefix, and the PyPI canonical-fix case moves to its native advisory group.
+The old count is not a completion target.
+
+The four missing groups register ordinary failed examples without fixture acquisition.
+All 17 existing PyPI cases still execute, including read telemetry and native extensions after missing write cases.
+
+| Missing group | Required family | Case IDs |
+|---|---|---|
+| `pypi/missing/mirroring` | mirroring | `pypi/mirror/dependency-graph`, `pypi/mirror/module-exports`, `pypi/mirror/linked-executable`, `pypi/mirror/origin-evidence`, `pypi/mirror/installed-tree`, `pypi/mirror/empty-store-control` |
+| `pypi/missing/publication` | publication | `pypi/publish/publish-install`, `pypi/publish/scope-refusal` |
+| `pypi/missing/dredger` | dredger | `pypi/dredger/inventory`, `pypi/dredger/admission-only`, `pypi/dredger/denied-versions`, `pypi/dredger/dry-run`, `pypi/dredger/consent-refusal`, `pypi/dredger/first-party`, `pypi/dredger/two-stores`, `pypi/dredger/advisory-revocation`, `pypi/dredger/denied-install`, `pypi/dredger/delete-recovery`, `pypi/dredger/refill`, `pypi/dredger/missing-source`, `pypi/dredger/late-copy`, `pypi/dredger/old-worker`, `pypi/dredger/old-dredger-refill`, `pypi/dredger/old-dredger-loss` |
+| `pypi/missing/telemetry-write` | telemetry | `pypi/telemetry/domain-spans`, `pypi/telemetry/private-fetch` |
+
+Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
+The write telemetry group supplies the two missing laws in the required `telemetry` family.
+Failures distinguish an absent adapter publisher from an advertised publisher whose test driver is unbound.
+The completion audit reports these failed laws under `FullEcosystem`.
+
+[Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
+The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
+Metadata checks the actual declarations and reports. It does not choose test combinations at runtime.
+
+## Canonical E2E module index
+
+These modules live under `test/contracts/Ecluse/Test/Contract/` and take observations from the native E2E providers.
+The ecosystem spec modules retain native observations and scenario providers.
+Fixed suite lists bind their contract functions to concrete fixtures.
+
+| Canonical module | Registered cases | Native evidence retained |
+|---|---|---|
+| `Install` | The shared npm and PyPI installation families, plus the retained original install IDs | Startup rule text, lifecycle-script sentinel, wheel filename/hash and native installed-result observations. |
+| `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Exact expected artifact membership in native listings before remediation installation, advertised digests, exact denial text and remediation controls. |
+| `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
+| `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
+| `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
+| `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
+| `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
+| `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
+| `Sweep.Advisory` | `npm/dredger/advisory-revocation` | Generation swap, exact audit, revoked/fixed installs, stored and served artifact observations. |
+| `Sweep.Recovery` | Five recovery cases below | Residual deletion, refill, absent source bytes and copies arriving after cleanup. |
+| `Sweep.Rollout` | Three rollout cases below | Durable queue, independently started roles, stale policy, retained bytes and sentinel drain. |
+
+`Sweep.Types` owns the fixture and operation records. `Sweep` owns shared inventory, listing and refusal assertions.
+The Dredger provider keeps four lifecycle brackets in order: identity, advisory, recovery and rollout.
+All four remain inside the single schedulable `npm/dredger` group.
+The detailed tables below preserve all 49 original E2E observations and descriptions.
+Native deprecation/yank handling, npm publication metadata and tamper-refusal assertions remain in their ecosystem specs.
+
+The new shared installation family runs these four IDs for each of `npm` and `pypi`:
+`installation/accepted-install`, `installation/default-denial`, `installation/artifact-integrity`,
+and `installation/artifact-head`, with the ecosystem prefix.
+
+Admission preserves the native version or distribution observation until the contract compares it with the expected result.
+Refusal requires a failed client and an empty installation tree, including npm's lock file or pip's complete target directory.
+`core/test/unit/Ecluse/Test/Contract/InstallSpec.hs` rejects unexpected versions and files left by failed clients.
+Those negative controls create and inspect their files before checking the contract's failure.
+
+The npm advisory counterparts are `npm/advisories/deny-cve`, `npm/advisories/deny-epss`,
+and `npm/advisories/exact-fix`.
+The PyPI full contract also runs `pypi/telemetry/signals`,
+`pypi/telemetry/disabled`, `pypi/telemetry/export-failure`, and `pypi/telemetry/datadog`.
+The six former telemetry IDs map as follows. Each case keeps its original observations.
+
+| Former ID | Current ID |
+|---|---|
+| `telemetry/signals` | `npm/telemetry/signals` |
+| `telemetry/domain-spans` | `npm/telemetry/domain-spans` |
+| `telemetry/private-fetch` | `npm/telemetry/private-fetch` |
+| `telemetry/disabled` | `npm/telemetry/disabled` |
+| `telemetry/export-failure` | `npm/telemetry/export-failure` |
+| `telemetry/datadog` | `npm/telemetry/datadog` |
+
+`npm/telemetry/domain-spans` and `npm/telemetry/private-fetch` remain required by the full contract.
+`pypi/advisories/canonical-fix` keeps its ID in the native advisory group.
+Each new ID runs beside the original native case IDs and their negative controls.
+
+## E2E assertion identities
+
+The following original example descriptions retain their assertions and negative controls.
+The six telemetry IDs gained the `npm/` prefix as mapped above.
+The native modules retain scenario providers. The fixed suite declarations register their contract calls.
+
+### `test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `npm/install/default-denial` | uses the shipped default to block install scripts and never mirrors the package |
+| `npm/install/lifecycle-script-control` | runs no package lifecycle script during a harness install (defence in depth) |
+| `npm/install/deprecation-relay` | relays a deprecated version's notice to the client, before and after the worker mirrors the version |
+| `npm/install/deprecation-negative-control` | rejects the deprecation warning assertion for a version without the member |
+| `npm/install/integrity-refusal` | refuses to mirror an artifact whose bytes fail the integrity gate |
+| `npm/install/head-no-effect` | answers HEAD on a tarball with its size but no body, and enqueues no mirror |
+| `npm/install/metadata-preservation` | mirrors supported installation metadata and omits unknown and public-registry fields |
+| `npm/install/latest-preservation` | keeps the upstream latest on the mirror when an older version is mirrored after it |
+| `npm/install/publication-unconfigured` | answers a publish with 405 when no publication target is configured |
+
+### `test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `npm/mirror/dependency-graph` | resolves the dependency, its own dependency, and the peer, as the install from public did |
+| `npm/mirror/module-exports` | loads every package's export through the root, as the install from public did |
+| `npm/mirror/linked-executable` | links the root's executable, which prints the root's export, as the install from public did |
+| `npm/mirror/origin-evidence` | takes every packument and artifact from the mirror while public answers nothing |
+| `npm/mirror/installed-tree` | leaves the tree the install from public left, apart from the proxy's address |
+| `npm/mirror/empty-store-control` | fails the same install when no private store holds the graph |
+
+### `test/e2e/Ecluse/E2E/Npm/PublishE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `npm/publish/publish-install` | publishes an in-scope package, then installs it back through the private leg |
+| `npm/publish/scope-refusal` | refuses an out-of-scope publish before any upstream write (anti-shadowing guard) |
+
+### `test/e2e/Ecluse/E2E/Npm/DredgerE2ESpec.hs`
+
+| Case ID | Original assertion | Canonical home and retained evidence |
+|---|---|---|
+| `npm/dredger/inventory` | walks the seeded store through listPackagesIn, including scoped base-name buckets | `Sweep.Identity`: Exact seeded snapshot, listing matches names, empty and matching prefix inventories, absent prefix empty. |
+| `npm/dredger/admission-only` | keeps every version an identity deny limited to admission names, and states the phase at boot | `Sweep.Identity`: Successful role exit, admission-only phase at boot, exact examined/deleted/kept/guard tally, both complete snapshots unchanged. |
+| `npm/dredger/denied-versions` | deletes every denied version and preserves all other versions, including first-party versions | `Sweep.Identity`: Successful exit and exact fixture version, deletion reason, no-generation audit and cycle tally. Denied inventory empty, retained snapshot/listing exact, cache unchanged. |
+| `npm/dredger/dry-run` | previews distinct real inventories without writes and preserves first-party versions | `Sweep.Identity`: Distinct cache versions, first-party publication and listing readiness. Non-success preview exit, both store diagnostics, cache-only preview and deletion count. Partial-evidence and non-authority messages. No first-party deletion and both snapshots unchanged. |
+| `npm/dredger/consent-refusal` | refuses missing consent, names the key, and leaves every version intact | `Sweep.Identity`: Non-success exit, exact native consent key diagnostic, no sweep events, both snapshots unchanged. |
+| `npm/dredger/first-party` | protects every first-party version even when an identity deny names one | `Sweep.Identity`: Successful exit, exact zero-work/guard-skipped tally across both stores, exact protected versions and unchanged mirror snapshot. |
+| `npm/dredger/two-stores` | deletes shared and cache-only versions while preserving each store's other contents | `Sweep.Identity`: Cache-only publication and original bounded presence probes: present in cache, absent in mirror. Successful exit. Each snapshot loses only the condemned name. Both name inventories empty. |
+| `npm/dredger/advisory-revocation` | revokes the version a new advisory generation condemns and keeps its fix installable | `Sweep.Advisory`: Every fixture release and unaffected package installed, with exact mirrored versions/listing and initial snapshot. Successful generation publication, second swap witness and successful sweep. Exact deletion and cycle tally, with unpinned generation. Snapshot removes only the vulnerable version. Vulnerable install fails and artifact returns 403. Bounded no-refill window, fixed version retained and fixed install succeeds. Stored and served artifact bytes remain nonempty with HTTP 200. |
+| `npm/dredger/denied-install` | serves the sibling and refuses the denied version once both stores lose it | `Sweep.Recovery`: Exact initial cache versions and vulnerable bytes. Successful sweep, sibling-only inventories, removed cache artifact 404, metadata and sibling artifact 200. Denied artifact 403 and fresh install failure. Sibling fresh install succeeds with exact installed version. Both sibling-only inventories remain unchanged. |
+| `npm/dredger/delete-recovery` | keeps the cache copy its backend refused and removes it on a later run | `Sweep.Recovery`: Exact cache target, version and refused-503 audit. Mirror empty while cache retains version and bytes. Later successful sweep removes the cache copy. Subsequent direct and client reads remain denied. Both inventories empty. |
+| `npm/dredger/refill` | mirrors the version again when the policy lifts and the public source still holds bytes | `Sweep.Recovery`: Successful removal and both inventories empty. Relaxed fresh install succeeds with exact version. Bounded mirror inventory and nonempty stored artifact. |
+| `npm/dredger/missing-source` | leaves both stores empty when the policy lifts and no source bytes remain | `Sweep.Recovery`: Successful removal and both inventories empty. Public-artifact fault, relaxed artifact 404 and fresh install failure. Original bounded write window, both stores remain empty. |
+| `npm/dredger/late-copy` | removes the copies each store received after the cycle that reported them gone | `Sweep.Recovery`: Successful initial cleanup and empty stores. Direct publication into both stores, exact inventory and listing readiness. Later successful rediscovery sweep leaves both stores empty. |
+| `npm/dredger/old-worker` | removes the copies an old worker mirrored after a stricter proxy started | `Sweep.Rollout`: Shared durable queue, successful old admissions and first-party publication. Target absent before worker starts, strict public reads denied. Old worker publishes target and unrelated release, target reaches both stores. Private-origin fresh install succeeds with exact version and nonempty served bytes. Successful sweep removes target from both stores and preserves unrelated and first-party versions. Next reads fail. Permissive drain publishes sentinel, never denied release. Successful rescan retains the first-party version. |
+| `npm/dredger/old-dredger-refill` | restores a version an old Dredger removed while the newer roles permitted it | `Sweep.Rollout`: Initial cache bytes and mirror HTTP 200. Old policy removes both copies. Converged permissive sweep alone restores nothing. Fresh install succeeds with exact version and mirrored inventory. Restored artifact returns HTTP 200 with identical bytes. Served artifact returns HTTP 200. Exact byte equality strengthens the original SHA-512 equality. |
+| `npm/dredger/old-dredger-loss` | leaves the version lost when an old Dredger removed the only remaining bytes | `Sweep.Rollout`: With public bytes absent, retained artifact initially returns 200. Old policy removes both copies. Converged sweep restores nothing. Artifact returns 404 rather than policy refusal. Fresh install fails. Bounded window leaves both stores empty. |
+
+### `test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar |
+| `pypi/install/yanked-pin` | relays the yank reason when pip installs an exact pin |
+| `pypi/install/yank-negative-control` | rejects the yank warning assertion for a release without the member |
+| `pypi/install/sdist` | serves the source distribution beside the wheel under the shipped policy |
+| `pypi/install/outage` | fails the same install through a second proxy while both public upstreams are down |
+
+### `test/e2e/Ecluse/E2E/PyPI/AdvisoriesE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `pypi/advisories/exact-fix` | admits the recent exact fix while the remediation-disabled control quarantines it |
+| `pypi/advisories/canonical-fix` | admits a recent release with a canonicalised advisory fix and preserves refusal controls |
+| `pypi/advisories/deny-cve` | denies the old affected Flask release by CVE |
+| `pypi/advisories/deny-epss` | denies the old affected Flask release by EPSS |
+
+### `test/e2e/Ecluse/E2E/TelemetryE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `telemetry/signals` | exports ecluse.* metrics and a span to the collector on a real npm request |
+| `telemetry/domain-spans` | emits the rule-eval, mirror-enqueue, and mirror-job domain spans to the collector on a mirror round-trip |
+| `telemetry/private-fetch` | serves a mirrored artifact from the private leg, and the collector receives that upstream fetch |
+| `telemetry/disabled` | starts, serves a real install, and logs JSONL to stdout -- no collector needed |
+| `telemetry/export-failure` | surfaces a throttled export-failure warning yet keeps serving -- an absent collector degrades visibly, no crash |
+| `telemetry/datadog` | carries the Datadog unified-service tags to the collector and the dd object onto the logs |
+
+### `test/e2e/Ecluse/E2E/MixedEcosystemE2ESpec.hs`
+
+| Case ID | Original assertion |
+|---|---|
+| `mixed/alternating-clients` | serves an npm install, a pip install, and a second npm install in turn |
+
+## Integration registration and native traceability
+
+The integration runner registers 17 complete lifecycle groups and 254 unique examples.
+Of these, 23 execute canonical serving, queue, or advisory contracts.
+The other 231 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
+Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
+
+The pure expected catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
+Preparation builds the expected plan from that snapshot.
+The integration entrypoint discovers actual case IDs from its fixed Hspec specs before acquiring fixtures.
+Removing a case, profile, or required capability fails catalogue validation.
+Mutation checks exercise every registered case and capability without constructing integration specs.
+The shared runner compares actual Hspec result IDs against each group's declared case set.
+A deleted action cannot satisfy the catalogue merely because its metadata remains.
+
+The previous `hspec-discover` output registered `PipelineIntegrationSpec` alongside all three modules it called.
+That wrapper added no hooks or assertions and repeated 116 examples.
+Explicit registration removes those duplicate executions and keeps every unique assertion.
+The old wrapper remains as a native source reference, but the runner does not schedule it.
+
+| Group | Native example IDs | Canonical examples | Native module |
+|---|---|---|---|
+| `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
+| `integration/pypi` | `native-001` to `native-021` (27) | 10 serving, including `artifact-head` | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
+| `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
+| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving, including `artifact-head` | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
+| `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
+| `integration/worker` | `native-001` to `native-008` (8) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
+| `integration/pilot` | `native-001` to `native-003` (8) | None | `Ecluse.PilotIntegrationSpec` |
+| `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
+| `integration/advisory-export` | `native-001` to `native-002` (2) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
+| `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
+| `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |
+| `integration/telemetry-metrics` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec` |
+| `integration/telemetry-scrape` | `native-001` to `native-006` (6) | None | `Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec` |
+| `integration/telemetry-traces` | `native-001` to `native-003` (3) | None | `Ecluse.Runtime.Telemetry.TracingIntegrationSpec` |
+
+Every ID labels its original Hspec example in the module listed above.
+That example retains all of its prior assertions, negative controls, and resource hooks.
+The independent obligation file enumerates every expanded parameter case.
+
+Read the explicit contract list in [integration/Spec.hs](../test/integration/Spec.hs).
+Run `cabal run ecluse-integration-manifest` to inspect the fixed manifest without Docker.
+Run `task test-integration` for the complete tier.
+Coverage remains one full integration invocation with the same Cabal instrumentation and four total uploads.
+
+## Unit registration validation
+
+Core and runtime retain `hspec-discover` and their existing dependency boundaries.
+The core `Ecluse.Test.Contract.UnitCatalogue` and runtime `Ecluse.Runtime.Test.Contract.UnitCatalogue` hold separate obligations.
+Together, they require 100 canonical examples across nine actual spec roots.
+`UnitCatalogueSpec` reads labelled declaration trees without executing hooks or examples.
+Native unlabelled examples continue in their original suites.
+The audits reject missing, duplicate, and unknown IDs and missing capabilities.
+Deletion mutations cover each group, case, and profile capability.
+Production adapter registration anchors ecosystem coverage.
+The npm maintenance operations and CodeArtifact format anchor their supported maintenance profiles.
+Add a provider's obligations separately from its actual registrations.

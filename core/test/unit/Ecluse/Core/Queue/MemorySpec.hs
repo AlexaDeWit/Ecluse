@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Memory queue delivery laws and bounded overflow behaviour.
 module Ecluse.Core.Queue.MemorySpec (spec) where
 
 import System.Timeout (timeout)
@@ -9,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent),
-    MirrorJob (..),
+    MirrorJob,
     MirrorQueue (..),
     QueueMessage (..),
  )
@@ -18,11 +19,20 @@ import Ecluse.Core.Queue.Memory (
     memoryQueueDropReportInterval,
     newBoundedInMemoryQueue,
  )
+import Ecluse.Test.Contract.Queue (QueueDriver (..), ephemeralQueueContract, queueContract)
 import Ecluse.Test.Queue (otherJob, sampleJob, thirdJob)
 import Ecluse.Test.Support (expectRightIO)
 
 spec :: Spec
 spec = do
+    before
+        ( do
+            (queue, _) <- boundedQueue 10
+            pure QueueDriver{queueHandle = queue, awaitDelivery = expectRightIO (receive queue)}
+        )
+        $ do
+            queueContract "queue/memory"
+            ephemeralQueueContract "queue/memory"
     describe "newBoundedInMemoryQueue" $ do
         it "returns [] on an idle queue within the poll window (never blocks forever)" $ do
             -- The worker advances its heartbeat only when receive returns, so an idle receive
@@ -30,25 +40,6 @@ spec = do
             (q, _drops) <- boundedQueue 4
             result <- timeout 2_000_000 (expectRightIO (receive q))
             result `shouldBe` Just []
-
-        it "carries a job from enqueue through receive to ack (round-trip)" $ do
-            -- A cap well above the one job, so nothing is dropped: the job arrives
-            -- unchanged and ack (a no-op on this backend) completes without error.
-            (q, _drops) <- boundedQueue 10
-            expectRightIO (enqueue q sampleJob)
-            [msg] <- expectRightIO (receive q)
-            msgJob msg `shouldBe` sampleJob
-            expectRightIO (ack q (msgReceipt msg))
-
-        it "dead-letters a received job without redelivering it (the memory terminus is a drop; issue #846)" $ do
-            -- This backend has no dead-letter queue, so a terminal fault is the drop a delivered
-            -- job already is. It never redelivers.
-            (q, _drops) <- boundedQueue 10
-            expectRightIO (enqueue q sampleJob)
-            [msg] <- expectRightIO (receive q)
-            expectRightIO (deadLetter q (msgReceipt msg))
-            afterDeadLetter <- expectRightIO (receive q)
-            afterDeadLetter `shouldBe` []
 
         it "reports every delivery as a first delivery, so the redelivery budget never bites" $ do
             -- This backend removes a job at delivery, so every delivery is a first delivery.
@@ -64,18 +55,6 @@ spec = do
             -- decide its boot warning, and the memory backend captures nothing.
             (q, _drops) <- boundedQueue 10
             deadLetterTerminus q `shouldBe` Right TerminusAbsent
-
-        it "carries every job field through unchanged from enqueue to receive" $ do
-            -- Assert field by field rather than on the whole record, so a regression names the
-            -- single field the queue mangled.
-            (q, _drops) <- boundedQueue 10
-            expectRightIO (enqueue q sampleJob)
-            [msg] <- expectRightIO (receive q)
-            let job = msgJob msg
-            jobPackage job `shouldBe` jobPackage sampleJob
-            jobVersion job `shouldBe` jobVersion sampleJob
-            jobArtifactUrl job `shouldBe` jobArtifactUrl sampleJob
-            jobArtifactFilename job `shouldBe` jobArtifactFilename sampleJob
 
         it "delivers jobs in FIFO order" $ do
             (q, _drops) <- boundedQueue 10

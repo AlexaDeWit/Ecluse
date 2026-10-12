@@ -1,0 +1,51 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | E2E scheduling metadata is independent of Hspec construction and resource acquisition.
+module Ecluse.E2E.Catalogue (catalogue, prerequisites) where
+
+import Prelude hiding (universe)
+
+import Data.Universe.Class (universe)
+
+import Ecluse.Core.Ecosystem (ecosystemName)
+import Ecluse.Core.Registry.Adapter (adapterFor)
+import Ecluse.E2E.Harness.Availability (e2ePrerequisites)
+import Ecluse.E2E.Requirements (obligations)
+import Ecluse.E2E.Suites.Npm qualified as Npm
+import Ecluse.E2E.Suites.PyPI qualified as PyPI
+import Ecluse.E2E.Suites.SharedSystem qualified as SharedSystem
+import Ecluse.Test.Contract.Ecosystem (missingCapabilityObligations, missingCapabilityProfiles)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types
+
+-- | Fixed requirements do not shrink when a production adapter lacks an operation.
+catalogue :: Catalogue
+catalogue =
+    Catalogue
+        { catalogueProductionEcosystems = map ecosystemName $ filter (isJust . adapterFor) universe
+        , catalogueProfiles = profiles <> missingCapabilityProfiles "npm" Npm.declarations <> missingCapabilityProfiles "pypi" PyPI.declarations
+        , catalogueObligations = obligations <> missingCapabilityObligations declarations
+        , catalogueGroups = map declaredGroup declarations
+        }
+
+profiles :: [Profile]
+profiles =
+    [ Profile "npm/read" ["npm"] ["http"] ["read", "client-install"]
+    , Profile "npm/registry" ["npm"] ["verdaccio", "memory"] ["read", "mirror", "publication", "client-install"]
+    , Profile "npm/maintenance" ["npm"] ["verdaccio", "sqs", "s3"] ["read", "mirror", "maintenance", "advisories"]
+    , Profile "npm/advisories" ["npm"] ["http", "s3"] ["read", "advisories", "client-install"]
+    , Profile "pypi/read" ["pypi"] ["http"] ["read", "client-install"]
+    , Profile "pypi/advisories" ["pypi"] ["http", "s3"] ["read", "advisories", "client-install"]
+    , Profile "mixed/registry" ["npm", "pypi"] ["verdaccio", "memory"] ["read", "mirror", "client-install"]
+    , Profile "npm/telemetry" ["npm"] ["verdaccio", "memory", "collector"] ["read", "mirror", "telemetry", "client-install"]
+    , Profile "pypi/telemetry" ["pypi"] ["http", "collector"] ["read", "telemetry", "client-install"]
+    ]
+
+declarations :: [DeclaredGroup]
+declarations = Npm.declarations <> PyPI.declarations <> SharedSystem.declarations
+
+-- | Missing tools fail setup without replacing declared examples with pending placeholders.
+prerequisites :: Group -> IO (Maybe Text)
+prerequisites = fmap (fmap toText) . e2ePrerequisites . map toString . groupPrerequisites

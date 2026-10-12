@@ -12,12 +12,11 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (Artifact (..), Hash (hashAlg), HashAlg (SHA256), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (infoName, infoVersions), mkPackageName, renderPackageName)
+import Ecluse.Core.Package (Artifact (..), Hash (hashAlg), HashAlg (SHA256), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageInfo (infoVersions), mkPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody, responseStatusCode))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Exchange (boundedFetch)
-import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -25,34 +24,29 @@ import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), Limits (progre
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (canonicalPep440, renderVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (expectRight, expectRightText)
 
 -- | Only transport unavailability skips a live document or integrity check.
 spec :: Spec
 spec = describe "live PyPI registry protocol" $
-    it "reads a bounded Simple index and verifies one advertised wheel" $ do
+    it (caseLabel "live/pypi/sampleproject" "reads a bounded Simple index and verifies one advertised wheel") $ do
         manager <- newManager tlsManagerSettings
         base <- expectRightText (mkRegistryUrl "https://pypi.org")
         expectedVersion <- maybe (fail "invalid sampleproject fixture version") pure (canonicalPep440 "4.0.0")
         let versionKey = renderVersion expectedVersion
             name = mkPackageName PyPI Nothing "sampleproject"
             origin = originClient defaultLimits manager base Nothing
-        fetched <- fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name
-        case fetched of
-            Left (MetadataFetch (FetchTransport fault)) ->
-                pendingWith ("PyPI registry unreachable: " <> show fault)
-            _ -> do
-                manifest <- expectRight fetched
-                let info = manifestInfo manifest
-                renderPackageName (infoName info) `shouldBe` "sampleproject"
-                version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
-                pkgName version `shouldBe` name
-                renderVersion (pkgVersion version) `shouldBe` versionKey
-                artifact <-
-                    maybe (fail "live index omitted the sampleproject 4.0.0 wheel") pure $
-                        find ((== wheelFilename) . artFilename) (NE.toList (pkgArtifacts version))
-                downloadWheel manager artifact
+        info <- liveMetadata "sampleproject" (fetchManifest (metadataRead (adapterMetadata pypiAdapter)) passthroughTracingPort origin name)
+        version <- maybe (fail "live index omitted sampleproject 4.0.0") pure (Map.lookup versionKey (infoVersions info))
+        pkgName version `shouldBe` name
+        renderVersion (pkgVersion version) `shouldBe` versionKey
+        artifact <-
+            maybe (fail "live index omitted the sampleproject 4.0.0 wheel") pure $
+                find ((== wheelFilename) . artFilename) (NE.toList (pkgArtifacts version))
+        downloadWheel manager artifact
 
 wheelFilename :: Text
 wheelFilename = "sampleproject-4.0.0-py3-none-any.whl"

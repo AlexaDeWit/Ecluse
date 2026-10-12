@@ -22,15 +22,16 @@ commit messages stay in English.
 
 ## Automation scripting
 
-Build and CI automation is **Bash**: one language to read and review. Scripts live in
-[`scripts/`](scripts/) with `#!/usr/bin/env bash` and `set -euo pipefail`. The
-[`Taskfile.yml`](Taskfile.yml) and the workflows only invoke them. Keep logic in the scripts, not
-in a multiline YAML block, so it stays reviewable and runs outside CI. Scripts must pass
-`shellcheck` (`task lint-scripts`). Reach for `awk` or `sort` before a heavier runtime.
+Task owns the sequence of builds, preparation, execution, audits, and publication.
+Keep this sequence visible in [`Taskfile.yml`](Taskfile.yml) and its included files under [`taskfiles/`](taskfiles/).
+Workflows allocate runners, set prerequisites, and transport artifacts, then call named Task targets.
 
-Use another language only when the tool forces it, and say why in review. A new build-time
-dependency on Python, Node, or similar needs a strong, stated reason. "It reads a little
-cleaner" is not one.
+Haskell owns typed identities, artifact schemas, digests, qualification rules, and report transactions.
+Bash helpers in [`scripts/`](scripts/) handle OS operations such as Docker, cgroups, locks, process cancellation, and HPC conversion.
+Do not add a Bash dispatcher for a sequence that Task can express.
+Use `#!/usr/bin/env bash` and `set -euo pipefail` for executable helpers.
+Scripts must pass `shellcheck` (`task lint-scripts`).
+A new build dependency on another language needs a stated reason.
 
 ## Releases
 

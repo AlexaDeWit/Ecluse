@@ -1,62 +1,11 @@
 #!/usr/bin/env bash
-#
-# Generate a coverage report for ONE test suite, in Codecov's native JSON format,
-# for the Codecov action to upload. See docs/testing.md -> "Coverage: Codecov".
-#
-# This is a PARTIAL view: a single tier is only one of the flags Codecov merges
-# into the project total (unit ∪ integration). CI uses this per-tier form on
-# purpose, because each tier uploads under its own flag. A developer reading one
-# tier's number is under-counting every module the other tier exercises. For the
-# merged picture that matches the Codecov dashboard, run the combined report,
-# which needs Docker:
-#   task coverage   (the combined report, assembled in the Taskfile)
-# Each non-combined run prints this caveat. Set ECLTEST_COVERAGE_QUIET_PARTIAL=1
-# to suppress it, as the combined script does when it drives this one per tier.
-#
-# Why we drive HPC by hand instead of `hpc-codecov cabal:<suite>`: the `cabal:`
-# auto-discovery builds a wrong .mix path for cabal's modern
-# `extra-compilation-artifacts` layout. It doubles the package-key segment, so
-# it fails. We locate the .tix and every .mix directory ourselves and pass them
-# explicitly. Extra .mix dirs are harmless, because hpc-codecov reads only the
-# ones the .tix references. This manual path avoids the auto-discovery, so it
-# holds across hpc-codecov versions (pinned via the GHC 9.10 set in flake.lock,
-# currently 0.6.x).
-#
-# Usage: scripts/coverage.sh [SUITE]   (default: ecluse-unit)
+# Convert explicit HPC ticks and check the unchanged product-module denominator.
 set -euo pipefail
 
-suite="${1:-ecluse-unit}"
-shift || true
-builddir="dist-coverage" # isolated so -fhpc instrumentation never invalidates
-                         # the normal `cabal build` cache in dist-newstyle
-outdir="coverage"
-
-# The Taskfile's `coverage` task sets ECLTEST_COVERAGE_QUIET_PARTIAL when it drives
-# this script per tier, to suppress the caveat below. It prints the merged total
-# itself.
-if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
-  case "$suite" in
-    ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
-    ecluse-unit) other="ecluse-core-unit and ecluse-integration" ;;
-    ecluse-integration) other="ecluse-core-unit and ecluse-unit" ;;
-    *) other="the other gating tiers" ;;
-  esac
-  {
-    echo "coverage: PARTIAL VIEW — measuring '$suite' ONLY."
-    echo "  Codecov merges this with '$other' into the project total, so this number"
-    echo "  under-counts every module '$other' exercises. For the merged, Codecov-matching"
-    echo "  picture run:  task coverage   (combined unit ∪ integration; needs Docker)."
-  } >&2
-fi
-
-# Instrumented build + run of just this suite.
-cabal test "$suite" \
-  --enable-coverage \
-  --builddir="$builddir" \
-  --test-show-details=direct \
-  "$@"
-
-tix="$(bash scripts/coverage-tix.sh "$suite" "$builddir")"
+tix="${1:?tick file}"
+out="${2:?output file}"
+suite="${3:-combined}"
+builddir="${4:-dist-coverage}"
 
 # Every HPC mix directory produced by the coverage build.
 mix_args=()
@@ -64,28 +13,14 @@ while IFS= read -r d; do
   mix_args+=(-m "$d")
 done < <(find "$builddir" -type d -path '*/hpc/vanilla/mix')
 
-mkdir -p "$outdir"
-out="$outdir/${suite}.json"
+mkdir -p "$(dirname "$out")"
 
-# Exclude every module of the ecluse-test-support library. It is a first-class
-# local library, so the instrumented build measures it. Its Ecluse.Test.* modules
-# link into the suite, and would otherwise land in the uploaded report. It is
-# shared test scaffolding, not the software under test. The exclusion list comes
-# from test/support/, so a NEW Ecluse.Test.* module drops out here automatically.
-# As a second, report-side line of defence, codecov.yml `ignore` also drops
-# test/support/**.
+# Shared contracts and drivers are not product coverage.
 support_exclude=()
 while IFS= read -r module; do
   support_exclude+=(-x "$module")
-done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
+done < <(find test/support test/contracts runtime/test-support -name '*.hs' | sed -e 's#^\(test/support\|test/contracts\|runtime/test-support\)/##' -e 's#/#.#g' -e 's#\.hs$##')
 
-# -s .              resolve source paths relative to the repo root (./src/...)
-# -x Main           drop the hspec-discover entry module (no real source)
-# -x Paths_ecluse   drop the cabal-generated path module
-# -x Ecluse.Test.*  drop the ecluse-test-support library (support_exclude, above)
-# -f codecov        Codecov's native JSON: leanest for Codecov to ingest (no conversion)
-# codecov.yml `ignore` does the rest of the library-vs-test scoping, so a new
-# spec module needs no change to this script.
 hpc-codecov "${mix_args[@]}" \
   -s . \
   -x Main \
@@ -95,45 +30,22 @@ hpc-codecov "${mix_args[@]}" \
   -o "$out" \
   "$tix"
 
-# Completeness guard. HPC emits only a module the suite linked into its .tix. A
-# library module the suite never imports is therefore silently *absent* from the
-# report rather than reported as 0%, which quietly inflates the percentage. This
-# guard fails loudly on a missing module instead of hiding it. The fix is a test
-# that exercises the module, so that it links. A module that declares no
-# expression of its own is absent for a second reason: HPC has no tick box to
-# emit for it, so no test can bring it into the report. For that module, and for
-# one with genuinely nothing to cover yet, add an entry to the suite's `unscoped`
-# list below. See docs/testing.md -> "Coverage: Codecov".
-#
-# The whole-library expectation holds only for the two unit suites. Each must link
-# every module in its own source tree:
-#   ecluse-core-unit → must link every core/src/*.hs module.
-#   ecluse-unit      → must link every src/*.hs module.
-# A focused suite reports a subset legitimately: ecluse-integration links only the
-# cloud-backed modules its emulator tests exercise. Codecov merges that partial
-# view into the total under its own flag, so the guard would only produce false
-# positives there. Skip it for a non-unit suite.
+# Unit suites must link each product module in their layer. HPC silently omits unlinked code.
+# Integration contributes its exercised subset to the unchanged four-report union.
 case "$suite" in
   ecluse-core-unit)
     src_dir="core/src"
     src_prefix="./core/src/"
-    # Intentionally unscoped in ecluse-core-unit: pure types/handles with no
-    # executable logic yet. Each entry states why and when it returns, so this
-    # stays a reviewed decision and not a silent escape hatch.
+    # Each excluded module needs a reason for having no ticks in this suite.
     unscoped=(
-      # re-export only: the curated public surface over an .Internal or sibling
-      # module (docs/style.md 4.6). Such a module declares no expression, so HPC
-      # has no tick box for it and the report names it under no suite. The
-      # implementation and its coverage sit in the modules it re-exports.
+      # Re-exports declare no expressions. HPC covers their implementation modules.
       ./core/src/Ecluse/Core/Credential/Refresh.hs
       ./core/src/Ecluse/Core/Registry/Npm/Route.hs
       ./core/src/Ecluse/Core/Registry/PyPI/Route.hs
       ./core/src/Ecluse/Core/Security.hs
       ./core/src/Ecluse/Core/Server/Pipeline.hs
       ./core/src/Ecluse/Core/Worker.hs
-      # pure protocol Handle: the RegistryClient record and the error newtypes,
-      # no logic. Remove once the npm wire adapter adds real fetch and parse code
-      # with tests that link it.
+      # Pure handle and error types. Remove when this module gains executable logic.
       ./core/src/Ecluse/Core/Registry.hs
       # test and dev-only loopback constructor, enabled by the dev-http-egress
       # flag. The integration tests cover it, and core-unit does not link it.
@@ -156,10 +68,7 @@ case "$suite" in
     # Runtime modules the runtime-unit suite intentionally does not link. Another
     # gating tier covers each one, merged into the Codecov total under its flag.
     unscoped=(
-      # re-export only: the curated public surface over an .Internal or sibling
-      # module (docs/style.md 4.6). Such a module declares no expression, so HPC
-      # has no tick box for it and the report names it under no suite. The
-      # implementation and its coverage sit in the modules it re-exports.
+      # Re-exports declare no expressions. HPC covers their implementation modules.
       ./runtime/src/Ecluse/Runtime/Credential/CodeArtifact.hs
       ./runtime/src/Ecluse/Runtime/Cve/Sync.hs
       ./runtime/src/Ecluse/Runtime/Log.hs
@@ -175,16 +84,11 @@ case "$suite" in
       ./runtime/src/Ecluse/Runtime/Telemetry/Resolve.hs
       ./runtime/src/Ecluse/Runtime/Telemetry/Scrape.hs
       ./runtime/src/Ecluse/Runtime/Telemetry/Tracing.hs
-      # Ecluse.Runtime.Server.Internal and Ecluse.Runtime.Env carry the shell's
-      # runServer and runWorker, so Ecluse.Runtime.ServerSpec and
-      # Ecluse.Runtime.EnvSpec live in ecluse-unit, which links the app library.
-      # The runtime-unit partition cannot link them. ecluse-unit covers both.
+      # The application unit suite covers runServer and runWorker.
+      # The runtime unit suite cannot link the application library.
       ./runtime/src/Ecluse/Runtime/Server/Internal.hs
       ./runtime/src/Ecluse/Runtime/Env.hs
-      # The composed application (shell fixtures) exercises the middleware pieces
-      # and health probes in that same ecluse-unit Ecluse.Runtime.ServerSpec. The
-      # runtime-unit partition links only the drain and halt siblings, whose specs
-      # drive them directly.
+      # Application server specs cover middleware and health probes.
       ./runtime/src/Ecluse/Runtime/Server/Middleware.hs
       # only the integration tier exercises the S3 export adapter
       # (test/integration/Ecluse/Runtime/Pilot/ExportIntegrationSpec.hs).
@@ -206,7 +110,7 @@ missing="$(comm -23 <(echo "$expected") <(echo "$present"))"
 if [ -n "$missing" ]; then
   {
     echo "coverage: library modules absent from $out (not linked by $suite):"
-    echo "$missing" | sed 's/^/  /'
+    printf '%s\n' "$missing" | sed 's/^/  /'
     echo "Add a test that exercises the module, or list it in scripts/coverage.sh 'unscoped'."
   } >&2
   exit 1

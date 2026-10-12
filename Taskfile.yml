@@ -1,4 +1,8 @@
 version: '3'
+includes:
+  test: taskfiles/test.yml
+  coverage: taskfiles/coverage.yml
+  performance: taskfiles/performance.yml
 vars:
   DOCS_BUILDDIR: dist-newstyle
   BENCH_PROFILE_DIR: dist-bench-prof
@@ -74,18 +78,30 @@ tasks:
     desc: Run the fast, gating unit suites (core + app)
     cmds:
       - cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit --test-show-details=direct
-  test-integration:
-    desc: Run the integration suite (requires a Docker daemon)
+  test-unit-core-receipt:
+    desc: Run core unit tests and write their completion plan and report
     env:
-      # Pin this worktree's reaping scope. The harness stamps every container with it
-      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+      ECLTEST_UNIT_PLAN_PATH: scratchpad/unit/core/unit-plan.json
+      ECLTEST_UNIT_REPORT_PATH: scratchpad/unit/core/unit-report.json
     cmds:
-      # Sweep this worktree before running and on exit, without touching sibling containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - cabal test ecluse-integration --test-show-details=direct
+      - mkdir -p scratchpad/unit/core
+      - rm -f scratchpad/unit/core/unit-plan.json scratchpad/unit/core/unit-report.json
+      - cabal test ecluse-core-unit --test-show-details=direct
+  test-unit-runtime-receipt:
+    desc: Run runtime unit tests and write their completion plan and report
+    env:
+      ECLTEST_UNIT_PLAN_PATH: scratchpad/unit/runtime/unit-plan.json
+      ECLTEST_UNIT_REPORT_PATH: scratchpad/unit/runtime/unit-report.json
+    cmds:
+      - mkdir -p scratchpad/unit/runtime
+      - rm -f scratchpad/unit/runtime/unit-plan.json scratchpad/unit/runtime/unit-report.json
+      - cabal test ecluse-runtime-unit --test-show-details=direct
+  test-integration:
+    desc: Run the complete fixed integration suite
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:integration
   test-residency:
     desc: Run the bounded-memory streaming gate (own process, RTS -T)
     cmds:
@@ -94,37 +110,82 @@ tasks:
     desc: Run the smoke suite (live registries, non-gating)
     cmds:
       - cabal test ecluse-smoke --test-show-details=direct
-  test-e2e:
-    desc: End-to-end suite against a locally built OCI image (needs the E2E image, an active Docker daemon, and the E2E dependencies built)
+  test-e2e-prepare:
+    desc: Build one immutable image archive and the E2E plan
     env:
-      # Pin this worktree's reaping scope. The harness stamps every container with it
-      # (see Ecluse.Test.Containers), and the reaps below then target only our own.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
     cmds:
-      # Sweep this worktree before running and on exit, without touching sibling containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - |
-        echo "==> building the OCI image (.#dockerImage)"
-        img_archive="$(nix build --print-build-logs --option max-silent-time 1200 .#dockerImage --no-link --print-out-paths)"
-        
-        echo "==> loading the image into docker"
-        tag="$(bash scripts/docker-load.sh "$img_archive")"
-        echo "==> image: $tag"
-        
-        echo "==> running ecluse-e2e"
-        ECLTEST_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
+      - task: test:e2e-prepare
+  test-e2e-load:
+    desc: Verify and load the prepared E2E image archive
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-load
+  test-e2e-npm:
+    desc: Run the fixed npm E2E subject
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-npm
+  test-e2e-pypi:
+    desc: Run the fixed PyPI E2E subject
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-pypi
+  test-e2e-shared-system:
+    desc: Run the fixed shared-system E2E subject
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-shared-system
+  test-e2e-npm-completion:
+    desc: Audit npm completion against unit, integration and E2E reports
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:npm-completion
+  test-e2e-pypi-completion:
+    desc: Audit PyPI completion against unit, integration and E2E reports
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:pypi-completion
+  test-conformance-verdaccio:
+    desc: Run the fixed Verdaccio package-store contract
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:conformance-verdaccio
+  test-conformance-codeartifact:
+    desc: Run the fixed CodeArtifact package-store contract
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:conformance-codeartifact
+  test-e2e-audit:
+    desc: Check subject reports against the complete prepared plan
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e-audit
+  test-e2e:
+    desc: Collect every fixed E2E subject report and audit the complete execution
+    env:
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
+    cmds:
+      - task: test:e2e
   test-clean:
-    desc: Reap THIS worktree's leftover test containers/networks (scoped, safe while other agents or worktrees run)
+    desc: Wait for active planes, then reap this worktree's stale test resources
     cmds:
       - bash scripts/test-containers.sh reap
   test-clean-all:
-    desc: Reap ALL Écluse test containers/networks/images across every worktree (only when no other suite is running)
+    desc: Wait for active planes, then reap all labelled test resources
     cmds:
       - bash scripts/test-containers.sh reap --all
   test-all:
-    desc: Run every test suite
+    desc: Run the unit, integration, and smoke suites
     cmds:
       - task: test
       - task: test-integration
@@ -175,57 +236,19 @@ tasks:
     cmds:
       - cabal repl --with-ghc=doctest --repl-options="-Wwarn -Wno-missing-export-lists" lib:ecluse
   coverage:
-    desc: Combined unit + integration coverage matching Codecov
-    preconditions:
-      - sh: docker info >/dev/null 2>&1
-        msg: "coverage: the combined report needs a running Docker daemon (ecluse-integration drives ministack containers via testcontainers)."
-    env:
-      ECLTEST_COVERAGE_QUIET_PARTIAL: 1
+    desc: Combined unit and integration coverage matching Codecov
     cmds:
-      - task: coverage-unit
-        vars: { SUITE: ecluse-core-unit }
-      - task: coverage-unit
-        vars: { SUITE: ecluse-unit }
-      - task: coverage-unit
-        vars: { SUITE: ecluse-runtime-unit }
-      # Only integration needs the scoped Docker lifecycle. Unit coverage starts no containers.
-      - task: coverage-integration
-      - |
-        core_unit_tix="$(bash scripts/coverage-tix.sh ecluse-core-unit)"
-        runtime_unit_tix="$(bash scripts/coverage-tix.sh ecluse-runtime-unit)"
-        unit_tix="$(bash scripts/coverage-tix.sh ecluse-unit)"
-        integration_tix="$(bash scripts/coverage-tix.sh ecluse-integration)"
-        hpc combine --union --output=dist-coverage/unit-core-runtime.tix "$core_unit_tix" "$runtime_unit_tix"
-        hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/unit-core-runtime.tix "$unit_tix"
-        hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix "$integration_tix"
-        
-        mix_args=()
-        while IFS= read -r d; do
-          mix_args+=(-m "$d")
-        done < <(find dist-coverage -type d -path '*/hpc/vanilla/mix')
-        
-        support_exclude=()
-        while IFS= read -r module; do
-          support_exclude+=(-x "$module")
-        done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
-        
-        hpc-codecov "${mix_args[@]}" -s . -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
-        echo "coverage: wrote coverage/combined.json (combined core-unit ∪ app-unit ∪ integration — matches Codecov's merged total)"
+      - task: coverage:combined
   coverage-unit:
     desc: Fast, Docker-free unit-only coverage
     cmds:
-      - bash scripts/coverage.sh {{.SUITE}} {{.COVERAGE_FLAGS}}
+      - task: coverage:unit
   coverage-integration:
-    desc: Integration-tier coverage (drives ministack, scoped and reaped like test-integration)
+    desc: Full integration coverage under the shared daemon lock
     env:
-      # Stamp containers with this worktree scope so cleanup can identify them.
-      ECLTEST_SCOPE:
-        sh: bash scripts/test-containers.sh scope
+      ECLTEST_ARGUMENTS: '{{.CLI_ARGS}}'
     cmds:
-      # Sweep before running and on exit to remove this worktree's abandoned containers.
-      - bash scripts/test-containers.sh reap
-      - defer: bash scripts/test-containers.sh reap
-      - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
+      - task: coverage:integration
   gen-version-fixtures:
     desc: Regenerate version-ordering fixtures
     cmds:
@@ -365,10 +388,16 @@ tasks:
       # that fourmolu joined to the header. git grep exits 1 when all files carry the tag.
       # Preserve the maintained fork's BSD headers.
       - '{ git grep -z -L "SPDX-License-Identifier:" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
+  test-task-composition:
+    desc: Check Task sequencing and lifecycle with stubbed processes
+    cmds:
+      - bash scripts/task-composition.test.sh
   test-scripts:
     desc: Run the shell-script unit tests
     sources:
       - 'scripts/**/*.sh'
+      - 'taskfiles/*.yml'
+      - 'Taskfile.yml'
       - 'bench/corpus/**/*.json'
       - 'flake.lock'
     cmds:
@@ -377,6 +406,10 @@ tasks:
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/ci-runner-policy.test.sh
       - bash scripts/coverage-tix.test.sh
+      - bash scripts/coverage.test.sh
+      - bash scripts/task-composition.test.sh
+      - bash scripts/test-containers.test.sh
+      - bash scripts/process-capture.test.sh
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
       - bash scripts/image-archive.test.sh

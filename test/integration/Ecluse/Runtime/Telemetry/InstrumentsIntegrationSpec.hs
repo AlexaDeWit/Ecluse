@@ -4,6 +4,7 @@
 
 module Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec (spec) where
 
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Test.Hspec
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -37,20 +38,17 @@ import Ecluse.Runtime.Telemetry.Instruments.Internal (
     recordUpstreamFetch,
  )
 
-{- | Drive @ecluse.*@ measurements through an in-process telemetry handle into a real OTLP
-Collector container, then assert the Collector accepts the series. The assertion keys on the
-catalogue metric /name/, never a unique label, because the catalogue enforces bounded labels.
--}
+-- | Export bounded metric names through the telemetry handle into an OTLP Collector container.
 spec :: Spec
 spec =
     around (withCollector ["metrics"]) $
         describe "metrics → OTLP collector" $ do
-            it "delivers ecluse.* metrics to the collector when telemetry is on" $ \collector -> do
+            it (caseLabel "integration/telemetry-metrics/native-001" "delivers ecluse.* metrics to the collector when telemetry is on") $ \collector -> do
                 driveMetrics collector TelemetryOn
                 accepted <- awaitCollectorLine collector markerMetric 40
                 accepted `shouldBe` True
 
-            it "delivers nothing to the collector when telemetry is off" $ \collector -> do
+            it (caseLabel "integration/telemetry-metrics/native-002" "delivers nothing to the collector when telemetry is off") $ \collector -> do
                 driveMetrics collector TelemetryOff
                 accepted <- awaitCollectorLine collector markerMetric 8
                 accepted `shouldBe` False
@@ -59,8 +57,8 @@ spec =
 markerMetric :: Text
 markerMetric = "ecluse.serve.decision"
 
-{- Record a spread of @ecluse.*@ signals, then force-flush so the export does not wait on the
-periodic reader's window. With telemetry off there is no provider to flush. -}
+-- Record a spread of @ecluse.*@ signals, then force-flush so the export does not wait on the
+-- periodic reader's window. With telemetry off there is no provider to flush.
 driveMetrics :: Collector -> TelemetrySwitch -> IO ()
 driveMetrics collector switch = do
     logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")

@@ -2,26 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Bounded polling for the container-backed test tiers.
-
-A spec that waits on a container, a queue, or an asynchronous log line needs a bound, so a
-broken dependency fails the run instead of hanging it. 'pollUntil' and 'retryingIO' take that
-bound as an attempt count and a delay, over a "Control.Retry" policy. 'awaitUntil' takes it as
-wall clock instead, which is the budget a spec wants when the work it waits on runs in the
-background and the poll itself costs nothing. The two bounds differ on a loaded runner, so a
-caller picks the one its case was written against. None of the three decides what an exhausted
-budget means: 'pollUntil' hands back the last outcome it saw, 'awaitUntil' answers 'False', and
-'retryingIO' re-throws the last exception.
--}
+-- | Bounded fixture polling. Callers must check the final observation after exhaustion.
 module Ecluse.Test.Poll (
     pollUntil,
     awaitUntil,
     retryingIO,
+    runUntil,
 ) where
 
 import Control.Retry (constantDelay, limitRetries, retrying)
-import UnliftIO (MonadUnliftIO, throwIO, timeout, tryAny)
+import UnliftIO (MonadUnliftIO, race, throwIO, timeout, tryAny)
 import UnliftIO.Concurrent (threadDelay)
+
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 {- | Run @act@ up to @attempts@ times, @delayMicros@ apart, stopping at the first outcome
 'accept' holds for. The final outcome comes back whether or not it was accepted.
@@ -47,3 +40,11 @@ exception propagates. 'tryAny' leaves an async exception alone, so a cancel stil
 retryingIO :: (MonadUnliftIO m) => Int -> Int -> m a -> m a
 retryingIO attempts delayMicros act =
     pollUntil attempts delayMicros isRight (tryAny act) >>= either throwIO pure
+
+-- | Cancel the worker only after progress. Expiry and an early worker exit fail the fixture.
+runUntil :: Int -> Int -> IO () -> IO Bool -> IO ()
+runUntil budgetMicros delayMicros worker ready =
+    race worker (awaitUntil budgetMicros delayMicros ready) >>= \case
+        Right True -> pass
+        Right False -> throwIO (TestContractEscape "worker progress timed out")
+        Left () -> throwIO (TestContractEscape "worker stopped before progress")

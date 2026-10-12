@@ -382,6 +382,7 @@
           (pkgs.python3.withPackages (ps: [ ps.packaging ps.pip ]))
           pkgs.ruby
           pkgs.go-task
+          pkgs.flock
         ];
 
         # What the gating jobs add on top of the toolchain: formatting, linting,

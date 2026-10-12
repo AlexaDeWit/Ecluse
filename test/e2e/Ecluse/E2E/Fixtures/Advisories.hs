@@ -7,6 +7,8 @@ module Ecluse.E2E.Fixtures.Advisories (
     advisoryExportBase,
     advisoryEpssPath,
     pypiAdvisoryExportBase,
+    npmAdvisoryExportBase,
+    npmAdvisoryId,
     pypiAdvisoryId,
     buildAdvisoryFixtures,
 ) where
@@ -15,6 +17,7 @@ import Data.Aeson (encode, object, (.=))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2), osvCorpusZip, osvZipOf)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 
@@ -34,6 +37,14 @@ advisoryEpssPath = "advisories/epss_scores-current.csv.gz"
 pypiAdvisoryExportBase :: Text
 pypiAdvisoryExportBase = "advisories/pypi-proof"
 
+-- | The npm read-policy proof has a separate export from the revocation corpus.
+npmAdvisoryExportBase :: Text
+npmAdvisoryExportBase = "advisories/npm-proof"
+
+-- | The advisory linked to the npm affected and fixed releases.
+npmAdvisoryId :: Text
+npmAdvisoryId = "GHSA-e2e-npm"
+
 -- | The scored advisory whose package spelling differs from the served canonical name.
 pypiAdvisoryId :: Text
 pypiAdvisoryId = "GHSA-e2e-flask"
@@ -44,10 +55,12 @@ buildAdvisoryFixtures root = do
     for_ [minBound .. maxBound] $ \generation ->
         osvCorpusZip generation >>= writeUnder (advisoryExportBase generation <> "/npm/all.zip")
     osvZipOf
-        [ ("flask.json", pypiAdvisory pypiAdvisoryId "Flask" "1.19")
-        , ("raw-fix.json", pypiAdvisory "GHSA-e2e-raw-fix" "e2e-raw-fix" "1.19.0")
+        [ ("flask.json", ecosystemAdvisory PyPI pypiAdvisoryId "Flask" "1.19")
+        , ("raw-fix.json", ecosystemAdvisory PyPI "GHSA-e2e-raw-fix" "e2e-raw-fix" "1.19.0")
         ]
         >>= writeUnder (pypiAdvisoryExportBase <> "/PyPI/all.zip")
+    osvZipOf [("npm.json", ecosystemAdvisory Npm npmAdvisoryId "e2e-advisory" "1.19.0")]
+        >>= writeUnder (npmAdvisoryExportBase <> "/npm/all.zip")
     readFileLBS epssFixtureFile >>= writeUnder advisoryEpssPath
   where
     writeUnder relative bytes = do
@@ -55,8 +68,8 @@ buildAdvisoryFixtures root = do
         createDirectoryIfMissing True (takeDirectory path)
         writeFileLBS path bytes
 
-pypiAdvisory :: Text -> Text -> Text -> LByteString
-pypiAdvisory advisory name fixed =
+ecosystemAdvisory :: Ecosystem -> Text -> Text -> Text -> LByteString
+ecosystemAdvisory ecosystem advisory name fixed =
     encode $
         object
             [ "id" .= advisory
@@ -64,8 +77,8 @@ pypiAdvisory advisory name fixed =
             , "severity" .= [object ["type" .= ("CVSS_V3" :: Text), "score" .= ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" :: Text)]]
             , "affected"
                 .= [ object
-                        [ "package" .= object ["name" .= name, "ecosystem" .= ("PyPI" :: Text)]
-                        , "ranges" .= [object ["type" .= ("ECOSYSTEM" :: Text), "events" .= [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]]]
+                        [ "package" .= object ["name" .= name, "ecosystem" .= (if ecosystem == PyPI then "PyPI" else "npm" :: Text)]
+                        , "ranges" .= [object ["type" .= (if ecosystem == PyPI then "ECOSYSTEM" else "SEMVER" :: Text), "events" .= [object ["introduced" .= ("0" :: Text)], object ["fixed" .= fixed]]]]
                         ]
                    ]
             ]

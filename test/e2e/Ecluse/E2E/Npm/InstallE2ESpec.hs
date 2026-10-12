@@ -2,15 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm policy, artifact protocol responses, and mirror metadata on the base topology.
-Fresh public and mirror-only installation parity lives in "Ecluse.E2E.Npm.MirrorInstallE2ESpec".
+{- | npm policy, artifact protocol responses, and mirror metadata on the base topology. Fresh public
+and mirror-only installation parity lives in "Ecluse.E2E.Npm.MirrorInstallE2ESpec".
 -}
-module Ecluse.E2E.Npm.InstallE2ESpec (spec) where
+module Ecluse.E2E.Npm.InstallE2ESpec (nativeInstallationContract) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
+import Ecluse.Test.Contract.Runner (DeclaredGroup (..))
+import Ecluse.Test.Contract.Types (Group)
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures.Npm (
@@ -30,28 +35,38 @@ import Ecluse.E2E.Fixtures.Npm (
     tamperPkg,
  )
 import Ecluse.E2E.Harness
+import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
+import Ecluse.Test.Contract.Install (InstallDriver (..), RefusalDriver (..), installsObserved, refusesWithoutEffects)
+import Ecluse.Test.Contract.Mirror (MirrorTagDriver (..), preservesLatest)
+import Ecluse.Test.Contract.Serving (artifactHeadCase)
 
 -- | Drive the product image with a real npm client and local stores.
-spec :: Spec
-spec = whenE2EAvailable (aroundAll withGlobalDataPlane scenarios)
+nativeInstallationContract :: ConcreteFixture Group -> DeclaredGroup
+nativeInstallationContract fixture = DeclaredGroup (fixtureMetadata fixture) $ \recorder -> aroundAll (timedFixture recorder (withFixture fixture)) (scenarios recorder)
 
-scenarios :: SpecWith GlobalDataPlane
-scenarios = do
-    describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith withE2E $ do
+scenarios :: PhaseRecorder -> SpecWith GlobalDataPlane
+scenarios recorder = do
+    describe "read-only and non-interfering scenarios (shared environment)" $ aroundAllWith (timedFixtureWith recorder withE2E) $ do
         describe "public surface -- install and policy" $ do
-            it "uses the shipped default to block install scripts and never mirrors the package" $ \e2e -> do
+            it (caseLabel "npm/install/default-denial" "uses the shipped default to block install scripts and never mirrors the package") $ \e2e -> do
                 logs <- proxyContainerLogs e2e
                 logs `shouldSatisfy` T.isInfixOf "rule 1: DenyInstallTimeExecution (precedence 300, applies at admission only)"
-                void $ npmInstall e2e (psName denyPkg) >>= shouldFail
-                mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
-                mirrored `shouldBe` False
+                refusesWithoutEffects
+                    False
+                    RefusalDriver
+                        { refusalInstall = npmInstall e2e (psName denyPkg)
+                        , refusalObserve = verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
+                        , refusalSettle = awaitMirrorWindow
+                        }
 
-            it "runs no package lifecycle script during a harness install (defence in depth)" $ \e2e -> do
-                (installed, scriptRan) <- installWithLifecycleProbe e2e
-                void $ shouldSucceed installed
-                scriptRan `shouldBe` False
+            it (caseLabel "npm/install/lifecycle-script-control" "runs no package lifecycle script during a harness install (defence in depth)") $ \e2e -> do
+                installsObserved
+                    InstallDriver
+                        { installRun = installWithLifecycleProbe e2e
+                        , installExpected = False
+                        }
 
-            it "relays a deprecated version's notice to the client, before and after the worker mirrors the version" $ \e2e -> do
+            it (caseLabel "npm/install/deprecation-relay" "relays a deprecated version's notice to the client, before and after the worker mirrors the version") $ \e2e -> do
                 let name = psName deprecatedPkg
                     ver = psVersion deprecatedPkg
                     installsWithNotice = withNpmProject e2e $ \proj -> do
@@ -66,32 +81,27 @@ scenarios = do
                 verdaccioHasVersion e2e name ver `shouldReturn` True
                 installsWithNotice
 
-            it "rejects the deprecation warning assertion for a version without the member" $ \e2e ->
+            it (caseLabel "npm/install/deprecation-negative-control" "rejects the deprecation warning assertion for a version without the member") $ \e2e ->
                 withNpmProject e2e $ \proj -> do
                     installed <- npmInstallIn proj (psName allowPkg) >>= shouldSucceedThroughProxy e2e
                     shouldWarn ("npm warn deprecated " <> psName allowPkg <> "@" <> psVersion allowPkg <> ": " <> deprecationNotice) installed `shouldThrow` anyException
 
-        describe "server↔worker -- the integrity gate" $
-            it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do
-                -- A tarball request enqueues a mirror on demand. The worker's digest gate must
-                -- reject the tampered bytes, so the version never reaches the private mirror.
+        describe "server and worker -- the integrity gate" $
+            it (caseLabel "npm/install/integrity-refusal" "refuses to mirror an artifact whose bytes fail the integrity gate") $ \e2e -> do
                 _ <- proxyGet e2e (npmTarballPath (psName tamperPkg) (psVersion tamperPkg))
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName tamperPkg) (psVersion tamperPkg)
                 mirrored `shouldBe` False
 
         describe "protocol behaviours" $
-            it "answers HEAD on a tarball with its size but no body, and enqueues no mirror" $ \e2e -> do
-                -- A HEAD relays the upstream headers with no body, so it declares a
-                -- Content-Length yet enqueues no mirror. Only this case touches headPkg.
-                (status, declared, bodyBytes) <- proxyHead e2e (npmTarballPath (psName headPkg) (psVersion headPkg))
-                status `shouldBe` 200
-                bodyBytes `shouldBe` 0
-                declared `shouldSatisfy` maybe False (> 0)
+            it (caseLabel "npm/install/head-no-effect" "answers HEAD on a tarball with its size but no body, and enqueues no mirror") $ \e2e -> do
+                -- Only this case touches headPkg.
+                response <- proxyHead e2e (npmTarballPath (psName headPkg) (psVersion headPkg))
+                artifactHeadCase response
                 mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
-        describe "server↔worker -- mirror metadata" $ do
-            it "mirrors supported installation metadata and omits unknown and public-registry fields" $ \e2e -> do
+        describe "server and worker -- mirror metadata" $ do
+            it (caseLabel "npm/install/metadata-preservation" "mirrors supported installation metadata and omits unknown and public-registry fields") $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
                 verdaccioHasVersionNow e2e name ver `shouldReturn` False
@@ -115,25 +125,23 @@ scenarios = do
                     forM_ mirrorRegistryDistFields $ \(field, _) ->
                         (field, KeyMap.lookup field dist) `shouldBe` (field, Nothing)
                     KeyMap.member "integrity" dist `shouldBe` True
-            it "keeps the upstream latest on the mirror when an older version is mirrored after it" $ \e2e -> do
+            it (caseLabel "npm/install/latest-preservation" "keeps the upstream latest on the mirror when an older version is mirrored after it") $ \e2e -> do
                 let name = psName latestPkg
-                withNpmProject e2e $ \proj -> do
-                    void $ npmInstallIn proj (name <> "@2.0.0") >>= shouldSucceedThroughProxy e2e
-                    verdaccioHasVersion e2e name "2.0.0" `shouldReturn` True
-                    verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
-                    void $ npmInstallIn proj (name <> "@1.0.0") >>= shouldSucceedThroughProxy e2e
-                    verdaccioHasVersion e2e name "1.0.0" `shouldReturn` True
-                    -- Completion order must not retag: 1.0.0 landing last stays behind 2.0.0.
-                    verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
-                    verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
-                withNpmProject e2e $ \proj -> do
-                    -- The mirror's own tag is asserted on the store above, because the proxy never
-                    -- consults a private document's `latest`, so no install can show it.
-                    void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
-                    installedVersion proj name `shouldReturn` Just "2.0.0"
+                withNpmProject e2e $ \project ->
+                    preservesLatest
+                        "2.0.0"
+                        "1.0.0"
+                        MirrorTagDriver
+                            { tagInstallVersion = \version -> npmInstallIn project (name <> "@" <> version)
+                            , tagInstallLatest = withNpmProject e2e $ \fresh ->
+                                (,) <$> npmInstallIn fresh name <*> installedVersion fresh name
+                            , tagAwaitVersion = \version -> do
+                                void (verdaccioHasVersion e2e name version)
+                                verdaccioVersions e2e name
+                            , tagReadLatest = verdaccioLatest e2e name
+                            , tagReadVersions = verdaccioVersions e2e name
+                            }
         describe "first-party publish -- opt-in posture" $
-            it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
-                -- The base topology declares no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET, so PUT is not an allowed
-                -- method. A raw PUT suffices because the 405 precedes any body read.
+            it (caseLabel "npm/install/publication-unconfigured" "answers a publish with 405 when no publication target is configured") $ \e2e -> do
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
                 status `shouldBe` 405

@@ -3,14 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 {- | npm fixtures for the nginx upstream in end-to-end tests.
-Versions predate quarantine, and artifact integrity matches the served bytes
-except in the tampering fixture.
+Most versions predate quarantine. Advisory fixes use the creation time, and
+the tampering fixture serves bytes that differ from its advertised integrity.
 -}
 module Ecluse.E2E.Fixtures.Npm (
     PkgSpec (..),
     defaultPkgSpec,
     psVersions,
     allowPkg,
+    advisoryPkg,
     denyPkg,
     mirrorPkg,
     mirrorAuthorFields,
@@ -53,10 +54,13 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.Process.Typed (proc, runProcess_)
 
+import Ecluse.Core.Text.Iso8601 (renderIso8601Utc)
 import Ecluse.E2E.Harness.Stub (StubRoute (NpmPublic), stubUrl)
 import Ecluse.Test.Package (sriSha512Of)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -69,6 +73,8 @@ data PkgSpec = PkgSpec
     -- ^ The version @dist-tags.latest@ points at.
     , psOlderVersions :: [Text]
     -- ^ Further versions the packument publishes, all below 'psVersion'.
+    , psRecentVersions :: [Text]
+    -- ^ Versions whose publication time is the fixture creation time.
     , psInstallScript :: Bool
     -- ^ Declare an install script: the @DenyInstallTimeExecution@ trigger.
     , psTamper :: Bool
@@ -89,6 +95,7 @@ defaultPkgSpec name =
         { psName = name
         , psVersion = "1.0.0"
         , psOlderVersions = []
+        , psRecentVersions = []
         , psInstallScript = False
         , psTamper = False
         , psVersionFields = []
@@ -100,6 +107,10 @@ defaultPkgSpec name =
 psVersions :: PkgSpec -> [Text]
 psVersions spec = psVersion spec : psOlderVersions spec
 
+-- | The advisory proof has an old affected version and a quarantined exact fix.
+advisoryPkg :: PkgSpec
+advisoryPkg = (defaultPkgSpec "e2e-advisory"){psVersion = "1.19.0", psOlderVersions = ["1.18.0"], psRecentVersions = ["1.19.0"]}
+
 -- | An allow-listed package for the install path.
 allowPkg :: PkgSpec
 allowPkg = defaultPkgSpec "e2e-allow"
@@ -108,9 +119,7 @@ allowPkg = defaultPkgSpec "e2e-allow"
 denyPkg :: PkgSpec
 denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 
-{- | A package used to exercise the mirror round-trip (served, then mirrored). Its version object
-carries the author fields the mirror write keeps and the registry fields it strips.
--}
+-- | The mirror must retain supported author fields and omit registry-owned fields.
 mirrorPkg :: PkgSpec
 mirrorPkg =
     (defaultPkgSpec "e2e-mirror")
@@ -156,9 +165,7 @@ deprecatedPkg = (defaultPkgSpec "e2e-deprecated"){psVersionFields = ["deprecated
 deprecationNotice :: Text
 deprecationNotice = "superseded by a later release"
 
-{- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
-must not retag the store.
--}
+-- | Mirroring an older version must not replace the upstream latest tag.
 latestPkg :: PkgSpec
 latestPkg = (defaultPkgSpec "e2e-latest"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
 
@@ -186,9 +193,7 @@ dredgerKeepPkg = defaultPkgSpec "e2e-dredger-keep"
 dredgerDryRunPkg :: PkgSpec
 dredgerDryRunPkg = defaultPkgSpec "e2e-dredger-dry-run"
 
-{- | A two-version package for the recovery cases. A deny names @1.0.0@ alone, so @2.0.0@ is the
-sibling a next read must still serve.
--}
+-- | Deleting the denied version must leave its admitted sibling readable.
 recoveryPkg :: PkgSpec
 recoveryPkg = (defaultPkgSpec "e2e-recovery"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
 
@@ -208,9 +213,7 @@ recoveryLostPkg = defaultPkgSpec "e2e-recovery-lost"
 recoveryLatePkg :: PkgSpec
 recoveryLatePkg = defaultPkgSpec "e2e-recovery-late"
 
-{- | The package the OSV corpus names in its V2 delta alone. The name matches that advisory, so a
-generation swap condemns @1.0.0@ and leaves @1.2.0@, its stated fix.
--}
+-- | The V2 advisory generation revokes @1.0.0@ and names @1.2.0@ as its fix.
 corpusRevokedPkg :: PkgSpec
 corpusRevokedPkg = (defaultPkgSpec "corpus-revoked"){psVersion = "1.2.0", psOlderVersions = ["1.0.0"]}
 
@@ -226,9 +229,7 @@ telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
 telemetryPrivatePkg :: PkgSpec
 telemetryPrivatePkg = defaultPkgSpec "e2e-telemetry-private"
 
-{- | The root of the graph the mirror-only install resolves: a dependency with a dependency of its
-own, a peer, and an executable. Loading its module loads every package of the graph.
--}
+-- | Loading the root must load its transitive dependency and peer.
 graphRootPkg :: PkgSpec
 graphRootPkg =
     root{psFiles = psFiles root <> [("bin/report.js", reportScript)]}
@@ -266,9 +267,7 @@ graphPackages = [graphRootPkg, graphDepPkg, graphLeafPkg, graphPeerPkg]
 graphExecutable :: Text
 graphExecutable = "e2e-graph-report"
 
-{- | What the root's module exports once the whole graph loads, which is also what its executable
-prints: each package's name, nested under the field that loaded it.
--}
+-- | The module and executable must expose the same nested package identities.
 graphExport :: Value
 graphExport =
     object
@@ -298,6 +297,7 @@ compatibleWith pkg = Key.fromText (psName pkg) .= ("^" <> psVersion pkg)
 fixturePackages :: [PkgSpec]
 fixturePackages =
     [ allowPkg
+    , advisoryPkg
     , denyPkg
     , mirrorPkg
     , deprecatedPkg
@@ -320,9 +320,7 @@ fixturePackages =
     ]
         <> graphPackages
 
-{- | Where the stub serves one version's artifact, under the root 'buildFixtures' writes into.
-A case that withholds an artifact brackets this path.
--}
+-- | Fault injection withholds bytes at this fixture artifact path.
 artifactFile :: FilePath -> Text -> Text -> FilePath
 artifactFile root name version =
     root </> toString name </> "-" </> toString (name <> "-" <> version <> ".tgz")
@@ -336,9 +334,8 @@ buildOne root spec = do
     let pkgDir = root </> toString (psName spec)
     createDirectoryIfMissing True (pkgDir </> "-")
     digests <- traverse (buildArtifact root spec) (psVersions spec)
-    -- @<name>@ cannot be both a file and a directory, so the packument sits inside the package
-    -- directory and the nginx stub config maps @/<name>@ to it.
-    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec digests))
+    now <- renderIso8601Utc <$> getCurrentTime
+    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec now digests))
 
 -- Archive one version's package tree and return the integrity its packument entry declares.
 buildArtifact :: FilePath -> PkgSpec -> Text -> IO (Text, Text)
@@ -386,14 +383,14 @@ tarballPackageJson spec version =
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
             <> filter (not . T.isPrefixOf "_" . Key.toText . fst) (psVersionFields spec)
 
-packument :: PkgSpec -> [(Text, Text)] -> Value
-packument spec digests =
+packument :: PkgSpec -> Text -> [(Text, Text)] -> Value
+packument spec now digests =
     packumentValue
         (psName spec)
         (psVersion spec)
         [(version, versionMeta version sri) | (version, sri) <- digests]
         ( ["created" .= backdated, "modified" .= backdated]
-            <> [fromString (toString version) .= backdated | (version, _) <- digests]
+            <> [fromString (toString version) .= (if version `elem` psRecentVersions spec then now else backdated) | (version, _) <- digests]
         )
         []
   where

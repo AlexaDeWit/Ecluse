@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed
-trees, lockfiles, dependency resolution, module exports, and the linked executable's output.
+{- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed trees,
+lockfiles, dependency resolution, module exports, and the linked executable's output.
 -}
-module Ecluse.E2E.Npm.MirrorInstallE2ESpec (spec) where
+module Ecluse.E2E.Npm.MirrorInstallE2ESpec (npmMirrorFamily) where
 
 import Data.Aeson (Value)
 import Data.Set qualified as Set
-import Data.Text qualified as T
-import Test.Hspec
+import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
+import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
 
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
@@ -25,103 +25,74 @@ import Ecluse.E2E.Fixtures.Npm (
     psVersion,
  )
 import Ecluse.E2E.Harness
+import Ecluse.Test.Contract.Mirror
 
--- | Compare a mirror-only install with its control, using a real npm client and local stores.
-spec :: Spec
-spec = whenE2EAvailable (aroundAll withGlobalDataPlane scenarios)
+-- | Supply native observations and independent expectations to the canonical mirror contract.
+npmMirrorFamily :: ConcreteFixture FamilyMetadata -> (MirrorFixture (Set Resolved) Value, FamilyFixture (MirrorDriver (Set Resolved) Value))
+npmMirrorFamily fixture =
+    ( MirrorFixture
+        { mirrorExpectedGraph = expectedGraph
+        , mirrorExpectedExport = graphExport
+        , mirrorExpectedVersions = [(psName pkg, [psVersion pkg]) | pkg <- graphPackages]
+        , mirrorRequiredPaths = neededOfMirror
+        , mirrorExpectedSources = [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
+        }
+    , concreteFamily fixture (\_ action plane -> action (mirrorDriver plane))
+    )
 
-scenarios :: SpecWith GlobalDataPlane
-scenarios = describe "a new project's install while both public upstreams are down" $ do
-    aroundAllWith withBothInstalls $ do
-        it "resolves the dependency, its own dependency, and the peer, as the install from public did" $ \installs -> do
-            obGraph (fromPublic installs) `shouldBe` Right expectedGraph
-            obGraph (fromMirror installs) `shouldBe` Right expectedGraph
+mirrorDriver :: GlobalDataPlane -> MirrorDriver (Set Resolved) Value
+mirrorDriver plane =
+    MirrorDriver
+        { mirrorPublicInstall = withE2E installFromPublic plane
+        , mirrorOfflineInstall = withPublicUpstreamsDown plane (withE2E installFromMirror plane)
+        , mirrorEmptyInstall =
+            withPublicUpstreamsDown plane $
+                withE2EWith emptyPrivateStore (\proxy -> (,) <$> npmPublicReachable proxy <*> npmInstall proxy rootRequest) plane
+        }
 
-        it "loads every package's export through the root, as the install from public did" $ \installs -> do
-            obExport (fromPublic installs) `shouldBe` Right graphExport
-            obExport (fromMirror installs) `shouldBe` Right graphExport
-
-        it "links the root's executable, which prints the root's export, as the install from public did" $ \installs -> do
-            obExecutable (fromPublic installs) `shouldBe` Just (Right graphExport)
-            obExecutable (fromMirror installs) `shouldBe` Just (Right graphExport)
-
-        it "takes every packument and artifact from the mirror while public answers nothing" $ \installs -> do
-            let answered = mirrorPhaseReads installs
-            -- The reads ride along, so a failure shows what the stub answered beside what is missing.
-            (Set.toList (neededOfMirror `Set.difference` servedByMirror answered), answered) `shouldSatisfy` (null . fst)
-            filter answeredByPublic answered `shouldBe` []
-            lockedSources (obTree (fromMirror installs))
-                `shouldMatchList` [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
-
-        it "leaves the tree the install from public left, apart from the proxy's address" $ \installs -> do
-            let control = ("from public", obTree (fromPublic installs))
-                mirrored = ("from the mirror", obTree (fromMirror installs))
-            case treeDifferences control mirrored of
-                [] -> pass
-                differences -> expectationFailure (toString (T.unlines differences))
-
-    it "fails the same install when no private store holds the graph" $ \plane ->
-        withPublicUpstreamsDown plane . flip (withE2EWith emptyPrivateStore) plane $ \proxy -> do
-            npmPublicReachable proxy `shouldReturn` False
-            void $ npmInstall proxy rootRequest >>= shouldFail
-
--- What a client can see of one install: the graph npm resolved, what the root's module exports,
--- what its linked executable prints (Nothing when npm linked none), and the tree on disk.
-data Observed = Observed
-    { obGraph :: Either Text (Set Resolved)
-    , obExport :: Either Text Value
-    , obExecutable :: Maybe (Either Text Value)
-    , obTree :: InstalledTree
-    }
-
--- The control install, the mirror-only install, and what the stub answered during the second.
-data Installs = Installs
-    { fromPublic :: Observed
-    , fromMirror :: Observed
-    , mirrorPhaseReads :: [StubRead]
-    }
-
-{- Run both installs once for the group. Each has its own proxy and its own project, and the first
-proxy is gone before public goes down, so nothing it fetched or cached can serve the second. -}
-withBothInstalls :: (Installs -> IO ()) -> GlobalDataPlane -> IO ()
-withBothInstalls action plane = do
-    control <- withE2E installFromPublic plane
-    (mirrored, answered) <- withPublicUpstreamsDown plane (withE2E installFromMirror plane)
-    action Installs{fromPublic = control, fromMirror = mirrored, mirrorPhaseReads = answered}
-
--- The mirror holds none of the graph before the install, and every version of it once this returns.
-installFromPublic :: E2E -> IO Observed
+installFromPublic :: E2E -> IO (PublicPhase (Set Resolved) Value)
 installFromPublic proxy = do
-    for_ graphPackages $ \pkg -> verdaccioVersions proxy (psName pkg) `shouldReturn` []
-    npmPublicReachable proxy `shouldReturn` True
+    versionsBefore <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioVersions proxy (psName pkg)
+    reachable <- npmPublicReachable proxy
     observed <- observeInstall proxy
-    for_ graphPackages $ \pkg ->
-        verdaccioAwaitVersions proxy (psName pkg) [psVersion pkg] `shouldReturn` [psVersion pkg]
-    pure observed
+    versionsAfter <- forM graphPackages $ \pkg -> (psName pkg,) <$> verdaccioAwaitVersions proxy (psName pkg) [psVersion pkg]
+    pure
+        PublicPhase
+            { publicObserved = observed
+            , publicReachable = reachable
+            , publicVersionsBefore = versionsBefore
+            , publicVersionsAfter = versionsAfter
+            }
 
--- The reads are the stub's own record of the install, awaited until the mirror's part is complete.
-installFromMirror :: E2E -> IO (Observed, [StubRead])
+installFromMirror :: E2E -> IO (OfflinePhase (Set Resolved) Value)
 installFromMirror proxy = do
-    npmPublicReachable proxy `shouldReturn` False
+    reachable <- npmPublicReachable proxy
     seen <- length <$> stubReadsNow plane
     observed <- observeInstall proxy
     answered <- awaitStubReads plane seen ((neededOfMirror `Set.isSubsetOf`) . servedByMirror)
-    pure (observed, answered)
+    pure
+        OfflinePhase
+            { offlineObserved = observed
+            , offlinePublicReachable = reachable
+            , offlineMirrorPaths = servedByMirror answered
+            , offlinePublicAnswers = map show (filter answeredByPublic answered)
+            , offlineLockedSources = lockedSources (obTree observed)
+            }
   where
     plane = e2ePlane proxy
 
-{- Install the root by exact version in a new project, which holds no cache entry, lockfile, or
-@node_modules@ that could supply it. The tree is recorded first, before any later command runs in it. -}
-observeInstall :: E2E -> IO Observed
+observeInstall :: E2E -> IO (Observed (Set Resolved) Value)
 observeInstall proxy = withNpmProject proxy $ \project -> do
-    localInstallSources project `shouldReturn` []
-    void $ npmInstallIn project rootRequest >>= shouldSucceedThroughProxy proxy
+    sources <- localInstallSources project
+    result <- npmInstallIn project rootRequest
     tree <- installedTree proxy project
     Observed
         <$> resolvedGraph project
         <*> loadedExport project (psName graphRootPkg)
         <*> linkedExecutable project graphExecutable
         <*> pure tree
+        <*> pure result
+        <*> pure sources
 
 -- The request names an exact version, because the `latest` of a packument that only the mirror
 -- supplied is the proxy's own choice.
@@ -140,14 +111,12 @@ expectedGraph =
   where
     dependent `resolves` pkg = Resolved dependent (psName pkg) (psVersion pkg)
 
--- The two reads an install needs of each package, as the paths the private store serves them at.
 neededOfMirror :: Set Text
 neededOfMirror = Set.fromList (concatMap readsOf graphPackages)
   where
     readsOf :: PkgSpec -> [Text]
     readsOf pkg = ["/" <> psName pkg, npmArtifactPath (psName pkg) (psVersion pkg)]
 
--- The paths the mirror's route answered a read of with a success.
 servedByMirror :: [StubRead] -> Set Text
 servedByMirror answered =
     Set.fromList [srPath r | r <- answered, srRoute r == Mirror, srMethod r == "GET", srStatus r == 200]

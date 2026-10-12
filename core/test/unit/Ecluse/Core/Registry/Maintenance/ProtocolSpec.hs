@@ -27,12 +27,11 @@ import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
-    StoreFacts (..),
     StoreFault (faultRetry, faultTransport),
     StoreMaintenance (..),
     StoreManifestRead,
     StoreObservation (obClassifyStore, obListPackagesIn, obProbeUpstream, obVerifyConsent),
-    StoredVersion (storedPresence, storedVersion),
+    StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
     collectPages,
@@ -58,6 +57,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
 import Ecluse.Test.Json (keysAt, withKeys)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
@@ -82,21 +82,21 @@ spec = do
 
 factsSpec :: Spec
 factsSpec = describe "what the backend supplies without a call" $ do
-    it "reports the backend name it was built under, and the one-version delete ceiling" $
-        withStore True answerNothing $ \handle _ -> do
-            let facts = storeFacts handle
-            factBackend facts `shouldBe` "verdaccio"
-            factDeleteCeiling facts `shouldBe` AtMost 1
-            factRefill facts `shouldBe` RefillPermitted
-            factCompletion facts `shouldBe` CompletesOnCall
-
-    it "partitions its name space into nothing, because one read answers the whole listing" $
-        withStore True answerNothing $ \handle _ ->
-            factNameAlphabet (storeFacts handle) `shouldBe` noNameAlphabet
-
-    it "keeps no walk cursor, because the protocol writes nothing but a publish" $
-        withStore True answerNothing $ \handle _ ->
-            isNothing (storeCursor handle) `shouldBe` True
+    around (\use -> withStore True answerNothing (\handle _ -> use handle)) $
+        maintenanceFactsContract
+            "maintenance/protocol/facts"
+            MaintenanceProfile
+                { profileBackend = "verdaccio"
+                , profileCeiling = AtMost 1
+                , profileRefill = RefillPermitted
+                , profileCompletion = CompletesOnCall
+                , profileAlphabet = noNameAlphabet
+                , profileCursor = False
+                }
+    around (\use -> withStore True answerNothing (\handle _ -> use handle)) $
+        maintenanceConsentContract "maintenance/protocol/consented" ConsentGranted StoreDestroyable
+    around (\use -> withStore False answerNothing (\handle _ -> use handle)) $
+        maintenanceConsentContract "maintenance/protocol/withheld" (ConsentWithheld consentKey) (StorePreserved consentKey)
 
     it "leaves its uplinks undecided, because the protocol carries them in a file it does not serve" $
         withObservation True answerNothing $ \observed _ ->
@@ -109,16 +109,6 @@ factsSpec = describe "what the backend supplies without a call" $ do
             obVerifyConsent observed `shouldReturn` Right (ConsentWithheld consentKey)
             obClassifyStore observed `shouldReturn` Right (StorePreserved consentKey)
             map fst <$> calls stub `shouldReturn` ["GET"]
-
-    it "reads consent and classification off the operator's key, with no call" $
-        withStore True answerNothing $ \handle _ -> do
-            verifyConsent handle `shouldReturn` Right ConsentGranted
-            classifyStore handle `shouldReturn` Right StoreDestroyable
-
-    it "withholds consent, naming the key, when the store carries none" $
-        withStore False answerNothing $ \handle _ -> do
-            verifyConsent handle `shouldReturn` Right (ConsentWithheld consentKey)
-            classifyStore handle `shouldReturn` Right (StorePreserved consentKey)
 
 enumerationSpec :: Spec
 enumerationSpec = describe "enumeration over the protocol's own reads" $ do
@@ -146,11 +136,11 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
                 fmap faultRetry (leftToMaybe outcome) `shouldBe` Just retry
                 calls stub `shouldReturn` [("GET", "/-/all")]
 
-    it "reads a package's versions through the presence probe, all served" $
-        withStore True answerStore $ \handle _ -> do
-            stored <- enumerateVersions handle leftpadName
-            fmap (map storedVersion) stored `shouldBe` Right [npmVersion "1.0.0", npmVersion "2.0.0"]
-            fmap (map storedPresence) stored `shouldBe` Right [VersionServed, VersionServed]
+    around (\use -> withStore True answerStore (\handle _ -> use handle)) $
+        maintenanceInventoryContract
+            "maintenance/protocol/inventory"
+            [unscopedNpm "leftpad", unscopedNpm "rightpad"]
+            [(leftpadName, [StoredVersion (npmVersion raw) VersionServed Nothing | raw <- ["1.0.0", "2.0.0"]])]
 
     it "reads the store's own manifest for a package, projected through the ecosystem's codec" $
         withStore True answerStore $ \handle stub -> do
@@ -222,6 +212,8 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
 deletionSpec :: Spec
 deletionSpec = describe "deletion over the protocol's own request sequence" $ do
+    around (\use -> withStore True answerStore (\handle _ -> use handle)) $
+        maintenanceDeletionContract "maintenance/protocol/delete" leftpadName [npmVersion "2.0.0", npmVersion "1.0.0"]
     for_ [1, 2 :: Int] $ \faultAt ->
         it ("stops after protocol request fault " <> show faultAt) $ do
             let raws = take (faultAt + 1) ["1.0.0", "2.0.0", "3.0.0"]

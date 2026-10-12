@@ -11,9 +11,10 @@ module Ecluse.Runtime.Pilot.ExportIntegrationSpec (
 
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, aroundWith, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 import TestContainers (Container, containerAddress)
 
 import Amazonka qualified as AWS
@@ -23,24 +24,32 @@ import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.AdvisoryStore (AdvisoryStoreUrl, advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
+import Ecluse.Core.Cve (CveDbRejected (CveDbWrongEpoch))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Osv.Schema (EpssRequirement (..))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvSchemaEpoch)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
+import Ecluse.Runtime.Test.Advisory (advisoryDriver)
+import Ecluse.Test.Contract.Advisory (AdvisoryDriver, AdvisoryFixture (..), advisoryContract)
+import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 import Lens.Micro ((^.))
 
+-- | Run the last-good contract and native S3 publication assertions against ministack.
 spec :: Spec
 spec = do
     describe "S3 Export Integration" $ do
         aroundAll withMinistack $ do
-            it "uploads OSV databases to S3" $ \container -> do
+            aroundWith withS3AdvisoryDriver $
+                advisoryContract "advisory/s3" (CveDbWrongEpoch (osvSchemaEpoch + 1))
+
+            it (caseLabel "integration/advisory-export/native-001" "uploads OSV databases to S3") $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
                     Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
                         createdBucket container "s3://test-osv-bucket"
@@ -61,7 +70,7 @@ spec = do
                         [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
                         _ -> fail ("Expected 1 object, got " <> show (length objects))
 
-            it "uploads again when the artifact's bytes have not changed" $ \container -> do
+            it (caseLabel "integration/advisory-export/native-002" "uploads again when the artifact's bytes have not changed") $ \container -> do
                 -- Republishing one accepted artifact preserves its bytes, including built_at.
                 withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
                     Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
@@ -95,7 +104,6 @@ spec = do
                     pollUntil 21 500_000 id (export >> (advancedPast published <$> storedObject))
                         >>= (`shouldBe` True)
 
-                    -- The bytes never changed, so the object is the same one, re-published.
                     republished <- storedObject
                     republished ^. S3L.headObjectResponse_eTag `shouldBe` published ^. S3L.headObjectResponse_eTag
                     syncStep env (Just acceptedEtag) >>= \case
@@ -105,18 +113,47 @@ spec = do
                         `shouldReturn` (republished ^. S3L.headObjectResponse_lastModified)
                     generationInstalledAt slot `shouldReturn` installed
 
-{- | One case's advisory store on the emulator: the endpoint, an S3 environment over it, and the
-store URL the bucket and every object key derive from.
--}
+withS3AdvisoryDriver :: (AdvisoryDriver -> IO ()) -> Container -> IO ()
+withS3AdvisoryDriver use container =
+    withSystemTempDirectory "ecluse-advisory-contract" $ \dir -> do
+        Store{stEndpoint = endpoint, stAws = aws, stStore = store} <-
+            createdBucket container "s3://advisory-contract"
+        let bucket = advisoryStoreBucket store
+            key = "contract.db"
+            goodPath = dir <> "/good.db"
+            badPath = dir <> "/bad.db"
+        mkMinimalValidDb goodPath "pkg-a"
+        mkDbWithWrongEpoch badPath
+        bytes <- readFileBS goodPath
+        logEnv <- initLogEnv "ecluse-test" (Environment "test")
+        slot <- newCveSlot
+        source <- newS3CveSource (Just endpoint)
+        let env =
+                SyncEnv
+                    { syncFetch = s3CveFetchFor source bucket key (512 * 1024 * 1024)
+                    , syncEcosystem = Npm
+                    , syncEpssRequirement = EpssOptional
+                    , syncDbPath = dir <> "/live.db"
+                    , syncSlot = slot
+                    , syncStoreRef = "s3://" <> bucket
+                    }
+            publish fixture = do
+                let path = case fixture of
+                        AcceptedArtifact -> goodPath
+                        RefusedArtifact -> badPath
+                runKatipContextT logEnv () mempty (runResourceT (exportToS3 Nothing (Just endpoint) bucket key path))
+                response <- runResourceT (AWS.send aws (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key)))
+                case response ^. S3L.headObjectResponse_eTag of
+                    Just (S3.ETag tag) -> pure (DbEtag (decodeUtf8 tag))
+                    Nothing -> fail "the published artifact has no ETag"
+        advisoryDriver bytes publish (pure env) >>= use
+
 data Store = Store
     { stEndpoint :: AwsEndpoint
     , stAws :: AWS.Env
     , stStore :: AdvisoryStoreUrl
     }
 
-{- | Resolve @url@ the way the boot does and create its bucket on the container's S3 emulator.
-Bucket and object key both derive from the store, so the two cannot drift apart unnoticed.
--}
 createdBucket :: Container -> Text -> IO Store
 createdBucket container url = do
     let (host, port) = containerAddress container 4566

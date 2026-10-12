@@ -1,0 +1,82 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Completion controls remove requirements and execution evidence independently.
+module Ecluse.Test.Contract.CompletionSpec (spec) where
+
+import Data.List (lookup)
+import Test.Hspec
+
+import Ecluse.Test.Contract.Completion
+import Ecluse.Test.Contract.Fixtures qualified as Fixture
+import Ecluse.Test.Contract.Phase (PhaseTimings (..))
+import Ecluse.Test.Contract.Result
+import Ecluse.Test.Contract.Types
+
+spec :: Spec
+spec = describe "full completion" $ do
+    it "requires all eight ecosystem families and all six package-store families" $ do
+        map fst (requiredFamilyLaws FullEcosystem) `shouldMatchList` ["proxying", "installation", "policy", "advisories", "mirroring", "publication", "dredger", "telemetry"]
+        map fst (requiredFamilyLaws FullPackageStore) `shouldMatchList` ["reads", "writes", "inventory", "deletion", "integrity", "recovery"]
+    it "distinguishes the explicit read-only foundation from full completion" $ do
+        map fst (requiredFamilyLaws ReadOnlyEcosystemFoundation) `shouldMatchList` ["proxying", "installation", "policy", "advisories", "telemetry"]
+        lookup "telemetry" (requiredFamilyLaws FullEcosystem) `shouldNotBe` lookup "telemetry" (requiredFamilyLaws ReadOnlyEcosystemFoundation)
+    it "accepts independently declared laws with matching cases" $
+        validateCompletion completion [catalogue] `shouldBe` Right completion
+    it "rejects each omitted law even when its mapping and registration disappear together" $
+        forM_ (completionEvidence completion) $ \evidence -> do
+            let altered = completion{completionEvidence = filter (/= evidence) (completionEvidence completion)}
+                remaining = filter ((/= evidenceCase evidence) . caseId) (groupCases scenarioGroup)
+                changed = catalogue{catalogueGroups = [scenarioGroup{groupCases = remaining}], catalogueObligations = [obligation{obligationCases = map caseId remaining}]}
+            validateCompletion altered [changed] `shouldSatisfy` isLeft
+    it "rejects a whole omitted family without relying on a provider capability flag" $ do
+        let altered = completion{completionEvidence = filter ((/= "recovery") . evidenceFamily) (completionEvidence completion)}
+        validateCompletion altered [catalogue] `shouldSatisfy` isLeft
+    it "rejects another tier or an unknown case as evidence" $
+        forM_ [\e -> e{evidenceTier = Load}, \e -> e{evidenceCase = "missing"}] $ \change ->
+            validateCompletion completion{completionEvidence = map change (completionEvidence completion)} [catalogue] `shouldSatisfy` isLeft
+    it "rejects one passing case relabelled as several business laws" $ do
+        let altered = completion{completionEvidence = map (\e -> e{evidenceCase = "backend/reads/present"}) (completionEvidence completion)}
+        validateCompletion altered [catalogue] `shouldSatisfy` isLeft
+    it "audits executed cases rather than trusting their declarations" $
+        case makePlan catalogue of
+            Left faults -> expectationFailure (show faults :: String)
+            Right plan -> do
+                auditCompletion completion [(Fixture.executionIdentity, plan, [report])] `shouldBe` []
+                forM_ (reportCases report) $ \result -> do
+                    let omitted = report{reportCases = filter ((/= crCaseId result) . crCaseId) (reportCases report)}
+                        failed = report{reportCases = map (\actual -> if crCaseId actual == crCaseId result then actual{crStatus = Failed} else actual) (reportCases report)}
+                    auditCompletion completion [(Fixture.executionIdentity, plan, [omitted])] `shouldSatisfy` (not . null)
+                    auditCompletion completion [(Fixture.executionIdentity, plan, [failed])] `shouldSatisfy` (not . null)
+    it "rejects absent execution reports" $
+        auditCompletion completion [] `shouldSatisfy` (not . null)
+
+completion :: Completion
+completion = Completion "backend" FullPackageStore [LawEvidence family law Unit "backend" ("backend/" <> family <> "/" <> law) | (family, law) <- laws]
+
+laws :: [(Text, Text)]
+laws =
+    [ ("reads", "present")
+    , ("reads", "absent")
+    , ("writes", "complete")
+    , ("writes", "idempotent")
+    , ("inventory", "exact")
+    , ("deletion", "selected")
+    , ("integrity", "bytes-and-digests")
+    , ("recovery", "publish-retry")
+    , ("recovery", "reopen")
+    , ("recovery", "delete-retry")
+    ]
+
+catalogue :: Catalogue
+catalogue = Catalogue [] [Profile "backend" [] ["backend"] []] [obligation] [scenarioGroup]
+
+obligation :: Obligation
+obligation = Obligation "backend" "backend" "package-store" Supported [] ["backend/" <> family <> "/" <> law | (family, law) <- laws]
+
+scenarioGroup :: Group
+scenarioGroup = Group "backend" "package-store" "backend" Unit "backend" [Case identifier ["backend"] | identifier <- obligationCases obligation] [] [] [] []
+
+report :: Report
+report = Report 1 Fixture.executionIdentity "backend" False [GroupResult "backend" Passed 0 [] (PhaseTimings 0 0 0)] [CaseResult identifier "backend" Passed 0 [] | identifier <- obligationCases obligation] 1 [scenarioGroup]

@@ -2,10 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | SQS delivery contracts against the queue emulator.
 module Ecluse.Runtime.Queue.SqsIntegrationSpec (spec) where
 
+import Data.Unique (hashUnique, newUnique)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
+import TestContainers (Container)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -36,39 +40,20 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     defaultSqsConfig,
     newSqsQueue,
  )
+import Ecluse.Test.Contract.Queue (QueueDriver (..), leasedQueueContract, queueContract)
 import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
 import Ecluse.Test.Support (expectRightIO)
 
-{- | These cases drive the SQS 'MirrorQueue' backend against a @ministack@ container from
-"Ecluse.Integration.Ministack". They are gating and need a Docker daemon, never real AWS.
--}
+-- | Run shared delivery contracts and SQS lease and fault assertions against ministack.
 spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "mirror queue (ministack)" $ do
-            it "round-trips a job: enqueue, receive, ack, then no redelivery" $ \container -> do
-                queue <- freshQueue container "mirror-roundtrip" defaultQueueOptions
-                expectRightIO (enqueue queue sampleJob)
-                [message] <- receiveUntil queue
-                msgJob message `shouldBe` sampleJob
-                expectRightIO (ack queue (msgReceipt message))
-                -- After the ack the job is gone: a poll past the (short) visibility
-                -- window yields nothing.
-                afterAck <- expectRightIO (receive queue)
-                map msgJob afterAck `shouldBe` []
+            beforeWith sqsQueueDriver $ do
+                queueContract "queue/sqs"
+                leasedQueueContract "queue/sqs"
 
-            it "redelivers a job that was received but never acked" $ \container -> do
-                -- A one-second visibility timeout so the un-acked job becomes
-                -- visible again within the test's patience.
-                queue <- freshQueue container "mirror-redeliver" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                expectRightIO (enqueue queue sampleJob)
-                _firstDelivery <- receiveUntil queue
-                -- Deliberately do not ack: retry-is-don't-ack means the job must
-                -- reappear once its visibility window lapses.
-                redelivered <- receiveUntil queue
-                map msgJob redelivered `shouldBe` [sampleJob]
-
-            it "extendVisibility holds an un-acked job past its original window" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-001" "extendVisibility holds an un-acked job past its original window") $ \container -> do
                 -- Extend the in-flight message well past its 1s visibility timeout. No
                 -- reappearance inside the original window proves the extension held it.
                 queue <- freshQueue container "mirror-extend" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
@@ -80,7 +65,7 @@ spec =
                 stillHidden2 <- expectRightIO (receive queue)
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
-            it "renews a received job's visibility for as long as the worker holds it (issue #1208)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-002" "renews a received job's visibility for as long as the worker holds it (issue #1208)") $ \container -> do
                 -- The lease controller against real SQS: a job that outruns its two-second
                 -- window stays hidden, so no second consumer can take it mid-mirror.
                 queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
@@ -95,10 +80,9 @@ spec =
                 -- having finished is half of what this case proves.
                 outcomes `shouldBe` [Just ()]
 
-            it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
-                -- deadLetter must NOT DeleteMessage, which would silently discard the terminal
-                -- fault. It returns the message with the terminal backoff, so the message rides
-                -- the operator's redrive policy. Reappearance proves nothing deleted it.
+            it (caseLabel "integration/queue-sqs/native-003" "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)") $ \container -> do
+                -- Terminal faults must return through redrive, never DeleteMessage.
+                -- Reappearance proves that terminal handling retained the payload.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
                 expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
@@ -106,23 +90,13 @@ spec =
                 redelivered <- receiveUntil queue
                 map msgJob redelivered `shouldBe` [sampleJob]
 
-            it "carries a real ApproximateReceiveCount, rising on each redelivery (issue #935)" $ \container -> do
-                -- SQS omits this attribute unless the request asks for it. A missing
-                -- parameter would read as a first delivery forever, so the budget never fires.
-                queue <- freshQueue container "mirror-receive-count" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                expectRightIO (enqueue queue sampleJob)
-                [first'] <- receiveUntil queue
-                msgReceiveCount first' `shouldBe` 1
-                [second'] <- receiveUntil queue
-                msgReceiveCount second' `shouldBe` 2
-
-            it "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-004" "probes a queue with no redrive policy as having no dead-letter terminus (issue #935)") $ \container -> do
                 -- A plain CreateQueue leaves nothing to capture a poison message, so
                 -- Écluse must warn the operator at boot.
                 queue <- freshQueue container "mirror-no-dlq" defaultQueueOptions
                 deadLetterTerminus queue `shouldBe` Right TerminusAbsent
 
-            it "probes an attached redrive policy, reading its maxReceiveCount (issue #935)" $ \container -> do
+            it (caseLabel "integration/queue-sqs/native-005" "probes an attached redrive policy, reading its maxReceiveCount (issue #935)") $ \container -> do
                 -- The capture count 9 sits above the shipped floor of 5, so the raise is
                 -- visible. At 5 the effective budget would equal the floor either way.
                 queue <- freshQueue container "mirror-with-dlq" defaultQueueOptions{qoDeadLetterAfter = Just 9}
@@ -131,7 +105,7 @@ spec =
                 -- the dead-letter queue always takes the message first.
                 deliveryBudget queue `shouldBe` DeliveryBudget 10
 
-            it "reports an unreachable endpoint as the handle's typed transport fault" $ \_container -> do
+            it (caseLabel "integration/queue-sqs/native-006" "reports an unreachable endpoint as the handle's typed transport fault") $ \_container -> do
                 -- The poll must come back as a typed 'Left' with the unreachable cause,
                 -- classified at the adapter edge, never as an exception through the caller.
                 queue <- deadEndpointQueue
@@ -140,8 +114,13 @@ spec =
                     Left fault -> tfCause fault `shouldBe` TransportUnreachable
                     Right messages -> expectationFailure ("expected a typed transport fault, got " <> show messages)
 
--- An SQS backend pointed at a loopback port with nothing listening, for the
--- typed-fault classification case. Port 1 is in the privileged range and never bound.
+sqsQueueDriver :: Container -> IO QueueDriver
+sqsQueueDriver container = do
+    unique <- hashUnique <$> newUnique
+    queue <- freshQueue container ("mirror-contract-" <> show unique) defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+    pure QueueDriver{queueHandle = queue, awaitDelivery = receiveUntil queue}
+
+-- Port 1 supplies the unreachable endpoint for fault classification.
 deadEndpointQueue :: IO MirrorQueue
 deadEndpointQueue = do
     logEnv <- quietLogEnv
@@ -154,9 +133,6 @@ deadEndpointQueue = do
             , sqsWaitSeconds = 1
             }
 
-{- | A job that runs three times its receipt's two-second window, then asserts nothing came
-back to a second consumer in the meantime.
--}
 heldJob :: MirrorQueue -> KatipContextT IO ()
 heldJob queue = liftIO $ do
     threadDelay 6_000_000
@@ -165,7 +141,6 @@ heldJob queue = liftIO $ do
     stillHidden2 <- expectRightIO (receive queue)
     map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
--- | A sample mirror job carried end-to-end through SQS.
 sampleJob :: MirrorJob
 sampleJob =
     MirrorJob

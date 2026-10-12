@@ -28,7 +28,6 @@ import Ecluse.Core.Registry.Maintenance (
     RetryAdvice (RetryFutile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (..),
-    StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
     StoreManifestRead,
@@ -85,8 +84,9 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     serviceError,
     withNpmStore,
  )
+import Ecluse.Test.Contract.Maintenance (MaintenanceProfile (..), maintenanceConsentContract, maintenanceDeletionContract, maintenanceFactsContract, maintenanceInventoryContract)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
-import Ecluse.Test.Package (lodashName, sampleManifest)
+import Ecluse.Test.Package (lodashName, sampleManifest, unscopedNpm)
 import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 
@@ -108,22 +108,17 @@ handleCases store = do
 
 factCases :: CodeArtifactStore -> Spec
 factCases store = describe "the CodeArtifact handle's standing facts" $ do
-    -- The handle holds a real amazonka env, and these cases only read what it was built with.
-    beforeAll (factsFor store) $ do
-        it "names the backend the Dredger's boot line records" $ \facts ->
-            factBackend facts `shouldBe` "codeArtifact"
-
-        it "accepts 100 versions per destructive call" $ \facts ->
-            factDeleteCeiling facts `shouldBe` AtMost 100
-
-        it "records that CodeArtifact re-admits a version published again after a delete" $ \facts ->
-            factRefill facts `shouldBe` RefillPermitted
-
-        it "records that the delete is done by the time the call answers" $ \facts ->
-            factCompletion facts `shouldBe` CompletesOnCall
-
-        it "carries the alphabet it was built with, which is the mount ecosystem's own" $ \facts ->
-            factNameAlphabet facts `shouldBe` testAlphabet
+    before (handleFor store) $
+        maintenanceFactsContract
+            "maintenance/codeartifact/facts"
+            MaintenanceProfile
+                { profileBackend = "codeArtifact"
+                , profileCeiling = AtMost 100
+                , profileRefill = RefillPermitted
+                , profileCompletion = CompletesOnCall
+                , profileAlphabet = testAlphabet
+                , profileCursor = True
+                }
 
     it "reads a manifest through the read it was handed, never through the control plane" $ do
         outcome <- readStoreManifest (handleOver store inertPlane) lodashName
@@ -137,6 +132,16 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
 
 enumerationCases :: CodeArtifactStore -> Spec
 enumerationCases store = describe "the handle's paged enumerations" $ do
+    before
+        ( do
+            packages <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
+            versions <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage Nothing ["1.1.0"]]
+            pure (handleOver store (reading inertReader{rpListPackages = const packages, rpListVersions = const versions}))
+        )
+        $ maintenanceInventoryContract
+            "maintenance/codeartifact/inventory"
+            [lodashName, unscopedNpm "axios"]
+            [(lodashName, [served "1.0.0", served "1.1.0"])]
     it "pages the package listing to exhaustion, sending back the token the last page returned" $ do
         tokens <- newIORef []
         answer <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
@@ -186,6 +191,16 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
 
 deleteCases :: CodeArtifactStore -> Spec
 deleteCases store = describe "the handle's chunked delete" $ do
+    before
+        ( pure
+            ( handleOver
+                store
+                inertPlane
+                    { cpDeleteVersions = \request -> pure (Right (allRemoved (request ^. CAL.deletePackageVersions_versions)))
+                    }
+            )
+        )
+        $ maintenanceDeletionContract "maintenance/codeartifact/delete" lodashName (reverse (versionRun 101))
     for_ [1, 2 :: Int] $ \faultAt ->
         for_ [False, True] $ \throughSweep ->
             it ("stops after CodeArtifact chunk fault " <> show faultAt <> ", through sweep: " <> show throughSweep) $ do
@@ -290,6 +305,19 @@ deleteCases store = describe "the handle's chunked delete" $ do
 
 consentCases :: CodeArtifactStore -> Spec
 consentCases store = describe "the handle's consent read" $ do
+    before
+        ( pure
+            ( handleOver
+                store
+                ( reading
+                    inertReader
+                        { rpDescribeRepository = const (pure (Right describedWithArn))
+                        , rpListTags = const (pure (Right (taggedWith [markerTag])))
+                        }
+                )
+            )
+        )
+        $ maintenanceConsentContract "maintenance/codeartifact/consented" ConsentGranted StoreDestroyable
     it "describes the repository before it reads the tags, because a tag read is addressed by ARN" $ do
         calls <- newIORef []
         verdict <- consentUnder store calls (Right describedWithArn) (Right (taggedWith [markerTag]))
@@ -636,9 +664,6 @@ faultSaying detail =
 
 versionRun :: Int -> [Version]
 versionRun n = [mkVersion Npm ("1.0." <> show i) | i <- [1 .. n]]
-
-factsFor :: CodeArtifactStore -> IO StoreFacts
-factsFor store = storeFacts <$> handleFor store
 
 {- A two-character alphabet over the names these cases seed, so the bucket the handle sends is
 readable without this spec knowing an ecosystem's grammar. -}

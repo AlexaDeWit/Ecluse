@@ -10,6 +10,7 @@ module Ecluse.Runtime.Cve.SyncIntegrationSpec (spec) where
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
@@ -59,7 +60,7 @@ spec :: Spec
 spec =
     aroundAll withMinistack $
         describe "advisory sync + shadow swap (ministack S3, one proxy, two phases)" $
-            it "denies the young fix with no database, then admits it once the synced artifact swaps in" $ \container ->
+            it (caseLabel "integration/advisory-sync/native-001" "denies the young fix with no database, then admits it once the synced artifact swaps in") $ \container ->
                 withSystemTempDir $ \dataDir ->
                     withPublicUpstream $ \publicUrl ->
                         withPrivateUpstream $ \privateUrl -> do
@@ -138,8 +139,8 @@ createBucketWithRetry awsEnv bucket attempts =
   where
     attempt = tryAny (runResourceT (AWS.send awsEnv (S3.newCreateBucket (S3.BucketName bucket))))
 
-{- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject, under @env@
-with the feeds pointed at stubs. The output lands in its own temp dir, apart from the sync's. -}
+-- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject, under @env@
+-- with the feeds pointed at stubs. The output lands in its own temp dir, apart from the sync's.
 publishViaPilot :: Maybe AwsEndpoint -> [(String, String)] -> CorpusVersion -> IO ()
 publishViaPilot s3Endpoint env v = do
     zipBytes <- osvCorpusZip v
@@ -189,8 +190,8 @@ withPublicUpstream k = withRoutedStub selfHosted (k . stubLocalhostUrl)
 artifactPlaceholder :: Text
 artifactPlaceholder = "http://localhost:1"
 
-{- The private upstream resolves with no versions, so the public leg and the rules decide.
-A 404 would turn a total public denial into a retryable 503, hiding the 403 this test pins. -}
+-- The private upstream resolves with no versions, so the public leg and the rules decide.
+-- A 404 would turn a total public denial into a retryable 503, hiding the 403 this test pins.
 withPrivateUpstream :: (Text -> IO a) -> IO a
 withPrivateUpstream k = withStub status200 (encode emptyPackument) (k . stubLocalhostUrl)
 

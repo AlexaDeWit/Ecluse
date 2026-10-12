@@ -13,7 +13,10 @@ import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfDeprecated))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Server.Pipeline.ServingDriver (npmServingDriver)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Serving (servingContract)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
@@ -25,6 +28,7 @@ import UnliftIO.Exception (throwIO)
 
 spec :: Spec
 spec = do
+    servingContract "npm" npmServingDriver
     mergeSpec
     availabilitySpec
     cacheSpec
@@ -36,23 +40,7 @@ spec = do
 
 mergeSpec :: Spec
 mergeSpec = describe "multi-upstream merge (not fallback)" $ do
-    it "serves the union of trusted-private and gated-public versions" $ do
-        privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
-        publicUp <-
-            servingUpstream
-                ( encodePackument
-                    ( packument
-                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
-                        "2.0.0"
-                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
-                    )
-                )
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0", "2.0.0"]
-
-    it "gates public versions through the rules while trusting private ones" $ do
+    it (caseLabel "integration/npm-metadata/native-001" "gates public versions through the rules while trusting private ones") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <-
             servingUpstream
@@ -69,7 +57,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.5.0", "3.0.0"]
             servedLatest resp `shouldBe` Just "3.0.0"
 
-    it "denies a public install-script version while admitting a private one of the same key" $ do
+    it (caseLabel "integration/npm-metadata/native-002" "denies a public install-script version while admitting a private one of the same key") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
             servingUpstream
@@ -86,23 +74,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "1.0.0")
 
-    it "filters a hashless public version out of the served listing (integrity-presence policy)" $ do
-        privateUp <- failingUpstream
-        publicUp <-
-            servingUpstream
-                ( encodePackument
-                    ( packument
-                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
-                        "1.0.0"
-                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
-                    )
-                )
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
-
-    it "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)" $ do
+    it (caseLabel "integration/npm-metadata/native-003" "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -118,16 +90,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "drops a hashless trusted-private version from the listing by default (uniform floor)" $ do
-        privateUp <-
-            servingUpstream
-                (encodePackument (privatePackument [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
-        publicUp <- failingUpstream
-        withProxy privateUp publicUp Nothing $ \app -> do
-            resp <- getThing Nothing app
-            status resp `shouldBe` 403
-
-    it "rejects a public version whose only digest is below the floor (SHA-1 shasum)" $ do
+    it (caseLabel "integration/npm-metadata/native-004" "rejects a public version whose only digest is below the floor (SHA-1 shasum)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -143,7 +106,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "admits a public version carrying a SHA-256 integrity digest (meets the floor)" $ do
+    it (caseLabel "integration/npm-metadata/native-005" "admits a public version carrying a SHA-256 integrity digest (meets the floor)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -159,7 +122,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)" $ do
+    it (caseLabel "integration/npm-metadata/native-006" "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
@@ -168,7 +131,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
 
-    it "lists a SHA-1-only trusted-private version when the trusted floor is loosened to SHA-1" $ do
+    it (caseLabel "integration/npm-metadata/native-007" "lists a SHA-1-only trusted-private version when the trusted floor is loosened to SHA-1") $ do
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         privateUp <-
             servingUpstream
@@ -180,7 +143,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "rejects a public SHA-256 version when the floor is raised to SHA-512 (the floor value is wired)" $ do
+    it (caseLabel "integration/npm-metadata/native-008" "rejects a public SHA-256 version when the floor is raised to SHA-512 (the floor value is wired)") $ do
         sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
         privateUp <-
             servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
@@ -199,7 +162,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["3.0.0"]
 
-    it "drops a public SHA-1-only copy at the same key, serving the private SHA-256 (the weak digest never leaks)" $ do
+    it (caseLabel "integration/npm-metadata/native-009" "drops a public SHA-1-only copy at the same key, serving the private SHA-256 (the weak digest never leaks)") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
@@ -218,7 +181,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" resp `shouldBe` Just (sri256For "private")
 
-    it "serves the private copy and latest tag on an integrity divergence" $ do
+    it (caseLabel "integration/npm-metadata/native-010" "serves the private copy and latest tag on an integrity divergence") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
@@ -237,7 +200,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "private")
             servedLatest resp `shouldBe` Just "1.0.0"
 
-    it "keeps the divergent private version beside an agreeing version" $ do
+    it (caseLabel "integration/npm-metadata/native-011" "keeps the divergent private version beside an agreeing version") $ do
         privateUp <-
             servingUpstream
                 ( encodePackument
@@ -265,7 +228,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0", "2.0.0"]
             servedLatest resp `shouldBe` Just "2.0.0"
 
-    it "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)" $ do
+    it (caseLabel "integration/npm-metadata/native-012" "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -284,7 +247,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
 
 cacheSpec :: Spec
 cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
-    it "fetches changed full metadata within the TTL and replaces the assembled representation" $ do
+    it (caseLabel "integration/npm-metadata/native-013" "fetches changed full metadata within the TTL and replaces the assembled representation") $ do
         privateUp <- failingUpstream
         let v1 =
                 encodePackument
@@ -314,7 +277,7 @@ cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
             secondEtag `shouldNotBe` firstEtag
             seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
-    it "keeps each fetched policy decision and its served fields coherent" $ do
+    it (caseLabel "integration/npm-metadata/native-014" "keeps each fetched policy decision and its served fields coherent") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -338,7 +301,7 @@ cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
 
 noSurvivorsSpec :: Spec
 noSurvivorsSpec = describe "no survivors in the merge" $ do
-    it "503s when no version survives and the private upstream is unavailable (transient)" $ do
+    it (caseLabel "integration/npm-metadata/native-015" "503s when no version survives and the private upstream is unavailable (transient)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -353,7 +316,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 503
 
-    it "denies with 403 (never 503) when no version survives and the mount has no private upstream (serve-only pure gate)" $ do
+    it (caseLabel "integration/npm-metadata/native-016" "denies with 403 (never 503) when no version survives and the mount has no private upstream (serve-only pure gate)") $ do
         -- The absent private leg is structural, not an outage. Nothing is unavailable, so the
         -- young-versions denial renders as the policy 403, never the failed-private 503.
         privateUp <- failingUpstream
@@ -374,7 +337,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             -- absent leg must never fetch from it.
             seenAuth privateUp `shouldReturn` []
 
-    it "serves the filtered public document with no private upstream configured (serve-only pure gate)" $ do
+    it (caseLabel "integration/npm-metadata/native-017" "serves the filtered public document with no private upstream configured (serve-only pure gate)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -392,7 +355,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
             seenAuth privateUp `shouldReturn` []
 
-    it "403s when all public versions are denied and the private upstream genuinely has none" $ do
+    it (caseLabel "integration/npm-metadata/native-018" "403s when all public versions are denied and the private upstream genuinely has none") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
             servingUpstream
@@ -408,7 +371,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             status resp `shouldBe` 403
             status resp `shouldNotBe` 404
 
-    it "403s when every public version is integrity-inadmissible and the private upstream has none" $ do
+    it (caseLabel "integration/npm-metadata/native-019" "403s when every public version is integrity-inadmissible and the private upstream has none") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
             servingUpstream
@@ -424,7 +387,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             status resp `shouldBe` 403
             status resp `shouldNotBe` 404
 
-    it "502s when every responding origin reports a different package (no valid contribution)" $ do
+    it (caseLabel "integration/npm-metadata/native-020" "502s when every responding origin reports a different package (no valid contribution)") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
@@ -438,7 +401,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             header "Retry-After" resp `shouldBe` Nothing
             status resp `shouldNotBe` 404
 
-    it "502s a public-leg mismatch routed through the metadata cache (private resolves but is empty)" $ do
+    it (caseLabel "integration/npm-metadata/native-021" "502s a public-leg mismatch routed through the metadata cache (private resolves but is empty)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
             servingUpstream
@@ -450,7 +413,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
 
 edgeAuthSpec :: Spec
 edgeAuthSpec = describe "inbound ECLUSE_SERVER__AUTH_TOKEN validated at the edge" $ do
-    it "401s a request with no/incorrect inbound token before proxying" $ do
+    it (caseLabel "integration/npm-metadata/native-022" "401s a request with no/incorrect inbound token before proxying") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
         withProxy privateUp publicUp (Just "edge-secret") $ \app -> do
@@ -459,7 +422,7 @@ edgeAuthSpec = describe "inbound ECLUSE_SERVER__AUTH_TOKEN validated at the edge
             seenAuth privateUp `shouldReturn` []
             seenAuth publicUp `shouldReturn` []
 
-    it "admits a request presenting the correct inbound token" $ do
+    it (caseLabel "integration/npm-metadata/native-023" "admits a request presenting the correct inbound token") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
         withProxy privateUp publicUp (Just "edge-secret") $ \app -> do
@@ -468,14 +431,14 @@ edgeAuthSpec = describe "inbound ECLUSE_SERVER__AUTH_TOKEN validated at the edge
 
 conditionalSpec :: Spec
 conditionalSpec = describe "own ETag over the served bytes" $ do
-    it "serves a 200 with a strong ETag header" $ do
+    it (caseLabel "integration/npm-metadata/native-024" "serves a 200 with a strong ETag header") $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             header "ETag" resp `shouldSatisfy` isJust
 
-    it "answers 304 when the client echoes our ETag" $ do
+    it (caseLabel "integration/npm-metadata/native-025" "answers 304 when the client echoes our ETag") $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
@@ -484,7 +447,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
             status secondResp `shouldBe` 304
             simpleBody secondResp `shouldBe` ""
 
-    it "consults the private origin on a 304 -- the conditional never bypasses per-client authorisation" $ do
+    it (caseLabel "integration/npm-metadata/native-026" "consults the private origin on a 304 -- the conditional never bypasses per-client authorisation") $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing (Just "client-token") app
@@ -495,7 +458,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
             -- evaluates the derived validator only after the per-request private fetch resolves.
             seenAuth privateUp `shouldReturn` [Just "Bearer client-token", Just "Bearer client-token"]
 
-    it "re-serves 200 when the private document changes under a matching validator (per-client freshness)" $ do
+    it (caseLabel "integration/npm-metadata/native-027" "re-serves 200 when the private document changes under a matching validator (per-client freshness)") $ do
         -- Only the private leg changes, because the pipeline re-fetches it every request. A changed
         -- merged view must never answer 304 off the warm public entry.
         privateUp <-
@@ -516,29 +479,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
 
 packumentHeadSpec :: Spec
 packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no body)" $ do
-    it "answers a 200 HEAD with the GET's status, ETag, and Content-Length but no body" $ do
-        (privateUp, publicUp) <- twoServingUpstreams
-        withProxy privateUp publicUp Nothing $ \app -> do
-            getResp <- getThing Nothing app
-            headResp <- headThing Nothing app
-            status getResp `shouldBe` 200
-            status headResp `shouldBe` 200
-            simpleBody headResp `shouldBe` ""
-            header "ETag" headResp `shouldSatisfy` isJust
-            header "ETag" headResp `shouldBe` header "ETag" getResp
-            header "Content-Length" headResp
-                `shouldBe` Just (show (LBS.length (simpleBody getResp)))
-
-    it "answers a conditional HEAD that matches our ETag with a bodiless 304" $ do
-        (privateUp, publicUp) <- twoServingUpstreams
-        withProxy privateUp publicUp Nothing $ \app -> do
-            firstResp <- getThing Nothing app
-            etag <- etagOf firstResp
-            headResp <- headThingWith [("If-None-Match", etag)] app
-            status headResp `shouldBe` 304
-            simpleBody headResp `shouldBe` ""
-
-    it "403s a HEAD identically to the GET when every version is withheld by policy" $ do
+    it (caseLabel "integration/npm-metadata/native-028" "403s a HEAD identically to the GET when every version is withheld by policy") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
             servingUpstream
@@ -555,7 +496,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
             status resp `shouldNotBe` 404
             simpleBody resp `shouldBe` ""
 
-    it "503s a HEAD identically to the GET when a needed upstream is unavailable (transient)" $ do
+    it (caseLabel "integration/npm-metadata/native-029" "503s a HEAD identically to the GET when a needed upstream is unavailable (transient)") $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -571,7 +512,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
             status resp `shouldBe` 503
             simpleBody resp `shouldBe` ""
 
-    it "502s a HEAD identically to the GET when every responding origin reports a different package" $ do
+    it (caseLabel "integration/npm-metadata/native-030" "502s a HEAD identically to the GET when every responding origin reports a different package") $ do
         privateUp <-
             servingUpstream
                 (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
@@ -583,7 +524,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
             status resp `shouldBe` 502
             simpleBody resp `shouldBe` ""
 
-    it "401s a HEAD with a bad edge token before touching any upstream (gating identical to GET)" $ do
+    it (caseLabel "integration/npm-metadata/native-031" "401s a HEAD with a bad edge token before touching any upstream (gating identical to GET)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
         withProxy privateUp publicUp (Just "edge-secret") $ \app -> do
@@ -595,7 +536,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
 
 retainedFieldsSpec :: Spec
 retainedFieldsSpec = describe "supported served metadata fields" $ do
-    it "retains installation fields and omits unknown metadata" $ do
+    it (caseLabel "integration/npm-metadata/native-032" "retains installation fields and omits unknown metadata") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
@@ -610,14 +551,14 @@ retainedFieldsSpec = describe "supported served metadata fields" $ do
                 Just (String text) -> "See http://" `T.isPrefixOf` text && "/thing" `T.isSuffixOf` text
                 _ -> False
 
-    it "rewrites dist.tarball under the mount base so artifacts route back through the gate" $ do
+    it (caseLabel "integration/npm-metadata/native-033" "rewrites dist.tarball under the mount base so artifacts route back through the gate") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
 
-    it "rewrites a gated public version's dist.tarball under the mount base (rewritten once at assembly)" $ do
+    it (caseLabel "integration/npm-metadata/native-034" "rewrites a gated public version's dist.tarball under the mount base (rewritten once at assembly)") $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         withProxy privateUp publicUp Nothing $ \app -> do
@@ -638,7 +579,7 @@ etagOf = maybe (throwIO NoETag) pure . header "ETag"
 availabilitySpec :: Spec
 availabilitySpec = describe "admission-only deprecation policy" $
     for_ [(False, "obsolete release line" :: Text, 403), (False, "", 200), (True, "obsolete release line", 200)] $ \(stored, notice, expected) ->
-        it ("serves deprecated stored=" <> show stored <> ", notice=" <> toString notice) $ do
+        it (caseLabel ("integration/npm-metadata/native-035/" <> (if stored then "stored" else if expected == 403 then "denied" else "allowed")) (toText ("serves deprecated stored=" <> show stored <> ", notice=" <> toString notice :: String))) $ do
             let version = withKeys ["deprecated" .= notice] (plainVersion "1.0.0")
                 metadata = encodePackument (packument [("1.0.0", version)] "1.0.0" [("1.0.0", publishedDaysAgo 30)])
             publicUp <- servingUpstream metadata

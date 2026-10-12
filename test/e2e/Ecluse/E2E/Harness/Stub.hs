@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The nginx stub's routes. One nginx terminates TLS for every registry name the product dials
-and tells them apart by @server_name@, so the product reaches https-only endpoints. A case holds
-a fault on a route by rendering the configuration with it, and reads what each route answered
-from the access log. "Ecluse.E2E.Harness.Docker" applies the configuration and fetches the log.
+{- | The nginx stub's routes. One nginx terminates TLS for every registry name the product dials and tells them apart by @server_name@, so the product reaches https-only endpoints. A case holds a fault
+on a route by rendering the configuration with it, and reads what each route answered from the access log. "Ecluse.E2E.Harness.Docker" applies the configuration and fetches the log.
 -}
 module Ecluse.E2E.Harness.Stub (
     -- * Routes
@@ -159,9 +157,11 @@ routeLines = \case
         , "    }"
         ]
     Mirror ->
-        [ "    client_max_body_size 0;" -- admits a published tarball of any size
+        [ "    resolver 127.0.0.11 valid=5s;"
+        , "    client_max_body_size 0;" -- admits a published tarball of any size
         , "    location / {"
-        , "        proxy_pass http://verdaccio:4873;"
+        , "        set $mirror_backend verdaccio:4873;"
+        , "        proxy_pass http://$mirror_backend;"
         , "        proxy_set_header Host $host;"
         , "        proxy_set_header X-Forwarded-Proto https;" -- keeps Verdaccio writing https URLs
         , "        proxy_set_header X-Forwarded-For $remote_addr;"

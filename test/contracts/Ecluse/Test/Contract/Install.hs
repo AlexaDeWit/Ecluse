@@ -1,0 +1,124 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Real-client installation outcomes and native installation observations.
+module Ecluse.Test.Contract.Install (
+    ClientResult (..),
+    InstallDriver (..),
+    InstallationDriver (..),
+    installationContract,
+    RefusalDriver (..),
+    refusesWithoutEffects,
+    installsObserved,
+    refusesObserved,
+    shouldSucceed,
+    shouldFail,
+    shouldWarn,
+    clientReport,
+) where
+
+import System.Exit (ExitCode (ExitSuccess))
+import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe)
+
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Contract.Serving (ServingResponse, artifactDigestCase, artifactHeadCase)
+import Ecluse.Test.InstalledTree (InstalledTree)
+
+-- | The outcome of one client invocation: what ran, its exit code, and its captured output.
+data ClientResult = ClientResult
+    { crCommand :: Text
+    , crExit :: ExitCode
+    , crStdout :: Text
+    , crStderr :: Text
+    }
+    deriving stock (Show)
+
+-- | A fresh client invocation with its independent observation of the installed result.
+data InstallDriver observation = InstallDriver
+    { installRun :: IO (ClientResult, observation)
+    , installExpected :: observation
+    }
+
+-- | Native operations for the same admission and artifact scenarios on each ecosystem.
+data InstallationDriver observation = InstallationDriver
+    { installationAccepted :: InstallDriver observation
+    , installationDenied :: InstallDriver (observation, InstalledTree)
+    , installationArtifact :: IO (Text, ServingResponse)
+    , installationDigest :: ByteString -> Text
+    , installationHead :: IO ServingResponse
+    }
+
+-- | Require a fresh installation, refusal without files, and intact artifact representations.
+installationContract :: (Eq observation, Show observation) => Text -> SpecWith (InstallationDriver observation)
+installationContract prefix = do
+    it (label "accepted-install" "installs the admitted release into a fresh client directory") $ \driver ->
+        installsObserved (installationAccepted driver)
+    it (label "default-denial" "refuses an unadmitted release without installing files") $ \driver ->
+        refusesObserved (installationDenied driver)
+    it (label "artifact-integrity" "serves bytes matching the digest advertised in metadata") $ \driver -> do
+        (digest, response) <- installationArtifact driver
+        artifactDigestCase (installationDigest driver) digest response
+    it (label "artifact-head" "advertises an admitted artifact without transferring its body") $
+        installationHead >=> artifactHeadCase
+  where
+    label name = caseLabel (prefix <> "/" <> name)
+
+-- | An attempted install and an independent destination observation after its write window.
+data RefusalDriver evidence = RefusalDriver
+    { refusalInstall :: IO ClientResult
+    , refusalObserve :: IO evidence
+    , refusalSettle :: IO ()
+    }
+
+-- | Refusal must leave the required destination state intact after asynchronous work settles.
+refusesWithoutEffects :: (Eq evidence, Show evidence) => evidence -> RefusalDriver evidence -> Expectation
+refusesWithoutEffects expected driver = do
+    void (refusalInstall driver >>= shouldFail)
+    refusalSettle driver
+    observed <- refusalObserve driver
+    observed `shouldBe` expected
+
+-- | Require client success and the expected native installation result.
+installsObserved :: (Eq observation, Show observation) => InstallDriver observation -> Expectation
+installsObserved driver = do
+    (result, observed) <- installRun driver
+    void (shouldSucceed result)
+    observed `shouldBe` installExpected driver
+
+-- | Require client refusal and the expected unchanged installation result.
+refusesObserved :: (Eq observation, Show observation) => InstallDriver observation -> Expectation
+refusesObserved driver = do
+    (result, observed) <- installRun driver
+    void (shouldFail result)
+    observed `shouldBe` installExpected driver
+
+-- | Fail the assertion with the client's output when the command failed.
+shouldSucceed :: (MonadIO m) => ClientResult -> m ClientResult
+shouldSucceed res = liftIO $ case crExit res of
+    ExitSuccess -> pure res
+    _ -> expectationFailure (toString (clientReport res "failed")) >> pure res
+
+-- | Fail the assertion with the client's output when the command unexpectedly succeeded.
+shouldFail :: (MonadIO m) => ClientResult -> m ClientResult
+shouldFail res = liftIO $ case crExit res of
+    ExitSuccess -> expectationFailure (toString (clientReport res "incorrectly succeeded")) >> pure res
+    _ -> pure res
+
+-- | Fail the assertion with the client's output unless one line of its stderr is exactly this one.
+shouldWarn :: (MonadIO m) => Text -> ClientResult -> m ClientResult
+shouldWarn line res = liftIO $ do
+    unless (line `elem` lines (crStderr res)) $
+        expectationFailure (toString (clientReport res ("wrote no stderr line " <> show line)))
+    pure res
+
+-- | The command, outcome, and captured output for a failed client assertion.
+clientReport :: ClientResult -> Text -> Text
+clientReport res outcome =
+    crCommand res
+        <> " "
+        <> outcome
+        <> "!\nSTDOUT:\n"
+        <> crStdout res
+        <> "\nSTDERR:\n"
+        <> crStderr res

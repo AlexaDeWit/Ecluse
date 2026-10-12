@@ -8,17 +8,23 @@ Corpus loading reads each capture through the production read driver before a ha
 module Ecluse.Test.EcosystemBench (
     module Ecluse.Test.EcosystemBench.Types,
     ecosystemBenches,
+    benchmarkEcosystems,
+    checkBenchmarkCoverage,
 ) where
+
+import Prelude hiding (universe)
 
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Universe.Class (universe)
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, infoVersions)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (Manifest (..))
@@ -47,10 +53,30 @@ import Ecluse.Test.Snapshot (readDetails)
 
 -- | Load every registered corpus, failing on missing, malformed, or empty metadata.
 ecosystemBenches :: IO [EcosystemBench]
-ecosystemBenches = traverse (uncurry loadEcosystem) [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages)]
+ecosystemBenches = do
+    either (fail . toString) pure (checkBenchmarkCoverage benchmarkEcosystems)
+    traverse (uncurry loadEcosystem) benchmarkRegistrations
+
+-- | Provider identities without loading corpus files or running measured operations.
+benchmarkEcosystems :: [Ecosystem]
+benchmarkEcosystems = map (ebEcosystem . fst) benchmarkRegistrations
+
+-- | Compare providers with both reviewed obligations and the production adapter registry.
+checkBenchmarkCoverage :: [Ecosystem] -> Either Text ()
+checkBenchmarkCoverage actual
+    | sort actual /= sort required = Left ("measurement providers differ from required ecosystems: " <> show actual)
+    | sort actual /= sort production = Left ("measurement providers differ from production adapters: " <> show production)
+    | otherwise = Right ()
+  where
+    required = [Npm, PyPI]
+    production = filter (isJust . adapterFor) universe
+
+benchmarkRegistrations :: [(EcosystemBench, [CorpusPackage])]
+benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages)]
 
 loadEcosystem :: EcosystemBench -> [CorpusPackage] -> IO EcosystemBench
 loadEcosystem ecosystem packages = do
+    when (null packages) (fail ("empty measurement corpus for " <> show (ebEcosystem ecosystem)))
     entries <- traverse loadOne (sortOn cpTier (reverse packages))
     pure ecosystem{ebCorpus = entries}
   where

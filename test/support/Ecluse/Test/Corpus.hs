@@ -11,6 +11,7 @@ module Ecluse.Test.Corpus (
     corpusPackages,
     pypiCorpusPackages,
     cpName,
+    corpusLabel,
     CaptureUpstream (..),
     npmCaptureUpstream,
     pypiCaptureUpstream,
@@ -92,6 +93,15 @@ pypiCorpusPackages =
 cpName :: CorpusPackage -> Text
 cpName = renderPackageName . cpPackage
 
+-- | The stable corpus label used in native benchmark rows.
+corpusLabel :: CorpusPackage -> Text
+corpusLabel package = cpName package <> " (" <> tier <> ")"
+  where
+    tier = case cpTier package of
+        Medium -> "medium"
+        Large -> "large"
+        Heavy -> "heavy"
+
 -- | The registry a capture came from, which production enforces artifact locations against.
 data CaptureUpstream = CaptureUpstream
     { upstreamOrigin :: Text
@@ -129,9 +139,7 @@ readCaptureRecords eco = readCorpusPins $ \pins -> do
     entries <- recorded .: fromString (toString (ecosystemName eco))
     traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "sha256" <*> capture .: "capturedAt")) entries
 
-{- | The texts a parser reads from each entry of a capture. An empty capture fails the running example, and
-so does an entry with fewer texts than the given count, so a field the parser misses cannot pass unread.
--}
+-- | Read each capture entry, rejecting empty captures and entries below the requested text count.
 captureTexts :: Int -> J.Parser [Text] -> CorpusPackage -> IO [[Text]]
 captureTexts fewest textsOf package = do
     bytes <- readFileBS (cpPath package)

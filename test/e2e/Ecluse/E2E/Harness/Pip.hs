@@ -2,14 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | pip clients for end-to-end scenarios.
-Each project pins one release to the digest the mount's own index advertised, so pip's
-hash-checking mode refuses any byte that is not the one the client was promised.
+{- | pip clients for end-to-end scenarios. Each project pins one release to the digest the mount's own index
+advertised, so pip's hash-checking mode refuses any byte that is not the one the client was promised.
 -}
 module Ecluse.E2E.Harness.Pip (
     withPipProject,
     pipInstallIn,
     pipInstalled,
+    pipInstalledTree,
     pipInstallsWheel,
 
     -- * The served index
@@ -21,18 +21,22 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
-import Test.Hspec (Expectation, expectationFailure, shouldBe)
+import Test.Hspec (Expectation, expectationFailure)
 import UnliftIO.Environment (getEnvironment)
 
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet, shouldSucceedThroughProxy)
+import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
+import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
 withPipProject e2e project version digest use =
     withClientDir "pip" $ \projectDir -> do
+        index <- clientEndpoint PyPI e2e
         writeFileText (projectDir </> requirementsFile) (requirement project version digest)
         baseEnv <- getEnvironment
         -- --isolated drops PIP_* and the user config but still reads the global and site
@@ -40,7 +44,7 @@ withPipProject e2e project version digest use =
         let cleanEnv =
                 filter ((`notElem` ["HOME", "PIP_CONFIG_FILE"]) . fst) baseEnv
                     <> [("HOME", projectDir), ("PIP_CONFIG_FILE", "/dev/null")]
-        use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = e2ePypiIndex e2e}
+        use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = index}
 
 -- | Install into the project target with @--require-hashes@ checking the advertised digest.
 pipInstallIn :: PipProject -> IO ClientResult
@@ -74,15 +78,21 @@ pipInstallsWheel e2e advertised =
     case filter ((== pypiWheelFile) . fst) advertised of
         [(_, digest)] ->
             withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
-                void $ pipInstallIn proj >>= shouldSucceedThroughProxy e2e
-                installed <- pipInstalled proj pypiDistInfo
-                installed `shouldBe` True
+                installsObserved
+                    InstallDriver
+                        { installRun = (,) <$> pipInstallIn proj <*> pipInstalled proj pypiDistInfo
+                        , installExpected = True
+                        }
         other ->
             expectationFailure ("the served index advertised " <> show (map fst other) <> ", not one digested wheel")
 
 -- | Whether a wheel's @.dist-info@ directory landed in the project's install target.
 pipInstalled :: PipProject -> Text -> IO Bool
 pipInstalled proj distInfo = doesDirectoryExist (ppDir proj </> targetDir </> toString distInfo)
+
+-- | Observe all installation output, including unexpected distributions and partial files.
+pipInstalledTree :: PipProject -> IO InstalledTree
+pipInstalledTree proj = snapshotTree (ppDir proj) [targetDir]
 
 -- | Read advertised @(filename, sha256)@ pairs through the proxy, failing if the mount refuses.
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]

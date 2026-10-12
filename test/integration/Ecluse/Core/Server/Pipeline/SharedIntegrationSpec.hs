@@ -10,6 +10,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
@@ -56,7 +57,7 @@ allowingEffectfulRule =
 
 effectfulSpec :: Spec
 effectfulSpec = describe "effectful rule tier" $ do
-    it "filters an Undecidable version out of a packument and 503s when nothing survives" $ do
+    it (caseLabel "integration/pipeline-faults/native-001" "filters an Undecidable version out of a packument and 503s when nothing survives") $ do
         rule <- downEffectfulRule
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
@@ -65,7 +66,7 @@ effectfulSpec = describe "effectful rule tier" $ do
             status resp `shouldBe` 503
             status resp `shouldNotBe` 404
 
-    it "excludes a version a reachable effectful deny rejects (403 when nothing else survives)" $ do
+    it (caseLabel "integration/pipeline-faults/native-002" "excludes a version a reachable effectful deny rejects (403 when nothing else survives)") $ do
         rule <- denyingEffectfulRule
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
@@ -73,7 +74,7 @@ effectfulSpec = describe "effectful rule tier" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
 
-    it "serves a version a reachable effectful allow admits (a 200 with that version)" $ do
+    it (caseLabel "integration/pipeline-faults/native-003" "serves a version a reachable effectful allow admits (a 200 with that version)") $ do
         rule <- allowingEffectfulRule
         privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
         publicUp <-
@@ -86,7 +87,7 @@ effectfulSpec = describe "effectful rule tier" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "serves a tarball a reachable effectful allow admits on the artifact path" $ do
+    it (caseLabel "integration/pipeline-faults/native-004" "serves a tarball a reachable effectful allow admits on the artifact path") $ do
         rule <- allowingEffectfulRule
         privateUp <- privateArtifactMiss
         let young base = packument [("1.0.0", selfHostedVersion base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 1)]
@@ -96,7 +97,7 @@ effectfulSpec = describe "effectful rule tier" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "maps a concrete-artifact Undecidable to a 503 on the tarball path" $ do
+    it (caseLabel "integration/pipeline-faults/native-005" "maps a concrete-artifact Undecidable to a 503 on the tarball path") $ do
         rule <- downEffectfulRule
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
@@ -162,7 +163,7 @@ nestedValue = foldr (\_ value -> object ["default" .= value]) (String "./index.j
 
 boundsSpec :: Spec
 boundsSpec = describe "response bounds through the request path (security.md invariant 4)" $ do
-    it "skips deeply nested unknown fields without rejecting the package" $ do
+    it (caseLabel "integration/pipeline-faults/native-006" "skips deeply nested unknown fields without rejecting the package") $ do
         let body = case admittingPublic "1.0.0" of
                 Object fields -> Object (KeyMap.insert "_unknown" nestedValue fields)
                 other -> other
@@ -177,7 +178,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
                 Object fields -> KeyMap.lookup "_unknown" fields `shouldBe` Nothing
                 _ -> expectationFailure "expected a metadata object"
 
-    it "refuses an oversized private packument fail-closed, serving only the public set" $ do
+    it (caseLabel "integration/pipeline-faults/native-007" "refuses an oversized private packument fail-closed, serving only the public set") $ do
         privateUp <- servingUpstream (oversizedPackument "9.9.9")
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
@@ -186,7 +187,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "503s when the only (public) packument is oversized and the private upstream is down" $ do
+    it (caseLabel "integration/pipeline-faults/native-008" "503s when the only (public) packument is oversized and the private upstream is down") $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream (oversizedPackument "1.0.0")
         queue <- newTestMemoryQueue
@@ -194,7 +195,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             resp <- getThing Nothing app
             status resp `shouldBe` 503
 
-    it "refuses a version-flood public packument fail-closed (nothing served from it)" $ do
+    it (caseLabel "integration/pipeline-faults/native-009" "refuses a version-flood public packument fail-closed (nothing served from it)") $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream versionFloodPackument
         queue <- newTestMemoryQueue
@@ -202,7 +203,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             resp <- getThing Nothing app
             status resp `shouldBe` 503
 
-    it "serves the public set when a version-flood document arrives on the private leg" $ do
+    it (caseLabel "integration/pipeline-faults/native-010" "serves the public set when a version-flood document arrives on the private leg") $ do
         privateUp <- servingUpstream versionFloodPackument
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
@@ -211,7 +212,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "refuses a deeply-nested public document fail-closed (503 with the private upstream down)" $ do
+    it (caseLabel "integration/pipeline-faults/native-011" "refuses a deeply-nested public document fail-closed (503 with the private upstream down)") $ do
         privateUp <- failingUpstream
         publicUp <- servingUpstream deeplyNestedBody
         queue <- newTestMemoryQueue
@@ -219,7 +220,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             resp <- getThing Nothing app
             status resp `shouldBe` 503
 
-    it "serves the public set when a deeply-nested document arrives on the private leg" $ do
+    it (caseLabel "integration/pipeline-faults/native-012" "serves the public set when a deeply-nested document arrives on the private leg") $ do
         privateUp <- servingUpstream deeplyNestedBody
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
@@ -228,7 +229,7 @@ boundsSpec = describe "response bounds through the request path (security.md inv
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "serves normally when every document is within the bounds (no false refusal)" $ do
+    it (caseLabel "integration/pipeline-faults/native-013" "serves normally when every document is within the bounds (no false refusal)") $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
         queue <- newTestMemoryQueue
@@ -253,34 +254,34 @@ captureBreachLog privateBody = do
 
 boundsLogSpec :: Spec
 boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
-    it "logs a WARNING naming the version-count bound, distinct from a plain parse failure" $ do
+    it (caseLabel "integration/pipeline-faults/native-014" "logs a WARNING naming the version-count bound, distinct from a plain parse failure") $ do
         logged <- captureBreachLog versionFloodPackument
         logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"version-count\""
         logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
 
-    it "logs a WARNING naming the metadata-body-size bound on an oversized body" $ do
+    it (caseLabel "integration/pipeline-faults/native-015" "logs a WARNING naming the metadata-body-size bound on an oversized body") $ do
         logged <- captureBreachLog (oversizedPackument "9.9.9")
         logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"metadata-body-size\""
 
-    it "logs a WARNING naming the nesting-depth bound on a deeply-nested body" $ do
+    it (caseLabel "integration/pipeline-faults/native-016" "logs a WARNING naming the nesting-depth bound on a deeply-nested body") $ do
         logged <- captureBreachLog deeplyNestedBody
         logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"nesting-depth\""
 
-    it "logs a WARNING on an undecodable upstream body (the case the bound guards leave silent)" $ do
+    it (caseLabel "integration/pipeline-faults/native-017" "logs a WARNING on an undecodable upstream body (the case the bound guards leave silent)") $ do
         logged <- captureBreachLog undecodableBody
         logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
         logged `shouldSatisfy` T.isInfixOf "did not decode"
 
-    it "tags every serve-path log line with the emitting module" $ do
+    it (caseLabel "integration/pipeline-faults/native-018" "tags every serve-path log line with the emitting module") $ do
         logged <- captureBreachLog versionFloodPackument
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
 
 perimeterSpec :: Spec
 perimeterSpec = describe "the typed request perimeter (an escaped pre-commit fault)" $
-    it "answers a bottoming assembly with the route's declared neutral 500, never a torn session" $ do
+    it (caseLabel "integration/pipeline-faults/native-019" "answers a bottoming assembly with the route's declared neutral 500, never a torn session") $ do
         -- The assembly hook bottoms when the render forces it, an invariant break escaping the
         -- handler pre-commit. The perimeter answers a neutral 500 and the session survives.
         privateUp <- failingUpstream

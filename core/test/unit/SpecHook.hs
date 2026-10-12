@@ -1,0 +1,19 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | Keep automatic discovery while reporting actual canonical unit outcomes when requested.
+module SpecHook (hook) where
+
+import Test.Hspec (Spec)
+
+import Ecluse.Test.Contract.Catalogue (combineCatalogues)
+import Ecluse.Test.Contract.PackageStore (packageStoreCatalogue)
+import Ecluse.Test.Contract.UnitCatalogueSpec (unitCatalogue)
+import Ecluse.Test.Contract.UnitReport (unitReportHook)
+
+-- | Local runs retain Hspec options without requiring report identities or artifact paths.
+hook :: Spec -> Spec
+hook = unitReportHook "core-unit" $ do
+    catalogue <- unitCatalogue
+    pure $ combineCatalogues [catalogue, packageStoreCatalogue "verdaccio"]

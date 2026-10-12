@@ -18,7 +18,6 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson (Value, encode, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Pair)
-import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, nominalDay)
@@ -26,19 +25,19 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Clock (getMonotonicTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
 import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
-import Ecluse.BenchLoad.Advisories (allRulesAdvisories, shippedAdvisories)
+import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture (..), proxied, scenario, urlLoad)
-import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath, saUpstreamUrl))
-import Ecluse.BenchLoad.PatternScenario (loadPins, patternScenarios, selectArtifacts)
-import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..), privateCopyScenarios)
-import Ecluse.BenchLoad.ProxyProcess (ProxyProcess, proxyPort)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath))
+import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
+import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
+import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
+import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
@@ -73,7 +72,7 @@ import Ecluse.Core.Worker (
     processBatch,
     runWorkerM,
  )
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier, cpWeight), CorpusTier (Heavy), corpusPackages, cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpWeight), corpusPackages, cpName)
 import Ecluse.Test.Corpus.Subset (newestNpmShare)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsafeHash, validSha1, validSha512Sri)
@@ -85,36 +84,29 @@ import Ecluse.Test.Worker (admitAllPolicies)
 -- | The npm load fixture covers metadata, artifact relays, cache churn, and mirror jobs.
 npmFixture :: UpstreamFixture
 npmFixture =
-    UpstreamFixture
-        { fixtureEcosystem = Npm
-        , fixtureScenarios =
-            [ mergeScenario
-            , shippedAdvisories Npm mergeScenario
-            , allRulesAdvisories Npm mergeScenario
-            ]
-                <> privateCopyScenarios npmPrivateCopy
-                <> [ assembledHitScenario
-                   , revalidateScenario
-                   , shippedAdvisories Npm revalidateScenario
-                   , cacheFitsScenario
-                   , cacheEvictsScenario
-                   , tarballScenario
-                   , tarballOnboardingScenario
-                   , tarballCeilingScenario
-                   , herdScenario
-                   , warmUnderColdScenario
-                   , rampScenario
-                   , workerScenario
-                   ]
-                <> patternScenarios
-                    Npm
-                    corpusPackages
-                    (\knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
-                    ( \knobs bodies artifacts -> do
-                        rewritten <- newIORef mempty
-                        pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies artifacts)
-                    )
-                    packageUrl
+    readLoadContract
+        npmReadDriver
+        [workerScenario]
+
+npmReadDriver :: LoadReadDriver
+npmReadDriver =
+    LoadReadDriver
+        { lrdPrivateCopy = npmPrivateCopy
+        , lrdColdMetadata = mergeScenario
+        , lrdAssembledHit = assembledHitScenario
+        , lrdRevalidate = revalidateScenario
+        , lrdCacheFits = cacheFitsScenario
+        , lrdCacheEvicts = cacheEvictsScenario
+        , lrdPrivateArtifact = tarballScenario
+        , lrdPublicArtifact = tarballOnboardingScenario
+        , lrdArtifactCeiling = tarballCeilingScenario
+        , lrdHerd = herdScenario
+        , lrdWarmUnderCold = warmUnderColdScenario
+        , lrdRamp = rampScenario
+        , lrdPatternPrivate = \knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lrdPatternPublic = \knobs bodies artifacts -> do
+            rewritten <- newIORef mempty
+            pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies artifacts)
         }
 
 mergeScenario :: Scenario
@@ -229,9 +221,6 @@ herdScenario =
         { scenarioServiceTime = False
         }
 
-herdSize :: Int
-herdSize = 100
-
 warmUnderColdScenario :: Scenario
 warmUnderColdScenario =
     ( scenario
@@ -243,36 +232,19 @@ warmUnderColdScenario =
         }
 
 warmUnderCold :: LoadKnobs -> (Target -> IO a) -> IO a
-warmUnderCold knobs k = do
-    bodies <- loadCorpusBodies corpusPackages
-    pins <- loadPins
-    selected <- either benchFail pure (selectArtifacts Npm (Just "pinned") pins warmPackages bodies)
-    artifactRequests <- traverse (HTTP.parseRequest . toString . saUpstreamUrl) (Map.elems selected)
-    served <- newIORef (0 :: Int)
-    rewritten <- newIORef mempty
-    let latency = lkUpstreamLatencyMicros knobs
-        bytes = artifactBytes (lkPayloadBytes knobs)
-        artifacts = Map.fromList [(HTTP.path request, bytes) | request <- artifactRequests]
-        nonce name
-            | name `elem` map cpName coldPackages = do
-                n <- atomicModifyIORef' served (\count -> (count + 1, count))
-                pure ["description" .= ("bench nonce " <> show n :: Text)]
-            | otherwise = pure []
-    withProxyOverStubs
-        Npm
-        knobs
-        longCacheTtl
-        Nothing
-        (privateOverlayStubWith nonce latency bytes)
-        (corpusPublicStub rewritten latency bodies artifacts)
-        (const [])
-        $ \proxy _ -> do
-            let port = proxyPort proxy
-                listings pkgs = weightedMix cpWeight packageUrl pkgs port
-                warmUrls = listings warmPackages <> [packageUrl port (saProxyPath artifact) | artifact <- Map.elems selected]
-            -- Prime the assembled and selected-version stores, and prove every warm path serves.
-            for_ (ordNub warmUrls) (void . fetchChecked status200 [])
-            k (proxied proxy (DriveUnder (urlLoad warmUrls) (urlLoad (listings coldPackages))))
+warmUnderCold =
+    pairedLoad
+        WarmLoadDriver
+            { wldEcosystem = Npm
+            , wldPackages = corpusPackages
+            , wldListingUrl = packageUrl
+            , wldArtifactUrl = \port -> packageUrl port . saProxyPath
+            , wldSelect = \packages bodies -> do
+                pins <- loadPins
+                either benchFail pure (selectArtifacts Npm (Just "pinned") pins packages bodies)
+            , wldPrivate = privateOverlayStubWith
+            , wldPublic = corpusPublicStub
+            }
 
 rampScenario :: Scenario
 rampScenario =
@@ -283,13 +255,6 @@ rampScenario =
     )
         { scenarioServiceTime = False
         }
-
-rampSteps :: [Int]
-rampSteps = [10, 25, 50, 100, 200, 400]
-
--- The heavy tier drives the cold side of the paired scenario, and the rest the warm side.
-coldPackages, warmPackages :: [CorpusPackage]
-(coldPackages, warmPackages) = partition ((== Heavy) . cpTier) corpusPackages
 
 withNpmProxy :: LoadKnobs -> Int -> Maybe Int -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withNpmProxy knobs ttl maxEntries mkMix body = do

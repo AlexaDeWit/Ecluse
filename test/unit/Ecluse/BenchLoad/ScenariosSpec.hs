@@ -10,13 +10,25 @@ import Data.Set qualified as Set
 import Test.Hspec
 
 import Ecluse.BenchLoad.Floors (Calibration (calOperatingPoint, calRuns), Floors (floorsByShape, floorsCalibration), Pass (ConcurrencyOne, Loaded), loadFloors)
-import Ecluse.BenchLoad.Harness (defaultLoadKnobs, operatingPoint)
+import Ecluse.BenchLoad.Harness (UpstreamFixture (fixtureScenarios), defaultLoadKnobs, operatingPoint)
 import Ecluse.BenchLoad.Pod (PodShape (Unlimited), scheduledPodShapes)
-import Ecluse.BenchLoad.Scenarios (checkedCounts)
+import Ecluse.BenchLoad.Scenarios (checkFixtureCoverage, checkedCounts, fixtures)
 import Ecluse.BenchLoad.Support (twoCores)
 
 spec :: Spec
 spec = do
+    describe "load provider coverage" $ do
+        it "covers every supported ecosystem" $
+            checkFixtureCoverage fixtures `shouldBe` Right ()
+        it "rejects an omitted provider" $
+            checkFixtureCoverage (drop 1 fixtures) `shouldSatisfy` isLeft
+        it "rejects a duplicate provider" $
+            checkFixtureCoverage (fixtures <> fixtures) `shouldSatisfy` isLeft
+        it "rejects a provider without scenarios" $
+            checkFixtureCoverage (map (\fixture -> fixture{fixtureScenarios = []}) fixtures) `shouldSatisfy` isLeft
+        it "rejects duplicate scenario identities" $
+            checkFixtureCoverage (map (\fixture -> fixture{fixtureScenarios = fixtureScenarios fixture <> fixtureScenarios fixture}) fixtures) `shouldSatisfy` isLeft
+
     describe "checkedCounts" $ do
         it "checks in-process work only under the unlimited shape, the one shape that runs it" $ do
             checkedCounts Unlimited `shouldSatisfy` Set.member ("npm/worker-mirroring", Loaded)

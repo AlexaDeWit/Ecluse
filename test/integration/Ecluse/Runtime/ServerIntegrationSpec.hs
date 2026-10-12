@@ -4,6 +4,7 @@
 
 module Ecluse.Runtime.ServerIntegrationSpec (spec) where
 
+import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Client (
     Manager,
     defaultManagerSettings,
@@ -31,14 +32,12 @@ import UnliftIO.Timeout (timeout)
 
 import Ecluse.Test.Wai (freePort)
 
-{- | The graceful-shutdown drain, driven against a real Warp listener on loopback. Closing
-the listen socket stops new connections, but Warp still waits for an in-flight request to
-finish. These tests close the socket directly, because signal delivery is process-global and
-would race the test runner.
+{- | Drain in-flight requests after closing a loopback listener.
+Direct socket closure avoids process-global signal delivery in the runner.
 -}
 spec :: Spec
 spec = describe "graceful shutdown -- drain in-flight work" $ do
-    it "completes an in-flight request after the socket is closed, then the server stops" $ do
+    it (caseLabel "integration/server-shutdown/native-001" "completes an in-flight request after the socket is closed, then the server stops") $ do
         -- A handler that blocks on a release barrier. The test can then hold a request
         -- in-flight across the socket close, the rollover window the drain guards.
         arrived <- newEmptyMVar
@@ -72,7 +71,7 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             stopped <- timeout 5_000_000 (wait serverThread)
             stopped `shouldBe` Just ()
 
-    it "returns promptly when the socket is closed with no work in flight" $ do
+    it (caseLabel "integration/server-shutdown/native-002" "returns promptly when the socket is closed with no work in flight") $ do
         let app :: Application
             app _req respond = respond (responseLBS status200 [] "served")
 
@@ -92,10 +91,7 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             afterStop <- try (getStatusBody manager port) :: IO (Either SomeException (Int, LByteString))
             afterStop `shouldSatisfy` isLeft
 
-{- Run an 'Application' on a free loopback port with the graceful-shutdown settings
-'Ecluse.Runtime.Server.runWarp' uses. The install handler captures Warp's @closeSocket@ into an
-MVar rather than an OS signal handler, so the test triggers the drain deterministically.
--}
+-- Capture Warp socket closure in an MVar to trigger the production drain settings without OS signals.
 withListener ::
     Application ->
     Int ->
@@ -117,9 +113,8 @@ withListener app drainTimeoutSeconds k = do
     closeSocket <- takeMVar closeSocketVar
     k port closeSocket serverThread
 
-{- Issue a GET to the loopback listener. The request carries @Connection: close@, as a
-response from a draining instance does, so no keep-alive socket holds the drain open.
--}
+-- Issue a GET to the loopback listener. The request carries @Connection: close@, as a
+-- response from a draining instance does, so no keep-alive socket holds the drain open.
 getStatusBody :: Manager -> Port -> IO (Int, LByteString)
 getStatusBody manager port = do
     base <- parseRequest ("http://127.0.0.1:" <> show port <> "/")

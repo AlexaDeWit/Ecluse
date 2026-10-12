@@ -5,6 +5,17 @@
 module Ecluse.E2E.Harness.Types (
     E2E (..),
     E2EConfig (..),
+    Service (..),
+    Topology (..),
+    npmTopology,
+    pypiTopology,
+    pypiAdvisoryTopology,
+    dredgerTopology,
+    mixedTopology,
+    clientEndpoint,
+    packageStore,
+    serviceUrl,
+    ministackPort,
     defaultE2EConfig,
     GlobalDataPlane (..),
     ClientResult (..),
@@ -12,54 +23,82 @@ module Ecluse.E2E.Harness.Types (
     PipProject (..),
 ) where
 
+import Data.Map.Strict qualified as Map
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Test.Contract.Install (ClientResult (..))
 import Network.HTTP.Client (Manager)
-import System.Exit (ExitCode)
 
--- | A booted end-to-end environment, handed to each spec case.
+-- | Only the processes and endpoints acquired for this group.
 data E2E = E2E
-    { e2eRegistry :: Text
-    -- ^ The npm registry URL to point a client at (the proxy's npm mount).
-    , e2ePypiIndex :: Text
-    -- ^ The Simple-index URL to point a client at (the proxy's pypi mount).
+    { e2eClientEndpoints :: Map Ecosystem Text
     , e2eBaseUrl :: Text
-    -- ^ The proxy's base URL on host loopback (no trailing slash).
-    , e2eVerdaccio :: Text
-    -- ^ The Verdaccio base URL on host loopback (the mirror, for polling).
+    , e2eStore :: Maybe Service
     , e2ePlane :: GlobalDataPlane
-    -- ^ The data plane the proxy runs on, so a case can fault a stub route or boot a second proxy on it.
     , e2eProxyContainer :: String
-    {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
-    ('proxyContainerLogs'): what it wrote to stdout\/stderr.
-    -}
-    , e2eMirrorContainer :: String
-    {- ^ The Verdaccio container name, so a failure can carry the mirror store's own reason
-    for a status the proxy could only report as an outage.
-    -}
     , e2eCollectorContainer :: Maybe String
-    {- ^ The OTLP collector container name when the environment booted one ('ecCollector'), so
-    a test can read the collector's debug-exporter output. 'Nothing' when no collector booted.
-    -}
     , e2eManager :: Manager
-    -- ^ A shared HTTP manager for the harness's own probes.
     }
 
-{- | What an end-to-end environment boots beyond the base topology: an optional OTLP collector
-plus extra proxy environment that layers over 'proxyEnv'. The default boots neither.
--}
+-- | Extra role configuration layered over the group's topology.
 data E2EConfig = E2EConfig
     { ecCollector :: Bool
-    -- ^ Stand up the OTLP collector container (reached by the proxy as @otelcol@).
     , ecExtraEnv :: [(Text, Text)]
-    -- ^ Extra proxy environment, appended over (and so overriding) the base 'proxyEnv'.
     , ecQueueUrl :: Maybe Text
-    {- ^ Join this existing mirror queue rather than create one, so several roles share the
-    queue a scenario hands between them. 'Nothing' creates a queue for this proxy alone.
-    -}
     , ecArgs :: [String]
-    {- ^ The role arguments the product image runs, such as @["proxy", "--no-worker"]@. Empty
-    takes the image's default role, the proxy with its embedded worker.
-    -}
     }
+
+-- | A service with its owned container and host-loopback endpoint.
+data Service = Service
+    { serviceContainer :: String
+    , servicePort :: Int
+    }
+
+-- | Resources and mounted ecosystems required by one atomic group.
+data Topology = Topology
+    { topologyMounts :: [Ecosystem]
+    , topologyStore :: Bool
+    , topologyAws :: Bool
+    }
+
+-- | npm reads with an observed mirror and an in-process queue.
+npmTopology :: Topology
+npmTopology = Topology [Npm] True False
+
+-- | PyPI reads need neither a package store nor an AWS emulator.
+pypiTopology :: Topology
+pypiTopology = Topology [PyPI] False False
+
+-- | Advisory compilation and reads share the S3 emulator.
+pypiAdvisoryTopology :: Topology
+pypiAdvisoryTopology = pypiTopology{topologyAws = True}
+
+-- | Maintenance and independent workers share S3 and SQS.
+dredgerTopology :: Topology
+dredgerTopology = npmTopology{topologyAws = True}
+
+-- | The supported shared-proxy configuration enables both ecosystems.
+mixedTopology :: Topology
+mixedTopology = npmTopology{topologyMounts = [Npm, PyPI]}
+
+-- | Resolve a required client capability before constructing a project.
+clientEndpoint :: Ecosystem -> E2E -> IO Text
+clientEndpoint ecosystem environment =
+    maybe
+        (fail ("topology has no client endpoint for " <> show ecosystem))
+        pure
+        (Map.lookup ecosystem (e2eClientEndpoints environment))
+
+-- | Resolve the required package-store capability before observing it.
+packageStore :: E2E -> IO Service
+packageStore environment = maybe (fail "topology has no package store") pure (e2eStore environment)
+
+-- | The host-loopback address of a concrete service.
+serviceUrl :: Service -> Text
+serviceUrl service = "http://127.0.0.1:" <> show (servicePort service)
+
+-- | Resolve the AWS emulator capability for advisory or durable-queue operations.
+ministackPort :: GlobalDataPlane -> IO Int
+ministackPort plane = maybe (fail "topology has no AWS emulator") (pure . servicePort) (gdpMinistack plane)
 
 -- | The base configuration: the plain topology, no collector and no extra environment.
 defaultE2EConfig :: E2EConfig
@@ -69,21 +108,11 @@ defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = [], ecQueueUrl = 
 data GlobalDataPlane = GlobalDataPlane
     { gdpNet :: String
     , gdpStub :: String
-    , gdpVerd :: String
-    , gdpMini :: String
-    , gdpVerdPort :: Int
-    , gdpMiniPort :: Int
+    , gdpStore :: Maybe Service
+    , gdpMinistack :: Maybe Service
     , gdpWorkDir :: FilePath
+    , gdpTopology :: Topology
     }
-
--- | The outcome of one client invocation: what ran, its exit code, and its captured output.
-data ClientResult = ClientResult
-    { crCommand :: Text
-    , crExit :: ExitCode
-    , crStdout :: Text
-    , crStderr :: Text
-    }
-    deriving stock (Show)
 
 {- | An isolated, throwaway @npm@ project: its own cache, userconfig, prefix and @HOME@ keep
 global npm state out and the proxy the only registry.
@@ -93,8 +122,8 @@ data NpmProject = NpmProject
     , npEnv :: [(String, String)]
     }
 
-{- | An isolated, throwaway @pip@ project: its own requirements file, install target and
-@HOME@ keep global pip state out and the proxy the only index.
+{- | An isolated, throwaway @pip@ project: its own requirements file, install target and @HOME@
+keep global pip state out and the proxy the only index.
 -}
 data PipProject = PipProject
     { ppDir :: FilePath

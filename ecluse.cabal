@@ -730,6 +730,7 @@ library ecluse-test-support
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
+    Ecluse.Test.Registry.Npm.StoredVersions
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonBytes
@@ -807,19 +808,98 @@ library ecluse-test-support
     -- The advisory fixtures serve their EPSS feeds gzipped, as the publisher does.
     , zlib              ^>=0.7
 
+-- Contracts depend on core test support, never runtime or application providers.
+library ecluse-test-contracts
+  import:          shared
+  hs-source-dirs:  test/contracts
+  exposed-modules:
+    Ecluse.Test.Contract.Advisory
+    Ecluse.Test.Contract.Artifact.Identity
+    Ecluse.Test.Contract.Artifact.Attempt
+    Ecluse.Test.Contract.Binding
+    Ecluse.Test.Contract.Catalogue
+    Ecluse.Test.Contract.Completion
+    Ecluse.Test.Contract.Ecosystem
+    Ecluse.Test.Contract.Performance
+    Ecluse.Test.Contract.Credential
+    Ecluse.Test.Contract.Integration.Catalogue
+    Ecluse.Test.Contract.Integration.Obligations
+    Ecluse.Test.Contract.Install
+    Ecluse.Test.Contract.Install.Advisory
+    Ecluse.Test.Contract.Install.Outage
+    Ecluse.Test.Contract.Mirror
+    Ecluse.Test.Contract.PackageStore
+    Ecluse.Test.Contract.Publication
+    Ecluse.Test.Contract.Telemetry
+    Ecluse.Test.Contract.Maintenance
+    Ecluse.Test.Contract.Measurement
+    Ecluse.Test.Contract.Metadata.Projection
+    Ecluse.Test.Contract.Manifest
+    Ecluse.Test.Contract.Phase
+    Ecluse.Test.Contract.Queue
+    Ecluse.Test.Contract.RegistrySmoke
+    Ecluse.Test.Contract.Result
+    Ecluse.Test.Contract.Retention
+    Ecluse.Test.Contract.Runner
+    Ecluse.Test.Contract.Serving
+    Ecluse.Test.Contract.Types
+    Ecluse.Test.Contract.UnitCatalogue
+    Ecluse.Test.Contract.UnitReport
+    Ecluse.Test.Contract.Sweep
+    Ecluse.Test.Contract.Sweep.Types
+    Ecluse.Test.Contract.Sweep.Composition
+    Ecluse.Test.Contract.Sweep.Identity
+    Ecluse.Test.Contract.Sweep.Recovery
+    Ecluse.Test.Contract.Sweep.Rollout
+    Ecluse.Test.Contract.Sweep.Advisory
+
+  if flag(dev-http-egress)
+    exposed-modules:
+      Ecluse.Test.Contract.Metadata.Fetch
+      Ecluse.Test.Contract.PackageStore.Protocol
+
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson             >=2.2 && <2.4
+    , bytestring        ^>=0.12
+    , containers        ^>=0.7
+    , crypton           >=2.1 && <2.2
+    , directory         ^>=1.3
+    , filepath          ^>=1.4 || ^>=1.5
+    , hspec             ^>=2.11
+    , hspec-core        ^>=2.11
+    , http-client       ^>=0.7
+    , http-types        ^>=0.12
+    , ram               ^>=0.22
+    , text              ^>=2.1
+    , time              ^>=1.12
+    , unliftio          ^>=0.2.25
+    , universe-base     ^>=1.1
+    , zlib              ^>=0.7
+
 -- Internal runtime-test-support library shared by suites that depend on the runtime tier.
 library ecluse-runtime-test-support
   import:          shared
   hs-source-dirs:  runtime/test-support
   exposed-modules:
+    Ecluse.Runtime.Test.Advisory
+    Ecluse.Runtime.Test.Contract.UnitCatalogue
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.Support
     Ecluse.Runtime.Test.Telemetry
+
+  if flag(dev-http-egress)
+    exposed-modules: Ecluse.Runtime.Test.PackageStore
 
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
+    , amazonka-codeartifact ^>=2.0
+    , directory         ^>=1.3
+    , microlens         ^>=0.4.13
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
@@ -838,8 +918,44 @@ test-suite ecluse-core-unit
   ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  hs-source-dirs:     core/test/unit
+  -- Extra roots supply declarations for coverage audits, not discovered executable examples.
+  hs-source-dirs:     core/test/unit test/smoke test/residency
   other-modules:
+    SpecHook
+    Ecluse.Core.Registry.NpmSmokeSpec
+    Ecluse.Core.Registry.PyPISmokeSpec
+    Ecluse.Core.Registry.Npm.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.Json.WalkProbe
+    Ecluse.Test.Contract.Artifact.IdentitySpec
+    Ecluse.Test.Contract.Artifact.AttemptSpec
+    Ecluse.Test.Contract.BindingSpec
+    Ecluse.Test.Contract.CatalogueSpec
+    Ecluse.Test.Contract.CompletionSpec
+    Ecluse.Test.Contract.EcosystemSpec
+    Ecluse.Test.Contract.PerformanceSpec
+    Ecluse.Test.Contract.PackageStoreSpec
+    Ecluse.Test.Contract.Fixtures
+    Ecluse.Test.Contract.PhaseSpec
+    Ecluse.Test.Contract.ResultSpec
+    Ecluse.Test.Contract.RegistrySmokeSpec
+    Ecluse.Test.Contract.ServingSpec
+    Ecluse.Test.Contract.InstallSpec
+    Ecluse.Test.Contract.Install.AdvisorySpec
+    Ecluse.Test.Contract.TelemetrySpec
+    Ecluse.Test.Contract.Integration.CatalogueSpec
+    Ecluse.Test.Contract.UnitCatalogueSpec
+    Ecluse.Test.Contract.UnitReportSpec
+    Ecluse.Test.Contract.Sweep.AdvisorySpec
+    Ecluse.Test.Contract.PublicationSpec
+    Ecluse.Test.Contract.QueueSpec
+    Ecluse.Test.Registry.Npm.StoredVersionsSpec
+    Ecluse.Test.Contract.RunnerSpec
+    Ecluse.Test.Contract.MeasurementSpec
+    Ecluse.Test.Contract.RetentionSpec
+    Ecluse.Test.EcosystemBenchSpec
+    Ecluse.Test.EnvSpec
+    Ecluse.Test.PollSpec
     Data.JsonStream.LexerSpec
     Data.JsonStream.ParserSpec
     Data.JsonStream.UnescapeSpec
@@ -1029,6 +1145,7 @@ test-suite ecluse-core-unit
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
@@ -1042,14 +1159,17 @@ test-suite ecluse-core-unit
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , hspec             ^>=2.11
+    , hspec-core        ^>=2.11
     , hspec-hedgehog    ^>=0.3
     , http-client       ^>=0.7
+    , http-client-tls   >=0.3.6 && <0.5
     , http-types        ^>=0.12
     , iproute           ^>=1.7
     , katip             ^>=0.8.8
     , ram               ^>=0.22
     , network           ^>=3.2
     , primitive         ^>=0.9
+    , process           ^>=1.6
     , retry             ^>=0.9
     , exceptions        ^>=0.10
     , scientific        ^>=0.3
@@ -1088,10 +1208,16 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit bench/load
   other-modules:
+    Ecluse.Test.ContainersSpec
     Ecluse.AcceptanceSpec
+    Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.Contract.Driver
+    Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.AdvisoriesSpec
+    Ecluse.BenchLoad.ContractSpec
     Ecluse.BenchLoad.BootLinesSpec
+    Ecluse.BenchLoad.EvidenceSpec
     Ecluse.BenchLoad.ExpositionSpec
     Ecluse.BenchLoad.FloorsSpec
     Ecluse.BenchLoad.LatencySpec
@@ -1132,6 +1258,9 @@ test-suite ecluse-unit
     Ecluse.BenchReport.AgainstMain.LoadSpec
     Ecluse.BenchReport.AgainstMainSpec
     Ecluse.BenchReport.MarkdownSpec
+    Ecluse.BenchReport.PerformanceReceiptSpec
+    Ecluse.BenchReport.PerformanceCommandSpec
+    Ecluse.BenchReport.PerformanceSpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1200,6 +1329,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-manifest
     , ecluse:ecluse-site
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
     , autodocodec       ^>=0.5
@@ -1262,6 +1392,9 @@ test-suite ecluse-runtime-unit
   main-is:            Spec.hs
   hs-source-dirs:     runtime/test/unit
   other-modules:
+    SpecHook
+    Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
+    Ecluse.Runtime.Test.PackageStoreSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec
@@ -1288,6 +1421,7 @@ test-suite ecluse-runtime-unit
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
@@ -1328,14 +1462,13 @@ test-suite ecluse-runtime-unit
 -- testcontainers). Hermetic and gating. The AWS cases require a Docker daemon.
 test-suite ecluse-integration
   import:             shared
-  -- hspec-discover generates a Main without an export list. The tracing integration
-  -- test drives the OpenTelemetry batch span processor through the live SDK. It aborts
-  -- under the non-threaded RTS, so the suite needs -threaded.
-  ghc-options:        -Wno-missing-export-lists -threaded
+  -- The OpenTelemetry integration requires the threaded RTS for its batch span processor.
+  ghc-options:        -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
   other-modules:
+    Ecluse.Server.Pipeline.ServingDriver
     Ecluse.AwsEndToEndIntegrationSpec
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
@@ -1359,7 +1492,6 @@ test-suite ecluse-integration
     Ecluse.Runtime.Telemetry.TracingIntegrationSpec
     Ecluse.Server.Pipeline.TestSupport
 
-  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            >=2.2 && <2.4
     , amazonka         ^>=2.0
@@ -1374,6 +1506,7 @@ test-suite ecluse-integration
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , hspec            ^>=2.11
     , http-client      ^>=0.7
@@ -1426,6 +1559,7 @@ test-suite ecluse-residency
     , ecluse:ecluse-json-stream
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , ecluse:ecluse-runtime-test-support
     , hspec             ^>=2.11
     , http-client      ^>=0.7
@@ -1468,6 +1602,7 @@ test-suite ecluse-smoke
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , hedgehog         ^>=1.5
     , hspec            ^>=2.11
     , hspec-hedgehog   ^>=0.3
@@ -1482,21 +1617,24 @@ test-suite ecluse-smoke
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
 
--- End-to-end tests: the whole system as the real OCI image, driven by the real npm
--- and pip clients over its public HTTP surface. The suite covers the server↔worker
--- round-trip across real containers. It gates in CI as its own job and stays out of
--- the local gate, because it needs a Docker daemon, both clients, and the
--- `.#dockerImage` build. It COMPILES in the normal build, and RUNS only when
--- ECLTEST_E2E_IMAGE names a loaded image. Without that variable each spec module
--- reports one `pending` case, so a bare `cabal test` never fails without the setup.
-test-suite ecluse-e2e
+-- E2E providers need the development-only loopback constructor.
+-- Their suites and metadata tools follow the same flag in release builds.
+library ecluse-e2e-test-support
   import:             shared
-  -- hspec-discover generates a Main without an export list.
-  ghc-options:        -Wno-missing-export-lists
-  type:               exitcode-stdio-1.0
-  main-is:            Spec.hs
+  if !flag(dev-http-egress)
+    buildable: False
   hs-source-dirs:     test/e2e
-  other-modules:
+  exposed-modules:
+    Ecluse.E2E.Catalogue
+    Ecluse.E2E.Requirements
+    Ecluse.E2E.Fixtures.Contracts
+    Ecluse.E2E.Suites.Npm
+    Ecluse.E2E.Drivers.Npm
+    Ecluse.E2E.Drivers.PyPI
+    Ecluse.E2E.InstallationE2ESpec
+    Ecluse.E2E.AdvisoriesE2ESpec
+    Ecluse.E2E.Suites.PyPI
+    Ecluse.E2E.Suites.SharedSystem
     Ecluse.E2E.Fixtures.Advisories
     Ecluse.E2E.Fixtures.Npm
     Ecluse.E2E.Fixtures.PyPI
@@ -1504,6 +1642,8 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Advisories
     Ecluse.E2E.Harness.Availability
     Ecluse.E2E.Harness.Client
+    Ecluse.E2E.Harness.Container
+    Ecluse.E2E.Harness.Lifecycle
     Ecluse.E2E.Harness.Collector
     Ecluse.E2E.Harness.Docker
     Ecluse.E2E.Harness.Npm
@@ -1521,7 +1661,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.PyPI.InstallE2ESpec
     Ecluse.E2E.TelemetryE2ESpec
 
-  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12
@@ -1529,15 +1668,196 @@ test-suite ecluse-e2e
     , directory      ^>=1.3
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
     , filepath       ^>=1.5
     , hspec          ^>=2.11
     , http-client    ^>=0.7
     , http-types     ^>=0.12
     , network        ^>=3.2
+    , random         ^>=1.2
     , text           ^>=2.1
     , time           ^>=1.12
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
+    , universe-base  ^>=1.1
+
+test-suite ecluse-e2e-npm
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-npm
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-pypi
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-pypi
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-e2e-shared-system
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:   test/e2e-shared-system
+  build-depends:
+    , ecluse:ecluse-e2e-test-support
+    , ecluse:ecluse-test-contracts
+
+test-suite ecluse-conformance-verdaccio
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         VerdaccioMain.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+executable ecluse-conformance-verdaccio-manifest
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         VerdaccioManifest.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+executable ecluse-conformance-verdaccio-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         VerdaccioAudit.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+test-suite ecluse-conformance-codeartifact
+  import:          shared
+  ghc-options:     -threaded
+  if !flag(dev-http-egress)
+    buildable: False
+  type:            exitcode-stdio-1.0
+  main-is:         CodeArtifactMain.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+executable ecluse-conformance-codeartifact-manifest
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         CodeArtifactManifest.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+executable ecluse-conformance-codeartifact-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         CodeArtifactAudit.hs
+  hs-source-dirs:   test/conformance
+  build-depends:
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-test-support
+    , text           ^>=2.1
+
+executable ecluse-completion-npm-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-npm-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-completion-pypi-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/completion-pypi-audit test/tools/completion-support
+  other-modules:   Ecluse.Test.Contract.CompletionAudit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-runtime-test-support
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-artifact
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/artifact
+  build-depends:
+    , ecluse:ecluse-test-contracts
+
+executable ecluse-e2e-manifest
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/e2e-manifest
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-e2e-test-support
+
+executable ecluse-integration-manifest
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/integration-manifest
+  build-depends:
+    , ecluse:ecluse-test-contracts
+
+executable ecluse-e2e-audit
+  import:          shared
+  if !flag(dev-http-egress)
+    buildable: False
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/e2e-audit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-e2e-test-support
+    , text           ^>=2.1
+
+executable ecluse-integration-audit
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:   test/tools/integration-audit
+  build-depends:
+    , ecluse:ecluse-test-contracts
+    , text           ^>=2.1
 
 -- Benchmarks: the work-per-request micro-benches over the pure ecluse-core hot paths,
 -- plus the synthetic-corpus generator's correctness tests and the complexity
@@ -1610,6 +1930,8 @@ executable bench-load
     buildable: False
   other-modules:
     Ecluse.BenchLoad.Advisories
+    Ecluse.BenchLoad.Contract.Driver
+    Ecluse.BenchLoad.Stress
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
@@ -1658,7 +1980,9 @@ library ecluse-bench-load
   import:          shared
   hs-source-dirs:  bench/load/src
   exposed-modules:
+    Ecluse.BenchLoad.Contract
     Ecluse.BenchLoad.BootLines
+    Ecluse.BenchLoad.Evidence
     Ecluse.BenchLoad.Exposition
     Ecluse.BenchLoad.Floors
     Ecluse.BenchLoad.Latency
@@ -1679,12 +2003,8 @@ library ecluse-bench-load
     , aeson >=2.2 && <2.4
     , universe-base ^>=1.1
 
--- The pure rendering behind the benchmark run summaries: the work-per-request report from
--- the tasty-bench CSV, and the comparison of a bench, acceptance, or load report with the
--- latest run on main. An internal sublibrary, following the ecluse-bench-load pattern, so
--- the gating unit suite exercises the parsing and rendering. No HTTP and no egress former,
--- so unlike bench-load it needs no dev-http-egress gating. It stays out of the shipped
--- library closure.
+-- Native report rendering and typed receipt assembly stay outside the shipped library.
+-- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
   import:          shared
   hs-source-dirs:  bench/report/src
@@ -1695,14 +2015,23 @@ library ecluse-bench-report
     Ecluse.BenchReport.AgainstMain.Bench
     Ecluse.BenchReport.AgainstMain.Load
     Ecluse.BenchReport.Markdown
+    Ecluse.BenchReport.Performance
+    Ecluse.BenchReport.PerformanceCommand
+    Ecluse.BenchReport.PerformanceReceipt
   build-depends:
+    , aeson >=2.2 && <2.4
+    , ecluse:ecluse-test-contracts
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , ecluse:ecluse-bench-load
+    , bytestring ^>=0.12
+    , directory ^>=1.3
+    , filepath ^>=1.4 || ^>=1.5
+    , unliftio ^>=0.2.25
     , containers  ^>=0.7
     , text        ^>=2.1
 
--- The file-reading shell over ecluse-bench-report. CI runs it after the benchmarks to turn
--- bench-results.csv, plus the teed console output, into the run summary, and after each
--- benchmark workflow off main to render the comparison with main. It appends to
--- $GITHUB_STEP_SUMMARY itself, like the load and acceptance harnesses.
+-- Task invokes report rendering, measurement declarations and fixed receipt commands.
 executable bench-report
   import:         shared
   main-is:        Main.hs
@@ -1721,7 +2050,9 @@ executable bench-report
 library ecluse-acceptance
   import:          shared
   hs-source-dirs:  acceptance/src
-  exposed-modules: Ecluse.Acceptance
+  exposed-modules:
+    Ecluse.Acceptance
+    Ecluse.Acceptance.Evidence
   build-depends:
     , ecluse:ecluse-core
     , aeson          >=2.2 && <2.4

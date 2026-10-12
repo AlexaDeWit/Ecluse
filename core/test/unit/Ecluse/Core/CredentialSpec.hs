@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Secret representation and static credential contract.
 module Ecluse.Core.CredentialSpec (spec) where
 
 import Data.Text qualified as T
@@ -9,6 +10,7 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Test.Hspec
 
 import Ecluse.Core.Credential
+import Ecluse.Test.Contract.Credential (credentialContract)
 
 -- | A fixed expiry instant for the static-provider test.
 anExpiry :: UTCTime
@@ -60,17 +62,7 @@ spec = do
             let tok = AuthToken{authSecret = mkSecret "leak-me", authExpiresAt = Just anExpiry}
             T.pack (show tok) `shouldSatisfy` (not . T.isInfixOf "leak-me")
 
-    describe "staticProvider" $ do
-        it "currentToken returns the configured token" $ do
-            let tok = AuthToken{authSecret = mkSecret "static-token", authExpiresAt = Nothing}
-            got <- currentToken (staticProvider tok)
-            unSecret (authSecret got) `shouldBe` "static-token"
-
-        it "currentToken returns the configured token every call (no expiry, no refresh)" $ do
-            let tok = AuthToken{authSecret = mkSecret "static-token", authExpiresAt = Just anExpiry}
-                provider = staticProvider tok
-            -- Compared against the configured token rather than against each other, so a
-            -- provider handing out a consistently wrong token cannot pass.
-            served <- replicateM 2 (currentToken provider)
-            map authExpiresAt served `shouldBe` [Just anExpiry, Just anExpiry]
-            map (unSecret . authSecret) served `shouldBe` ["static-token", "static-token"]
+    describe "staticProvider" $
+        for_ [Nothing, Just anExpiry] $ \expiry -> do
+            let token = AuthToken{authSecret = mkSecret "static-token", authExpiresAt = expiry}
+            describe (show expiry) $ before (pure (staticProvider token)) (credentialContract ("credential/static/" <> if isJust expiry then "expiring" else "permanent") token)
