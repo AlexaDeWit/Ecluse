@@ -6,9 +6,7 @@
 -- | First-party multipart publication through the product image and its native target.
 module Ecluse.E2E.PyPI.PublishE2ESpec (spec) where
 
-import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS), applyBasicAuth, httpLbs, parseRequest, responseStatus)
 import Network.HTTP.Types (statusCode)
 import System.FilePath ((</>))
@@ -17,7 +15,6 @@ import Test.Hspec
 import Ecluse.E2E.Fixtures.PyPI.Mirror
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.PyPIMirror
-import Ecluse.Test.Package (hexSha256Of)
 
 -- | Exercise the live pathless route, ownership guard, credential pair, and disabled control.
 spec :: Spec
@@ -84,33 +81,7 @@ sendUpload proxy distribution extra = do
                 "client-password"
                 base
                     { method = "POST"
-                    , requestHeaders = [("Content-Type", "multipart/form-data; boundary=fixture-upload")]
-                    , requestBody = RequestBodyBS (uploadBody distribution extra)
+                    , requestHeaders = [("Content-Type", nativeUploadContentType)]
+                    , requestBody = RequestBodyBS (distributionUploadBody distribution extra)
                     }
     statusCode . responseStatus <$> httpLbs request (e2eManager proxy)
-
-uploadBody :: Distribution -> [(Text, Text)] -> ByteString
-uploadBody distribution extra =
-    BS.concat (map fieldPart (fields <> if null extra then [("name", distributionProject distribution)] else extra))
-        <> "--fixture-upload\r\nContent-Disposition: form-data; name=\"content\"; filename=\""
-        <> encodeUtf8 (distributionFilename distribution)
-        <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-        <> distributionBytes distribution
-        <> "\r\n--fixture-upload--\r\n"
-  where
-    fields =
-        [ (":action", "file_upload")
-        , ("protocol_version", "1")
-        , ("version", mirrorVersion)
-        , ("metadata_version", "2.2")
-        , ("provides_extra", "test")
-        , ("filetype", if ".whl" `T.isSuffixOf` distributionFilename distribution then "bdist_wheel" else "sdist")
-        , ("pyversion", if ".whl" `T.isSuffixOf` distributionFilename distribution then "py3" else "source")
-        , ("sha256_digest", hexSha256Of (distributionBytes distribution))
-        , ("requires_python", ">=3.8")
-        , ("classifiers", "Programming Language :: Python :: 3")
-        , ("classifiers", "License :: OSI Approved :: MIT License")
-        , ("description", "Fixture description with a second line.\nRetain this body verbatim.\n")
-        ]
-            <> [("summary", value) | line <- T.lines (decodeUtf8 (distributionMetadata distribution)), Just value <- [T.stripPrefix "Summary: " line]]
-    fieldPart (name, value) = "--fixture-upload\r\nContent-Disposition: form-data; name=\"" <> encodeUtf8 name <> "\"\r\n\r\n" <> encodeUtf8 value <> "\r\n"

@@ -19,6 +19,8 @@ module Ecluse.E2E.Fixtures.PyPI (
     buildPyPIFixtures,
     buildWheelWithMetadata,
     buildWheelWithFiles,
+    buildWheelFor,
+    metadataFileFor,
 ) where
 
 import Data.Aeson (Value (Bool, Object, String), object, (.=))
@@ -104,6 +106,7 @@ escapedProject = T.replace "-" "_" pypiProject
 buildWheel :: FilePath -> FilePath -> IO ()
 buildWheel = buildWheelFor pypiProject pypiVersion metadataFile
 
+-- | Build one ordinary wheel for a native protocol fixture.
 buildWheelFor :: Text -> Text -> Text -> FilePath -> FilePath -> IO ()
 buildWheelFor project version metadata = buildWheelWithMetadata project version metadata "py3-none-any"
 
@@ -143,6 +146,7 @@ buildSdist work sdistPath = do
 metadataFile :: Text
 metadataFile = metadataFileFor pypiProject pypiVersion
 
+-- | Core metadata for a simple named release.
 metadataFileFor :: Text -> Text -> Text
 metadataFileFor project version =
     T.unlines

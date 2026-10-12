@@ -6,6 +6,9 @@
 -- | A native multipart target whose stored bytes and faults remain observable across product restarts.
 module Ecluse.E2E.Harness.PyPIMirror (
     NativeTarget (..),
+    NativeTargetConfig (..),
+    withConfiguredNativeTarget,
+    nativeApplication,
     UploadFault (..),
     TargetFields (..),
     withNativeTarget,
@@ -68,9 +71,22 @@ data NativeTarget = NativeTarget
     , ntInFlight :: TVar Int
     }
 
--- | Bind on the bridge gateway so nginx can forward its TLS route to this application.
+-- | Native endpoint facts, independent of the product credential and URL constructors.
+data NativeTargetConfig = NativeTargetConfig
+    { ntcBaseUrl :: Text
+    , ntcAuthorization :: ByteString
+    , ntcFields :: TargetFields
+    }
+
+-- | Bind the fixed mirror graph's target with its declared fixture credential.
 withNativeTarget :: TargetFields -> [Distribution] -> (NativeTarget -> IO a) -> IO a
-withNativeTarget fieldsMode expected action = do
+withNativeTarget fieldsMode =
+    withConfiguredNativeTarget
+        (NativeTargetConfig (stubUrl PyPIMirror) "Basic Zml4dHVyZS11c2VyOmZpeHR1cmUtcGFzc3dvcmQ=" fieldsMode)
+
+-- | Bind a configured native target on the bridge gateway behind its TLS route.
+withConfiguredNativeTarget :: NativeTargetConfig -> [Distribution] -> (NativeTarget -> IO a) -> IO a
+withConfiguredNativeTarget config expected action = do
     files <- newTVarIO Map.empty
     attempts <- newTVarIO []
     fault <- newTVarIO AcceptUploads
@@ -80,7 +96,7 @@ withNativeTarget fieldsMode expected action = do
     unless (all ((< nativeUploadLimit `div` 2) . BS.length . distributionBytes) expected) (fail "fixture artifact exceeds half the multipart bound")
     active <- newTVarIO 0
     let target = NativeTarget 0 files attempts fault requests blocked released active
-    testWithApplicationSettings (setHost "*" defaultSettings) (pure (nativeApplication fieldsMode expected target)) $ \port ->
+    testWithApplicationSettings (setHost "*" defaultSettings) (pure (nativeApplication config expected target)) $ \port ->
         action target{ntPort = port}
 
 -- | Read the exact filenames and bytes accepted by the target.
@@ -97,17 +113,18 @@ awaitTargetFiles target expected = (== wanted) <$> pollUntil 120 500000 (== want
   where
     wanted = Map.fromList [(distributionFilename d, distributionBytes d) | d <- expected]
 
-nativeApplication :: TargetFields -> [Distribution] -> NativeTarget -> Application
-nativeApplication fieldsMode expected target request respond
+-- | Expose native upload and Simple routes for a composed backend transport fixture.
+nativeApplication :: NativeTargetConfig -> [Distribution] -> NativeTarget -> Application
+nativeApplication config expected target request respond
     | requestMethod request == "POST"
     , filter (not . T.null) (pathInfo request) == ["legacy"] =
         bracket_ beginUpload endUpload $
             boundedRead (PublishRequestBodyLimit nativeUploadLimit) (getRequestBodyChunk request) >>= \case
                 Left _ -> respond (responseLBS status413 [] "multipart request exceeds fixture bound")
-                Right (_, body) -> parseUpload expected target request body >>= respond
+                Right (_, body) -> parseUpload config expected target request body >>= respond
     | requestMethod request `elem` ["GET", "HEAD"] = do
         files <- targetFiles target
-        respond (nativeRead fieldsMode expected request files)
+        respond (nativeRead config expected request files)
     | otherwise = respond (responseLBS status404 [] "missing")
   where
     beginUpload = atomically $ do
@@ -115,8 +132,8 @@ nativeApplication fieldsMode expected target request respond
         modifyTVar' (ntInFlight target) (+ 1)
     endUpload = atomically (modifyTVar' (ntInFlight target) (subtract 1))
 
-parseUpload :: [Distribution] -> NativeTarget -> Request -> ByteString -> IO Response
-parseUpload expected target request body =
+parseUpload :: NativeTargetConfig -> [Distribution] -> NativeTarget -> Request -> ByteString -> IO Response
+parseUpload config expected target request body =
     case parseContentType <$> lookup "Content-Type" (requestHeaders request) of
         Just ("multipart/form-data", attributes)
             | Just boundary <- lookup "boundary" attributes
@@ -125,16 +142,16 @@ parseUpload expected target request body =
                 chunks <- newIORef body
                 (fields, files) <- sinkRequestBody lbsBackEnd (Multipart boundary) (atomicModifyIORef' chunks (BS.empty,))
                 case files of
-                    [("content", file)] -> receiveUpload expected target request fields file
+                    [("content", file)] -> receiveUpload config expected target request fields file
                     _ -> pure (responseLBS status400 [] "expected one content part")
         _ -> pure (responseLBS status400 [] "expected bounded multipart boundary")
 
-receiveUpload :: [Distribution] -> NativeTarget -> Request -> [(ByteString, ByteString)] -> FileInfo LByteString -> IO Response
-receiveUpload expected target request fields file =
+receiveUpload :: NativeTargetConfig -> [Distribution] -> NativeTarget -> Request -> [(ByteString, ByteString)] -> FileInfo LByteString -> IO Response
+receiveUpload config expected target request fields file =
     case find ((== filename) . distributionFilename) expected of
         Just distribution
             | validUpload distribution fields bytes
-            , lookup "Authorization" (requestHeaders request) == Just "Basic Zml4dHVyZS11c2VyOmZpeHR1cmUtcGFzc3dvcmQ=" -> do
+            , lookup "Authorization" (requestHeaders request) == Just (ntcAuthorization config) -> do
                 atomically (modifyTVar' (ntAttempts target) (<> [filename]))
                 result <- atomically (acceptUpload target filename bytes)
                 case result of
@@ -149,9 +166,10 @@ receiveUpload expected target request fields file =
     filename = decodeUtf8 (fileName file)
     bytes = LBS.toStrict (fileContent file)
 
-nativeRead :: TargetFields -> [Distribution] -> Request -> Map Text ByteString -> Response
-nativeRead fieldsMode expected request files = case filter (not . T.null) (pathInfo request) of
-    ["simple", project] -> answer status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (Aeson.encode (targetIndex fieldsMode project expected files))
+nativeRead :: NativeTargetConfig -> [Distribution] -> Request -> Map Text ByteString -> Response
+nativeRead config expected request files = case filter (not . T.null) (pathInfo request) of
+    ["simple", project]
+        | any (\distribution -> distributionProject distribution == project && Map.member (distributionFilename distribution) files) expected -> answer status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (Aeson.encode (targetIndex config project expected files))
     ["simple", _, filename] -> maybe (answer status404 [] "missing") (answer status200 [] . LBS.fromStrict) (Map.lookup filename files)
     _ -> answer status404 [] "missing"
   where
@@ -195,32 +213,29 @@ validUpload distribution fields bytes =
     bytes == distributionBytes distribution
         && lookup ":action" fields == Just "file_upload"
         && lookup "protocol_version" fields == Just "1"
-        && lookup "metadata_version" fields == Just "2.2"
-        && lookup "provides_extra" fields == Just "test"
         && lookup "filetype" fields == Just (if ".whl" `T.isSuffixOf` distributionFilename distribution then "bdist_wheel" else "sdist")
         && lookup "name" fields == Just (encodeUtf8 (distributionProject distribution))
-        && lookup "version" fields == Just (encodeUtf8 mirrorVersion)
+        && lookup "version" fields == Just (encodeUtf8 (distributionVersion distribution))
         && lookup "sha256_digest" fields == Just (encodeUtf8 (hexSha256Of bytes))
-        && lookup "requires_python" fields == Just ">=3.8"
-        && lookup "summary" fields == (encodeUtf8 <$> listToMaybe [value | line <- T.lines (decodeUtf8 (distributionMetadata distribution)), Just value <- [T.stripPrefix "Summary: " line]])
-        && lookup "description" fields == Just "Fixture description with a second line.\nRetain this body verbatim.\n"
-        && length (filter ((== "classifiers") . fst) fields) == 2
-        && (distributionProject distribution /= mirrorRoot || lookup "requires_dist" fields == Just (encodeUtf8 (mirrorDependency <> "==" <> mirrorVersion)))
+        && all (\name -> values name fields == values name expected) (ordNub (map fst expected))
+  where
+    expected = distributionFields distribution
+    values name = map snd . filter ((== name) . fst)
 
 -- Native reads deliberately lose source fields and companions to exercise durable reconstruction.
-targetIndex :: TargetFields -> Text -> [Distribution] -> Map Text ByteString -> Aeson.Value
-targetIndex fieldsMode project expected files =
+targetIndex :: NativeTargetConfig -> Text -> [Distribution] -> Map Text ByteString -> Aeson.Value
+targetIndex config project expected files =
     object
         [ "name" .= project
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
         , "files"
             .= [ object
                     [ "filename" .= distributionFilename distribution
-                    , "url" .= (stubUrl PyPIMirror <> "simple/" <> project <> "/" <> distributionFilename distribution)
+                    , "url" .= (ntcBaseUrl config <> "simple/" <> project <> "/" <> distributionFilename distribution)
                     , "hashes" .= object ["sha256" .= hexSha256Of bytes]
-                    , "requires-python" .= (if fieldsMode == ChangeSourceFields then ">=99" else ">=3.8" :: Text)
-                    , "upload-time" .= (if fieldsMode == ChangeSourceFields then "2099-01-01T00:00:00Z" else "2020-01-01T00:00:00Z" :: Text)
-                    , "yanked" .= (if fieldsMode == ChangeSourceFields then Aeson.String "target changed the reason" else Aeson.Bool False)
+                    , "requires-python" .= (if ntcFields config == ChangeSourceFields then ">=99" else ">=3.8" :: Text)
+                    , "upload-time" .= (if ntcFields config == ChangeSourceFields then "2099-01-01T00:00:00Z" else "2020-01-01T00:00:00Z" :: Text)
+                    , "yanked" .= (if ntcFields config == ChangeSourceFields then Aeson.String "target changed the reason" else Aeson.Bool False)
                     ]
                | distribution <- expected
                , distributionProject distribution == project

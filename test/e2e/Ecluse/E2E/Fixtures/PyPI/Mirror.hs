@@ -13,6 +13,9 @@ module Ecluse.E2E.Fixtures.PyPI.Mirror (
     mirrorPlatformArm,
     mirrorWheelFile,
     mirrorArchitectures,
+    distributionFields,
+    distributionUploadBody,
+    nativeUploadContentType,
     buildMirrorGraph,
     buildPublication,
     distributionEntry,
@@ -33,9 +36,11 @@ import Ecluse.Test.Package (hexSha256Of)
 -- | Original bytes and supported source fields for one distribution.
 data Distribution = Distribution
     { distributionProject :: Text
+    , distributionVersion :: Text
     , distributionFilename :: Text
     , distributionBytes :: ByteString
     , distributionMetadata :: ByteString
+    , distributionArchiveMetadata :: ByteString
     }
 
 -- | The package pip installs explicitly.
@@ -78,7 +83,7 @@ buildProject root project = do
         bytes <- BS.readFile path
         let companion = encodeUtf8 (metadata <> "\nPublic companion payload.\n")
         BS.writeFile (path <> ".metadata") companion
-        pure (Distribution project filename bytes companion)
+        pure (Distribution project mirrorVersion filename bytes companion (encodeUtf8 metadata))
     sources <- forM ["tar.gz", "tgz", "tar.bz2", "tar.xz", "zip"] $ \suffix -> do
         let filename = project <> "-" <> mirrorVersion <> "." <> suffix
             metadata = projectMetadata project ("Source " <> suffix)
@@ -92,7 +97,7 @@ buildProject root project = do
             "zip" -> runProcess_ . setWorkingDir work $ proc "python3" ["-m", "zipfile", "-c", path, folder]
             _ -> runProcess_ (proc "tar" [compressionFlag suffix, path, "-C", work, folder])
         bytes <- BS.readFile path
-        pure (Distribution project filename bytes (encodeUtf8 metadata))
+        pure (Distribution project mirrorVersion filename bytes (encodeUtf8 metadata) (encodeUtf8 metadata))
     pure (wheels <> sources)
 
 compressionFlag :: Text -> String
@@ -137,7 +142,7 @@ distributionIndex base project distributions =
     object
         [ "name" .= project
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
-        , "versions" .= [mirrorVersion]
+        , "versions" .= ordNub [distributionVersion distribution | distribution <- distributions, distributionProject distribution == project]
         , "files" .= map (distributionEntry base) (filter ((== project) . distributionProject) distributions)
         ]
 
@@ -162,3 +167,43 @@ mirrorArchitectures = case System.arch of
   where
     x86 = ("x86_64", mirrorPlatformX86)
     arm = ("aarch64", mirrorPlatformArm)
+
+-- | Native upload fields declared by the fixture's archive metadata, independent of the product parser.
+distributionFields :: Distribution -> [(ByteString, ByteString)]
+distributionFields distribution =
+    [ (encodeUtf8 (fieldName name), encodeUtf8 value)
+    | line <- T.lines headers
+    , let (name, rest) = T.breakOn ":" line
+    , Just value <- [T.stripPrefix ": " rest]
+    ]
+        <> [("description", encodeUtf8 (T.drop 2 body)) | not (T.null body)]
+  where
+    (headers, body) = T.breakOn "\n\n" (decodeUtf8 (distributionArchiveMetadata distribution))
+    fieldName "Classifier" = "classifiers"
+    fieldName "Project-URL" = "project_urls"
+    fieldName name = T.replace "-" "_" (T.toLower name)
+
+-- | The boundary used by the independent fixture multipart encoder.
+nativeUploadContentType :: ByteString
+nativeUploadContentType = "multipart/form-data; boundary=fixture-upload"
+
+-- | Encode an actual client upload, with explicit replacement fields for refusal controls.
+distributionUploadBody :: Distribution -> [(Text, Text)] -> ByteString
+distributionUploadBody distribution overrides =
+    BS.concat (map fieldPart (controls <> fields <> replacements))
+        <> "--fixture-upload\r\nContent-Disposition: form-data; name=\"content\"; filename=\""
+        <> encodeUtf8 (distributionFilename distribution)
+        <> "\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        <> distributionBytes distribution
+        <> "\r\n--fixture-upload--\r\n"
+  where
+    replacements = [(encodeUtf8 name, encodeUtf8 value) | (name, value) <- overrides]
+    fields = filter ((`notElem` map fst replacements) . fst) (distributionFields distribution)
+    controls =
+        [ (":action", "file_upload")
+        , ("protocol_version", "1")
+        , ("filetype", if ".whl" `T.isSuffixOf` distributionFilename distribution then "bdist_wheel" else "sdist")
+        , ("pyversion", if ".whl" `T.isSuffixOf` distributionFilename distribution then "py3" else "source")
+        , ("sha256_digest", encodeUtf8 (hexSha256Of (distributionBytes distribution)))
+        ]
+    fieldPart (name, value) = "--fixture-upload\r\nContent-Disposition: form-data; name=\"" <> name <> "\"\r\n\r\n" <> value <> "\r\n"
