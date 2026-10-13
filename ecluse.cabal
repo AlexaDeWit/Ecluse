@@ -1277,6 +1277,7 @@ test-suite ecluse-unit
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
     Ecluse.Report.MarkdownSpec
+    Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
@@ -2003,6 +2004,7 @@ benchmark ecluse-bench
     Ecluse.Core.WireBench
 
   build-depends:
+    , ecluse:ecluse-report-format
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , aeson            >=2.2 && <2.4
@@ -2124,7 +2126,9 @@ library ecluse-bench-load
 library ecluse-report-format
   import: shared
   hs-source-dirs: report/src
-  exposed-modules: Ecluse.Report.Markdown
+  exposed-modules:
+    Ecluse.Report.Markdown
+    Ecluse.Report.BenchLabels
   build-depends: text ^>=2.1
 
 -- Native report rendering and typed receipt assembly stay outside the shipped library.
