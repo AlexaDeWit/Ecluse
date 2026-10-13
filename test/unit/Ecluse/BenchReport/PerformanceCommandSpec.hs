@@ -25,5 +25,11 @@ spec = describe "independent conditions" $ do
         obligation <- expectRight (compileObligation "benchmark" "ecosystem-pypi" (Map.fromList [("compiler", "other"), ("optimisation", "-O0"), ("profiling", "on"), ("rts", "-N1"), ("stdev", "100")]))
         Map.lookup "rts" (poConditions obligation) `shouldBe` Just "-T"
         Map.lookup "stdev" (poConditions obligation) `shouldBe` Just "10"
+    it "requires the PyPI worker and managed reads in a full unlimited load receipt" $ do
+        let conditions = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("podShape", "unlimited"), ("durationSeconds", "30"), ("concurrency", "100"), ("serveMaxInFlight", "automatic"), ("affinity", "taskset -c 0 oha")]
+        obligation <- expectRight (compileObligation "load" "ecosystem-pypi" conditions)
+        for_ ["worker-mirroring", "mirror-native-baseline", "mirror-managed-warm", "mirror-managed-revision"] $ \scenario ->
+            for_ ["loaded", "concurrencyOne"] $ \whichPass ->
+                poRows obligation `shouldSatisfy` elem ("pypi/" <> scenario <> "/" <> whichPass)
     it "rejects a missing measurement declaration" $
         compileObligation "allocation" "ecosystem-npm" Map.empty `shouldSatisfy` isLeft

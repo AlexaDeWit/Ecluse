@@ -32,9 +32,9 @@ spec = do
                 conditionArguments arguments `shouldSatisfy` isLeft
     describe "receipt qualification" $ do
         it "keeps selected scenarios and thrash probes diagnostic even without native rows" $ do
-            receiptDiagnostic "load-foundation" (Map.singleton "selectedScenarios" "npm/merge-cold") Nothing `shouldBe` Just "selected scenarios"
-            receiptDiagnostic "load-foundation" (Map.singleton "thrashLimitsMiB" "2048,1536") Nothing `shouldBe` Just "GC-thrash probe"
-            receiptDiagnostic "load-foundation" (Map.singleton "selectedScenarios" " \t\n") (Just held) `shouldBe` Nothing
+            receiptDiagnostic "load" (Map.singleton "selectedScenarios" "npm/merge-cold") Nothing `shouldBe` Just "selected scenarios"
+            receiptDiagnostic "load" (Map.singleton "thrashLimitsMiB" "2048,1536") Nothing `shouldBe` Just "GC-thrash probe"
+            receiptDiagnostic "load" (Map.singleton "selectedScenarios" " \t\n") (Just held) `shouldBe` Nothing
         it "uses native floor reasons for every diagnostic exclusion"
             $ forM_
                 [ (Map.empty, "load floor enforcement missing")
@@ -43,7 +43,7 @@ spec = do
                 , (Map.fromList [("floorEnforcement", "not-held"), ("floorEnforcementReasons", "ChangedDuration")], "load floors not held")
                 ]
             $ \(conditions, reason) ->
-                receiptDiagnostic "load-foundation" Map.empty (Just held{npConditions = conditions}) `shouldBe` Just reason
+                receiptDiagnostic "load" Map.empty (Just held{npConditions = conditions}) `shouldBe` Just reason
         it "keeps unavailable live upstreams diagnostic despite native process success" $
             receiptDiagnostic "live-allocation" Map.empty (Just held{npOutcome = NativeUnavailable}) `shouldBe` Just "live upstream unavailable"
     describe "receipt publication" $ do

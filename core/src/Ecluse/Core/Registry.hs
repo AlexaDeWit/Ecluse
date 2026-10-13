@@ -81,7 +81,7 @@ newtype ParseError = ParseError
     }
     deriving stock (Eq, Show)
 
--- | Why publishing an artifact to a registry failed, the fault 'Ecluse.Core.Registry.Publish.mpPublishArtifact' reports.
+-- | Why the mirror target refused a publication.
 newtype PublishError = PublishError
     { publishErrorMessage :: Text
     -- ^ A human-readable description of why the publish failed.
@@ -127,6 +127,8 @@ data PublishFault
       PublishFetch FetchFault
     | -- | The registry answered and rejected the write (a non-2xx, non-@409@ status). Retryable.
       PublishRejected PublishError
-    | -- | The writer had no usable source version object, so it formed no request. Not retryable.
+    | -- | Mirror upload preparation refused missing or inconsistent mirror upload data. Not retryable.
       PublishSourceUnavailable Text
+    | -- | Artifact bytes differ from the admitted strongest digest. Not retryable.
+      PublishIntegrityMismatch Text
     deriving stock (Eq, Show)

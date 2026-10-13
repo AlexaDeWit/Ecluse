@@ -3,59 +3,10 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DerivingVia #-}
 
-{- | The OpenAPI spec: a pure assembly of Écluse's OpenAPI 3 document from
-the closed serve-route enumeration and the configured mounts.
-
-The manifest is a __capability statement__, not a client-integration contract.
-Registry clients (npm, pnpm, yarn) hardcode the registry protocol and never read an
-API description. This document exists to say, for a human, /which registry protocols
-this one server speaks and exactly what is, and is not, supported/, per ecosystem.
-It is __statically generated__ from a fixed canonical source and published as static
-content. It is __not served__, and there is no route or WAI wiring for it.
-
-The document is __rendered from the mounted adapters' route grammar__. Each
-configured ecosystem's 'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' carries
-its serve surface as data ('Ecluse.Core.Registry.Adapter.Types.serveRoutes', a
-'RouteSpec' per served 'Route'), the same grammar the server's
-'Ecluse.Core.Server.Route.Classifier' routes on. This module walks those specs into
-OpenAPI paths and marries each to its owned documentation. The described surface is
-therefore a projection of how the server mounts routes, not a hand-kept parallel
-copy. The owned response bodies carry code-first schemas, and the module
-distinguishes three kinds of surface:
-
-* Écluse authors the __owned__ bodies, so this module models them in full: the
-  error\/denial envelope (a codec, rendered from the same
-  'Ecluse.Core.Registry.Npm.Serve.npmErrorCodec' the serve path emits) and the
-  merged-and-filtered packument ('synthesizedPackumentSchema').
-* __Opaque pass-through__, the artifact bytes, is described as a streamed media
-  type and links out rather than reproducing the upstream protocol.
-* __Unsupported__, @search@, the dist-tag routes, and any unrecognised path, are
-  first-class documented boundaries (a @501@ and the deny-by-default @404@), so a reader
-  learns the limit from the manifest, not from an error reply.
-
-== Determinism
-
-The rendered bytes must be __byte-stable__ across runs and machines, so the
-published artifact yields a meaningful line-level diff on every contract change.
-'renderManifest' pins object-key ordering (sorted), and 'buildOpenApi' is a pure
-function of an explicit 'ManifestSource'. Generate from 'canonicalManifestSource'
-(fixed mounts and base URL), never from a live or environment-derived configuration,
-or the output churns on per-deployment values.
-
-== Schema strategy
-
-A response body is either a codec or a hand-authored schema, and the route's declared
-'Ecluse.Core.Server.Contract.Outcome's say which. A __codec body__ (npm's error
-envelope) carries one @autodocodec@ codec in core. The serve path encodes the wire
-body from it, and this tier renders the /same/ codec to the documented schema. The
-emitted body and its documentation are one source and cannot diverge.
-
-A __documented body__ (the merged packument, the publish document) is one Écluse
-builds imperatively rather than round-tripping through a type. It carries a
-hand-written schema here, registered as a named component, and a validation check
-binds it to the emitted bytes. npm's /inbound/ wire decoding stays lenient
-hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire"): codecs are for what Écluse owns
-and emits, not for tolerantly parsing someone else's loose document.
+{- | Build a static OpenAPI 3 capability document from registered adapter routes and explicit mounts.
+Owned response contracts supply schemas. Pass-through and unsupported responses retain their declared boundaries.
+Generate published artifacts from 'canonicalManifestSource' and use 'renderManifest' for deterministic bytes.
+The document has no runtime route.
 -}
 module Ecluse.Manifest (
     -- * Inputs
@@ -133,7 +84,7 @@ import Ecluse.Core.Server.Contract (
 import Ecluse.Core.Server.Route (RouteName, unRouteName)
 import Ecluse.Core.Server.RouteDescription (
     ParamSpec (psDescription, psName),
-    PathSeg (Lit, Param),
+    PathSeg (Lit, Param, ParamSuffix),
     RouteSpec (rsDescription, rsMethod, rsName, rsOutcomes, rsPattern, rsRequest, rsSummary),
  )
 
@@ -252,10 +203,15 @@ routePathKey prefix spec =
     renderSeg = \case
         Lit s -> s
         Param p -> "{" <> psName p <> "}"
+        ParamSuffix p suffix -> "{" <> psName p <> "}" <> suffix
 
 -- | The path parameters a route's template carries, in template order.
 specParams :: RouteSpec -> [ParamSpec]
-specParams spec = [p | Param p <- rsPattern spec]
+specParams spec = mapMaybe parameter (rsPattern spec)
+  where
+    parameter (Param p) = Just p
+    parameter (ParamSuffix p _) = Just p
+    parameter (Lit _) = Nothing
 
 {- | Place an operation on the 'PathItem' field its HTTP method names. Total over 'StdMethod'.
 The unreachable @CONNECT@ branch is the sanctioned @error@ escape hatch (docs/style.md 10).
@@ -275,11 +231,7 @@ methodItem method op = case method of
     -- CONNECT has no OpenAPI operation slot, and no served route uses it.
     CONNECT -> error "Ecluse.Manifest: OpenAPI has no CONNECT operation"
 
-{- | Interpret a route's __documentation__ into an OpenAPI operation.
-
-The ecosystem qualifies the route's name to form OpenAPI's @operationId@, which must be unique
-across the whole document, and only here is every mount in view.
--}
+-- | Qualify the route's operation name with its ecosystem and project its response contract.
 operationFrom :: Ecosystem -> RouteSpec -> Operation
 operationFrom eco spec =
     (mempty :: Operation)
@@ -379,12 +331,7 @@ instance ToSchema SynthesizedPackument where
 synthesizedPackumentSchemaName :: Text
 synthesizedPackumentSchemaName = "SynthesizedPackument"
 
-{- | The __partial__ schema of the served packument: the documented __trust boundary__.
-
-It models only the fields Écluse reads and transforms, and stays open everywhere else. A valid
-instance is __not__ a proof that every @dist-tags@ target is a surviving @versions@ key, because
-that cross-field coherence is not schema-expressible.
--}
+-- | Model transformed packument fields. Cross-field tag coherence cannot be expressed by this schema.
 synthesizedPackumentSchema :: Schema
 synthesizedPackumentSchema =
     (mempty :: Schema)
@@ -508,8 +455,8 @@ simpleIndexSchema =
                 \merged across upstreams and gated (private releases trusted, public releases admitted only by \
                 \policy), files that do not clear the integrity floor or that name an authority this mount does \
                 \not honour are dropped, and each surviving file's `url` is rewritten to resolve back through \
-                \this proxy. The PEP 658 `core-metadata` and `data-dist-info-metadata` keys are omitted, \
-                \because Écluse serves no `.metadata` companion."
+                \this proxy. Canonical `core-metadata` declarations retain their upstream Boolean or digest map. \
+                \Legacy metadata aliases are omitted. Declared companions use the distribution URL with `.metadata` appended to its path."
         , _schemaRequired = ["name", "files"]
         , _schemaProperties =
             InsOrd.fromList

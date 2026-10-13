@@ -182,6 +182,45 @@ environment variable written under a tag your document did not use leaves the en
 tags, and the boot refuses it naming both. And two endpoints that name the same registry under
 different tags are refused for every role, because one store has one backend.
 
+## PyPI uploads and mirror state
+
+[Complete PyPI setup](@/docs/pypi-setup.md) combines the repositories, roles, credentials and rollout order.
+
+PyPI mirror tags also admit `uploadUrl` and `username`. Publication tags also admit `username`.
+The role requires these fields as described below.
+
+A PyPI mirror declares the registry root, from which reads append `simple/`, and an explicit native `uploadUrl`. A generic static
+write token also declares its Basic `username`. CodeArtifact supplies `aws` at its backend binding.
+A CodeArtifact upload URL must name the same domain, account, region and repository as its read root.
+Its supported upload paths are listed in the [configuration reference](#the-configuration-reference).
+The refresh provider still owns only the secret. Client publication uses the exact configured
+publication URL and retains the caller's Basic pair when no static replacement is configured.
+
+Configure `mirrorState.url` independently from `advisories.url`. Its S3-compatible store must
+support strong reads, conditional creation and conditional replacement. The proxy needs reads
+and prefix listing to distinguish confirmed absence. The worker also needs writes. No mirror
+worker deletes state or package bytes. Do not expire project records or referenced companions.
+Losing expected history can hide files that the current public index no longer lists.
+
+Partial uploads remain incomplete through Écluse. A state failure answers unavailable.
+A missing recorded version that a named rule denies in the current public read does not block the remaining authorised listing.
+Without decisive denial evidence, the listing still requires complete file coverage. An absent state record leaves ordinary
+unmanaged private handling intact. These controls do not promise atomic direct-registry reads.
+Project listings still discover public releases. Already mirrored artifact and companion reads
+need no public request or new admission after current private authorisation and identity proof.
+
+`MAL-*` advisory IDs do not impose an unconditional deny at any mirror phase. Public serving
+and worker ingest apply the configured admission rules. `DenyIfCve` treats an affecting advisory
+without a CVSS score as meeting every threshold, subject to rule precedence. Completed private
+copies keep the trusted-read path and do not re-run public advisory admission. Dredger reaping
+requires a named decisive deny whose `appliesTo` includes `revocation`, plus that store's deletion
+consent and the other [deletion guards](@/docs/dredger.md).
+
+A mount's optional `maxRequestBytes` overrides its inherited upload cap without changing another
+mount. Unset, it uses the existing global configured or computed value. The memory plan reserves
+aggregate capacity for the largest effective publishing cap and refuses an override that cannot fit.
+See the generated configuration reference for defaults and environment spellings.
+
 ## First-party namespaces
 
 A mount's `firstParty` key names the namespaces your deployment owns. Set it when your own
@@ -334,7 +373,7 @@ mounts:
 Deprecation also marks obsolete packages and entire release lines. Enabling `DenyIfDeprecated`
 can refuse all versions that a dependency range selects, not only isolated withdrawn releases.
 The yank rule is the PyPI yank setting. There is no separate configuration key.
-PyPI mirroring remains tracked in [#765](https://github.com/AlexaDeWit/Ecluse/issues/765).
+PyPI mirroring copies every supported wheel and source distribution admitted for a version.
 
 Without `appliesTo`, either deny also applies at revocation. The Dredger reads the store's own
 metadata, so a later public yank or deprecation does not update the stored flag by itself.

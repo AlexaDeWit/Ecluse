@@ -179,6 +179,10 @@ data MirrorWrite
 data MirrorEndpoint = MirrorEndpoint
     { meUrl :: RegistryUrl
     , meWrite :: MirrorWrite
+    , meUploadUrl :: Maybe RegistryUrl
+    -- ^ Explicit native upload endpoint when it differs from the read root.
+    , meUsername :: Maybe Text
+    -- ^ Static Basic username. A managed backend supplies its own convention.
     }
     deriving stock (Eq, Show)
 
@@ -199,12 +203,12 @@ meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
         WriteCodeArtifact{} -> TagCodeArtifact
         WriteVerdaccio{} -> TagVerdaccio
 
-{- | A declared @publicationTarget@: where a client publish is relayed, and the static credential
-forwarded __only when the publishing client sends none__.
--}
+-- | A publication endpoint and the credential that replaces an authenticated edge token.
 data PublicationEndpoint = PublicationEndpoint
     { peTarget :: Target
     , peToken :: Maybe Secret
+    , peUsername :: Maybe Text
+    -- ^ Username paired with the configured publication token.
     }
     deriving stock (Eq, Show)
 
@@ -295,6 +299,8 @@ data MountConfig = MountConfig
     , mntPublicationTarget :: Maybe PublicationEndpoint
     , mntFirstParty :: Maybe FirstParty
     , mntIntegrity :: MountIntegrity
+    , mntMaxRequestBytes :: Maybe Int
+    -- ^ Optional per-mount upload bound. Absence inherits the resolved global cap.
     }
     deriving stock (Eq, Show)
 
@@ -307,6 +313,8 @@ data AppConfig = AppConfig
     , cfgIntegrity :: IntegritySettings
     , cfgEgress :: EgressSettings
     , cfgAdvisories :: AdvisoriesSettings
+    , cfgMirrorState :: Maybe AdvisoryStoreUrl
+    -- ^ Independent object-store location for expected files and retained source data.
     , cfgRuntime :: RuntimeSettings
     , cfgObservability :: ObservabilitySettings
     , cfgDredger :: DredgerSettings
@@ -522,6 +530,10 @@ regMirrorTarget regs = case regMode regs of
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
     , mtBackend :: StoreBackend
+    , mtUploadUrl :: RegistryUrl
+    -- ^ Resolved native writer endpoint.
+    , mtUsername :: Maybe Text
+    -- ^ Resolved username, carried beside the refreshed secret.
     }
     deriving stock (Eq, Show)
 

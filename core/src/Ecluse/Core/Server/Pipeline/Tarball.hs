@@ -36,7 +36,7 @@ import Ecluse.Core.Server.Pipeline.Internal (recordDenials, serveDecisionClass)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Private (
-    PrivateLeg (PrivateAnswered, PrivateMissed),
+    PrivateLeg (PrivateAnswered, PrivateHandled, PrivateMissed),
     streamPrivateArtifact,
  )
 import Ecluse.Core.Server.Pipeline.Tarball.Public (servePublicArtifact)
@@ -124,6 +124,7 @@ tarballWith mode replies name version file request respond = do
 serveArtifactLegs :: ArtifactRequest response -> Maybe ClientCredential -> Handler ResponseReceived
 serveArtifactLegs ctx token =
     streamPrivateArtifact ctx token >>= \case
+        PrivateHandled received -> pure received
         PrivateAnswered decision received -> do
             liftIO (mpServeDecision (srMetrics (arRuntime ctx)) decision)
             pure received

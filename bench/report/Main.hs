@@ -25,6 +25,7 @@ main =
         ["receipt-allocation", root, conditions] -> Receipt.writePerformanceReceipts "allocation" root conditions
         ["receipt-live-allocation", root, conditions] -> Receipt.writePerformanceReceipts "live-allocation" root conditions
         ["receipt-benchmark", root, conditions] -> Receipt.writePerformanceReceipts "benchmark" root conditions
+        ["receipt-load", root, conditions] -> Receipt.writePerformanceReceipts "load" root conditions
         ["receipt-load-foundation", root, conditions] -> Receipt.writePerformanceReceipts "load-foundation" root conditions
         ["performance-obligation", kind, subject, conditionsPath] -> Performance.writeObligation (toText kind) (toText subject) conditionsPath
         ["performance-receipt", requestPath, nativePath, receiptPath] -> Performance.writeReceipt requestPath nativePath receiptPath
@@ -37,7 +38,7 @@ main =
             die . toString . unlines $
                 [ "usage: bench-report <results.csv> [<console-log>]"
                 , "       bench-report conditions <path> <key=value> ..."
-                , "       bench-report receipt-{allocation,live-allocation,benchmark,load-foundation} <root> <conditions.json>"
+                , "       bench-report receipt-{allocation,live-allocation,benchmark,load,load-foundation} <root> <conditions.json>"
                 , "       bench-report performance-obligation <kind> <subject> <conditions.json>"
                 , "       bench-report performance-receipt <request.json> <native-results> <receipt.json>"
                 , "       bench-report performance-audit <request.json> <receipt.json>"

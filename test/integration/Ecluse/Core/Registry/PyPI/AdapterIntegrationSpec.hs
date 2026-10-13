@@ -7,7 +7,7 @@ Private index failures retain their access-refusal or fallback policy.
 -}
 module Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Array, Number, Object, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
@@ -16,23 +16,27 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, methodGet, methodHead, status200, status401, status403, status404, status503, statusCode)
+import Network.HTTP.Types (Header, Status, methodGet, methodHead, status200, status302, status304, status401, status403, status404, status503, statusCode)
 import Network.Wai (Application, responseLBS)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
+import Network.Wai.Test (SResponse (SResponse, simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
+import UnliftIO (tryAny)
 
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
+import Ecluse.Core.Queue (MirrorQueue (enqueue))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, DenyIfYanked))
+import Ecluse.Core.Security (Limits (progressFloor), mkProgressFloor)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Response (mkHelpMessage)
-import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
+import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.ServingDriver (pypiServingDriver)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
@@ -42,8 +46,8 @@ import Ecluse.Test.Json (asObject, fieldAt, textAtPath, withKeys)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admissionOnly, atDefaultPrecedence, inertRuleDeps)
-import Ecluse.Test.Server.Mount (pypiServeDeps)
-import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, selfBaseUrl)
+import Ecluse.Test.Server.Mount (pypiServeDeps, withMirrorPlan)
+import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, pacedBody, selfBaseUrl)
 
 spec :: Spec
 spec = do
@@ -52,6 +56,8 @@ spec = do
     availabilitySpec
     conditionalFloorSpec
     artifactSpec
+    sidecarSpec
+    sidecarCollisionSpec
     negotiationSpec
     refusalBodySpec
     privateLegSpec
@@ -77,10 +83,11 @@ indexSpec = describe "the served Simple index" $ do
                            , "http://ecluse.test/pypi/simple/requests/requests-2.34.2.tar.gz"
                            ]
 
-    it (caseLabel "integration/pypi/native-004" "omits the PEP 658 sidecar keys, because it serves no .metadata companion") $
+    it (caseLabel "integration/pypi/native-004" "retains canonical companion digests and omits legacy aliases") $
         withPyPIProxy publicIndex $ \app -> do
             resp <- getIndex app
             for_ sidecarKeys (`excludesSidecar` resp)
+            mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles resp) `shouldBe` [metadataDigest, metadataDigest]
             let expectedFiles = map (withoutSidecars . fileOn "http://ecluse.test/pypi") ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
             servedFiles resp `shouldBe` expectedFiles
 
@@ -167,6 +174,245 @@ artifactSpec = describe "the served distribution file" $ do
             resp <- getPath "/pypi/simple/requests/urllib3-2.0.0.tar.gz" app
             simpleStatus resp `shouldBe` status404
 
+sidecarSpec :: Spec
+sidecarSpec = describe "the metadata companion" $ do
+    for_ [methodGet, methodHead] $ \method ->
+        it (caseLabel ("integration/pypi/native-022/" <> T.toLower (decodeUtf8 method)) (toText (("relays metadata under " <> decodeUtf8 method <> " without advisory or policy reads") :: String))) $
+            withPyPIProxyOver publicIndex publicPypiDeps $ \proxy -> do
+                let app = proxyWithDeps proxy (withMirrorPlan (MirrorOnAdmit (loopbackRegistryUrl "http://localhost:1")) . (\deps -> deps{pdRules = [], pdAdvisoryEtag = fail "sidecar read advisories"}))
+                response <- requestAt method (sdistPath <> ".metadata") Wai.defaultRequest app
+                statusOf response `shouldBe` 200
+                simpleBody response `shouldBe` if method == methodHead then "" else metadataBytes
+                hits <- privateHits proxy
+                map fst hits `shouldContain` [sdistPath <> ".metadata"]
+                map snd hits `shouldSatisfy` all isNothing
+
+    it (caseLabel "integration/pypi/native-023" "rejects a missing edge credential before reading metadata") $
+        withPyPIProxyOver publicIndex publicPypiDeps $ \proxy -> do
+            let app = proxyWithDeps proxy (\deps -> deps{pdInboundToken = Just (mkSecret "edge-secret")})
+            response <- getPath (sdistPath <> ".metadata") app
+            statusOf response `shouldBe` 401
+            privateHits proxy `shouldReturn` []
+
+    it (caseLabel "integration/pypi/native-024" "does not fetch public metadata for a first-party private absence") $
+        withPyPIProxyOver publicIndex publicPypiDeps $ \proxy -> do
+            let app = proxyWithDeps proxy (\deps -> deps{pdFirstParty = const True})
+            response <- getPath (sdistPath <> ".metadata") app
+            statusOf response `shouldBe` 404
+            privateHits proxy `shouldReturn` []
+
+    it (caseLabel "integration/pypi/native-025" "reports an unavailable public index without fetching companion bytes") $
+        withPyPIProxyResponding (const (\_ respond -> respond (responseLBS status503 [] "unavailable"))) publicIndex publicPypiDeps $ \proxy -> do
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 503
+
+    it (caseLabel "integration/pypi/native-026" "refuses a mismatched project identity") $
+        withPyPIProxyOver (withKeys ["name" .= ("other-project" :: Text)] . publicIndex) publicPypiDeps $ \proxy -> do
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 404
+            hits <- privateHits proxy
+            map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
+
+    it (caseLabel "integration/pypi/native-027" "serves bytes with the advertised companion digest") $
+        withPyPIProxy publicIndex $ \app -> do
+            index <- getIndex app
+            response <- getPath (sdistPath <> ".metadata") app
+            mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldSatisfy` all (== hexSha256Of (LBS.toStrict (simpleBody response)))
+            metadataDigest `shouldNotBe` sha256Digest
+
+    for_ [("absent", Nothing), ("false", Just (Bool False)), ("empty", Just (object [])), ("null", Just Null), ("invalid-digest", Just (object ["sha256" .= True]))] $ \(declarationId, declaration) ->
+        it (caseLabel ("integration/pypi/native-028/" <> declarationId) (toText (("does not fetch an absent or unusable companion " <> show declaration) :: String))) $
+            withPyPIProxyOver (alterDeclarations declaration) publicPypiDeps $ \proxy -> do
+                response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+                statusOf response `shouldBe` 404
+                hits <- privateHits proxy
+                map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
+
+    it (caseLabel "integration/pypi/native-029" "enforces the parent's public and trusted integrity floors") $
+        for_ [(False, publicPypiDeps), (True, privatePypiDeps)] $ \(private, depsFor) ->
+            withPyPIProxyOver publicIndex depsFor $ \proxy -> do
+                publicFloor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+                trustedFloor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)
+                let app = proxyWithDeps proxy (\deps -> deps{pdMinIntegrity = publicFloor, pdMinTrustedIntegrity = trustedFloor, pdFirstParty = const private})
+                response <- getPathWith [clientCredential] (sdistPath <> ".metadata") app
+                statusOf response `shouldBe` 404
+                hits <- privateHits proxy
+                map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
+
+    for_ [status404, status503] $ \privateStatus ->
+        it (caseLabel ("integration/pypi/native-030/" <> show (statusCode privateStatus)) (toText (("falls back anonymously after private metadata HTTP " <> show (statusCode privateStatus)) :: String))) $
+            testWithApplication (pure (\_ respond -> respond (responseLBS privateStatus [] "private miss"))) $ \privatePort ->
+                withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) $ \proxy -> do
+                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                    statusOf response `shouldBe` 200
+                    simpleBody response `shouldBe` metadataBytes
+                    hits <- privateHits proxy
+                    map snd hits `shouldSatisfy` all isNothing
+
+    it (caseLabel "integration/pypi/native-031" "reports a companion transport failure before committing bytes") $
+        withPyPIProxyResponding (onCompanion (\_ respond -> respond (Wai.responseRaw (\_ _ -> pass) (responseLBS status503 [] "")))) publicIndex publicPypiDeps $ \proxy -> do
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 503
+
+    it (caseLabel "integration/pypi/native-032" "stops a streamed companion when upstream progress falls below the floor") $ do
+        progress <- either (fail . show) pure (mkProgressFloor 30 0.5 1024)
+        withPyPIProxyResponding (onCompanion (pacedBody [(0, "partial"), (20_000_000, "rest")])) publicIndex publicPypiDeps $ \proxy -> do
+            let app = proxyWithDeps proxy (\deps -> deps{pdLimits = (pdLimits deps){progressFloor = progress}})
+            outcome <- tryAny (getPath (sdistPath <> ".metadata") app)
+            outcome `shouldSatisfy` isLeft
+
+    it (caseLabel "integration/pypi/native-033" "keeps private credentials on the private companion authority") $
+        withPrivatePyPIProxy privateIndexOnItself $ \proxy -> do
+            response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 200
+            hits <- privateHits proxy
+            lookup (sdistPath <> ".metadata") hits `shouldBe` Just (Just basicCredential)
+
+    for_ [status401, status403] $ \refused ->
+        it (caseLabel ("integration/pypi/native-034/" <> show (statusCode refused)) (toText (("stops public fallback after companion HTTP " <> show (statusCode refused)) :: String))) $
+            withPyPIProxyResponding (companionResponse refused) publicIndex privatePypiDeps $ \proxy -> do
+                response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                statusOf response `shouldBe` 403
+                simpleBody response `shouldBe` ""
+
+    for_ [status304, status302, status503] $ \upstreamStatus ->
+        it (caseLabel ("integration/pypi/native-035/" <> show (statusCode upstreamStatus)) (toText (("relays companion HTTP " <> show (statusCode upstreamStatus) <> " without following redirects") :: String))) $
+            withPyPIProxyResponding (companionResponse upstreamStatus) publicIndex publicPypiDeps $ \proxy -> do
+                response <- getPathWith [("If-None-Match", "*")] (sdistPath <> ".metadata") (proxyApp proxy)
+                simpleStatus response `shouldBe` upstreamStatus
+                when (upstreamStatus == status304) (simpleBody response `shouldBe` "")
+
+    it (caseLabel "integration/pypi/native-036" "refuses a foreign parent without fetching its companion") $
+        withPrivatePyPIProxy (privateIndexOn "http://files.example.invalid") $ \proxy -> do
+            let app = proxyWithDeps proxy (\deps -> deps{pdFirstParty = const True})
+            response <- getPathWith [clientCredential] (sdistPath <> ".metadata") app
+            statusOf response `shouldBe` 404
+            hits <- privateHits proxy
+            map fst hits `shouldNotContain` [sdistPath <> ".metadata"]
+
+sidecarCollisionSpec :: Spec
+sidecarCollisionSpec = describe "companions keep the winning source" $ do
+    it (caseLabel "integration/pypi/native-037" "serves the private bytes whose digest the winning index advertised") $
+        withCollision (privateCollisionIndex id) id $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [privateMetadataDigest, privateMetadataDigest]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 200
+            hexSha256Of (LBS.toStrict (simpleBody response)) `shouldBe` privateMetadataDigest
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_
+        [ ("absent", "absent declaration", KeyMap.delete "core-metadata", True)
+        , ("false", "false declaration", KeyMap.insert "core-metadata" (Bool False), True)
+        , ("empty", "empty declaration", KeyMap.insert "core-metadata" (object []), True)
+        , ("weak", "weak parent", KeyMap.insert "hashes" (object ["md5" .= ("0123456789abcdef0123456789abcdef" :: Text)]), False)
+        , ("foreign", "foreign parent", KeyMap.insert "url" (String "http://foreign.invalid/requests-2.34.2.tar.gz"), False)
+        ]
+        $ \(caseId, label, change, retainsParent) ->
+            it (caseLabel ("integration/pypi/native-038/" <> caseId) (toText (("keeps a private sibling authoritative after an " <> label) :: String))) $
+                withCollision (privateCollisionIndex (changeParent change)) id $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    statusOf index `shouldBe` 200
+                    mapMaybe (fieldAt "size") (servedFiles index) `shouldSatisfy` all (== Number 17)
+                    let parent = find ((== Just "requests-2.34.2.tar.gz") . textAtPath ["filename"]) (servedFiles index)
+                    isJust parent `shouldBe` retainsParent
+                    length (servedFiles index) `shouldBe` if retainsParent then 2 else 1
+                    when retainsParent $ (parent >>= fieldAt "core-metadata") `shouldBe` KeyMap.lookup "core-metadata" (change (KeyMap.singleton "core-metadata" (object ["sha256" .= privateMetadataDigest])))
+                    publicBefore <- privateHits proxy
+                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                    statusOf response `shouldBe` 404
+                    privateHits proxy `shouldReturn` publicBefore
+
+    it (caseLabel "integration/pypi/native-039" "keeps a private version authoritative when it lacks the requested filename") $
+        withCollision (privateCollisionIndex (filter ((/= Just "requests-2.34.2.tar.gz") . textAtPath ["filename"]))) id $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            length (servedFiles index) `shouldBe` 1
+            mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` [Number 17]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 404
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_ [status404, status503] $ \privateStatus ->
+        for_ [methodGet, methodHead] $ \method ->
+            it (caseLabel ("integration/pypi/native-040/" <> show (statusCode privateStatus) <> "/" <> T.toLower (decodeUtf8 method)) (toText (("does not replace an advertised private companion after HTTP " <> show (statusCode privateStatus) <> " under " <> decodeUtf8 method) :: String))) $
+                withCollision (privateCollisionIndex id) (companionResponse privateStatus) $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [privateMetadataDigest, privateMetadataDigest]
+                    publicBefore <- privateHits proxy
+                    response <- requestAt method (sdistPath <> ".metadata") Wai.defaultRequest (proxyApp proxy)
+                    simpleStatus response `shouldBe` privateStatus
+                    privateHits proxy `shouldReturn` publicBefore
+
+    it (caseLabel "integration/pypi/native-041" "does not replace a private companion after a transport failure") $
+        withCollision (privateCollisionIndex id) (onCompanion (\_ respond -> respond (Wai.responseRaw (\_ _ -> pass) (responseLBS status503 [] "")))) $ \proxy -> do
+            index <- getIndex (proxyApp proxy)
+            mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` [Number 17, Number 17]
+            publicBefore <- privateHits proxy
+            response <- getPath (sdistPath <> ".metadata") (proxyApp proxy)
+            statusOf response `shouldBe` 503
+            privateHits proxy `shouldReturn` publicBefore
+
+    for_
+        [ ("weak", map (withKeys ["hashes" .= object ["md5" .= ("0123456789abcdef0123456789abcdef" :: Text)]]))
+        , ("foreign", map (withKeys ["url" .= ("http://foreign.invalid/requests-2.34.2.tar.gz" :: Text)]))
+        , ("absent", const [])
+        ]
+        $ \(label, change) ->
+            it (caseLabel ("integration/pypi/native-042/" <> toText label) (toText (("serves the public winner when every private entry is " <> label) :: String))) $
+                withCollision (privateCollisionIndex change) id $ \proxy -> do
+                    index <- getIndex (proxyApp proxy)
+                    mapMaybe (fieldAt "size") (servedFiles index) `shouldBe` []
+                    mapMaybe (textAtPath ["core-metadata", "sha256"]) (servedFiles index) `shouldBe` [metadataDigest, metadataDigest]
+                    publicBefore <- privateHits proxy
+                    response <- getPathWith [clientCredential] (sdistPath <> ".metadata") (proxyApp proxy)
+                    simpleBody response `shouldBe` metadataBytes
+                    statusOf response `shouldBe` 200
+                    publicAfter <- privateHits proxy
+                    let newPublicReads = drop (length publicBefore) publicAfter
+                    map fst newPublicReads `shouldContain` [sdistPath <> ".metadata"]
+                    map snd newPublicReads `shouldSatisfy` all isNothing
+
+withCollision :: (Text -> Value) -> (Application -> Application) -> (PyPIProxy -> IO a) -> IO a
+withCollision privateIndex transform use =
+    testWithApplication (pure (transform privateApp)) $ \privatePort ->
+        withPyPIProxyOver publicIndex (pypiDeps (Just (loopbackRegistryUrl (localhost privatePort))) . loopbackRegistryUrl . localhost) use
+  where
+    privateApp = onCompanion (\_ respond -> respond (responseLBS status200 [] privateMetadataBytes)) (upstreamApp privateIndex (const pass))
+
+privateCollisionIndex :: ([Value] -> [Value]) -> Text -> Value
+privateCollisionIndex change authority =
+    withKeys ["files" .= change files] (publicIndex authority)
+  where
+    files = map (withKeys ["size" .= (17 :: Int), "core-metadata" .= object ["sha256" .= privateMetadataDigest]] . fileOn authority) ["requests-2.34.2-py3-none-any.whl", "requests-2.34.2.tar.gz"]
+
+changeParent :: (KeyMap.KeyMap Value -> KeyMap.KeyMap Value) -> [Value] -> [Value]
+changeParent change = map $ \file ->
+    if textAtPath ["filename"] file == Just "requests-2.34.2.tar.gz" then Object (change (asObject file)) else file
+
+privateMetadataDigest :: Text
+privateMetadataDigest = hexSha256Of (LBS.toStrict privateMetadataBytes)
+
+privateMetadataBytes :: LByteString
+privateMetadataBytes = "private metadata"
+
+alterDeclarations :: Maybe Value -> Text -> Value
+alterDeclarations declaration authority = withKeys ["files" .= map change (servedFiles response)] (publicIndex authority)
+  where
+    response = SResponse status200 [] (encode (publicIndex authority))
+    change = Object . maybe (KeyMap.delete "core-metadata") (KeyMap.insert "core-metadata") declaration . asObject
+
+onCompanion :: Application -> Application -> Application
+onCompanion companion original request respond
+    | ".metadata" `T.isSuffixOf` decodeUtf8 (Wai.rawPathInfo request) = companion request respond
+    | otherwise = original request respond
+
+companionResponse :: Status -> Application -> Application
+companionResponse status = onCompanion $ \request respond -> do
+    when (status == status304) (lookup "If-None-Match" (Wai.requestHeaders request) `shouldBe` Just "*")
+    respond (responseLBS status [("Location", "http://foreign.invalid/file")] "")
+
 negotiationSpec :: Spec
 negotiationSpec = describe "content negotiation, decided from the route record" $ do
     it (caseLabel "integration/pypi/native-011" "serves a client that admits the JSON form") $
@@ -219,7 +465,7 @@ privateLegSpec = describe "the private artifact leg, addressed by the index's ow
     for_ [status401, status403] $ \upstreamStatus ->
         it (caseLabel ("integration/pypi/native-017/" <> show (statusCode upstreamStatus)) (toText ("refuses an index HTTP " <> show (statusCode upstreamStatus) <> " on metadata and indexed artifacts" :: String))) $
             withPyPIProxyResponding (const (\_ respond -> respond (responseLBS upstreamStatus [("WWW-Authenticate", "private-secret")] "private-secret"))) publicIndex privatePypiDeps $ \proxy ->
-                for_ ["/pypi/simple/requests", sdistPath] $ \path ->
+                for_ ["/pypi/simple/requests", sdistPath, sdistPath <> ".metadata"] $ \path ->
                     for_ [methodGet, methodHead] $ \method -> do
                         let req = Wai.defaultRequest{Wai.requestHeaders = [clientCredential, ("If-None-Match", "*")]}
                         response <- requestAt method path req (proxyApp proxy)
@@ -283,7 +529,7 @@ withPyPIProxyResponding transform indexFor depsFor k = do
     manager <- newManager defaultManagerSettings
     recorded <- newIORef []
     testWithApplication (pure (transform (upstreamApp indexFor (record recorded)))) $ \upstreamPort -> do
-        env <- newTestEnvWithQueue queue manager
+        env <- newTestEnvWithQueue queue{enqueue = \_ -> fail "unexpected mirror enqueue"} manager
         deps <- depsFor upstreamPort
         let configured change = application (mkServerConfig (maybeToList (mountBindingFor PyPI (change deps) Nothing))) env
         k (PyPIProxy (configured id) configured (readIORef recorded))
@@ -300,6 +546,7 @@ upstreamApp indexFor observe request respond = do
         -- The index read carries its trailing slash, because a real index redirects a request
         -- without one and no data-plane request follows a redirect.
         ["simple", _project] -> respond (responseLBS status200 [("Content-Type", "application/vnd.pypi.simple.v1+json")] (encode (indexFor (selfBaseUrl request))))
+        ["simple", _, file] | ".metadata" `T.isSuffixOf` file -> respond (responseLBS status200 [("Content-Type", "text/plain")] metadataBytes)
         ["simple", _, _] -> respond (responseLBS status200 [("Content-Type", "application/octet-stream")] artifactBytes)
         _ -> respond (responseLBS status404 [] "")
 
@@ -343,7 +590,7 @@ fileOn authority filename =
         , "hashes" .= object ["sha256" .= sha256Digest]
         , "requires-python" .= (">=3.10" :: Text)
         , "upload-time" .= ("2026-01-01T00:00:00Z" :: Text)
-        , "core-metadata" .= object ["sha256" .= sha256Digest]
+        , "core-metadata" .= object ["sha256" .= metadataDigest]
         , "dist-info-metadata" .= object ["sha256" .= sha256Digest]
         , "data-dist-info-metadata" .= object ["sha256" .= sha256Digest]
         ]
@@ -353,6 +600,12 @@ sha256Digest = hexSha256Of (LBS.toStrict artifactBytes)
 
 artifactBytes :: LByteString
 artifactBytes = "python distribution bytes"
+
+metadataBytes :: LByteString
+metadataBytes = "Metadata-Version: 2.1\nName: requests\nVersion: 2.34.2\n"
+
+metadataDigest :: Text
+metadataDigest = hexSha256Of (LBS.toStrict metadataBytes)
 
 clientCredential :: Header
 clientCredential = ("Authorization", basicCredential)
@@ -391,7 +644,7 @@ statusOf :: SResponse -> Int
 statusOf = statusCode . simpleStatus
 
 sidecarKeys :: [Text]
-sidecarKeys = ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"]
+sidecarKeys = ["dist-info-metadata", "data-dist-info-metadata"]
 
 excludesSidecar :: Text -> SResponse -> Expectation
 excludesSidecar key resp = servedKeys resp `shouldNotContain` [key]

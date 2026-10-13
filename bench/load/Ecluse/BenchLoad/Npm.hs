@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Local npm load scenarios for metadata, private copies of public versions, artifacts, caches,
-advisory databases, admission under memory pressure, and the mirror worker. Private reads stay
-live. Public requests can share one in-flight fetch even at zero cache TTL.
+{- | npm load scenarios covering serving, admission, and the mirror worker.
+Private reads stay live, while public requests can share a fetch at zero cache TTL.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
@@ -22,7 +21,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import GHC.Clock (getMonotonicTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404)
@@ -38,25 +36,26 @@ import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
 import Ecluse.BenchLoad.ProxyProcess (ProxyProcess)
 import Ecluse.BenchLoad.Stress (WarmLoadDriver (..), herdSize, pairedLoad, rampSteps)
+import Ecluse.BenchLoad.Worker (runWorkerLoad)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
+import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageDetails (pkgVersion), PackageInfo (..), PackageName, mkPackageName, unscopedName)
 import Ecluse.Core.Queue (
     MirrorJob (
         MirrorJob,
-        jobArtifactFilename,
-        jobArtifactUrl,
         jobPackage,
         jobTraceContext,
+        jobTriggerFilename,
         jobVersion
     ),
     MirrorQueue (receive),
     enqueue,
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Registry (BodyOutcome (UnreadStatus))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent))
+import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.Npm.Publish (prepareNpmSource)
+import Ecluse.Core.Registry.Publish.Internal (MirrorPublish (..), PreparedMirrorUpload (..), PreparedMirrorVersion (..))
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
@@ -79,7 +78,7 @@ import Ecluse.Test.Package (hexSha1OfLazy, sriSha512OfLazy, unsafeFilename, unsa
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Wai (localhost, selfBaseUrl)
-import Ecluse.Test.Worker (admitAllPolicies)
+import Ecluse.Test.Worker (admitAllPolicies, workerSourceAt)
 
 -- | The npm load fixture covers metadata, artifact relays, cache churn, and mirror jobs.
 npmFixture :: UpstreamFixture
@@ -292,9 +291,10 @@ workerScenario :: Scenario
 workerScenario =
     ( scenario
         "worker-mirroring"
-        "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop in the harness process. The presence probe reports absent, so every job exercises the complete pipeline."
+        "Run the mirror worker fetch, integrity check, publish, and acknowledgement loop in the harness process. The initial presence probe reports absent and the final probe confirms the write, so every job exercises the complete pipeline."
         $ \knobs k -> do
             counter <- newIORef (0 :: Int)
+            publish <- succeedingPublishClient counter
             let bytes = artifactBytes (lkPayloadBytes knobs)
             testWithApplication (pure (stubUpstream octetContentType (lkUpstreamLatencyMicros knobs) bytes)) $ \artPort -> do
                 manager <- newManager defaultManagerSettings
@@ -312,10 +312,10 @@ workerScenario =
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
                             , wrInjectTraceContext = id
-                            , wrPolicies = admitAllPolicies (succeedingPublishClient counter) (jobHashes bytes)
+                            , wrPolicies = workerSourceAt artUrl (admitAllPolicies publish (jobHashes bytes))
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
-                    job = mirrorJob artUrl
+                    job = mirrorJob
                 k (Target Nothing (DriveInProcess (runWorkerLoop knobs logEnv runtime queue job counter)))
     )
         { scenarioInProcess = True
@@ -323,8 +323,7 @@ workerScenario =
 
 runWorkerLoop :: LoadKnobs -> LogEnv -> WorkerRuntime -> MirrorQueue -> MirrorJob -> IORef Int -> IO [Double]
 runWorkerLoop knobs logEnv runtime queue job counter = do
-    deadline <- (+ fromIntegral (lkDurationSeconds knobs)) <$> getMonotonicTime
-    latencies <- go deadline []
+    latencies <- runWorkerLoad knobs prepare (runWorkerM logEnv mempty runtime . processBatch) (const pass)
     published <- readIORef counter
     when (published /= length latencies) $
         benchFail
@@ -336,37 +335,34 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
             )
     pure latencies
   where
-    go :: Double -> [Double] -> IO [Double]
-    go deadline acc = do
-        nowT <- getMonotonicTime
-        if nowT >= deadline
-            then pure (reverse acc)
-            else do
-                enqueue queue job >>= either (\f -> fail ("bench enqueue faulted: " <> show f)) pure
-                messages <- receive queue >>= either (\f -> fail ("bench receive faulted: " <> show f)) pure
-                t0 <- getMonotonicTime
-                runWorkerM logEnv mempty runtime (processBatch messages)
-                t1 <- getMonotonicTime
-                go deadline ((t1 - t0) : acc)
+    prepare = do
+        enqueue queue job >>= either (\f -> fail ("bench enqueue faulted: " <> show f)) pure
+        receive queue >>= either (\f -> fail ("bench receive faulted: " <> show f)) pure
 
-mirrorJob :: Text -> MirrorJob
-mirrorJob url =
+mirrorJob :: MirrorJob
+mirrorJob =
     MirrorJob
         { jobPackage = packageName
         , jobVersion = mkVersion Npm "1.0.0"
-        , jobArtifactUrl = loopbackRegistryUrl url
-        , jobArtifactFilename = unsafeFilename (packageText <> "-1.0.0.tgz")
+        , jobTriggerFilename = Just (unsafeFilename (packageText <> "-1.0.0.tgz"))
         , jobTraceContext = Nothing
         }
 
-succeedingPublishClient :: IORef Int -> MirrorPublish
-succeedingPublishClient counter =
-    MirrorPublish
-        { mpPublishArtifact = \_ _ _ _ -> do
-            atomicModifyIORef' counter (\n -> (n + 1, ()))
-            pure (Right ())
-        , mpProbeMetadata = const (pure (Right (UnreadStatus 404)))
-        }
+succeedingPublishClient :: IORef Int -> IO MirrorPublish
+succeedingPublishClient counter = do
+    committed <- newIORef Nothing
+    pure
+        MirrorPublish
+            { mpPrepareVersion = \name version doc -> do
+                (inventory, _) <- prepareNpmSource name version doc
+                pure $ PreparedMirrorVersion inventory $ \_ _ _ -> pure . Right $ PreparedMirrorUpload $ \_ -> do
+                    atomicModifyIORef' counter (\n -> (n + 1, ()))
+                    let details = inventoryDetails inventory
+                    writeIORef committed (Just (PackageInfo name (Map.singleton (renderVersion (pkgVersion details)) details) mempty []))
+                    pure (Right ())
+            , mpNativeComplete = \_ _ _ -> False
+            , mpProbeInventory = \_ _ -> maybe (Left MetadataAbsent) Right <$> atomicModifyIORef' committed (Nothing,)
+            }
 
 jobHashes :: LByteString -> NonEmpty Hash
 jobHashes bytes = unsafeHash SRI (sriSha512OfLazy bytes) :| [unsafeHash SHA1 (hexSha1OfLazy bytes)]

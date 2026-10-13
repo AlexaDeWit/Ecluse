@@ -8,16 +8,8 @@ A retained raw version object is charged on the shared wire-to-resident model, w
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
-import Data.Text.Short qualified as TS
-import Data.Text.Unsafe (lengthWord8)
-import Data.Time (UTCTime (..), diffTimeToPicoseconds, toModifiedJulianDay)
-
-import Ecluse.Core.Package
-import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
-import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Text (textStorageBytes)
+import Ecluse.Core.Server.Cache.VersionWeight.Fields
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
@@ -29,65 +21,4 @@ weighVersion versionRead =
     latestPart = maybe 0 (textWeight . renderVersion) (vrUpstreamLatest versionRead)
 
 pairWeight :: VersionDoc -> Integer
-pairWeight doc = detailsWeight (vdDetails doc) + maybe 0 rawWeight (vdRaw doc)
-
-{- The raw object on the full store's measure, its compact-encoded size scaled by the shared
-expansion, estimated by one walk of the tree so the serve path never encodes it. -}
-rawWeight :: CachedDoc -> Integer
-rawWeight = toInteger . expandWireBytes . fromIntegral . weighCachedDoc
-
-detailsWeight :: PackageDetails -> Integer
-detailsWeight details =
-    -- The base covers the entry, package record, scalar tags, and wrappers.
-    -- Artifact node allowances include the size as well as record fields.
-    16 * 1024
-        + nameWeight (pkgName details)
-        + textWeight rawVersion
-        + 256 * toInteger rawLength
-        + maybe 0 timeWeight (pkgPublishedAt details)
-        + installWeight (pkgInstallCode details)
-        + itemsWeight artifactWeight (pkgArtifacts details)
-  where
-    -- The opaque parsed version has flat token lists and bounded numeric components.
-    -- The per-byte allowance also covers RubyGems hyphen expansion and copied parser text.
-    rawVersion = renderVersion (pkgVersion details)
-    rawLength = lengthWord8 rawVersion
-
-nameWeight :: PackageName -> Integer
-nameWeight name =
-    sum (map (textWeight . TS.toText) [pkgCanonical name, pkgBaseName name])
-        + textWeight (renderPackageName name)
-        + maybe 0 (textWeight . renderScope) (pkgNamespace name)
-
--- Decimal digits overestimate Integer payload bytes without depending on its heap layout.
-timeWeight :: UTCTime -> Integer
-timeWeight (UTCTime day time) =
-    textWeight (show (toModifiedJulianDay day)) + textWeight (show (diffTimeToPicoseconds time))
-
--- Text slices can retain an entire input allocation. Count that allocation each time.
-textWeight :: Text -> Integer
-textWeight text = 128 + toInteger (textStorageBytes text)
-
--- The allowance covers a list cell, its element record, wrappers, and alignment.
-itemsWeight :: (Foldable f) => (a -> Integer) -> f a -> Integer
-itemsWeight weigh = foldl' (\total value -> total + 256 + weigh value) 0
-
-installWeight :: CodeExecSignal -> Integer
-installWeight = \case
-    NoCodeOnInstall -> 0
-    RunsCodeOnInstall reason -> textWeight reason
-    CodeExecUnknown -> 0
-
-artifactWeight :: Artifact -> Integer
-artifactWeight artifact =
-    weighEntryKey (artEntryKey artifact)
-        + textWeight (artFilename artifact)
-        + textWeight (artUrl artifact)
-        + itemsWeight (textWeight . hashValue) (artHashes artifact)
-
--- | Charge an entry coordinate, including any retained text backing allocation.
-weighEntryKey :: EntryKey -> Integer
-weighEntryKey = \case
-    ArrayEntry _ -> 64
-    ObjectEntry key -> 64 + textWeight key
-    SingletonEntry -> 16
+pairWeight doc = 16 * 1024 + detailsFieldsWeight (vdDetails doc) + maybe 0 rawWeight (vdRaw doc)

@@ -26,11 +26,11 @@ module Ecluse.Core.Server.Route (
 
     -- * Building a route table
     answering,
-    refusing,
     safeSegment,
     isHead,
 ) where
 
+import Data.Text qualified as T
 import Network.HTTP.Types.Header (RequestHeaders)
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
 
@@ -82,6 +82,8 @@ capture. A capture consumes one or more leading segments and yields a value.
 data PatternSeg v
     = SegLit Text
     | SegCap (Capture v)
+    | -- | One captured segment followed by a literal suffix.
+      SegCapSuffix (Capture v) Text
 
 {- | A named path capture and its parser. 'capConsume' may claim more than one segment, which an
 ecosystem whose identifier spans a decoded @\'\/\'@ needs, and 'Nothing' fails the match.
@@ -183,6 +185,11 @@ consumeSegs (SegLit l : ps) (s : ss)
 consumeSegs (SegCap c : ps) ss = do
     (v, rest) <- capConsume c ss
     (v :) <$> consumeSegs ps rest
+consumeSegs (SegCapSuffix capture suffix : patterns) (segment : segments) = do
+    base <- T.stripSuffix suffix segment
+    (value, remaining) <- capConsume capture [base]
+    guard (null remaining)
+    (value :) <$> consumeSegs patterns segments
 consumeSegs _ _ = Nothing
 
 {- | A 'routeBuild' that answers with one fixed value whatever the method and captures. The
@@ -190,12 +197,6 @@ literal routes an ecosystem answers itself, rather than through the data plane, 
 -}
 answering :: response -> Method -> [v] -> Maybe (ResponseAction response)
 answering answer _method _captures = Just (AnswerLocally answer)
-
-{- | 'answering' for a refusal: the route decides it, and the site holding the mount's
-dependencies renders it under the configured help message.
--}
-refusing :: (Maybe HelpMessage -> response) -> Method -> [v] -> Maybe (ResponseAction response)
-refusing render _method _captures = Just (AnswerRefusal render)
 
 {- | A 'capConsume' that claims one leading segment, and only when it is a safe path component.
 A traversal, separator, or control character therefore fails the match before the value exists.
@@ -216,6 +217,9 @@ fillSegs :: [PatternSeg v] -> [v] -> Maybe [Text]
 fillSegs [] [] = Just []
 fillSegs (SegLit lit : ps) vs = (lit :) <$> fillSegs ps vs
 fillSegs (SegCap capture : ps) (v : vs) = (capRender capture v <>) <$> fillSegs ps vs
+fillSegs (SegCapSuffix capture suffix : patterns) (value : values) = case capRender capture value of
+    [segment] -> ((segment <> suffix) :) <$> fillSegs patterns values
+    _ -> Nothing
 fillSegs _ _ = Nothing
 
 -- | Whether a request is the bodiless read. A @HEAD@ is a variation of its @GET@, not a route.

@@ -162,7 +162,7 @@ tasks:
       - task: reporter
       - '"$(cabal list-bin exe:bench-report)" receipt-benchmark "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
 
-  load-foundation-measure:
+  load-measure:
     vars:
       RUN_ID:
         sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
@@ -178,7 +178,7 @@ tasks:
       ECLTEST_RUN_ID: '{{.RUN_ID}}'
       ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
       ECLTEST_REQUIRED: '1'
-      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load-foundation/%s" .RUN_ID)}}'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load/%s" .RUN_ID)}}'
       MEASUREMENT_AFFINITY: '{{if eq (env "BENCH_LOAD_ISOLATE_OHA") "1"}}taskset -c 0 oha{{else}}unrestricted{{end}}'
       ECLUSE_PERFORMANCE_OBSERVATIONS: load-observations.json
     cmds:
@@ -190,7 +190,7 @@ tasks:
       - bash scripts/process-capture.sh "$PERF_ARTIFACT_DIR/native-status" bench-load-results.md bash scripts/load-cgroup.sh enter cabal run -v0 bench-load --enable-optimization={{.OPTIMISATION}} --{{.PROFILING}}-profiling -- +RTS -N3 -RTS
       - bash scripts/process-status.sh "$PERF_ARTIFACT_DIR/native-status"
 
-  load-foundation-receipt:
+  load-receipt:
     vars:
       RUN_ID:
         sh: if [ -n "${GITHUB_RUN_ID:-}" ]; then printf '%s-%s\n' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"; else bash scripts/test-containers.sh run-id; fi
@@ -204,8 +204,8 @@ tasks:
       ECLTEST_RUN_ID: '{{.RUN_ID}}'
       ECLTEST_ATTEMPT: '{{env "GITHUB_RUN_ATTEMPT" | default "1"}}'
       ECLTEST_REQUIRED: '1'
-      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load-foundation/%s" .RUN_ID)}}'
+      PERF_ARTIFACT_DIR: '{{.PERF_ARTIFACT_DIR | default (printf "scratchpad/performance/load/%s" .RUN_ID)}}'
     cmds:
       - task --exit-code performance:invalidate
       - task: reporter
-      - '"$(cabal list-bin exe:bench-report)" receipt-load-foundation "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+      - '"$(cabal list-bin exe:bench-report)" receipt-load "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'

@@ -2,11 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Pure integration plans combine independent obligations with concrete scheduling metadata.
+-- | Pure integration groups declare all cases before any resource acquisition.
 module Ecluse.Test.Contract.Integration.Catalogue (
     integrationCatalogue,
     awsComposition,
     pypiHttp,
+    mirrorViewHttp,
     egressHttp,
     originHttp,
     npmMetadataHttp,
@@ -16,6 +17,8 @@ module Ecluse.Test.Contract.Integration.Catalogue (
     workerSqs,
     pilotS3,
     advisorySyncS3,
+    mirrorStateS3Internal,
+    mirrorStateS3,
     advisoryExportS3,
     queueSqs,
     serverShutdownHttp,
@@ -41,6 +44,7 @@ integrationCatalogue =
         , catalogueProfiles =
             [ Profile "integration/aws-composition" ["npm"] ["ministack"] ["serving", "mirror-worker"]
             , Profile "integration/pypi" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
+            , Profile "integration/mirror-view" ["pypi"] ["wai"] ["metadata-read", "artifact-read", "serving"]
             , Profile "integration/egress" [] ["wai"] ["egress"]
             , Profile "integration/origin" ["npm"] ["wai"] ["origin"]
             , Profile "integration/npm-metadata" ["npm"] ["wai"] ["metadata-read", "serving"]
@@ -50,6 +54,8 @@ integrationCatalogue =
             , Profile "integration/worker" ["npm"] ["ministack"] ["queue-lease", "mirror-worker"]
             , Profile "integration/pilot" ["npm", "pypi"] ["ministack"] ["advisory-compilation", "advisory-publication"]
             , Profile "integration/advisory-sync" [] ["ministack"] ["advisory-sync"]
+            , Profile "integration/mirror-state-s3-internal" ["pypi"] ["ministack"] ["mirror-state"]
+            , Profile "integration/mirror-state-s3" ["pypi"] ["ministack"] ["mirror-state"]
             , Profile "integration/advisory-export" [] ["ministack"] ["advisory-publication", "advisory-last-good"]
             , Profile "integration/queue-sqs" ["npm"] ["ministack"] ["queue-payload", "queue-lease", "queue-redelivery"]
             , Profile "integration/server-shutdown" [] ["wai"] ["server-shutdown"]
@@ -61,6 +67,7 @@ integrationCatalogue =
         , catalogueGroups =
             [ awsComposition
             , pypiHttp
+            , mirrorViewHttp
             , egressHttp
             , originHttp
             , npmMetadataHttp
@@ -70,6 +77,8 @@ integrationCatalogue =
             , workerSqs
             , pilotS3
             , advisorySyncS3
+            , mirrorStateS3Internal
+            , mirrorStateS3
             , advisoryExportS3
             , queueSqs
             , serverShutdownHttp
@@ -95,6 +104,16 @@ pypiHttp =
     expectedGroup
         "integration/pypi"
         "serving"
+        ["metadata-read", "artifact-read", "serving"]
+        []
+        ["wai"]
+
+-- | Scheduling metadata for integration/mirror-view.
+mirrorViewHttp :: Group
+mirrorViewHttp =
+    expectedGroup
+        "integration/mirror-view"
+        "mirror-view"
         ["metadata-read", "artifact-read", "serving"]
         []
         ["wai"]
@@ -186,6 +205,26 @@ advisorySyncS3 =
         "integration/advisory-sync"
         "advisory-sync"
         ["advisory-sync"]
+        ["docker"]
+        ["ministack"]
+
+-- | Scheduling metadata for integration/mirror-state-s3-internal.
+mirrorStateS3Internal :: Group
+mirrorStateS3Internal =
+    expectedGroup
+        "integration/mirror-state-s3-internal"
+        "mirror-state-s3-internal"
+        ["mirror-state"]
+        ["docker"]
+        ["ministack"]
+
+-- | Scheduling metadata for integration/mirror-state-s3.
+mirrorStateS3 :: Group
+mirrorStateS3 =
+    expectedGroup
+        "integration/mirror-state-s3"
+        "mirror-state-s3"
+        ["mirror-state"]
         ["docker"]
         ["ministack"]
 

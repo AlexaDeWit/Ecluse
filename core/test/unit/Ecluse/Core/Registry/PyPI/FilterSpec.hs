@@ -48,7 +48,7 @@ import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, 
 import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
--- | Pin PyPI source selection, artifact rebasing, sidecar removal, and served bytes.
+-- | Pin PyPI source selection, artifact rebasing, sidecar declarations, and served bytes.
 spec :: Spec
 spec = do
     relaySpec
@@ -402,7 +402,7 @@ rebaseSpec = describe "where a served file points" $ do
 
 sidecarSpec :: Spec
 sidecarSpec = describe "the PEP 658 sidecar keys" $ do
-    for_ ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"] $ \key ->
+    for_ ["dist-info-metadata", "data-dist-info-metadata"] $ \key ->
         for_ [Bool True, Bool False, object ["sha256" .= validSha256]] $ \metadata ->
             it ("drops " <> show key <> " with value " <> show metadata <> " and omits unknown fields") $ do
                 let filename = "requests-2.34.2-py3-none-any.whl"
@@ -411,9 +411,9 @@ sidecarSpec = describe "the PEP 658 sidecar keys" $ do
                     expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] (simpleFile filename)
                 servedFiles (assembleOne [advertised]) `shouldBe` [expected]
 
-    it "drops all sidecar spellings when advertised together" $ do
+    it "keeps the canonical declaration and drops legacy aliases" $ do
         let entry = servedEntry (assembleOne allFiles) "requests-2.34.2-py3-none-any.whl"
-        (entry >>= KeyMap.lookup "core-metadata") `shouldBe` Nothing
+        (entry >>= KeyMap.lookup "core-metadata") `shouldBe` Just (object ["sha256" .= sidecarDigest])
         (entry >>= KeyMap.lookup "dist-info-metadata") `shouldBe` Nothing
         (entry >>= KeyMap.lookup "data-dist-info-metadata") `shouldBe` Nothing
 

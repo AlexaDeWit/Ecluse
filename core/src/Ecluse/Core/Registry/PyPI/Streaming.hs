@@ -26,7 +26,7 @@ import Ecluse.Core.Package.Hash (HashAlg (SRI), renderHashAlg)
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, fcVersionKey, readLatestCoordinate)
 
 -- | Select all files or one canonical release while counting every input file.
-data PyPIRead = FullRead | SelectedRead PackageName Text
+data PyPIRead = FullRead | SelectedRead PackageName Text | MirrorRead PackageName Text
     deriving stock (Eq, Show)
 
 -- | File events carry original positions, including items that yield no retained payload.
@@ -47,9 +47,9 @@ fileScalars = ["filename", "url", "requires-python", "size", "upload-time", "yan
 hashNames :: [Text]
 hashNames = [renderHashAlg alg | alg <- Universe.universe, alg /= SRI]
 
--- | One member event of a file object that a selected read inspects.
+-- | Scalar payloads wait until the filename survives. The reader still validates their tokens immediately.
 data SelectedFileEvent
-    = FileScalar Key.Key Value
+    = FileScalar Key.Key ~Value
     | HashesStart
     | HashesEnd
     | HashField Key.Key Value

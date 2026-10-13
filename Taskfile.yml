@@ -636,7 +636,7 @@ tasks:
       # Exit 1 means findings, which are report-only: the SARIF upload in
       # security.yml surfaces them. Only a scanner error (>1) fails the task. The maintained
       # json-stream's freeze has its own name, so the scanner is told to read it as a freeze.
-      - osv-scanner scan source --lockfile cabal.project.freeze --lockfile cabal.project.freeze:json-stream/upstream.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
+      - osv-scanner scan source --lockfile cabal.project.freeze --lockfile cabal.project.freeze:json-stream/upstream.freeze --lockfile cabal.project.freeze:vendor/lzma-managed/upstream.freeze --format sarif --output osv-freeze.sarif || test $? -eq 1
       - bash scripts/sarif-locations.sh osv-freeze.sarif cabal.project.freeze
   clean:
     desc: Remove build artifacts

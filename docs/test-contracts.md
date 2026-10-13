@@ -14,8 +14,8 @@ inventory, deletion, integrity, and recovery. These lists are normative for each
 Driver capability flags cannot shrink them. Independent obligations detect a family omitted
 from registration, while actual Hspec execution proves the registered laws ran.
 Each missing required family must fail by name, and unrelated families continue.
-PyPI runs the same full composition as npm. Missing write drivers produce named failed cases.
-These failures expose incomplete conformance without claiming production write support.
+npm and PyPI both run the full composition. The separate read-only foundation API remains partial
+and does not satisfy the full ecosystem contract.
 
 ## Metadata and serving
 
@@ -90,11 +90,11 @@ Each suffix expands to integration.serving.npm and integration.serving.pypi.
 | trusted-integrity | npm "drops a hashless trusted-private version from the listing by default" moves here, with PyPI counterpart |
 | artifact-integrity | PyPI exact distribution bytes and advertised sha256 checks move here, with npm counterpart. Require fixture bytes, advertised digest and digest of actual response bytes |
 | artifact-head | Successful artifact HEAD returns 200, an empty body and a positive Content-Length for both npm and PyPI. The PyPI instance is new. |
-| conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, ETag presence and equality, exact Content-Length, GET and HEAD 304 with empty bodies |
+| conditional-coherence | npm 200 HEAD and matching conditional HEAD examples move here. Require GET 200, HEAD 200, empty HEAD body, matching nonempty ETag, exact Content-Length, GET and HEAD 304 with empty bodies |
 
 Seven native duplicate example bodies are removed. Twenty shared serving examples run.
 Native npm tags, weaker/stronger floors, empty digests, retention, mutable cache representations, private authorisation, edge authorisation, origin failures and HEAD refusal cases remain.
-Native PyPI media type, multi-file identity, exact mount-local URLs, sidecar-key removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
+Native PyPI media type, multi-file identity, exact mount-local URLs, canonical sidecar advertisement and legacy-alias removal with adversarial retained-field controls, trailing slash, project-name canonicalization, content negotiation, helpful refusals, indexed-private credential routing, foreign-host refusal and mutable integrity-floor validators remain.
 Native deprecation/yank policy tests from the current baseline remain unchanged.
 Native OriginIntegrationSpec and TarballIntegrationSpec retain their assertions under fixed integration case IDs. All pipeline core tests remain unchanged.
 
@@ -133,8 +133,10 @@ Its independent Aeson readers inspect native wire version and artifact digest fi
 
 ### Full package-store subjects
 
-Verdaccio and CodeArtifact each run the same ten cases through `fullPackageStoreContract`.
-Each ID below has the prefix `package-store/<subject>/`, where `<subject>` is `verdaccio` or `codeartifact`.
+Verdaccio npm, CodeArtifact npm and CodeArtifact PyPI each run the same ten cases through `fullPackageStoreContract`.
+Each ID below has the prefix `package-store/<subject>/`.
+The subjects are `verdaccio`, `codeartifact` and `codeartifact-pypi`.
+Both CodeArtifact profiles use the existing `package-store-codeartifact` job and the `codeartifact` backend identity.
 The six family names come from an independent completion definition, so removing a family
 from the provider catalogue cannot make its absence pass.
 
@@ -147,17 +149,26 @@ from the provider catalogue cannot make its absence pass.
 | `integrity` | `bytes-and-digests` | Preserve all artifact bytes and their verified digests. |
 | `recovery` | `publish-retry`, `reopen`, `delete-retry` | Report failed work, finish a later attempt, and read completed work from a fresh handle. |
 
-Both subjects use production handles through deterministic service boundaries.
+All profiles use production handles through deterministic service boundaries.
+The PyPI profile uploads two wheels and one source distribution per version, with distinct consumer metadata.
+Its native fixture decodes submitted multipart fields and retains actual uploaded bytes.
+Independent format constants check the CodeArtifact requests.
+Fresh handles retain only the remote fixture state.
 The CodeArtifact result does not claim live AWS operations.
 The npm E2E subject supplies separate Verdaccio service evidence.
 
 All other original assertions remain in their native specs. This includes memory FIFO and overflow accounting, SQS visibility extension and active lease renewal, terminal redrive and dead-letter capture budget, unreachable endpoint classification, secret representation, refresh/expiry/cancellation policy, provider mint mapping, maintenance raw JSON preservation, pagination tokens, request credentials, per-version refusals, uncertain/unreached outcomes, upstream classification, cursor persistence and bounds, advisory HEAD/GET race, republication identity, EPSS policy, last-good age, cancellation, and the compile/publish/serve integration.
 
-Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. PyPI publication/mirroring and S3 package storage remain planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
+Consent gating, first-party protection, dry-run, cap charging and sweep recovery remain once in Core.Registry.SweepSpec and its generic sweep modules. These are caller policy, not backend guarantees. S3 package storage remains planned and unimplemented. CodeArtifact control-plane doubles remain unit evidence, not emulator proof.
 No automatic test verifies a real AWS token mint or the Datadog SaaS.
 Credential tests use local HTTP stubs. Telemetry tests use the local Collector and process logs.
 
 ### Negative controls and lifecycle
+
+CodeArtifact registration checks reject a missing PyPI profile before fixture acquisition.
+The npm and PyPI integrity controls alter successful production reads to change bytes, digests or consumer metadata.
+A PyPI control also removes distribution files.
+Each control requires an assertion failure and proves that the altered read ran.
 
 New Ecluse.Test.Contract.QueueSpec runs the same queuePayloadLaw with the real memory driver, an empty-delivery driver and a corrupted-payload driver. Wrong drivers must fail.
 
@@ -200,7 +211,8 @@ Provider coverage runs outside measured operations. New PyPI stress rows add sam
 
 The `ReadLoadFoundation` scope requires the 25 shared read and stress laws for npm and PyPI.
 `FullLoad` adds `MirrorWorker` as a separate requirement.
-PyPI currently reports `MissingLoadScenario MirrorWorker "worker-mirroring"` for that full scope.
+Active npm and PyPI fixtures and receipts use `FullLoad`, including their native worker rows.
+PyPI also requires its three managed-read comparisons.
 The new PyPI ceiling, herd, warm-under-cold and ramp rows use the shared law bodies.
 Their pass floors use three branch observations per pod shape, recorded in `bench/load/floors.json`.
 The existing floors and measured settings stay fixed.
@@ -225,8 +237,8 @@ An unheld or missing status produces diagnostic-only evidence and keeps the nati
 | Shared npm/PyPI proxy | Supported with one mount per ecosystem. Keep the existing mixed-client scenario and mount-local policy, credentials, jobs, and URLs. |
 | Memory queue with an in-process worker | Supported with destructive receive. Split roles over the memory queue remain boot refusals. |
 | SQS queue and S3 advisory transport | Supported with native lease, redelivery, and advisory transport checks. S3 advisory storage grants no package-store capability. |
-| PyPI publication and mirroring | Planned under [#765](https://github.com/AlexaDeWit/Ecluse/issues/765) and [#1133](https://github.com/AlexaDeWit/Ecluse/issues/1133). Every wheel and source distribution needs complete-version evidence when activated. |
-| Hosted incremental PyPI copying | The [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639) ruling permits physical partial uploads. Future contracts must prove a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
+| PyPI publication and mirroring | Supported. Keep native multipart publication, every supported wheel and source distribution, retained companions, and durable complete-version evidence. |
+| Hosted incremental PyPI copying | Supported under [#1639](https://github.com/AlexaDeWit/Ecluse/issues/1639). Contracts require a complete authorised served view or explicit unavailability, retry/restart, and offline completion. |
 | Filesystem or S3 package storage | Planned under [#1239](https://github.com/AlexaDeWit/Ecluse/issues/1239). Future contracts require committed completion visibility, interrupted writes, failed markers, restart, concurrent publication, and direct-read/listing invisibility. |
 | PyPI scope allow and install-time execution denial | Refused because the adapter blocks those rule types. Existing boot and capability tests keep the reasons explicit. |
 | RubyGems | No shipped adapter. Measurement registration rejects it as a supported provider. |
@@ -305,32 +317,27 @@ Its result does not claim live AWS service coverage.
 Read each suite's declaration list to see the contracts and concrete fixtures it runs.
 The three Cabal components are `ecluse-e2e-npm`, `ecluse-e2e-pypi`, and `ecluse-e2e-shared-system`.
 
-| Subject entrypoint | Composition | Active cases |
+| Subject entrypoint | Composition | Concrete coverage |
 |---|---|---|
-| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | 46: former serving and write cases, six moved telemetry cases, four shared installation laws, and three advisory laws. |
-| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | 43: the 17 existing cases and 26 named missing-capability cases below. |
-| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | 1: the mixed-client case. |
+| [Npm.hs](../test/e2e/Ecluse/E2E/Suites/Npm.hs) | `fullEcosystemContract npmDriver` | Serving, installation, advisory, mirroring, publication, Dredger and telemetry laws. |
+| [PyPI.hs](../test/e2e/Ecluse/E2E/Suites/PyPI.hs) | `fullEcosystemContract pypiDriver` | The same required families, with native wheel, sdist, multipart and CodeArtifact fixtures. |
+| [SharedSystem.hs](../test/e2e/Ecluse/E2E/Suites/SharedSystem.hs) | Cross-ecosystem and core capability cases | The mixed-client case. |
 
-The active plan registers 90 E2E cases in 18 groups, including 43 PyPI cases in nine groups.
-It retains all 49 prior observations and the 15 observations added by the green foundation.
-The historical green foundation ran 64 E2E cases before the 26 missing-capability cases were activated.
-Six telemetry IDs gain an `npm/` prefix, and the PyPI canonical-fix case moves to its native advisory group.
-The old count is not a completion target.
+Both ecosystem drivers bind concrete providers for every required family.
+PyPI mirror evidence includes whole-version copies, restart recovery, cross-target file selection and retained metadata.
+Cross-target checks prove selected files and installed contents. They do not execute foreign architecture code.
 
-The four missing groups register ordinary failed examples without fixture acquisition.
-All 17 existing PyPI cases still execute, including read telemetry and native extensions after missing write cases.
+The final functional declarations require 50 PyPI cases, 47 npm cases and one shared-system case.
+Unit, integration, residency, allocation, load and smoke evidence remain independent requirements.
 
-| Missing group | Required family | Case IDs |
-|---|---|---|
-| `pypi/missing/mirroring` | mirroring | `pypi/mirror/dependency-graph`, `pypi/mirror/module-exports`, `pypi/mirror/linked-executable`, `pypi/mirror/origin-evidence`, `pypi/mirror/installed-tree`, `pypi/mirror/empty-store-control` |
-| `pypi/missing/publication` | publication | `pypi/publish/publish-install`, `pypi/publish/scope-refusal` |
-| `pypi/missing/dredger` | dredger | `pypi/dredger/inventory`, `pypi/dredger/admission-only`, `pypi/dredger/denied-versions`, `pypi/dredger/dry-run`, `pypi/dredger/consent-refusal`, `pypi/dredger/first-party`, `pypi/dredger/two-stores`, `pypi/dredger/advisory-revocation`, `pypi/dredger/denied-install`, `pypi/dredger/delete-recovery`, `pypi/dredger/refill`, `pypi/dredger/missing-source`, `pypi/dredger/late-copy`, `pypi/dredger/old-worker`, `pypi/dredger/old-dredger-refill`, `pypi/dredger/old-dredger-loss` |
-| `pypi/missing/telemetry-write` | telemetry | `pypi/telemetry/domain-spans`, `pypi/telemetry/private-fetch` |
+Backend completion also requires the PyPI CodeArtifact full-store instance in the existing backend subject.
+Its deterministic control-plane tests do not establish live AWS service guarantees.
 
+Native cases also cover partial copies, public outages and exact installed files, including executable scripts.
 Publication maps the required `authorisation-refusal` law to `pypi/publish/scope-refusal`.
-The write telemetry group supplies the two missing laws in the required `telemetry` family.
-Failures distinguish an absent adapter publisher from an advertised publisher whose test driver is unbound.
-The completion audit reports these failed laws under `FullEcosystem`.
+The write telemetry group supplies `pypi/telemetry/domain-spans` and `pypi/telemetry/private-fetch`.
+Both completion audits use `FullEcosystem` and require actual execution reports.
+An absent or unbound driver still produces a named failure under the shared contract.
 
 [Fixtures/Contracts.hs](../test/e2e/Ecluse/E2E/Fixtures/Contracts.hs) owns concrete resource acquisition and declaration metadata.
 The shared `ecluse-e2e-test-support` library holds the fixture and provider modules.
@@ -348,7 +355,7 @@ Fixed suite lists bind their contract functions to concrete fixtures.
 | `Install.Advisory` | Three shared laws per ecosystem. PyPI canonical-fix stays native. | Exact expected artifact membership in native listings before remediation installation, advertised digests, exact denial text and remediation controls. |
 | `Install.Outage` | `pypi/install/outage` | Fresh proxy/client, public-route fault controls and request evidence. |
 | `Serving` | `pypi/install/sdist`, `npm/install/head-no-effect`, and paired successful artifact HEAD laws | Source distribution digest and exact bytes, HEAD size/body and no-mirror observation. The integration providers use the same artifact laws. |
-| `Mirror` | All six `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
+| `Mirror` | All seven `npm/mirror/*` cases and `npm/install/latest-preservation` | Fresh public/mirror installations, exact native graphs/values, binaries, locks, origin evidence and independent negative control. Native tag observations remain provider-owned. |
 | `Publication` | Both `npm/publish/*` cases | First-party identity, expected version present in destination inventory, successful fresh installation and out-of-scope publication refusal. |
 | `Telemetry` | The retained six npm cases and paired PyPI read/service laws | Scenario-correlated spans, metrics, readiness and logs from the local Collector. Datadog tag/log checks do not contact its SaaS. |
 | `Sweep.Identity` | Seven `npm/dredger/*` identity cases below | Independent mirror/cache inventories, consent, dry-run and first-party observations. |
@@ -453,7 +460,8 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 | Case ID | Original assertion |
 |---|---|
-| `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar |
+| `pypi/install/wheel` | installs the compatible non-yanked wheel with its advertised hash |
+| `pypi/install/metadata-companion` | resolves with a real pip request for the advertised companion, then completes the hash-checked install |
 | `pypi/install/yanked-pin` | relays the yank reason when pip installs an exact pin |
 | `pypi/install/yank-negative-control` | rejects the yank warning assertion for a release without the member |
 | `pypi/install/sdist` | serves the source distribution beside the wheel under the shipped policy |
@@ -487,10 +495,12 @@ The native modules retain scenario providers. The fixed suite declarations regis
 
 ## Integration registration and native traceability
 
-The integration runner registers 17 complete lifecycle groups and 254 unique examples.
+The integration runner registers 20 complete lifecycle groups and 346 unique examples.
 Of these, 23 execute canonical serving, queue, or advisory contracts.
-The other 231 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
+The other 323 retain their native assertions and receive fixed `integration/<group>/native-NNN` IDs.
 A parameterised example appends explicit fixture dimensions, such as HTTP status or first-party ownership.
+The PyPI cases retain source authority, companion integrity, credential confinement, and private mirror observations.
+Canonical `core-metadata` advertisement replaces its former omission control. The two legacy-alias controls remain.
 Descriptions never determine the IDs. Keep the numeric ID when changing a description or reordering examples.
 
 The pure expected catalogue and independent obligation snapshot live under `test/contracts/Ecluse/Test/Contract/Integration/`.
@@ -509,16 +519,19 @@ The old wrapper remains as a native source reference, but the runner does not sc
 | Group | Native example IDs | Canonical examples | Native module |
 |---|---|---|---|
 | `integration/aws-composition` | `native-001` to `native-002` (2) | None | `Ecluse.AwsEndToEndIntegrationSpec` |
-| `integration/pypi` | `native-001` to `native-021` (27) | 10 serving, including `artifact-head` | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/pypi` | `native-001` to `native-042` (65) | 10 serving | `Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec` |
+| `integration/mirror-view` | `native-001` to `native-018` (27) | None | `Ecluse.Core.Server.MirrorViewIntegrationSpec` |
 | `integration/egress` | `native-001` to `native-003` (3) | None | `Ecluse.Core.Security.EgressIntegrationSpec` |
 | `integration/origin` | `native-001` to `native-017` (29) | None | `Ecluse.Core.Server.Pipeline.OriginIntegrationSpec` |
-| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving, including `artifact-head` | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
-| `integration/publication` | `native-001` to `native-019` (25) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
+| `integration/npm-metadata` | `native-001` to `native-035` (37) | 10 serving | `Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec` |
+| `integration/publication` | npm `native-001` to `native-019` and 23 PyPI cases (48) | None | `Ecluse.Core.Server.Pipeline.PublishIntegrationSpec` |
 | `integration/pipeline-faults` | `native-001` to `native-019` (19) | None | `Ecluse.Core.Server.Pipeline.SharedIntegrationSpec` |
 | `integration/npm-artifact` | `native-001` to `native-043` (51) | None | `Ecluse.Core.Server.Pipeline.TarballIntegrationSpec` |
-| `integration/worker` | `native-001` to `native-008` (8) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
+| `integration/worker` | `native-001` to `native-009` (9) | None | `Ecluse.Core.Worker.LoopIntegrationSpec` |
 | `integration/pilot` | `native-001` to `native-003` (8) | None | `Ecluse.PilotIntegrationSpec` |
 | `integration/advisory-sync` | `native-001` to `native-001` (1) | None | `Ecluse.Runtime.Cve.SyncIntegrationSpec` |
+| `integration/mirror-state-s3-internal` | `native-001` (1) | None | `Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec` |
+| `integration/mirror-state-s3` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.Mirror.State.S3IntegrationSpec` |
 | `integration/advisory-export` | `native-001` to `native-002` (2) | 1 advisory | `Ecluse.Runtime.Pilot.ExportIntegrationSpec` |
 | `integration/queue-sqs` | `native-001` to `native-006` (6) | 2 queue | `Ecluse.Runtime.Queue.SqsIntegrationSpec` |
 | `integration/server-shutdown` | `native-001` to `native-002` (2) | None | `Ecluse.Runtime.ServerIntegrationSpec` |

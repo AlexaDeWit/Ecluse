@@ -92,8 +92,9 @@ limits:
   # concurrency and the metadata memory budget. Reads fail closed past this limit.
   # A positive explicit value stays exact. Boot and check-config warn that accepting
   # a body does not guarantee its materialisation fits the heap.
-  # maxRequestBytes bounds a publish body. The memory plan sizes it from the heap,
-  # and the server refuses a larger body with 413.
+  # maxRequestBytes is the inherited publish-body cap. The memory plan computes it
+  # between 25 and 100 MiB when unset. A mount may set its own maxRequestBytes.
+  # The aggregate admission covers the largest active cap. Unsafe overrides refuse boot.
   # maxResponseBytes: 134217728
   # maxRequestBytes: 26214400
   # The mirror worker's per-artifact fetch cap. The memory plan computes this one too,
@@ -134,6 +135,11 @@ integrity:
 # at boot.
 # egress:
 #   additionalBlockedRanges: "100.64.0.0/10,198.18.0.0/15"
+
+# Durable expected PyPI files and preserved read metadata, separate from advisory storage.
+# Requires conditional creates/replacements and strong reads. Referenced objects must not expire.
+mirrorState:
+  url: null # s3://bucket/prefix, required when a PyPI mirror target is configured.
 
 advisories:
   # How often the proxy polls object storage for a fresh advisory database (a cheap
@@ -427,12 +433,32 @@ mounts:
       # trust-our-scope:
       #   type: AllowScope
       #   scope: acme            # the scope without its leading @
-  # A pypi mount serves reads: the PEP 691 Simple index and the distribution files
-  # under it. It publishes nothing, so a publicationTarget or a mirrorTarget on it
-  # refuses the boot naming the ecosystem and the key.
+  # A pypi mount serves the PEP 691 Simple index, distributions and declared companions.
+  # Mirroring and multipart publication are opt-in. Native upload URLs are explicit.
   # With advisories.url set, this mount reads pypi-osv-schema5.db under that prefix.
   # Publish it with ecluse pilot compile --ecosystem pypi --out DIR --upload.
   pypi:
+    # Optional per-mount upload body cap, overriding the resolved limits.maxRequestBytes.
+    # Unset, it inherits the computed/configured global limit. Exceeding it returns 413.
+    # maxRequestBytes: 52428800
+    # The read root and native upload endpoint are distinct. The state store above is required.
+    # Generic PyPI write credentials declare their Basic username. CodeArtifact binds aws.
+    # CodeArtifact reads use /pypi/{repository}/. Its uploadUrl accepts that root or
+    # /pypi/{repository}/legacy/ for the same domain, account, region and repository.
+    # mirrorTarget:
+    #   registry:
+    #     url: https://mirror.internal/
+    #     uploadUrl: https://mirror.internal/legacy/
+    #     username: publisher
+    #     token:
+    # Client publication uses this exact native endpoint and preserves multipart framing.
+    # A static token requires server.authToken and an explicit generic username.
+    # Without a static token, the complete caller Basic pair passes through unchanged.
+    # publicationTarget:
+    #   registry:
+    #     url: https://first-party.internal/legacy/
+    #     username: publisher
+    #     token:
     # pypi blocks these rule types at boot, even through shared rules:
     # DenyInstallTimeExecution: Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release.
     # DenyIfDeprecated: The PyPI adapter supplies no deprecation flag.

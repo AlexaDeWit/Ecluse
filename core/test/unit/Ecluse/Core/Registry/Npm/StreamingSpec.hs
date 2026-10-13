@@ -33,7 +33,7 @@ import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, f
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, maxNestingDepth), defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream)
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
@@ -41,6 +41,7 @@ import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
+import Ecluse.Test.Registry.Publish (checkedNpmUpload)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
@@ -95,10 +96,11 @@ spec = describe "npmFields" $ do
         sharesString "1.0.0" (versionKeys <> mapMaybe (fieldAt "version") (releases compact)) `shouldReturn` True
 
     it "mirrors the same supported fields and source author pointer" $ do
-        (_, compact) <- expectRight (projectNpmManifest defaultLimits name body)
-        let version = mkVersion Npm "1.0.0"
-        selected <- maybe (fail "missing selected metadata") pure (selectNpmVersionDoc version (fst npmCached compact))
-        mirroredBytes <- expectRight (npmPublishDocument name (PublishPlan version version selected) "thing-1.0.0.tgz" Nothing Nothing "tarball bytes")
+        let dist = object ["tarball" .= ("https://registry.npmjs.org/thing/-/thing-1.0.0.tgz" :: Text), "shasum" .= validSha1]
+            source = object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("dist", dist)] release]]
+        selected <- expectRight (projectNpmVersion defaultLimits name (mkVersion Npm "1.0.0") (toStrict (encode source)))
+        doc <- maybe (fail "missing selected version") pure (vrVersion selected)
+        mirroredBytes <- mirrorSelected (mkVersion Npm "1.0.0") doc
         mirrored <- expectRight (eitherDecodeStrict mirroredBytes)
         let releaseDoc = fieldAt "versions" mirrored >>= fieldAt "1.0.0"
         (releaseDoc >>= fieldAt "author") `shouldBe` Just (String "See https://registry.npmjs.org/thing")
@@ -120,7 +122,8 @@ spec = describe "npmFields" $ do
         let served = assembleMergedPackument "https://proxy.example/npm" (Map.singleton 0 (Snapshot digest compact)) plan compact
             servedDist = withKeys [("tarball", String "https://proxy.example/npm/thing/-/thing-1.0.0.tgz")] contractDist
         (fieldAt "versions" served >>= fieldAt "1.0.0") `shouldBe` Just (withKeys [("dist", servedDist)] contractExpected)
-        mirroredBytes <- expectRight (npmPublishDocument name (PublishPlan version version selectedRaw) "thing-1.0.0.tgz" (Just validSha512Sri) (Just validSha1) "tarball bytes")
+        doc <- maybe (fail "missing selected version") pure (vrVersion selected)
+        mirroredBytes <- mirrorSelected version doc
         mirrored <- expectRight (eitherDecodeStrict mirroredBytes)
         let mirroredDist = object ["tarball" .= ("thing-1.0.0.tgz" :: Text), "integrity" .= validSha512Sri, "shasum" .= validSha1, "fileCount" .= (2 :: Int), "unpackedSize" .= (123 :: Int)]
             mirroredExpected = case withKeys [("dist", mirroredDist)] contractExpected of
@@ -549,3 +552,8 @@ releaseDepthCases =
         <> [ (Key.toText field <> " optional leaf", 6, object [field .= object ["dep" .= object ["optional" .= True]]])
            | field <- ["dependenciesMeta", "peerDependenciesMeta"]
            ]
+
+mirrorSelected :: Version -> VersionDoc -> IO ByteString
+mirrorSelected version doc = do
+    upload <- expectRight (checkedNpmUpload doc "")
+    pure (npmPublishDocument (PublishPlan version) upload)

@@ -12,7 +12,7 @@ import Data.JsonStream.Lexer (Cursor)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmPacked)
-import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
+import Ecluse.Core.Registry.Exchange (formThen)
 import Ecluse.Core.Registry.Json.Walk (Steps)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded), VersionRead)
@@ -23,6 +23,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken),
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Registry.JsonStream (testTable, walkJsonChunks, walkWritingChunks)
+import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 
 -- | Feed held bytes in bounded pieces without adding a second transport body ceiling.
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
@@ -70,5 +71,5 @@ fetchMetadataFormBounded ::
 fetchMetadataFormBounded origin form name =
     formThen
         FetchUrlUnformable
-        (boundedFetch (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+        (fetchTestBody (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (metadataRequest (originBaseUrl origin) (ocToken origin) form name)

@@ -11,6 +11,7 @@ module Ecluse.E2E.Fixtures.Advisories (
     npmAdvisoryId,
     pypiAdvisoryId,
     buildAdvisoryFixtures,
+    ecosystemAdvisory,
 ) where
 
 import Data.Aeson (encode, object, (.=))
@@ -68,6 +69,7 @@ buildAdvisoryFixtures root = do
         createDirectoryIfMissing True (takeDirectory path)
         writeFileLBS path bytes
 
+-- | A scored native advisory with one fixed boundary and no feed-specific decoration.
 ecosystemAdvisory :: Ecosystem -> Text -> Text -> Text -> LByteString
 ecosystemAdvisory ecosystem advisory name fixed =
     encode $

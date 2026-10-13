@@ -5,12 +5,12 @@
 -- | Supported-field extraction preserves source positions across arbitrary input chunks.
 module Ecluse.Core.Registry.PyPI.StreamingSpec (spec) where
 
-import Data.Aeson (Value (Array, Null, Number, String), object, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, String), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Core.Package (Artifact (artFilename, artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashValue)
+import Ecluse.Core.Package (Artifact (artCoreMetadata, artFilename, artHashes), CoreMetadata (..), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), hashValue)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
@@ -59,12 +59,22 @@ corpusRead =
 
 retainedSpec :: Spec
 retainedSpec = describe "supported PyPI fields" $ do
-    it "omits unknown fields and sidecars before retaining the file" $ do
-        let file = withFileKeys [(key, object ["unneeded" .= replicate 100 (String "payload")]) | key <- ["core-metadata", "dist-info-metadata", "data-dist-info-metadata", "unknown"]] (simpleFile filename)
+    it "omits unknown fields and legacy sidecars before retaining the file" $ do
+        let file = withFileKeys [(key, object ["unneeded" .= replicate 100 (String "payload")]) | key <- ["dist-info-metadata", "data-dist-info-metadata", "unknown"]] (simpleFile filename)
             body = encodeStrict (simpleIndexWith "requests" ["unknown" .= file] [file])
         (_, document) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
         map snd (simpleFiles document) `shouldBe` [simpleFile filename]
         fieldAt "unknown" (simpleValue document) `shouldBe` Nothing
+
+    for_ [(Bool True, MetadataAvailable True), (Bool False, MetadataAvailable False), (object [], MetadataDigests mempty), (object ["unknown" .= ("RawDigest" :: Text)], MetadataDigests (Map.singleton "unknown" "RawDigest"))] $ \(wire, expected) ->
+        it ("retains canonical declarations in full and selected reads: " <> show wire) $
+            for_ [FullRead, selected] $ \mode -> do
+                let file = withFileKeys [("core-metadata", wire)] (simpleFile filename)
+                    body = encodeStrict (simpleIndex "requests" [file])
+                streamed <- expectRight (projectPyPIChunks defaultLimits requestsName mode [body])
+                (info, document) <- expectRight (projectPyPIStream defaultLimits requestsName streamed)
+                [artCoreMetadata artifact | details <- Map.elems (infoVersions info), artifact <- toList (pkgArtifacts details)] `shouldBe` [Just expected]
+                map (fieldAt "core-metadata" . snd) (simpleFiles document) `shouldBe` [Just wire]
 
     it "shares field names, known digest names and repeated strings across files, and nothing between reads" $ do
         let file other = withFileKeys [("hashes", object ["sha256" .= validSha256, "custom" .= ("digest" :: Text)])] (simpleFile other)

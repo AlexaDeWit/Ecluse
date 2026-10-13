@@ -78,6 +78,33 @@ flag (`-with-rtsopts=-T`) in its `ghc-options`. It runs outside coverage too. No
 WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `task check` includes
 it via `cabal-checks`.
 
+Managed state has an isolated retained-graph check in `Mirror.State.WeightResidencySpec`.
+Each child decodes the unchanged 1000-version record, consumes its full derived rendering,
+and retains only the record through a stable pointer. This forces expected descriptors,
+opaque parsed versions, verified hashes, companion references, and source fields independently
+of the weigher. Post-GC live growth must fit the record charge alone. Release uses the same
+16 KiB and one-tenth limits as the other retained probes. Smaller adversarial controls cover
+repeated descriptors and hashes, verified identities, companions, long versions, and text backing aliases.
+These controls extend the decoded graph directly where a wire round trip would remove aliases.
+The cold, warm, and replacement probes retain their separate combined lifetime checks.
+The state-only charge is not an admission allowance. Update, worker, encoding and inventory
+reservations retain their conservative selected-release accounting.
+
+Archive decoder probes run on the pinned Linux/glibc runtime. Hosted residency proof runs on
+arm64. The test-only allocator wrapper and its runtime results remain unverified on amd64.
+After four warmups, each gzip, bzip2 and XZ case performs 64 early exits through return, refusal or
+cancellation without a GC. VM growth and allocator-retained growth must each stay within 1 MiB.
+The Haskell control allocates at least 16 MiB while meeting both gates. Eight simultaneously open
+XZ decoders must exceed both gates before their scopes close.
+
+The allocator counter adds glibc `mallinfo2` fields `uordblks` and `hblkhd` across all arenas and
+allocator mmap regions. It includes freed thread-cache chunks and allocator overhead, so it does
+not count exact live decoder ownership. ByteString payloads use the GHC heap. The Haskell control
+checks that separation on the hosted target. Unsupported allocator platforms fail the probe
+explicitly. The report retains RSS as diagnostics because freed pages can remain resident and
+RSS growth does not track Haskell allocation bytes. Each row names its mode and includes the
+allocator fields before and after the interval. No allocator tunables or caches change.
+
 Metadata probes use a fresh child process for each corpus package and retained shape.
 They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
 The complete corpus must include a capture above the previous 3,687,514-byte maximum.
@@ -166,9 +193,27 @@ or derived rendering, so they do not establish the same fully forced retained en
 
 ### Listing peaks
 
-The [qualified packed integration](#qualified-packed-integration) sets PyPI's full-read charge to 3.2 and its read limit to 2.75.
-npm keeps its full-read charge of 1.1. Output charges remain 2.0 for npm and 1.6 for PyPI.
-The factor-update candidate still needs all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
+PyPI's full-read charge is 3.5 and its read limit is 3.25 after retaining canonical sidecars.
+npm keeps its full-read charge of 1.1. Output charges are 2.0 for npm and 1.9 for PyPI.
+
+[Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296)
+measured all 84 listing shapes and 48 retained probes at actual checkout `372e02a14222e65128bd6cae284e335ca4e41b46`.
+That checkout merges source `9d78a8a1f79aac63fe3e401ea9d0ab22cd19ee0e` into base `9b20b528d03a7958cc6471a542db2a516db76732`.
+
+Boto3's single listing reaches 6,157,344 read bytes above baseline from 2,206,044 source bytes, a ratio of 2.791124746.
+It sets both qualifying read maxima: realistic listings and all shapes, each restricted to at least one 1 MiB source step.
+The 25% margin rounded up to a tenth gives 3.5. The all-shape figure rounds up to 2.8, so the read charge is 3.5.
+The single-read 8% margin rounded up to a quarter gives the 3.25 read regression limit.
+
+All retained envelopes and the 1,024-byte forcing allowance pass in that run and remain unchanged.
+The [earlier packed qualification](#qualified-packed-integration) retains its original 3.2 charge and 2.75 limit as historical evidence.
+
+Retaining canonical PyPI sidecars raises the measured output working set. At checkout `372e02a14222e65128bd6cae284e335ca4e41b46`,
+NumPy's disjoint merge reaches 1.476585 per basis byte, the largest qualifying realistic shape among all 84 listing rows.
+The documented 25% margin rounded up to a tenth gives 1.9. The 8% margin rounded up to a quarter gives a 1.75 regression limit.
+The same run's 48 retained probes include a maximum twice-encoded/source ratio of 1.753574 for requests, within the charge.
+Heavy NumPy's largest output ratio is 1.734852, also within the charge. The source is [Build job 114592183296](https://github.com/AlexaDeWit/Ecluse/actions/runs/38180562637/job/114592183296).
+A representation change requires all 84 listing shapes, 48 retained probes, cold reads, renders and default loads.
 The historical snapshots below retain their original measurements and limits.
 
 `MemoryModelResidencySpec` also measures the most live data a listing holds, which the memory gate's
@@ -238,9 +283,9 @@ The checks compare bytes with each ecosystem's charges:
 - The basis of an identical merge is one document and that of a disjoint merge is both. That of an
   overlapping merge is less than both, and that of a publish-order or heavy-base merge is at least
   the capture and less than both.
-- From one step up, the tier applies read regression limits of 1.0 for npm and 2.75 for PyPI.
-  The output limits remain 1.75 for npm and 1.5 for PyPI. Every limit remains below its charge.
-  The factor-update candidate requires qualification against the same actual main base as its measurements.
+- From one step up, the tier applies read regression limits of 1.0 for npm and 3.25 for PyPI.
+  The output limits are 1.75 for both npm and PyPI. Every limit remains below its charge.
+  Measurements must use the same main base as the candidate.
 - Every single-source npm listing's held entry stays smaller than the source it was read from.
   Each residency record's `residencyEntryBelowSource` selects this check. PyPI's packed files and typed view
   still outgrow the source, so that boundary remains npm-only.
@@ -606,7 +651,8 @@ config parsing, the denial span-attribute mapping, the JSONL scribe, and the met
 The only tier that assembles the whole system through the real composition root and drives it with
 the real `npm` and `pip` clients. It runs the default OCI image built by `nix build .#dockerImage`.
 Each profile adds the required nginx upstreams, Verdaccio store, queue, and advisory services on a Docker network.
-PyPI read profiles need no package-write store. npm write profiles retain their declared store and queue capabilities.
+PyPI read profiles need no package-write store. Both full ecosystem profiles require their native write stores, queues and concrete providers.
+PyPI write profiles also require durable mirror state and declared companions.
 The cases assert client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
@@ -644,7 +690,10 @@ cases belong to no single ecosystem sits beside the directories, and there are t
 | `Ecluse.E2E.Npm.PublishE2ESpec` | First-party publication with a publication target configured. |
 | `Ecluse.E2E.Npm.DredgerE2ESpec` | The Dredger groups described below. |
 | `Ecluse.E2E.PyPI.InstallE2ESpec` | The `pip` install from the `pypi` mount, and its failure while both public upstreams are down. |
-| `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | Pilot compiles and uploads PyPI advisories, the PyPI slot syncs them, and pip observes CVE and EPSS denial of an old affected release. The exact matching fix bypasses quarantine, a remediation-disabled control refuses it, and a differently spelled raw fix stays quarantined. Advisory `Flask` matches served `flask`. |
+| `Ecluse.E2E.PyPI.MirrorInstallE2ESpec` | Complete-version mirroring, durable recovery, companions and cross-target file selection. |
+| `Ecluse.E2E.PyPI.PublishE2ESpec` | Native multipart first-party publication and refusal controls. |
+| `Ecluse.E2E.PyPI.DredgerE2ESpec` | CodeArtifact inventory, consent, advisory revocation and recovery with deterministic control-plane responses. |
+| `Ecluse.E2E.PyPI.AdvisoriesE2ESpec` | Pilot compiles and uploads PyPI advisories, the PyPI slot syncs them, and pip observes CVE and EPSS denial of an old affected release. The exact matching fix bypasses quarantine, a remediation-disabled control refuses it, and a canonicalised exact fix also bypasses quarantine. Advisory `Flask` matches served `flask`. |
 | `Ecluse.E2E.TelemetryE2ESpec` | Telemetry export under each configuration. An `npm` client supplies the traffic, and the mirror cases require a mirror target. |
 | `Ecluse.E2E.MixedEcosystemE2ESpec` | Both clients use one proxy in turn. |
 
@@ -700,9 +749,10 @@ the same outage. The tree comparison detects differences in installed paths, fil
 executable permissions, link targets, and every byte outside those lockfile source URL values.
 It detects metadata loss only when that loss changes this fixture's installed tree or lockfile.
 It does not prove that every metadata field survives, even when the fixture declares that field.
-Every ecosystem with a mirror write owes this scenario. PyPI has no mirror write, so it has no
-counterpart. Its one case under the outage is the failing `pip` install of a mount with no private
-store, where the stub's log shows that the PyPI public route answered nothing.
+Every ecosystem with a mirror write owes this scenario. PyPI compares exact installed package and
+new script bytes and executable permissions across public and hot-mirror installs. Its full contract
+also covers a second target architecture, complete wheel and sdist inventory, interrupted copying,
+restart, and public outage. A mount without private storage retains its failing outage control.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,
@@ -747,8 +797,8 @@ served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLI
 `npm` cannot install the path-relative form.
 
 The [fixed E2E entrypoints](test-contracts.md#fixed-e2e-entrypoints) list each contract and its named concrete fixture.
-The active plan registers 90 E2E cases. It retains all 49 prior observations, including the Dredger cases.
-It adds 15 green-foundation observations and 26 named PyPI missing-capability cases.
+Both ecosystems run the full contract with concrete serving, mirroring, publication, Dredger and telemetry providers.
+Native cases retain protocol-specific observations beside the shared laws.
 Their fixture and provider modules share the `ecluse-e2e-test-support` library.
 Metadata checks declarations and reports. It does not choose test combinations at runtime.
 
@@ -1185,8 +1235,13 @@ merge: a breach turns only its own scheduled or dispatched run red.
 | Concurrency-one pass | The same count, for each scenario that joins that pass |
 | `npm/ramp`, `pypi/ramp` | Every step. The one floor comes from the lowest step of the calibration runs, and each step must reach it |
 | `npm/warm-under-cold`, `pypi/warm-under-cold` | Both loads, the measured one and the concurrent one |
-| `npm/worker-mirroring` | The jobs the worker completes, under `unlimited` only, the one shape that runs it |
+| `npm/worker-mirroring`, `pypi/worker-mirroring` | Complete jobs under `unlimited`, the only shape that runs the in-process worker |
 | The request-pattern replays | A finite trace whose count is the same every night, so the floor is half of it |
+
+The PyPI worker row runs in process under `unlimited`. Its admission capacity is `maxBound(Int) / 2`,
+not a constrained worker pod. The three managed-read HTTP rows retain constrained-pod coverage.
+The worker payload setting controls uncompressed bytes per archive file. Its timer excludes fixture
+reset, queue setup and assertions, while the scenario duration includes that work.
 
 The check fails closed, and it covers every scenario the zero-success check covers:
 
@@ -1547,8 +1602,8 @@ requires reads, writes, inventory, deletion, integrity, and recovery for every b
 An incomplete driver cannot reduce either required list. Discovery is pure, and missing families
 produce named failures without stopping unrelated contracts. A passing full composition defines
 completion only when its lower-tier obligations and execution reports also pass.
-PyPI runs the full composition and completion audit. Its missing write drivers produce 26 named failed cases.
-All 17 existing PyPI cases still execute. These failures keep the E2E aggregate and terminal CI gate red.
+npm and PyPI both register the full ecosystem composition. The separately named read-only foundation
+remains an API for incomplete providers, not either ecosystem's active completion claim.
 CI uploads actual plan and report pairs from the instrumented core unit, runtime unit and
 integration legs. Each ecosystem job downloads all three pairs and audits them with its own E2E report.
 All four tiers share the workflow run and attempt identity and use `arm64` as the architecture name.
@@ -1560,7 +1615,8 @@ Both the benchmark and allocation harness call that loader.
 The load harness composes 25 shared read and stress laws with `readLoadContract` for each ecosystem.
 `requiredLoadLaws` stays independent of each fixture's actual scenario names.
 `loadCoverageGaps` names a missing or duplicate law before measured work begins.
-`FullLoad` also requires worker mirroring, which PyPI does not yet provide.
+`FullLoad` also requires worker mirroring, which both npm and PyPI fixtures provide.
+Worker mirroring applies only to unlimited runs.
 Existing residency registration checks still require captures, positive limits, and every calibrated shape.
 The shared retention contract changes neither 2,000/16,000 repetition counts nor the strict live-byte allowance.
 
@@ -1583,13 +1639,13 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | Walk parity, gating in `ecluse-core-unit` | `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/ReaderSpec.hs`, a differential property over bodies from `Ecluse.Test.Registry.JsonBytes` | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/ReaderSpec.hs) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/ReaderSpec.hs), against the references that [One pattern for every ecosystem](#one-pattern-for-every-ecosystem) names. |
 | Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
 | At least one real-client install, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
-| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. PyPI's counterpart waits for the mirror write of [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). `withPublicUpstreamsDown` already takes the PyPI public upstream down. |
+| For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. [PyPI](../test/e2e/Ecluse/E2E/PyPI/MirrorInstallE2ESpec.hs) checks the complete version, public outage, restart, and file selection for a second target architecture. These target checks prove installed contents, not foreign-code execution. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
 | Metadata residency captures and limits, gating in `ecluse-residency` | Add one `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), with captures, retained-heap envelopes, peak limits, the entry bound and each probe hook. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | The tier checks every ecosystem with a registered adapter for a residency record, non-empty captures, positive peak limits and an envelope for each retained shape. Each record supplies the probe hooks and listing checks without generic ecosystem defaults. The same lookup excludes ecosystems without adapters, including RubyGems. Each regression limit stays below its adapter charge. The complete corpus includes a capture above 3,687,514 bytes. [Listing peaks](#listing-peaks) holds the calibration. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Ecluse/BenchLoad/Scenarios.hs`, with a [success floor](#success-floors) for each scenario in `bench/load/floors.json` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Ecluse/BenchLoad/Scenarios.hs`, with a [success floor](#success-floors) for each scenario in `bench/load/floors.json` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. Each fixture gives `Ecluse.BenchLoad.PrivateCopy` its corpus, stub, listing URL and `Ecluse.Test.Corpus.Subset` cut for the private-copy scenarios. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring measures four native archive files per job through verified extraction, upload, durable state and final completion proof. |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).

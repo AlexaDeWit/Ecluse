@@ -27,7 +27,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-00000000010a
     appliesToModel: true
   - id: as-least-privilege-grants
-    prose: The operator gives each role its own identity with the least privilege the role needs, and Écluse cannot check these grants. Under `codeArtifact` the mirror worker's role policy allows reads of the mirror repository and package publication only, so the policy sets the scope of the minted token. Under `registry` and `verdaccio` the worker's static token belongs to a dedicated user whose package rights cover the mirror store only. This scoping is defence in depth behind Écluse's endpoint checks. The Dredger's delete grant covers the mirror repository and, where the operator enables cleanup of the private read repository, package-scoped deletion there, with its read and consent permissions granted separately and no permission over the publication target. The Dredger guide documents these permissions. A role-minted credential is preferred over a static secret, and on a store with no access control of its own the Dredger's account is a dedicated user whose package rights cover the mirror store only. Pilot holds `s3:PutObject` on the advisory prefix, the proxy holds `s3:GetObject` only, and the advisory bucket is private. The publisher's credential for the publication target is least privilege too.
+    prose: The operator gives each role its own identity with the least privilege the role needs, and Écluse cannot check these grants. Under `codeArtifact` the mirror worker's role policy allows reads of the mirror repository and package publication only, so the policy sets the scope of the minted token. Under `registry` and `verdaccio` the worker's static token belongs to a dedicated user whose package rights cover the mirror store only. This scoping is defence in depth behind Écluse's endpoint checks. The Dredger's delete grant covers the mirror repository and, where the operator enables cleanup of the private read repository, package-scoped deletion there, with its read and consent permissions granted separately and no permission over the publication target. The Dredger guide documents these permissions. A role-minted credential is preferred over a static secret, and on a store with no access control of its own the Dredger's account is a dedicated user whose package rights cover the mirror store only. Pilot holds `s3:PutObject` on the advisory prefix, the proxy holds `s3:GetObject` only, and the advisory bucket is private. The publisher's credential for the publication target is least privilege too. The independent mirror-state prefix permits proxy reads and prefix listing, plus worker conditional writes. It grants the worker no deletion and has no expiry policy for referenced records or companions.
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000106
@@ -37,6 +37,12 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-000000000111
       - c12bddfe-96d4-47c6-92e0-a961abadb5b2
       - 987569ac-0a3a-4b7f-8b0a-7b67ee234097
+    appliesToModel: false
+  - id: as-mirror-state-durability
+    prose: The configured mirror-state store provides strong reads and conditional create and replace operations. The operator preserves expected records and referenced companions across process restarts, without expiry or deletion by another role. Confirmed absence means an unmanaged project, so loss of previously committed history is outside this storage contract.
+    status: valid
+    threats:
+      - 0ec10e5e-0000-4000-8000-000000000107
     appliesToModel: false
   - id: as-queue-access-control
     prose: The mirror queue sits inside the operator's trust boundary and is isolated at the infrastructure level. A job is unauthenticated data that tells the worker to fetch and publish, so the right to send a job is the right to write the trusted store. Écluse relies on the queue's access control for message authenticity, not on signatures, which is the usual pattern for an internal queue with one producer and one consumer. The queue grant lets the serve role send and lets the worker receive and acknowledge. With that grant in place the admission gate is the one sender, so the trusted store holds what the gate admits.
@@ -172,6 +178,7 @@ diagrams:
           - 0ec10e5e-0000-4000-8000-000000000034
           - f1646094-9885-422a-b7e7-7888c72905ef
           - c8455307-cef2-4843-a821-ff90db9643d2
+          - 4c9f308e-7725-42f7-b7d1-8f131a53c5a8
           - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
         crossingFlows:
           - 0ec10e5e-0000-4000-8000-000000000040
@@ -231,7 +238,7 @@ diagrams:
         name: |-
           Package client
           (developer / CI)
-        description: The caller. It presents its own CodeArtifact bearer token. The operator's access edge authenticates it to the proxy, not Écluse.
+        description: The caller. It presents its own registry credential, as npm Bearer or a PyPI Basic pair. The operator's access edge authenticates it to the proxy, not Écluse.
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -271,7 +278,7 @@ diagrams:
       - kind: process
         id: 0ec10e5e-0000-4000-8000-000000000021
         name: Écluse mirror worker
-        description: The demand-driven asynchronous worker. It polls the mirror queue, back-fills the approved artifact from the upstream registry, and verifies the bytes against dist.integrity. It then publishes to the mirror store with Écluse's own minted write token.
+        description: The demand-driven worker copies every supported file of an admitted version. It verifies exact source bytes, records expected PyPI identities and read data before upload, and prepares bounded native metadata without executing it. Current file and companion proof precedes completion acknowledgement.
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -353,7 +360,7 @@ diagrams:
       - kind: flow
         id: 0ec10e5e-0000-4000-8000-000000000040
         name: install and publish (caller credential)
-        description: The caller's request, carrying its own CodeArtifact bearer token. It crosses the operator access edge.
+        description: The caller's request, carrying its own native registry credential. It crosses the operator access edge.
         outOfScope: false
         reasonOutOfScope: ""
         protocol: HTTPS
@@ -531,6 +538,23 @@ diagrams:
           width: 170
           height: 110
         providesAuthentication: false
+      - kind: store
+        id: 4c9f308e-7725-42f7-b7d1-8f131a53c5a8
+        name: Mirror state (S3-compatible)
+        description: Monotonic expected file identities, preserved source fields and declared companions. The configured target partitions project keys. Only the worker conditionally extends records, and the proxy validates them after private authorisation. No mirror role deletes this history.
+        outOfScope: false
+        reasonOutOfScope: ""
+        position:
+          x: 950
+          y: 560
+        size:
+          width: 180
+          height: 110
+        isALog: false
+        isEncrypted: false
+        isSigned: false
+        storesCredentials: false
+        storesInventory: true
       - kind: store
         id: c8455307-cef2-4843-a821-ff90db9643d2
         name: Advisory store (S3)
@@ -768,6 +792,42 @@ diagrams:
           element: 0ec10e5e-0000-4000-8000-000000000021
         waypoints: []
         bidirectional: false
+      - kind: flow
+        id: 9f3d5702-9eb6-4a45-899b-6f50127b1562
+        name: conditional expected inventory and companion storage
+        description: The worker records expectations before uploading new files, retains verified companions, and validates current records before acknowledging completion. Conditional writes cannot discard concurrent admitted files.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000021
+        target:
+          kind: attached
+          element: 4c9f308e-7725-42f7-b7d1-8f131a53c5a8
+        waypoints: []
+        bidirectional: true
+      - kind: flow
+        id: a0e683b0-63a0-43b7-b5c2-d548b82f72f8
+        name: validate expected inventory and read retained companions
+        description: The proxy conditionally reads one project record after private authorisation. Retention contains source data and revisions only, never private responses or permission decisions. Unknown state refuses the managed read.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: 4c9f308e-7725-42f7-b7d1-8f131a53c5a8
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000020
+        waypoints: []
+        bidirectional: false
 mitigations:
   - id: mit-secret-redaction
     title: Credentials are redacted and request-scoped
@@ -783,13 +843,13 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000101
   - id: mit-pypi-filename-parser
     title: Bounded PyPI filename parsing
-    prose: PyPI coordinate parsing compares disjoint project-name chunks in bounded passes and keeps the filename grammar without a new length cap. Distribution routing and incremental Simple-index extraction use the same parser. Tests at both entry points assert subquadratic allocation growth for malformed filenames. Route selection precedes authentication and metadata admission, so the operator edge bounds total routing demand.
+    prose: PyPI coordinate parsing compares disjoint project-name chunks in bounded passes and keeps the filename grammar without a new length cap. Distribution routing and incremental Simple-index extraction use the same parser. Tests at both entry points assert subquadratic allocation growth for malformed filenames. Route selection precedes authentication and metadata admission, so the operator edge bounds total routing demand. Companion routes strip one terminal .metadata suffix, then use the shared distribution coordinate parser.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
   - id: mit-response-limits
     title: Fail-closed document limits
-    prose: Fail-closed limits still bound metadata body bytes, version count, artifact count and retained structure depth (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES`, `ECLUSE_LIMITS__MAX_VERSION_COUNT`, `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT`, `ECLUSE_LIMITS__MAX_NESTING_DEPTH`). The reader counts decompressed bytes and stops an oversized response. Dredger reads store package documents under the same body bound. npm and PyPI extract supported fields by walking the tokens of the maintained json-stream lexer, checking structural counts during extraction instead of projecting a complete source document first. Skipped fields do not become decoded values. A release or file the projection drops, and each repeat of a member within an object, never enters the read's table of shared strings, and a repeated member is dropped as it arrives. Extraction does not establish whole-document JSON validity. Supported fields still materialise, and listings retain useful release and artifact results. Body limits and structural limits remain separate from memory admission. Neither streaming nor the response cap proves a bound on the resulting heap. Advisory-backed rules still perform work for each evaluated version.
+    prose: Fail-closed limits still bound metadata body bytes, version count, artifact count and retained structure depth (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES`, `ECLUSE_LIMITS__MAX_VERSION_COUNT`, `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT`, `ECLUSE_LIMITS__MAX_NESTING_DEPTH`). The reader counts decompressed bytes and stops an oversized response. Dredger reads store package documents under the same body bound. npm and PyPI extract supported fields by walking the tokens of the maintained json-stream lexer, checking structural counts during extraction instead of projecting a complete source document first. Skipped fields do not become decoded values. A release or file the projection drops, and each repeat of a member within an object, never enters the read's table of shared strings, and a repeated member is dropped as it arrives. Extraction does not establish whole-document JSON validity. Supported fields still materialise, and listings retain useful release and artifact results. Body limits and structural limits remain separate from memory admission. Neither streaming nor the response cap proves a bound on the resulting heap. Advisory-backed rules still perform work for each evaluated version. Companion selection uses the same bounded selected-version metadata read. Companion bytes use the streaming relay without a new whole-body size cap.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
@@ -797,14 +857,14 @@ mitigations:
       - a883d9d9-0aa3-4a27-9653-cae0424abdba
   - id: mit-request-coalescing
     title: Single-flight requests, the upstream progress floor, and request timeout
-    prose: Single-flight joins eligible concurrent reads or renders for the same key onto one active computation, independently of retention. The local provider retains no full metadata, but active full reads still coalesce. Selected-version and assembled-response retention remain available through that provider. A per-request timeout limits each request. Every transfer over a registry protocol, the artifact stream relayed to a client included, keeps a progress floor of request and response body bytes together, at least `limits.minProgressBytes` (1 MiB by default) within each `limits.progressWindow` seconds (10 by default) spent waiting on the upstream. A transfer below the floor, a silent one included, fails with the transport timeout, and its connection closes rather than returning to the pool. Each upstream exchange of a served request also ends at the request timeout less a fixed 10-second margin, so a slow fetch fails before the request timeout, and the requests coalesced onto it receive the same fault and release their admission. The mirror worker and the Dredger have no such cap. The timeout is a transport fault like any other, and a private read that fails this way for a name that is not first-party falls back to the rule-gated public document, as any private transport fault does. Distinct keys do not coalesce, and useful results still occupy memory until their consumers release them.
+    prose: Single-flight joins eligible concurrent reads or renders for the same key onto one active computation, independently of retention. The local provider retains no full metadata, but active full reads still coalesce. Selected-version and assembled-response retention remain available through that provider. A per-request timeout limits each request. Every transfer over a registry protocol, the artifact stream relayed to a client included, keeps a progress floor of request and response body bytes together, at least `limits.minProgressBytes` (1 MiB by default) within each `limits.progressWindow` seconds (10 by default) spent waiting on the upstream. A transfer below the floor, a silent one included, fails with the transport timeout, and its connection closes rather than returning to the pool. Each upstream exchange of a served request also ends at the request timeout less a fixed 10-second margin, so a slow fetch fails before the request timeout, and the requests coalesced onto it receive the same fault and release their admission. The mirror worker and the Dredger have no such cap. The timeout is a transport fault like any other, and a private read that fails this way for a name that is not first-party falls back to the rule-gated public document, as any private transport fault does. Distinct keys do not coalesce, and useful results still occupy memory until their consumers release them. Companion public metadata reads use the selected-version provider. Companion relays retain the same progress floor and bracketed upstream connection lifetime.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
       - a883d9d9-0aa3-4a27-9653-cae0424abdba
   - id: mit-metadata-admission
     title: Memory-charged serve admission and bounded retention
-    prose: Listings and public artifact metadata decisions pass a memory gate and then a CPU gate. The memory gate charges an entry step against one budget before the request takes a CPU slot. A listing then pays for each decompressed chunk of its full reads before the parser sees it, and for its response before it builds it. The response pays on the larger of two estimates, one from the largest document the listing merges and one from the base document whose top-level fields it keeps, each adding the other document's share for the versions it lacks, so overlapping private and public documents pay for about one. The output charge comes from single documents and realistic merges, and the residency tier holds heavier private documents within it. The tier requires each registered ecosystem adapter to have captures, retained-heap envelopes and peak limits. For packages of at least 1 MiB the per-byte charges sit above the residency tier's measured peaks. A smaller package can peak above its per-byte charge, and that tier holds each capture's read and render under what the meter holds for it, at least the entry step. A selected read, a retained hit and a request that joins another's fetch or render pay only for what they hold themselves. A started read that runs out of budget pauses instead of failing. Only one request at a time may run past the budget, until it ends, together with the shared work it waits on, so the budget holds within about one request's worth and the ingest ceiling bounds that request. The boot sets the budget to a quarter of the heap the nursery leaves, less the cache, the queue tenants and the idle process. A sampler reads the collector and the cgroup ten times a second. It halves the budget, at most once a second, when the collector takes more than half the CPU, when live data nears the heap's overflow point or when the cgroup nears its limit. After each major collection it measures the live data outside the charges, so that charges and that remainder stay under a third of the heap the nursery leaves, with room under the overflow point for the largest recent request. The heap ceiling sits below the cgroup limit with room for native and kernel memory, so heap exhaustion ends in a heap-overflow exit rather than a kernel kill. The charges are a model of held memory, not exact heap accounting. Both gates release before artifact relay. A separate byte-weighted gate admits publish bodies. One provider owns metadata retention, and the local provider never retains full metadata. Selected-version and assembled stores charge accounted weights against their retention budget. An entry that cannot fit is served without retention or eviction. Assembled reuse never skips private fetches or their per-request authorisation. Caller credentials never enter shared metadata retention.
+    prose: Listings and public artifact metadata decisions pass a memory gate and then a CPU gate. The memory gate charges an entry step against one budget before the request takes a CPU slot. A listing then pays for each decompressed chunk of its full reads before the parser sees it, and for its response before it builds it. The response pays on the larger of two estimates, one from the largest document the listing merges and one from the base document whose top-level fields it keeps, each adding the other document's share for the versions it lacks, so overlapping private and public documents pay for about one. The output charge comes from single documents and realistic merges, and the residency tier holds heavier private documents within it. The tier requires each registered ecosystem adapter to have captures, retained-heap envelopes and peak limits. For packages of at least 1 MiB the per-byte charges sit above the residency tier's measured peaks. A smaller package can peak above its per-byte charge, and that tier holds each capture's read and render under what the meter holds for it, at least the entry step. A selected read, a retained hit and a request that joins another's fetch or render pay only for what they hold themselves. A started read that runs out of budget pauses instead of failing. Only one request at a time may run past the budget, until it ends, together with the shared work it waits on, so the budget holds within about one request's worth and the ingest ceiling bounds that request. The boot sets the budget to a quarter of the heap the nursery leaves, less the cache, the queue tenants and the idle process. A sampler reads the collector and the cgroup ten times a second. It halves the budget, at most once a second, when the collector takes more than half the CPU, when live data nears the heap's overflow point or when the cgroup nears its limit. After each major collection it measures the live data outside the charges, so that charges and that remainder stay under a third of the heap the nursery leaves, with room under the overflow point for the largest recent request. The heap ceiling sits below the cgroup limit with room for native and kernel memory, so heap exhaustion ends in a heap-overflow exit rather than a kernel kill. The charges are a model of held memory, not exact heap accounting. Both gates release before artifact relay. A separate byte-weighted gate admits publish bodies. One provider owns metadata retention, and the local provider never retains full metadata. Selected-version and assembled stores charge accounted weights against their retention budget. An entry that cannot fit is served without retention or eviction. Assembled reuse never skips private fetches or their per-request authorisation. Caller credentials never enter shared metadata retention. Both private and public companion selections enter metadata admission and release it before streaming bytes. Retained companion digest maps charge their keys and values.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
@@ -824,7 +884,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000125
   - id: mit-credential-passthrough
     title: Per-caller credential passthrough
-    prose: The read path never substitutes a credential of Écluse's own. It forwards the caller's credential to the private upstream and strips caller credentials from public fetches, which it makes anonymously. The publish path sends credentials only to the operator-declared publication target, and Écluse mints no publication token.
+    prose: The read path never substitutes a credential of Écluse's own. It forwards the caller's credential to the private upstream and strips caller credentials from public fetches, which it makes anonymously. The publish path sends credentials only to the operator-declared publication target, and Écluse mints no publication token. Companion requests forward credentials only to the private authority, never to a public or foreign authority.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000103
@@ -880,7 +940,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000128
   - id: mit-artifact-location-authority
     title: Same-authority artifact locations
-    prose: A disallow-by-default same-authority policy applies to every upstream-declared artifact location, matched on host and port, with the hosts an ecosystem serves artifact bytes from as its one equivalence. Écluse upgrades a legacy http location to https on the same host, and drops and records a file whose scheme or authority the policy refuses. The projection and the download gate read one definition of the check, so a refused file is absent from the served listing, and a release drops when none of its files survive.
+    prose: A disallow-by-default same-authority policy applies to every upstream-declared artifact location, matched on host and port, with the hosts an ecosystem serves artifact bytes from as its one equivalence. Écluse upgrades a legacy http location to https on the same host, and drops and records a file whose scheme or authority the policy refuses. The projection and the download gate read one definition of the check, so a refused file is absent from the served listing, and a release drops when none of its files survive. Companion selection checks the parent and derived companion location against the same origin-sensitive host and port rule.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000105
@@ -893,7 +953,7 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000105
   - id: mit-first-party-publish-guard
     title: First-party publish guard
-    prose: A mount's `firstParty` declaration, for npm a list of scopes, refuses a publish of any name outside the namespaces the deployment owns, before any upstream write. The scope match is exact on the parsed namespace, so `@acme-evil` does not satisfy `@acme`. Écluse checks that the publish document's declared name, its `_id`, and every per-version name equal the scope-guarded name in the URL path, then builds the write URL from that canonical name. The guarded name, the written name, and the merge collision key are therefore one identity.
+    prose: A mount's `firstParty` declaration refuses a publish of any name outside its owned namespace before an upstream write. PyPI multipart framing is bounded after edge authentication, and every declared name must resolve to one authorised project. The relay preserves the original body and Content-Type and the complete caller Basic pair. npm keeps its scope and document guards. The scope match is exact on the parsed namespace, so `@acme-evil` does not satisfy `@acme`. Écluse checks that the publish document's declared name, its `_id`, and every per-version name equal the scope-guarded name in the URL path, then builds the write URL from that canonical name. The guarded name, the written name, and the merge collision key are therefore one identity.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000106
@@ -913,11 +973,18 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010e
       - 0ec10e5e-0000-4000-8000-000000000111
   - id: mit-worker-opaque-bytes
-    title: Worker forwards bytes unparsed
-    prose: The mirror worker hashes the fetched bytes and forwards them unchanged, with no decompression and no tarball parsing, so a malicious artifact has little code-execution surface in the worker.
+    title: Bounded native upload metadata extraction
+    prose: The worker verifies distribution bytes before native preparation and uploads those exact bytes unchanged. npm does not unpack its artifact. PyPI extracts only bounded Core Metadata from ZIP or tar containers without executing their content. Archive path, entry, nesting, inflated-byte and decoder-memory limits refuse malformed or excessive inputs. Compression trailers are validated, and unrelated file bodies are discarded. Upload metadata cannot replace the verified artifact body.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000107
+  - id: mit-mirror-completeness
+    title: Durable whole-version proof before trusted PyPI reads
+    prose: The worker conditionally persists the complete supported expected file set and paired source fields before new uploads. Verified SHA-256 evidence remains separate from unverified source assertions. Current target filenames and compatible authoritative digests plus declared retained companions prove completion. Duplicate responses and version presence do not prove a PyPI version complete. The foreground validates one project record after caller-authorised private metadata and retains no private authorisation decision. Missing or unreadable expected history cannot fall back to a smaller current public index. First-party names bypass mirror reconciliation. Referenced objects require durable storage without lifecycle expiry, and the worker has no delete operation.
+    status: implemented
+    threats:
+      - 0ec10e5e-0000-4000-8000-000000000107
+      - 0ec10e5e-0000-4000-8000-00000000010d
   - id: mit-worker-integrity-check
     title: Worker integrity verification
     prose: The worker verifies the fetched bytes against the upstream's `dist.integrity` before it publishes them, and it never returns them to a caller. The check fails closed when the strongest digest present uses an algorithm it cannot compute, and it never falls back to a weaker digest. An internal or metadata response cannot match the asserted digest, so such a job fails and drops. The check proves that the bytes match the upstream's assertion. It catches tampering in transit and downgrade, not a hostile upstream or a worker compromise, which the admission gate, the role's grant, and queue access control bound.
@@ -929,7 +996,7 @@ mitigations:
       - bd6136ad-e767-424b-bda4-53144a8a7f10
   - id: mit-worker-reevaluation
     title: Worker re-evaluation before mirroring
-    prose: Public admission applies the configured rules before a version is queued, and the worker applies them again, with its current first-party predicate, before it downloads the artifact. A winning named deny stops new admission when its evidence is available, and the worker drops a queued job for a first-party name.
+    prose: Public admission applies the configured rules before a version is queued, and the worker applies them again, with its current first-party predicate, before it downloads the artifact. A winning named deny stops new admission when its evidence is available, and the worker drops a queued job for a first-party name. Before downloading, the npm mirror constructor checks the admitted identity and complete one-tarball inventory against the publication descriptor and requires the paired source metadata object. The writer accepts only that checked mirror upload data.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
@@ -943,13 +1010,13 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000108
   - id: mit-private-origin-uncached
     title: Private origin bypasses the shared cache
-    prose: The composition wires the private-origin path to an uncached metadata fetch, and wires the shared cache to the anonymous, gated public origin. Écluse re-consults the private origin on every request with the caller's own forwarded token, so the shared cache holds no private document.
+    prose: The composition wires the private-origin path to an uncached metadata fetch, and wires the shared cache to the anonymous, gated public origin. Écluse re-consults the private origin on every request with the caller's own forwarded token, so the shared cache holds no private document. Private companion selection reads the index per request under that caller's credential.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000109
   - id: mit-integrity-floors
     title: Integrity floors
-    prose: Public admission requires the configured integrity floor, which cannot go below SHA-256. Private metadata must meet the trusted integrity floor, which the operator can loosen. Invalid, absent, unsupported, or below-floor evidence does not bypass admission to reach the divergence comparison.
+    prose: Public admission requires the configured integrity floor, which cannot go below SHA-256. Private metadata must meet the trusted integrity floor, which the operator can loosen. Invalid, absent, unsupported, or below-floor evidence does not bypass admission to reach the divergence comparison. Companion eligibility requires the parent distribution to clear its own origin's floor. Companion Boolean or digest declarations do not weaken that check or impose a companion hash floor.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
@@ -961,13 +1028,13 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-private-refusal-stops-read
     title: Private refusal stops the read
-    prose: A 401 or 403 from the private upstream stops a metadata or artifact read with a local 403 before Écluse reads the error body, even when public content would pass admission, so no public copy substitutes. A genuine private 404 still falls back to the public origin for a package that is not first-party.
+    prose: A 401 or 403 from the private upstream stops a metadata or artifact read with a local 403 before Écluse reads the error body, even when public content would pass admission, so no public copy substitutes. A genuine private 404 still falls back to the public origin for a package that is not first-party. Companion metadata and byte requests obey this refusal rule.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010b
   - id: mit-first-party-private-routing
     title: First-party names resolve privately only
-    prose: A declared first-party name resolves only through the private upstream. Metadata does not fetch or merge the public origin, and an artifact read does not fall back to the public origin after a private miss. npm scopes match exactly, and PyPI declarations name canonical project names or prefixes bounded by a separator. The load refuses an empty declaration.
+    prose: A declared first-party name resolves only through the private upstream. Metadata does not fetch or merge the public origin, and an artifact read does not fall back to the public origin after a private miss. npm scopes match exactly, and PyPI declarations name canonical project names or prefixes bounded by a separator. The load refuses an empty declaration. Companion reads also preserve private-only routing after a private miss.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000126
@@ -1148,7 +1215,7 @@ mitigations:
       - 1da83f8a-f998-4ef8-89bd-61a39b4e22ee
   - id: mit-artifact-entry-keys
     title: Source-local artifact entry keys
-    prose: Artifact extraction assigns each entry a source-local key before lenient drops. PyPI preserves original array positions in full and selected reads, including gaps left by discarded files. npm uses version keys. Merge and assembly match the winning source, its complete upstream-byte digest and the admitted key. Missing, ambiguous or mismatched identities contribute no entry. Duplicate admitted files retain their source order and supported fields. Unknown fields are omitted rather than relayed as source spans. Incremental hashing covers the complete successful decompressed response, including omitted fields. No extra serve-time hash, persistent identity or schema epoch is introduced.
+    prose: Artifact extraction assigns each entry a source-local key before lenient drops. PyPI preserves original array positions in full and selected reads, including gaps left by discarded files. npm uses version keys. Merge and assembly match the winning source, its complete upstream-byte digest and the admitted key. Missing, ambiguous or mismatched identities contribute no entry. Duplicate admitted files retain their source order and supported fields. Unknown fields are omitted rather than relayed as source spans. Incremental hashing covers the complete successful decompressed response, including omitted fields. No extra serve-time hash, persistent identity or schema epoch is introduced. Canonical companion declarations replay from the exact admitted source entry. A refused duplicate cannot restore a declaration or supply a companion location. A surviving private version stays authoritative when its companion is absent or its fetch fails. Public fallback requires the private version to be absent after listing admission.
     status: implemented
     threats:
       - 72ad19e6-3fbf-44c6-a190-8cb074f89ea0
@@ -1291,6 +1358,8 @@ threats:
     description: The mirror worker's role identity is the Écluse identity meant to write the mirror store (Registry B), which feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store and poison future reads. A mirror job is unauthenticated data that directs the worker to fetch and publish, so whoever can send to the queue can direct that write. On a store whose only control plane is the ecosystem protocol, the same credential also deletes versions, so a worker compromise can empty the mirror as well as poison it. What bounds the poisoning of future reads is the soundness of the admission gate, the role's blast radius, and queue access control, not the integrity check.
     elements:
       - 0ec10e5e-0000-4000-8000-00000000004a
+      - 4c9f308e-7725-42f7-b7d1-8f131a53c5a8
+      - 9f3d5702-9eb6-4a45-899b-6f50127b1562
   - id: 0ec10e5e-0000-4000-8000-000000000108
     number: 8
     title: SSRF to the instance-metadata credential endpoint

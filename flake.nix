@@ -226,11 +226,16 @@
             then sequentialCompile (sequentialHaddock pkg)
             else pkg) hsuper;
 
+        managedLzmaOverlay = hself: _hsuper: {
+          ecluse-lzma-managed = hself.callCabal2nix "ecluse-lzma-managed" ./vendor/lzma-managed { };
+        };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
+            managedLzmaOverlay
             sequentialBuildOverlay
           ];
         };
@@ -349,15 +354,13 @@
         };
 
         # ---- Dev-shell composition -------------------------------------------
-        # Env shared by every shell. A UTF-8 locale, so hspec's '✔' and other
-        # Unicode output encode regardless of host locale. Plus the NODE_PATH that
-        # makes `require("semver")` resolve for the npm version oracle (fixture
-        # generator and smoke suite).
         shellEnv = {
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
           AWS_EC2_METADATA_DISABLED = "true";
+          # GHC loads archive libraries while evaluating compile-time splices.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.zlib pkgs.bzip2 pkgs.xz ];
         };
 
         # CI shares one closure: toolchain, gate, ops, and bench.
@@ -371,6 +374,8 @@
           toolHpkgs.ghc
           pkgs.cabal-install
           pkgs.zlib
+          pkgs.bzip2
+          pkgs.xz
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
           # and `task gen-version-fixtures`. They are node-semver (npm, built by

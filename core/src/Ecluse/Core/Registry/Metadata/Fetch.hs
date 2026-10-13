@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Metadata.Fetch (
     -- * Reading from an origin
     fetchManifest,
     fetchVersion,
+    chargingSelectedReads,
 
     -- * Reading from any body
     readManifest,
@@ -22,7 +23,7 @@ import GHC.Conc (pseq)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
-import Ecluse.Core.Registry.Exchange (chargedRead, digestingRead, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, chargedRead, chargedReadWith, digestingRead, formThen, withSuccessBody)
 import Ecluse.Core.Registry.Json.Intern (newInternTable, newTableKey)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError, VersionRead, metadataResponse)
@@ -32,6 +33,20 @@ import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, Limits (maxMetadataBytes, progressFloor))
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
+
+-- | Charge selected-read chunks before the adapter retains raw publication fields.
+chargingSelectedReads :: (ByteString -> Int) -> (Int -> IO ()) -> EcosystemRead -> EcosystemRead
+chargingSelectedReads weigh charge EcosystemRead{erRequest, erUniqueFields, erWalkFull, erFinishFull, erWalkSelected, erFinishSelected} =
+    EcosystemRead
+        { erRequest
+        , erUniqueFields
+        , erWalkFull
+        , erFinishFull
+        , erWalkSelected = \limits name version bound table readChunk -> do
+            pay <- accumulatingCharge charge
+            erWalkSelected limits name version bound table (chargedReadWith (pay . weigh) readChunk)
+        , erFinishSelected
+        }
 
 -- | Fetch a package's whole document from an origin and finish it into a 'Manifest'.
 fetchManifest :: EcosystemRead -> ManifestFetch
@@ -58,7 +73,7 @@ readManifest EcosystemRead{erUniqueFields = uniqueFields, erWalkFull = walk, erF
     base = rtBaseUrl terms
     decode = decoding tracing name limits uniqueFields (walk limits name base)
 
--- | The selected read of 'fetchVersion', over any body. It pays no charge and takes no digest.
+-- | Read one version without a source digest. A wrapped worker walk owns its raw-field charges.
 readVersion :: EcosystemRead -> TracingPort -> ReadTerms -> PackageName -> Version -> Body -> IO (Either MetadataError VersionRead)
 readVersion EcosystemRead{erUniqueFields = uniqueFields, erWalkSelected = walk, erFinishSelected = finish} tracing terms name version body =
     (>>= finish limits name (rtBaseUrl terms) version)

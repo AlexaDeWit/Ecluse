@@ -6,7 +6,7 @@ module Ecluse.Core.Server.Admission.MeterSpec (spec) where
 
 import Control.Concurrent.STM (check)
 import Test.Hspec
-import UnliftIO (Async, async, cancel, concurrently_, poll, wait, waitCatch)
+import UnliftIO (Async, async, cancel, concurrently_, poll, wait, waitCatch, withAsync)
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Server.Admission.Meter (
@@ -17,6 +17,7 @@ import Ecluse.Core.Server.Admission.Meter (
     charge,
     meterFigures,
     meterSnapshot,
+    newChargeRegion,
     newMemoryMeter,
     servingFlight,
     steerMeter,
@@ -70,6 +71,26 @@ awaitFigures meter holds = atomically (meterFigures meter >>= check . holds)
 
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Admission.Meter" $ do
+    it "does not remember an unpaid high-water request after cancellation" $ do
+        entered <- newEmptyMVar
+        blocked <- newEmptyMVar
+        firstPayment <- newIORef True
+        paid <- newIORef (0 :: Int)
+        chargeRegion <- newChargeRegion $ \cost -> do
+            initial <- atomicModifyIORef' firstPayment (False,)
+            if initial then putMVar entered () >> takeMVar blocked else modifyIORef' paid (+ cost)
+        withAsync (chargeRegion 1024) $ \worker -> takeMVar entered >> cancel worker
+        chargeRegion 1024
+        readIORef paid `shouldReturn` 1024
+
+    it "keeps repeated workspace peaks separate from simultaneously retained regions" $ do
+        paid <- newIORef (0 :: Int)
+        workspace <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
+        retained <- newChargeRegion (\cost -> modifyIORef' paid (+ cost))
+        traverse_ workspace [32, 64, 16, 64]
+        retained 8
+        readIORef paid `shouldReturn` 72
+
     it "charges the entry step, pays small charges from it, and returns everything at the end" $ do
         (meter, port, _) <- newMeter 100
         inside <- withMemoryEntry port meter $ \ticket -> do

@@ -36,7 +36,7 @@ import Ecluse.Composition.MemoryPlan.Bounds (
  )
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opArtifact, opCache, opDepth, opRequest),
-    PlanInputs (piAllocAreaBytes, piCache, piCapabilities, piCpuAdmission, piLimits, piPublishConfigured, piQueueDemand),
+    PlanInputs (piAllocAreaBytes, piCache, piCapabilities, piCpuAdmission, piLimits, piPublishConfigured, piPublishRequestCaps, piQueueDemand),
     TenantDemands (..),
  )
 import Ecluse.Composition.MemoryPlan.Override (configuredPins)
@@ -57,8 +57,10 @@ tenantDemands inputs h =
         , tdAdmissionDesired = piCpuAdmission inputs
         , tdResponseFinal = fromMaybe responseBytesFallback (limMaxResponseBytes (piLimits inputs))
         , tdPublishConfigured = piPublishConfigured inputs
-        , tdPublishDesired = max requestFinal (appHeap * publishSharePercent `div` 100)
+        , tdPublishDesired = max largestRequest (appHeap * publishSharePercent `div` 100)
         , tdRequestFinal = requestFinal
+        , tdLargestRequest = largestRequest
+        , tdDefaultRequestUsed = any isNothing (piPublishRequestCaps inputs)
         , tdRequestComputed = requestComputed
         , tdDepthDesired = fromMaybe (clamp (queueDepthFloor, queueDepthCap) ((appHeap * queueSharePercent `div` 100) `div` mirrorJobEstimatedBytes)) (opDepth pins)
         , tdMemoryBacked = memoryQueueCharged demand
@@ -75,6 +77,7 @@ tenantDemands inputs h =
     liveCacheBytes = liveCacheShareBytes h (piCapabilities inputs) (piAllocAreaBytes inputs)
     requestComputed = clamp (requestBytesFloor, requestBytesCap) (appHeap * publishSharePercent `div` 100)
     requestFinal = fromMaybe requestComputed (opRequest pins)
+    largestRequest = foldl' max 0 (map (fromMaybe requestFinal) (piPublishRequestCaps inputs))
     -- The charged envelope is the cap times the envelope multiplier, so dividing the
     -- share back down keeps the mirror tenant a bounded share of the heap.
     artifactCapDesired =

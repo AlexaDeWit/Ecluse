@@ -8,6 +8,7 @@ module Main (main) where
 import Ecluse.AwsEndToEndIntegrationSpec qualified as AwsComposition
 import Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec qualified as PyPI
 import Ecluse.Core.Security.EgressIntegrationSpec qualified as Egress
+import Ecluse.Core.Server.MirrorViewIntegrationSpec qualified as MirrorView
 import Ecluse.Core.Server.Pipeline.OriginIntegrationSpec qualified as Origin
 import Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec qualified as NpmMetadata
 import Ecluse.Core.Server.Pipeline.PublishIntegrationSpec qualified as Publication
@@ -16,6 +17,8 @@ import Ecluse.Core.Server.Pipeline.TarballIntegrationSpec qualified as NpmArtifa
 import Ecluse.Core.Worker.LoopIntegrationSpec qualified as Worker
 import Ecluse.PilotIntegrationSpec qualified as Pilot
 import Ecluse.Runtime.Cve.SyncIntegrationSpec qualified as AdvisorySync
+import Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec qualified as MirrorStateS3Internal
+import Ecluse.Runtime.Mirror.State.S3IntegrationSpec qualified as MirrorStateS3
 import Ecluse.Runtime.Pilot.ExportIntegrationSpec qualified as AdvisoryExport
 import Ecluse.Runtime.Queue.SqsIntegrationSpec qualified as SqsQueue
 import Ecluse.Runtime.ServerIntegrationSpec qualified as ServerShutdown
@@ -35,6 +38,7 @@ main = do
         sequence
             [ discover Coverage.awsComposition AwsComposition.spec
             , discover Coverage.pypiHttp PyPI.spec
+            , discover Coverage.mirrorViewHttp MirrorView.spec
             , discover Coverage.egressHttp Egress.spec
             , discover Coverage.originHttp Origin.spec
             , discover Coverage.npmMetadataHttp NpmMetadata.spec
@@ -44,6 +48,8 @@ main = do
             , discover Coverage.workerSqs Worker.spec
             , discover Coverage.pilotS3 Pilot.spec
             , discover Coverage.advisorySyncS3 AdvisorySync.spec
+            , discover Coverage.mirrorStateS3Internal MirrorStateS3Internal.spec
+            , discover Coverage.mirrorStateS3 MirrorStateS3.spec
             , discover Coverage.advisoryExportS3 AdvisoryExport.spec
             , discover Coverage.queueSqs SqsQueue.spec
             , discover Coverage.serverShutdownHttp ServerShutdown.spec

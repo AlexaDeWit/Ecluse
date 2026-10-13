@@ -12,7 +12,7 @@ import Data.Aeson.Types (parseEither, parseJSON)
 
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (ParseError (ParseError))
-import Ecluse.Core.Registry.PyPI.Project (FileCoordinate, FilenameMemo, fileCoordinate, projectName, projectSimpleIndex)
+import Ecluse.Core.Registry.PyPI.Project (FileCoordinate, FilenameMemo, fileCoordinate, projectFile, projectName, projectSimpleIndex)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (..))
 import Ecluse.Core.Registry.WireSupport (Projection, checkNameAgreement)
 
@@ -21,8 +21,8 @@ projectSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projec
 projectSimpleIndexFromValue requested value = do
     index <- first (ParseError . toText) (parseEither parseJSON value)
     reported <- projectName (siName index)
-    let files = [(file, fileCoordinate reported (ifFilename file)) | file <- siFiles index]
-    pure (checkNameAgreement requested reported (projectSimpleIndex reported (siInvalidEntries index) files))
+    let files = [projectFile file (fileCoordinate reported (ifFilename file)) | file <- siFiles index]
+    pure (checkNameAgreement requested reported (projectSimpleIndex reported (siInvalidEntries index) (reverse files)))
 
 -- | Read file names in order through a memo read: the memo after the last name, and each name's coordinate.
 readThrough :: (FilenameMemo -> Text -> (Maybe FileCoordinate, FilenameMemo)) -> FilenameMemo -> [Text] -> (FilenameMemo, [Maybe FileCoordinate])

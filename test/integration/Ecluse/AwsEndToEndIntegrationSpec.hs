@@ -38,7 +38,7 @@ import Ecluse.Integration.Ministack (
 import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
     newQueueEnv,
-    publishedAtLeast,
+    observeAcknowledgement,
     runLoopUntil,
     withMirrorTarget,
  )
@@ -54,6 +54,7 @@ import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (stubLocalhostUrl, withStub)
 import Ecluse.Test.Wai (localhost, selfBaseUrl, servedVersions, status)
+import Ecluse.Test.Worker (workerSourceAt)
 
 {- | Serve and mirror through the composition root against ministack SQS and WAI npm stubs.
 Requires Docker, without a live AWS account.
@@ -75,12 +76,9 @@ spec =
                     resp <- getPath "/npm/left-pad/-/left-pad-1.0.0.tgz" (tpApp proxy)
                     status resp `shouldBe` 200
                     simpleBody resp `shouldBe` tarballBytes
-                    -- The worker long-polls the same SQS queue, fetches the artifact,
-                    -- verifies it against the re-admitted digest, and publishes it.
-                    runLoopUntil (tpPolicies proxy) (tpEnv proxy) (publishedAtLeast (tpMirrorLog proxy) 1)
-                    published <- readIORef (tpMirrorLog proxy)
-                    length published `shouldSatisfy` (>= 1)
-                    published `shouldSatisfy` all (== "/left-pad")
+                    runLoopUntil (tpPolicies proxy) (tpEnv proxy) (tpAcknowledged proxy)
+                    tpAcknowledged proxy `shouldReturn` True
+                    readIORef (tpMirrorLog proxy) `shouldReturn` ["/left-pad"]
 
 {- | The in-process Écluse under test: the serve 'Application', the composition-root
 'Env' the worker runs over, and the mirror-target stub's publish log.
@@ -90,21 +88,22 @@ data TestProxy = TestProxy
     , tpEnv :: Env
     , tpPolicies :: WorkerPolicies
     , tpMirrorLog :: IORef [ByteString]
+    , tpAcknowledged :: IO Bool
     }
 
--- The queue comes from the production composition root, driven by the AWS-SDK-standard
--- @AWS_ENDPOINT_URL_SQS@ override pointed at the container, so this fixture runs no test-only path.
+-- The production composition root selects SQS from @AWS_ENDPOINT_URL_SQS@.
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
         withPublicUpstream $ \publicUrl ->
             withMirrorTarget status201 $ \mirrorUrl mirrorLog -> do
                 queue <- configDrivenQueue container queueName
-                env <- newQueueEnv queue
-                policies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
+                (observedQueue, acknowledged) <- observeAcknowledgement queue
+                env <- newQueueEnv observedQueue
+                policies <- workerSourceAt (publicUrl <> "/left-pad/-/left-pad-1.0.0.tgz") <$> mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI sha512Integrity :| [])
                 binding <- mountBinding privateUrl publicUrl mirrorUrl
                 let app = application (mkServerConfig (maybeToList binding)) env
-                body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog}
+                body TestProxy{tpApp = app, tpEnv = env, tpPolicies = policies, tpMirrorLog = mirrorLog, tpAcknowledged = acknowledged}
 
 -- The released image resolves the backend the same way, from @AWS_ENDPOINT_URL_SQS@ and the
 -- standard credential keys. A one-second long poll keeps the worker loop brisk.
@@ -156,8 +155,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 }
     pure (mountBindingFor Npm deps Nothing)
 
--- The packument's @dist.tarball@ names this same loopback host and port, learned from the
--- request's @Host@ header, so the honoured location is reachable.
+-- Source metadata uses the stub's own authority so artifact location checks apply.
 withPublicUpstream :: (Text -> IO a) -> IO a
 withPublicUpstream k = testWithApplication (pure app) (k . localhost)
   where
@@ -173,16 +171,12 @@ withPublicUpstream k = testWithApplication (pure app) (k . localhost)
 withPrivateUpstream :: (Text -> IO a) -> IO a
 withPrivateUpstream k = withStub status404 "{}" (k . stubLocalhostUrl)
 
--- The artifact bytes the public upstream serves and the worker verifies + publishes.
 tarballBytes :: LByteString
 tarballBytes = "left-pad-1.0.0-artifact-bytes"
 
--- The true lower-cased hex SHA-1 (npm @dist.shasum@) of the served bytes.
 sha1Shasum :: Text
 sha1Shasum = hexSha1Of (toStrict tarballBytes)
 
--- The true SRI @sha512-<base64>@ (npm @dist.integrity@) of the served bytes: the
--- strongest digest, the one the worker verifies the fetched bytes against.
 sha512Integrity :: Text
 sha512Integrity = sriSha512Of (toStrict tarballBytes)
 

@@ -2,21 +2,27 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | PyPI read operations and explicit gaps in the required write drivers.
+-- | Concrete PyPI operations for every required ecosystem family.
 module Ecluse.E2E.Drivers.PyPI (pypiDriver) where
 
-import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterPublish))
-import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
+import Data.Aeson (Value)
 import Ecluse.E2E.AdvisoriesE2ESpec (pypiAdvisoryFamily)
 import Ecluse.E2E.Fixtures.Contracts
+import Ecluse.E2E.Harness.Pip (PythonGraph)
+import Ecluse.E2E.Harness.PyPIDredger (PyPISweepPlane, PyPISweepStore)
+import Ecluse.E2E.Harness.Types (PipProject)
 import Ecluse.E2E.InstallationE2ESpec (installationFamily, pypiInstallationDriver)
 import Ecluse.E2E.PyPI.AdvisoriesE2ESpec (nativeAdvisoryContract)
+import Ecluse.E2E.PyPI.DredgerE2ESpec (pypiDredgerFixture, pypiSweepDriver)
 import Ecluse.E2E.PyPI.InstallE2ESpec (nativeInstallationContract)
+import Ecluse.E2E.PyPI.MirrorInstallE2ESpec (nativeMirrorContract, pypiMirrorFamily)
+import Ecluse.E2E.PyPI.PublishE2ESpec (nativePublicationContract, pypiPublicationFamily)
+import Ecluse.E2E.PyPI.TelemetryE2ESpec (pypiMirrorTelemetryFamily)
 import Ecluse.E2E.TelemetryE2ESpec (pypiReadTelemetryFamily)
 import Ecluse.Test.Contract.Ecosystem
 
--- | Missing write drivers retain their required laws as named failures.
-pypiDriver :: EcosystemDriver Bool () () () () ()
+-- | Native read, write, install, maintenance and telemetry providers share the full ecosystem laws.
+pypiDriver :: EcosystemDriver Bool PythonGraph Value PyPISweepPlane PyPISweepStore PipProject
 pypiDriver =
     EcosystemDriver
         { ecosystemName = "pypi"
@@ -24,18 +30,13 @@ pypiDriver =
         , ecosystemInstallation = Available (installationFamily pypiInstallationFixture pypiInstallationDriver)
         , ecosystemPolicy = Available (ServingEvidence "integration/pypi")
         , ecosystemAdvisories = Available (pypiAdvisoryFamily pypiPilotFixture)
-        , ecosystemMirroring = Unavailable (writeGap "mirroring")
-        , ecosystemPublication = Unavailable (writeGap "publication")
-        , ecosystemDredger = Unavailable (writeGap "Dredger")
+        , ecosystemMirroring = Available (pypiMirrorFamily pypiMirrorFixture)
+        , ecosystemPublication = Available (pypiPublicationFamily pypiPublicationFixture)
+        , ecosystemDredger = Available (fixtureMetadata pypiDredgerFixture, pypiSweepDriver pypiDredgerFixture)
         , ecosystemTelemetry =
             Available
                 ( pypiReadTelemetryFamily pypiTelemetryFixture
-                , Unavailable (writeGap "mirror telemetry")
+                , Available (pypiMirrorTelemetryFamily pypiMirrorTelemetryFixture)
                 )
-        , ecosystemNativeExtensions = [nativeInstallationContract pypiPublicFixture, nativeAdvisoryContract pypiAdvisoryNativeFixture]
+        , ecosystemNativeExtensions = [nativeInstallationContract pypiPublicFixture, nativeAdvisoryContract pypiAdvisoryNativeFixture, nativeMirrorContract pypiMirrorNativeFixture, nativePublicationContract pypiPublicationNativeFixture]
         }
-
-writeGap :: Text -> MissingCapability
-writeGap family = MissingCapability $ case adapterPublish pypiAdapter of
-    Nothing -> "the PyPI adapter has no publisher required by the " <> family <> " conformance driver"
-    Just _ -> "the PyPI adapter advertises a publisher, but the " <> family <> " conformance driver is not bound"

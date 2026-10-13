@@ -366,7 +366,7 @@ export BENCH_LOAD_ISOLATE_OHA=1 BENCH_LOAD_DURATION_SECONDS=30 BENCH_LOAD_CONCUR
 run_task performance:load-build
 run_task performance:load-cgroup
 [ "$(cat "$BENCH_LOAD_CGROUP/cgroup.subtree_control")" = '+cpu +memory +pids' ]
-for kind in allocation live-allocation benchmark load-foundation; do
+for kind in allocation live-allocation benchmark load; do
   mkdir -p "$PERF_ARTIFACT_DIR/ecosystem-npm" "$PERF_ARTIFACT_DIR/ecosystem-pypi"
   touch "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json"
   : > "$TEST_TRACE"
@@ -381,7 +381,7 @@ for kind in allocation live-allocation benchmark load-foundation; do
 done
 test -s "$BENCH_LOAD_CGROUP/harness/cgroup.procs"
 grep -Fxq 'affinity=taskset -c 0 oha' "$PERF_ARTIFACT_DIR/conditions.json"
-TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-foundation-receipt
+TEST_FAIL_BUILD=exe:bench-report PERF_NATIVE_OUTCOME=failure reject run_task performance:load-receipt
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-npm/receipt.json" ]
 [ ! -e "$PERF_ARTIFACT_DIR/ecosystem-pypi/receipt.json" ]
 printf 'ok - Task sequence, current failures, aggregate evidence, locks, cancellation, coverage and fixed backend contracts\n'

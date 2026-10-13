@@ -19,7 +19,8 @@ import Data.Conduit (ConduitT, yield)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
 
-import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
+import Data.JsonStream.Parser qualified as J
+import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
@@ -75,6 +76,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), fetchVersionList)
+import Ecluse.Core.Registry.VersionList (VersionListItem)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -207,7 +209,12 @@ listingUnavailable status =
 {- The presence probe's read, which already projects a store's version list for the mirror
 worker. A store that holds no document for a package holds no versions of it either. -}
 listVersions :: ProtocolRead -> PackageName -> IO (Either StoreFault [StoredVersion])
-listVersions store name =
+listVersions store name = case pcVersionListParser (prCodec store) of
+    Nothing -> pure (Left (protocolFault "the adapter provides no version-list reader"))
+    Just parser -> listVersionsWith store name parser
+
+listVersionsWith :: ProtocolRead -> PackageName -> (Limits -> J.Parser VersionListItem) -> IO (Either StoreFault [StoredVersion])
+listVersionsWith store name parser =
     formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
         Right (SuccessBody _ listed) -> first (parseFault "version list") (map stored <$> listed)
@@ -216,7 +223,7 @@ listVersions store name =
   where
     origin = prOrigin store
     codec = prCodec store
-    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (pcVersionListParser codec (ocLimits origin)) request
+    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (parser (ocLimits origin)) request
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
 deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
@@ -285,8 +292,8 @@ sendFormed store = formThen unformableFault (send store)
 originBase :: ProtocolRead -> Text
 originBase = originBaseUrl . prOrigin
 
-originToken :: ProtocolRead -> Maybe Secret
-originToken = fmap credSecret . ocToken . prOrigin
+originToken :: ProtocolRead -> Maybe ClientCredential
+originToken = ocToken . prOrigin
 
 parseFault :: Text -> ParseError -> StoreFault
 parseFault subject err =

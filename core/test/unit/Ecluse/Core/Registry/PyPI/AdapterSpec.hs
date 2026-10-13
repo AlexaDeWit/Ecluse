@@ -27,8 +27,8 @@ spec = describe "the PyPI adapter" $ do
         fmap (artifactHosts . adapterArtifact) (adapterFor PyPI)
             `shouldBe` Just ["https://files.pythonhosted.org"]
 
-    it "carries no publish capability, so the upload route stays the documented refusal" $
-        fmap (isJust . adapterPublish) (adapterFor PyPI) `shouldBe` Just False
+    it "carries the native upload capability for a configured publication target" $
+        fmap (isJust . adapterPublish) (adapterFor PyPI) `shouldBe` Just True
 
     it "spells neither store-maintenance verb, so a Dredger against such a store refuses" $ do
         -- PyPI has no public wire endpoint for listing a store's projects or deleting a

@@ -51,7 +51,7 @@ import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersion), canonicalN
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Server.Context (
     MountRouter,
-    ResponseAction (AnswerRefusal),
+    ResponseAction (AnswerRefusal, RunPipeline),
     RouteAction (RouteAction),
  )
 import Ecluse.Core.Server.Contract (
@@ -71,6 +71,8 @@ import Ecluse.Core.Server.Contract (
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
+import Ecluse.Core.Server.Pipeline.Sidecar (sidecarAction)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
 import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
@@ -78,10 +80,9 @@ import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything, AcceptsOnly),
     MethodMatch (MethodPost, MethodRead),
-    PatternSeg (SegCap, SegLit),
+    PatternSeg (SegCap, SegCapSuffix, SegLit),
     Route (Route),
     RouteName (RouteName),
-    refusing,
     renderRoute,
     routerOf,
     safeSegment,
@@ -102,8 +103,23 @@ pypiRoutes :: [Route PyPICap]
 pypiRoutes =
     [ artifactRoute
     , simpleIndexRoute
+    , sidecarRoute
     , uploadRoute
     ]
+
+-- The companion route strips one suffix before applying the distribution coordinate parser.
+sidecarRoute :: Route PyPICap
+sidecarRoute =
+    Route
+        (RouteName "coreMetadata")
+        MethodRead
+        AcceptsAnything
+        [SegLit "simple", SegCap capProject, SegCapSuffix capFile ".metadata"]
+        buildSidecar
+        "Stream a distribution's Core Metadata companion"
+        "Relays an advertised companion after checking the parent file's origin and integrity. The resolver verifies the advertised companion digest."
+        Nothing
+        pypiArtifactContract
 
 -- @GET \/simple\/{project}\/{file}@: a distribution file, streamed.
 artifactRoute :: Route PyPICap
@@ -141,7 +157,7 @@ simpleIndexRoute =
         Nothing
         pypiIndexContract
 
--- @POST \/legacy@: the documented upload refusal.
+-- The native upload URL has no project capture.
 uploadRoute :: Route PyPICap
 uploadRoute =
     Route
@@ -149,11 +165,9 @@ uploadRoute =
         MethodPost
         AcceptsAnything
         [SegLit "legacy"]
-        (refusing (declaredRefusal "publishing is not enabled on this mount" []))
-        "Upload a first-party distribution (not supported)"
-        "A PyPI mount registers no publish capability, so an upload is answered `405` rather \
-        \than relayed. The route is declared so the refusal is the documented one rather than \
-        \the deny-by-default `404` an unrouted path takes."
+        buildUpload
+        "Upload a first-party distribution"
+        "Relays a bounded multipart upload after authentication and first-party name validation."
         Nothing
         pypiUploadContract
 
@@ -249,8 +263,22 @@ pypiArtifactReplies =
         , tarballEmpty = \status headers -> passthroughResponse status headers PassthroughEmpty
         }
 
-pypiUploadContract :: ResponseContract (ResponseValue (Maybe LByteString))
-pypiUploadContract = refusalContract status405 "Publishing is not enabled on this mount."
+pypiUploadContract :: ResponseContract PassthroughResponse
+pypiUploadContract = passthroughContract "The publication target's status and raw bytes, or a local publication refusal."
+
+pypiPublishReplies :: PublishReplies PassthroughResponse
+pypiPublishReplies =
+    PublishReplies
+        { publishAllowedMethods = "POST"
+        , publishDisabledReply = \headers help -> passthroughResponse status405 (("Content-Type", "text/plain") : headers) (artifactRefusalBody (mkRefusal help "publishing is not enabled on this mount"))
+        , publishRelayed = \status headers body -> passthroughResponse status (("Content-Type", "text/plain") : headers) (PassthroughBytes body)
+        , publishError = \status headers message -> passthroughResponse status (("Content-Type", "text/plain") : headers) (PassthroughBytes (fromStrict (encodeUtf8 message)))
+        }
+
+buildUpload :: Method -> [PyPICap] -> Maybe (ResponseAction PassthroughResponse)
+buildUpload _ = \case
+    [] -> Just (RunPipeline (publishError pypiPublishReplies status500 [] "internal server error") (servePublish pypiPublishReplies Nothing))
+    _ -> Nothing
 
 unsupportedContract :: ResponseContract (ResponseValue (Maybe LByteString))
 unsupportedContract = refusalContract status404 "Unrecognised path; deny by default."
@@ -286,6 +314,13 @@ buildArtifact method = \case
     [PyPIProject name, PyPIFile file] -> do
         (version, filename) <- artifactCoordinate name file
         pure (tarballAction pypiArtifactReplies method name version filename)
+    _ -> Nothing
+
+buildSidecar :: Method -> [PyPICap] -> Maybe (ResponseAction PassthroughResponse)
+buildSidecar method = \case
+    [PyPIProject name, PyPIFile file] -> do
+        (version, filename) <- artifactCoordinate name file
+        pure (sidecarAction pypiArtifactReplies method name version filename)
     _ -> Nothing
 
 -- | Positional captures distinguish parsed projects from checked distribution filenames.

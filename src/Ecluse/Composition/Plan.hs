@@ -45,7 +45,7 @@ import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpDegradations, mpMaxResponseBytes, mpOverrideViolations, mpQueueMemoryMaxDepth),
     planCacheConfig,
     queueTenantDemand,
-    resolveMemoryPlan,
+    resolveMemoryPlanForMounts,
  )
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -56,14 +56,14 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Composition.MirrorRole (mirrorRoleRefusal)
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), bootInvocation, everyBootRole, pipelineRoleOf, registryRoleOf)
-import Ecluse.Composition.Validate (ValidatedPlan (vpProgressFloor), vetBoot)
+import Ecluse.Composition.Validate (ValidatedPlan (vpProgressFloor), vetBoot, vetMirrorCapabilities)
 import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgAdvisories, cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp, configMounts),
     LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
     Mount (mountPolicy),
-    MountConfig (mntPublicationTarget),
+    MountConfig (mntMaxRequestBytes, mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     advisoryAgeLines,
     advisoryEpssLines,
@@ -173,6 +173,7 @@ planDecisions role inputs =
             <$> vetBoot config
             <*> decided (mirrorDecision role ambient (biRuntimePlan inputs) config)
             <*> decided (ambientEndpoint ambient)
+            <* vetMirrorCapabilities role (configApp config)
   where
     config = biConfig inputs
     ambient = ambientAwsFromEnv (biEnvVars inputs)
@@ -250,16 +251,16 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
 projection live here, so the two entry points cannot disagree on either. -}
 memoryPlanFor :: AppConfig -> EffectiveRuntimePlan -> MirrorRuntimePlan -> (MemoryPlan, [Text])
 memoryPlanFor appConfig effective mirrorRuntime =
-    resolveMemoryPlan
+    resolveMemoryPlanForMounts
         (cfgCache appConfig)
         (cfgLimits appConfig)
         (cfgQueue appConfig)
         (rtServeMaxInFlight (cfgRuntime appConfig))
         effective
         (queueTenantDemand mirrorRuntime)
-        publishConfigured
+        (map mntMaxRequestBytes publishingMounts)
   where
-    publishConfigured = any (isJust . mntPublicationTarget) (Map.elems (cfgMounts appConfig))
+    publishingMounts = filter (isJust . mntPublicationTarget) (Map.elems (cfgMounts appConfig))
 
 {- The document the boot read, or the path it found none at. An absent document is
 normal: the environment layer alone is a complete configuration. -}

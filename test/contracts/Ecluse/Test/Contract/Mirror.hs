@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Ecluse.Test.Contract.Install (ClientResult, shouldFail, shouldSucceed)
+import Ecluse.Test.Contract.Install (ClientResult, TargetExpectation, TargetObservation, TargetRefusal, crossTargetInstallCase, shouldFail, shouldSucceed)
 import Ecluse.Test.InstalledTree (InstalledTree, treeDifferences)
 
 -- | Native observations recorded immediately after one isolated client invocation.
@@ -35,6 +35,7 @@ data Observed graph value = Observed
 -- | Public-install evidence, including the complete destination inventory before and after.
 data PublicPhase graph value = PublicPhase
     { publicObserved :: Observed graph value
+    , publicTargetObserved :: TargetObservation graph
     , publicReachable :: Bool
     , publicVersionsBefore :: [(Text, [Text])]
     , publicVersionsAfter :: [(Text, [Text])]
@@ -43,6 +44,8 @@ data PublicPhase graph value = PublicPhase
 -- | Mirror-install evidence captured while the public source is unavailable.
 data OfflinePhase graph value = OfflinePhase
     { offlineObserved :: Observed graph value
+    , offlineTargetObserved :: TargetObservation graph
+    , offlineUnsupportedTarget :: Maybe TargetRefusal
     , offlinePublicReachable :: Bool
     , offlineMirrorPaths :: Set Text
     , offlinePublicAnswers :: [Text]
@@ -59,16 +62,24 @@ data MirrorDriver graph value = MirrorDriver
 -- | Independent fixture expectations, including every required artifact and metadata path.
 data MirrorFixture graph value = MirrorFixture
     { mirrorExpectedGraph :: graph
+    , mirrorExpectedTargets :: Either Text (TargetExpectation, TargetExpectation)
     , mirrorExpectedExport :: value
     , mirrorExpectedVersions :: [(Text, [Text])]
     , mirrorRequiredPaths :: Set Text
-    , mirrorExpectedSources :: [Text]
+    , mirrorExpectedSources :: Either Text [Text]
     }
 
 -- | Compare complete native evidence and retain a no-private-store negative control.
 mirrorContract :: (Eq graph, Show graph, Eq value, Show value) => Text -> MirrorFixture graph value -> SpecWith (MirrorDriver graph value)
 mirrorContract prefix fixture = do
     aroundAllWith acquire $ do
+        it (label "cross-target-install" "installs the declared target artifacts through the completed mirror") $ \(public, mirrored) -> do
+            expected <- either (fail . toString) pure (mirrorExpectedTargets fixture)
+            crossTargetInstallCase
+                (mirrorExpectedGraph fixture)
+                expected
+                (publicTargetObserved public, offlineTargetObserved mirrored)
+                (offlineUnsupportedTarget mirrored)
         it (label "dependency-graph" "resolves the same dependency graph") $ \(public, mirrored) -> do
             obGraph (publicObserved public) `shouldBe` Right (mirrorExpectedGraph fixture)
             obGraph (offlineObserved mirrored) `shouldBe` Right (mirrorExpectedGraph fixture)
@@ -81,7 +92,8 @@ mirrorContract prefix fixture = do
         it (label "origin-evidence" "reads every artifact and metadata document from the mirror during public outage") $ \(_, mirrored) -> do
             Set.toList (mirrorRequiredPaths fixture `Set.difference` offlineMirrorPaths mirrored) `shouldBe` []
             offlinePublicAnswers mirrored `shouldBe` []
-            offlineLockedSources mirrored `shouldMatchList` mirrorExpectedSources fixture
+            sources <- either (fail . toString) pure (mirrorExpectedSources fixture)
+            offlineLockedSources mirrored `shouldMatchList` sources
         it (label "installed-tree" "leaves the same installed tree apart from the proxy address") $ \(public, mirrored) ->
             case treeDifferences ("from public", obTree (publicObserved public)) ("from the mirror", obTree (offlineObserved mirrored)) of
                 [] -> pass

@@ -6,10 +6,12 @@
 module Ecluse.Test.Contract.Metadata.Fetch (ReadFixture (..), metadataFetchContract) where
 
 import Codec.Compression.GZip qualified as GZip
+import Control.Exception (throwIO)
 import Data.Aeson (Value, encode)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Network.HTTP.Client (Request, defaultManagerSettings, newManager, parseRequest)
 import Network.HTTP.Types (hLocation, mkStatus, status200, status302)
 import Network.HTTP.Types.Header (hContentEncoding)
@@ -26,7 +28,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead (vrBodyBytes, vrVersion),
  )
-import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest, fetchVersion, readManifest, readVersion)
+import Ecluse.Core.Registry.Metadata.Fetch (chargingSelectedReads, fetchManifest, fetchVersion, readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest), ReadTerms (..))
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead, ocLimits), chargingFullReads, originBaseUrl, originClient, perCallerOrigin)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge, TooManyVersions), Limits (maxMetadataBytes, maxVersionCount), defaultLimits)
@@ -162,6 +164,23 @@ requestSpec eco = describe "the request" $ do
 
 heldSpec :: ReadFixture -> Spec
 heldSpec eco = describe "held chunks, against the response" $ do
+    fetchCase eco "selected-worker-charge" "charges an explicitly wrapped selected read as an absolute per-read requirement" $ do
+        paid <- newIORef (0 :: Int)
+        let base = "https://registry.example.test"
+            bytes = toStrict (encode (rdReleases eco base ["1.2.3"]))
+            (front, back) = BS.splitAt (BS.length bytes `div` 2) bytes
+            terms = ReadTerms defaultLimits base (const pass)
+            charged = chargingSelectedReads BS.length (writeIORef paid) (rdRead eco)
+        outcome <- readVersion charged passthroughTracingPort terms (thing eco) (releaseOf eco) (heldBody [front, back])
+        fmap (isJust . vrVersion) outcome `shouldBe` Right True
+        readIORef paid `shouldReturn` BS.length bytes
+    fetchCase eco "selected-worker-refusal" "pays before parsing and propagates a payment refusal" $ do
+        let rejected = TestContractEscape "selected read payment refused"
+            charged = chargingSelectedReads BS.length (const (throwIO rejected)) (rdRead eco)
+            terms = ReadTerms defaultLimits "https://registry.example.test" (const pass)
+        readVersion charged passthroughTracingPort terms (thing eco) (releaseOf eco) (heldBody ["invalid JSON"])
+            `shouldThrow` (== rejected)
+
     fetchCase eco "held-parity" "gives the response's manifest and version read, and pays for the full read alone" $ do
         charges <- newIORef (0 :: Int)
         (full, selected) <- bothWays eco defaultLimits (\n -> modifyIORef' charges (+ n)) (\base -> toStrict (encode (rdReleases eco base ["1.2.3"])))

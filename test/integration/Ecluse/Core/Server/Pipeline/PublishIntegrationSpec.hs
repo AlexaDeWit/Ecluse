@@ -1,16 +1,16 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+-- TupleSections pairs optional media-type values with their header names.
+{-# LANGUAGE TupleSections #-}
 
-{- | Publish routing and credential behaviour through the application
-and a captured target.
--}
+-- | Publish routing and credentials through the application and a captured target.
 module Ecluse.Core.Server.Pipeline.PublishIntegrationSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (lookup)
 import Data.Text qualified as T
-import Ecluse.Test.Contract.Catalogue (caseLabel)
-import Network.HTTP.Types (hAuthorization, hContentType, methodPut, mkStatus)
+import Network.HTTP.Types (RequestHeaders, hAuthorization, hContentType, methodPost, methodPut, mkStatus)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestHeaders, requestMethod),
@@ -21,31 +21,34 @@ import Network.Wai (
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
     SRequest (SRequest),
-    SResponse (simpleBody),
+    SResponse (simpleBody, simpleHeaders),
     defaultRequest,
     runSession,
     setPath,
     srequest,
  )
 import Test.Hspec
-import UnliftIO (async, wait)
+import UnliftIO (async, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret, bareCredential, mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
-import Ecluse.Core.Security (defaultLimits, maxPublishRequestBytes)
+import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter, pypiPublish)
+import Ecluse.Core.Registry.PyPI.Project (canonicalName)
+import Ecluse.Core.Security (defaultLimits, maxMetadataBytes, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Server.Mount (inertPackumentDeps)
-import Ecluse.Test.Stub (Captured (capBody), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
+import Ecluse.Test.Contract.Catalogue (caseLabel)
+import Ecluse.Test.Server.Mount (inertDepsFor, inertPackumentDeps)
+import Ecluse.Test.Stub (Captured (capBody, capMethod, capPath), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
 import Ecluse.Test.Wai (status)
 
 withTarget :: Int -> LByteString -> (Int -> Stub -> IO a) -> IO a
@@ -61,7 +64,8 @@ publishDepsAt targetPort staticToken bodyBudget =
     PublishDeps
         { pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show targetPort)
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
-        , pubStaticToken = staticToken
+        , pubStaticCredential = bareCredential <$> staticToken
+        , pubMaxRequestBytes = 26214400
         , pubInboundToken = Nothing
         , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
         , pubBodyBudget = bodyBudget
@@ -83,7 +87,7 @@ proxyWith mkPublishDeps =
 -- The body cap fires before relay, so the target port is an unconnectable placeholder.
 cappedProxyWith :: Int -> IO Application
 cappedProxyWith cap =
-    proxyWith (Just (\bodyBudget -> (publishDepsAt 1 Nothing bodyBudget){pubLimits = defaultLimits{maxPublishRequestBytes = cap}}))
+    proxyWith (Just (\bodyBudget -> (publishDepsAt 1 Nothing bodyBudget){pubMaxRequestBytes = cap}))
 
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublish = putPublishAs ChunkedBody
@@ -129,7 +133,12 @@ mismatchedVersionNameBody =
 
 -- | Publish guards and the target-visible request and response contract.
 spec :: Spec
-spec = describe "first-party publish path → publication target (S52)" $ do
+spec = do
+    pypiPublishSpec
+    npmPublishSpec
+
+npmPublishSpec :: Spec
+npmPublishSpec = describe "first-party npm publication relay" $ do
     it (caseLabel "integration/publication/native-001" "503s a publish shed at the aggregate body-byte budget while the capacity is held") $ do
         -- A target that parks the first publish while it holds the whole budget. With zero
         -- waiter room the second sheds at the door, and the first completes once released.
@@ -300,3 +309,160 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 201
             seen <- targetSaw target
             map fst seen `shouldBe` [Just "Bearer publisher-token"]
+
+pypiProxy :: Maybe (ByteAdmission -> PublishDeps) -> IO Application
+pypiProxy build = do
+    env <- newTestEnv
+    deps <- traverse (\mk -> mk <$> newByteAdmission (128 * 1024 * 1024)) build
+    pure (application (mkServerConfig (maybeToList (mountBindingFor PyPI (inertDepsFor pypiAdapter) deps))) env)
+
+pypiDeps :: Int -> ByteAdmission -> PublishDeps
+pypiDeps port budget =
+    (publishDepsAt port Nothing budget)
+        { pubTargetUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show port <> "/legacy/")
+        , pubAdapter = pypiPublish
+        , pubProjectName = adapterProjectName pypiAdapter
+        , pubAllowed = (== "acme-widget") . canonicalName
+        }
+
+multipartType :: ByteString
+multipartType = "multipart/form-data; boundary=relay-boundary"
+
+multipartBody :: [ByteString] -> LByteString
+multipartBody names = fromStrict (foldMap field names <> file <> "--relay-boundary--\r\n")
+  where
+    field value = "--relay-boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n" <> value <> "\r\n"
+    file = "--relay-boundary\r\nContent-Disposition: form-data; name=\"content\"; filename=\"acme_widget-1.0.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\noriginal archive bytes\r\n"
+
+postUpload :: RequestBodyLength -> RequestHeaders -> LByteString -> Application -> IO SResponse
+postUpload bodyLength headers body = runSession (srequest (SRequest request body))
+  where
+    request =
+        (setPath defaultRequest "/pypi/legacy/")
+            { requestMethod = methodPost
+            , requestBodyLength = bodyLength
+            , requestHeaders = headers
+            }
+
+pypiPublishSpec :: Spec
+pypiPublishSpec = describe "first-party PyPI publication relay" $ do
+    it (caseLabel "integration/publication/native-pypi-001" "returns 405 and POST Allow when publication is disabled") $ do
+        app <- pypiProxy Nothing
+        response <- postUpload ChunkedBody [] "" app
+        status response `shouldBe` 405
+        lookup "Allow" (simpleHeaders response) `shouldBe` Just "POST"
+
+    for_ [(201, "accepted"), (400, "File already exists."), (401, "private refusal"), (409, "conflict")] $ \(code, responseBody) ->
+        it (caseLabel ("integration/publication/native-pypi-002/" <> toText (show code :: String)) ("preserves the original upload and native response " <> toText (show code :: String))) $
+            withTarget code responseBody $ \port target -> do
+                app <- pypiProxy (Just (pypiDeps port))
+                let body = multipartBody ["Acme_Widget", "acme-widget"]
+                    auth = "Basic OnBhc3N3b3Jk"
+                response <- postUpload ChunkedBody [("Content-Type", multipartType), ("Authorization", auth)] body app
+                status response `shouldBe` code
+                simpleBody response `shouldBe` responseBody
+                lookup "Content-Type" (simpleHeaders response) `shouldBe` Just "text/plain"
+                targetSaw target `shouldReturn` [(Just auth, LBS.toStrict body)]
+                captured <- allCaptured target
+                map (headerValue "Content-Type") captured `shouldBe` [Just multipartType]
+                map capMethod captured `shouldBe` ["POST"]
+                map capPath captured `shouldBe` ["/legacy/"]
+
+    for_ [("absent", []), ("empty", [""]), ("invalid", ["@invalid/name"]), ("conflict-first", ["acme-widget", "victim"]), ("conflict-last", ["victim", "acme-widget"])] $ \(nameCase, names) ->
+        it (caseLabel ("integration/publication/native-pypi-003/" <> nameCase) ("refuses absent, invalid, or conflicting names " <> toText (show names :: String))) $
+            withTarget 201 "accepted" $ \port target -> do
+                app <- pypiProxy (Just (pypiDeps port))
+                response <- postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody names) app
+                status response `shouldBe` 400
+                targetSaw target `shouldReturn` []
+
+    for_ [("missing", Nothing), ("wrong", Just "multipart/form-data; boundary=wrong"), ("ambiguous", Just "multipart/form-data; boundary=relay-boundary; boundary=other")] $ \(framingCase, contentType) ->
+        it (caseLabel ("integration/publication/native-pypi-004/" <> framingCase) ("refuses missing or ambiguous framing " <> toText (show contentType :: String))) $
+            withTarget 201 "accepted" $ \port target -> do
+                app <- pypiProxy (Just (pypiDeps port))
+                response <- postUpload ChunkedBody (maybeToList (("Content-Type",) <$> contentType)) (multipartBody ["acme-widget"]) app
+                status response `shouldBe` 400
+                targetSaw target `shouldReturn` []
+
+    for_ [("trailing", "trailing bytes"), ("forbidden-name", "--relay-boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nvictim\r\n--relay-boundary--\r\n")] $ \(suffixCase, suffix) ->
+        it (caseLabel ("integration/publication/native-pypi-005/" <> suffixCase) "refuses trailing data or a forbidden name after the closing delimiter") $
+            withTarget 201 "accepted" $ \port target -> do
+                app <- pypiProxy (Just (pypiDeps port))
+                response <- postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["acme-widget"] <> suffix) app
+                status response `shouldBe` 400
+                targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-006" "refuses an agreed name outside the first-party declaration") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (pypiDeps port))
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["victim"]) app
+            status response `shouldBe` 403
+            targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-007" "authenticates before parsing malformed multipart content") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (\budget -> (pypiDeps port budget){pubInboundToken = Just (mkSecret "edge-token")}))
+            response <- postUpload ChunkedBody [] "malformed" app
+            status response `shouldBe` 401
+            targetSaw target `shouldReturn` []
+
+    for_ [("chunked", ChunkedBody), ("known", KnownLength 4096)] $ \(lengthCase, bodyLength) ->
+        it (caseLabel ("integration/publication/native-pypi-008/" <> lengthCase) ("enforces the request limit before relay for " <> toText (show bodyLength :: String))) $
+            withTarget 201 "accepted" $ \port target -> do
+                app <- pypiProxy (Just (\budget -> (pypiDeps port budget){pubMaxRequestBytes = 8}))
+                response <- postUpload bodyLength [("Content-Type", multipartType)] (multipartBody ["acme-widget"]) app
+                status response `shouldBe` 413
+                targetSaw target `shouldReturn` []
+
+    it (caseLabel "integration/publication/native-pypi-009" "bounds the target's raw response body") $
+        withTarget 201 (LBS.replicate 256 120) $ \port _ -> do
+            app <- pypiProxy (Just (\budget -> (pypiDeps port budget){pubLimits = defaultLimits{maxMetadataBytes = 128}}))
+            response <- postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["acme-widget"]) app
+            status response `shouldBe` 502
+
+    it (caseLabel "integration/publication/native-pypi-010" "keeps the Basic username while authenticating the password at the edge") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <- pypiProxy (Just (\budget -> (pypiDeps port budget){pubInboundToken = Just (mkSecret "edge-token")}))
+            let body = multipartBody ["acme-widget"]
+                auth = "Basic dXNlcjplZGdlLXRva2Vu"
+            response <- postUpload ChunkedBody [("Content-Type", multipartType), ("Authorization", auth)] body app
+            status response `shouldBe` 201
+            targetSaw target `shouldReturn` [(Just auth, LBS.toStrict body)]
+
+    it (caseLabel "integration/publication/native-pypi-011" "uses the declared static Basic pair only after edge authentication") $
+        withTarget 201 "accepted" $ \port target -> do
+            app <-
+                pypiProxy
+                    ( Just
+                        ( \budget ->
+                            (pypiDeps port budget)
+                                { pubInboundToken = Just (mkSecret "edge-token")
+                                , pubStaticCredential = Just (ClientCredential (Just "user") (mkSecret "password"))
+                                }
+                        )
+                    )
+            let body = multipartBody ["acme-widget"]
+            response <- postUpload ChunkedBody [("Content-Type", multipartType), ("Authorization", "Basic dXNlcjplZGdlLXRva2Vu")] body app
+            status response `shouldBe` 201
+            targetSaw target `shouldReturn` [(Just "Basic dXNlcjpwYXNzd29yZA==", LBS.toStrict body)]
+
+    it (caseLabel "integration/publication/native-pypi-012" "holds byte admission until the publication response completes") $ do
+        release <- newEmptyMVar
+        entered <- newEmptyMVar
+        let blockingApp request respond = do
+                _ <- consumeRequestBodyStrict request
+                putMVar entered ()
+                takeMVar release
+                respond (responseLBS (mkStatus 201 "") [] "accepted")
+        testWithApplication (pure blockingApp) $ \port -> do
+            budget <- newByteAdmissionTuned 1 0 50_000
+            app <- pypiProxy (Just (const (pypiDeps port budget)))
+            let send = postUpload ChunkedBody [("Content-Type", multipartType)] (multipartBody ["acme-widget"]) app
+            heldRequest <- async send
+            arrival <- timeout 5_000_000 (takeMVar entered)
+            arrival `shouldBe` Just ()
+            shedResponse <- send
+            status shedResponse `shouldBe` 503
+            putMVar release ()
+            completed <- wait heldRequest
+            status completed `shouldBe` 201

@@ -49,7 +49,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Admission.Meter (MemoryMeter, MeterSettings (..), meterSnapshot, newMemoryMeter, withMemoryEntry)
 import Ecluse.Core.Server.Admission.Types (MeterSnapshot (snChargedBytes))
-import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
+import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (..),
@@ -87,7 +87,7 @@ import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, atPrecedence, blockedBy, inertRuleDeps, isUndecidable)
-import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
+import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, newMetadataCache)
 import Ecluse.Test.Server.Mount (npmServeDeps, pypiServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Support (testMemoryMeter)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)

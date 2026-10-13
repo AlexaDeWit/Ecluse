@@ -24,12 +24,14 @@ module Ecluse.Core.Server.Admission.Meter (
     MemoryTicket,
     withMemoryEntry,
     charge,
+    newChargeRegion,
 
     -- * Shared work
     awaitingFlight,
     servingFlight,
 ) where
 
+import Control.Concurrent.MVar qualified as MVar
 import Control.Concurrent.STM (retry, stateTVar)
 import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
@@ -240,6 +242,15 @@ awaitingFlight ticket key =
 -- | The same ticket, paying for shared work: its charges carry the priority of every request waiting on it.
 servingFlight :: FlightKey -> MemoryTicket -> MemoryTicket
 servingFlight key ticket = ticket{tServes = Just key}
+
+-- | Pay only increases within one sequential workspace. Overlapping work requires separate regions.
+newChargeRegion :: (Int -> IO ()) -> IO (Int -> IO ())
+newChargeRegion pay = do
+    highWater <- MVar.newMVar 0
+    pure $ \requested -> MVar.modifyMVar_ highWater $ \previous -> do
+        let next = max previous requested
+        when (next > previous) (pay (next - previous))
+        pure next
 
 -- | Pay for bytes the request is about to hold, already scaled to their charge.
 charge :: MemoryTicket -> Int -> IO ()

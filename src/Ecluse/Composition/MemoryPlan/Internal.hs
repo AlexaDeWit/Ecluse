@@ -27,6 +27,7 @@ data PlanInputs = PlanInputs
     , piQueue :: QueueSettings
     , piExplicitAdmission :: Maybe Int
     , piPublishConfigured :: Bool
+    , piPublishRequestCaps :: [Maybe Int]
     , piQueueDemand :: QueueTenantDemand
     , piCapabilities :: Int
     , piAllocAreaBytes :: Int
@@ -52,6 +53,8 @@ data TenantDemands = TenantDemands
     , tdPublishConfigured :: Bool
     , tdPublishDesired :: Int
     , tdRequestFinal :: Int
+    , tdLargestRequest :: Int
+    , tdDefaultRequestUsed :: Bool
     , tdRequestComputed :: Int
     , tdDepthDesired :: Int
     -- ^ Queued jobs, not bytes.
@@ -69,6 +72,7 @@ data OverridePins = OverridePins
     , opAdmission :: Maybe Int
     , opResponse :: Maybe Int
     , opRequest :: Maybe Int
+    , opMountRequest :: Maybe Int
     , opDepth :: Maybe Int
     , opArtifact :: Maybe Int
     }

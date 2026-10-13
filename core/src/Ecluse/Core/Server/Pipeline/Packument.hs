@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Merge trusted private metadata with admitted public versions and serve conditional responses.
-Private access refusals stop the request even when the public origin succeeds.
-First-party names consult only the private origin.
--}
+-- | Merge authorised private metadata with admitted public versions. First-party names use only private metadata.
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
     packumentAction,
@@ -39,6 +36,7 @@ import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Cve.Types (DbEtag)
+import Ecluse.Core.Mirror.State (ProjectMirrorRecord, StateRevision)
 import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoVersions),
@@ -65,7 +63,7 @@ import Ecluse.Core.Registry.Metadata (
     digestBytes,
  )
 import Ecluse.Core.Rules (newEvaluator)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
 import Ecluse.Core.Server.Admission.Meter (MemoryTicket, awaitingFlight, charge, servingFlight)
@@ -86,6 +84,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.Framing (frameBytes)
+import Ecluse.Core.Server.MirrorView (mirrorProjectViews, publicMirrorCoverage, validateMirrorProject)
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
 import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
@@ -138,9 +137,7 @@ data PackumentReplies response = PackumentReplies
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
     }
 
-{- | The action a read route names for a package unit. A @HEAD@ takes the head-mode handler,
-which runs the identical gating and merge but withholds the body.
--}
+-- | GET and HEAD use the same gate and merge. HEAD withholds the body.
 packumentAction :: PackumentReplies response -> Method -> PackageName -> ResponseAction response
 packumentAction replies method name
     | isHead method = RunPipeline perimeterFallback (headPackument replies name)
@@ -225,15 +222,31 @@ serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential ->
 serveAdmittedPackument serving clientToken = do
     logFM InfoS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
-    (privResult, pubResult) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
-    case privResult of
-        OriginAuthorisationFailure _ -> privateAccessRefused serving
-        _ -> serveMergedPackument serving evalCtx privResult pubResult
+    case pdMirrorState deps of
+        Just mirror | not (pdFirstParty deps (psvName serving)) -> do
+            ((private, checked), public) <-
+                concurrently
+                    ( do
+                        private <- fetchPrivateOrigin deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+                        checked <- case private of
+                            OriginAuthorisationFailure _ -> pure (Right Nothing)
+                            _ -> liftIO (validateMirrorProject mirror (psvTicket serving) (psvName serving))
+                        pure (private, checked)
+                    )
+                    (fetchPublicOrigin deps (psvRuntime serving) (psvTicket serving) (psvName serving))
+            case private of
+                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                _ -> case checked of
+                    Left _ -> mirrorUnavailable serving
+                    Right record -> serveMergedPackument serving evalCtx record private public
+        _ -> do
+            (private, public) <- resolveOrigins deps (psvRuntime serving) (psvTicket serving) clientToken (psvName serving)
+            case private of
+                OriginAuthorisationFailure _ -> privateAccessRefused serving
+                _ -> serveMergedPackument serving evalCtx Nothing private public
   where
     deps = psvDeps serving
 
-{- Resolve the origins this request may read: a first-party name reads the private origin alone
-and never the public leg. Every other name reads both concurrently. -}
 resolveOrigins :: PackumentDeps -> ServeRuntime -> MemoryTicket -> Maybe ClientCredential -> PackageName -> Handler (OriginResult, OriginResult)
 resolveOrigins deps rt ticket clientToken name
     | pdFirstParty deps name = do
@@ -254,25 +267,43 @@ privateAccessRefused serving = do
 serveMergedPackument ::
     PackumentServing response ->
     EvalContext ->
+    Maybe (StateRevision, ProjectMirrorRecord) ->
     OriginResult ->
     OriginResult ->
     Handler ResponseReceived
-serveMergedPackument serving evalCtx privResult pubResult = do
-    let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
-        trustedVersions = maybe Map.empty (infoVersions . srcInfo) private
-    public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (originManifest pubResult))
-    let sources = catMaybes [private, paContribution public]
-    case originMiss privResult of
-        Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
-        _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
-            Just plan -> serveResolved serving sources plan
-            Nothing ->
-                noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
-                    collectDecisions privResult pubResult (privateExclusions <> paExclusions public)
+serveMergedPackument serving evalCtx record privResult pubResult =
+    case views of
+        Left _ -> mirrorUnavailable serving
+        Right (unmanagedManifest, managedManifest, pending) -> do
+            let (unmanaged, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) unmanagedManifest
+                (managed, managedExclusions) = admitTrusted (pdMinTrustedIntegrity deps) managedManifest
+                privateSources = catMaybes [unmanaged, managed]
+                trustedVersions = Map.unions (map (infoVersions . srcInfo) privateSources)
+            public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (Map.keysSet pending) (originManifest pubResult))
+            let sources = privateSources <> maybeToList (paContribution public)
+                required = Map.withoutKeys pending (paBlockedPending public)
+                covered = Map.null required || maybe False (publicMirrorCoverage required . srcInfo) (paContribution public)
+            if not covered || fmap (infoVersions . manifestInfo) managedManifest /= fmap (infoVersions . srcInfo) managed
+                then mirrorUnavailable serving
+                else case originMiss privResult of
+                    Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
+                    _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
+                        Just plan -> serveResolved serving sources plan
+                        Nothing ->
+                            noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
+                                collectDecisions privResult pubResult (privateExclusions <> managedExclusions <> paExclusions public)
   where
     deps = psvDeps serving
     name = psvName serving
     rt = psvRuntime serving
+    views = case record of
+        Nothing -> Right (originManifest privResult, Nothing, Map.empty)
+        Just (revision, current) -> mirrorProjectViews revision current (originManifest privResult)
+
+mirrorUnavailable :: PackumentServing response -> Handler ResponseReceived
+mirrorUnavailable serving = do
+    liftIO (mpServeDecision (servingMetrics serving) Metric.Unavailable)
+    liftIO (psvRespond serving (packumentUnavailable (psvReplies serving) [] (mkRefusal (pdHelp (psvDeps serving)) "managed mirror view is unavailable")))
 
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
@@ -288,30 +319,34 @@ data PublicAdmission = PublicAdmission
     { paContribution :: Maybe Contribution
     , paExclusions :: [ServeDecision]
     , paVerdicts :: [VersionVerdict]
-    , paDeniedEvidence :: Map Text PackageDetails
-    -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+    , paBlockedPending :: Set Text
+    , -- Only named denials release a missing recorded version from coverage.
+      paDeniedEvidence :: Map Text PackageDetails
+      -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
     }
 
-gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Maybe Manifest -> IO PublicAdmission
-gatePublic tracing metrics deps name ctx trustedVersions = \case
-    Nothing -> pure (PublicAdmission Nothing [] [] Map.empty)
+gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Set Text -> Maybe Manifest -> IO PublicAdmission
+gatePublic tracing metrics deps name ctx trustedVersions pendingVersions = \case
+    Nothing -> pure (PublicAdmission Nothing [] [] Set.empty Map.empty)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions
+            blockedPending = Set.fromList [version | (version, Blocked{}) <- Map.toList (Map.restrictKeys decisions pendingVersions)]
             deniedEvidence = Map.withoutKeys (Map.intersection (infoVersions admissible) trustedVersions) (fpSurvivors plan)
         pure $
             if Set.null (fpSurvivors plan)
                 then
                     let verdicts = projectDecisions admissible (fpDecisions plan)
-                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts deniedEvidence
+                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts blockedPending deniedEvidence
                 else
                     PublicAdmission
                         (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest) (manifestBodyBytes manifest)))
                         integrityRefusals
                         []
+                        blockedPending
                         deniedEvidence
 
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
@@ -325,8 +360,6 @@ projectDecisions info =
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf (completeEvidence details) d)
 
-{- The trusted version map is the caller's own, the one the public gate was given, so the merge
-and the gate can never disagree about which versions are trusted. -}
 packumentPlan :: [Contribution] -> Map Text PackageDetails -> Map Text PackageDetails -> Maybe MergePlan
 packumentPlan sources trustedVersions deniedEvidence = do
     plan <- mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
@@ -339,8 +372,7 @@ serveResolved serving sources plan = do
     liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
     answerPackumentConditional serving sources plan
 
-{- Answer the conditional packument request before any assembly. A 304 costs the fetches
-and the plan, never the document rebuild, the encode, or an output hash. -}
+-- A 304 still pays for origin reads and planning, but skips assembly and encoding.
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
 answerPackumentConditional serving sources plan = do
     let origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
@@ -417,9 +449,7 @@ servedBytes serving sources plan etag =
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
-{- | The source bytes a listing's output charge scales: the larger of two estimates, anchored on the
-largest source and on the base document, each adding the others' bytes pro rata for versions it lacks.
--}
+-- | Charge the larger source estimate, adding proportional bytes for versions missing from each anchor.
 outputBasisBytes :: MergePlan -> [Contribution] -> Int
 outputBasisBytes plan sources = foldl' max 0 (map anchoredOn anchors)
   where

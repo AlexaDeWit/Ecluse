@@ -52,6 +52,9 @@ data LoadLaw
     | WarmUnderCold
     | AdmissionRamp
     | MirrorWorker
+    | ManagedMirrorBaseline
+    | ManagedMirrorWarm
+    | ManagedMirrorRevision
     deriving stock (Eq, Ord, Show)
 
 -- | Missing measurements describe test coverage, not evidence of a production defect.
@@ -128,6 +131,9 @@ loadScenarioName ecosystem law = case ecosystem of
         WarmUnderCold -> "warm-under-cold"
         AdmissionRamp -> "ramp"
         MirrorWorker -> "worker-mirroring"
+        ManagedMirrorBaseline -> "mirror-native-baseline"
+        ManagedMirrorWarm -> "mirror-managed-warm"
+        ManagedMirrorRevision -> "mirror-managed-revision"
 
 -- | Report every missing law while retaining unrelated registered scenarios.
 loadCoverageGaps :: LoadScope -> Ecosystem -> [Text] -> [LoadGap]
@@ -136,7 +142,7 @@ loadCoverageGaps scope ecosystem actual =
         <> [MissingLoadScenario law name | law <- required, name <- maybeToList (loadScenarioName ecosystem law), Map.notMember name counts]
         <> [DuplicateLoadScenario name | (name, count) <- Map.toList counts, count > 1]
   where
-    required = requiredLoadLaws scope
+    required = requiredFor scope ecosystem
     counts = Map.fromListWith (+) [(name, 1 :: Int) | name <- actual]
 
 -- | Independent pass obligations preserve the worker's process limit and non-duration scenarios.
@@ -152,7 +158,13 @@ requiredLoadPasses scope ecosystem shape
             , whichPass <- Loaded : [ConcurrencyOne | hasServiceTime law]
             ]
   where
-    laws = requiredLoadLaws scope
+    laws = requiredFor scope ecosystem
+
+requiredFor :: LoadScope -> Ecosystem -> [LoadLaw]
+requiredFor scope ecosystem =
+    requiredLoadLaws scope <> case ecosystem of
+        PyPI -> [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision]
+        _ -> []
 
 hasServiceTime :: LoadLaw -> Bool
 hasServiceTime = \case
@@ -182,3 +194,6 @@ hasServiceTime = \case
     PublicArtifactOnboarding -> True
     PrivateArtifactCeiling -> True
     MirrorWorker -> True
+    ManagedMirrorBaseline -> True
+    ManagedMirrorWarm -> True
+    ManagedMirrorRevision -> True

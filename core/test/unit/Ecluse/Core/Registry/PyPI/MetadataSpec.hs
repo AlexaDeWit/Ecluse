@@ -22,6 +22,9 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
  )
+import Ecluse.Core.Registry.PyPI.Document (simpleEnvelope)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIStream)
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..))
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
@@ -33,13 +36,23 @@ import Ecluse.Test.Contract.Metadata.Projection (ProjectionDriver (..), metadata
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion, simpleValue)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIChunks, projectPyPIIndex, projectPyPIVersion, simpleValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
     metadataProjectionContract "pypi" projectionDriver
+    describe "worker selected envelope" $
+        it "retains supported project fields without widening ordinary selected reads" $ do
+            let body = encodeStrict (simpleIndexWith "requests" [("project-status", object ["status" .= ("active" :: Text)]), ("alternate-locations", Array (fromList [String "https://other.test/simple/requests/"]))] (filesNamed ["requests-2.34.2.tar.gz"]))
+                readMode mode = projectPyPIChunks defaultLimits requestsName mode [body] >>= projectPyPIStream defaultLimits requestsName
+            (_, worker) <- expectRight (readMode (MirrorRead requestsName "2.34.2"))
+            (_, ordinary) <- expectRight (readMode (SelectedRead requestsName "2.34.2"))
+            KeyMap.member "project-status" (simpleEnvelope worker) `shouldBe` True
+            KeyMap.member "alternate-locations" (simpleEnvelope worker) `shouldBe` True
+            KeyMap.member "project-status" (simpleEnvelope ordinary) `shouldBe` False
+            KeyMap.member "alternate-locations" (simpleEnvelope ordinary) `shouldBe` False
     indexSpec
     versionSpec
     paritySpec

@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), newEvaluator, pushInability)
 import Ecluse.Core.Rules.Render (renderInability, renderReason)
-import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Inability, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Inability, Reason, RuleEvidence (evName, evVersion), completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -135,11 +135,11 @@ selectPackage counting ports counters mount ctx name stored
         decide <- newEvaluator ctx (smRules mount)
         catMaybes <$> traverse (decideVersion counting ports counters decide evidence) served
 
-{- The manifest's own entry for a version, or identity alone where it projects none. A listing can
-name a version the manifest omits, and identity is established either way. -}
+-- The listing establishes exact identity even when the manifest keys an equivalent spelling.
 evidenceIn :: PackageName -> Manifest -> Version -> RuleEvidence
-evidenceIn name manifest version =
-    maybe (identityEvidence name version) completeEvidence (selectVersion version (manifestInfo manifest))
+evidenceIn name manifest version = case selectVersion version (manifestInfo manifest) of
+    Nothing -> identityEvidence name version
+    Just details -> (completeEvidence details){evName = name, evVersion = version}
 
 {- Decide one version from whatever evidence it has and count it. Only a named decisive deny
 condemns, so this reads the engine's decision rather than the wrapper that folds in deny-by-default. -}

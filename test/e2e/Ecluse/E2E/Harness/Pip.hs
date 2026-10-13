@@ -2,15 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | pip clients for end-to-end scenarios. Each project pins one release to the digest the mount's own index
-advertised, so pip's hash-checking mode refuses any byte that is not the one the client was promised.
--}
+-- | Isolated pip clients for digest checks, dependency installs, and platform selection.
 module Ecluse.E2E.Harness.Pip (
     withPipProject,
+    pipCredentialUrl,
     pipInstallIn,
+    pipResolveIn,
     pipInstalled,
     pipInstalledTree,
     pipInstallsWheel,
+    pipInstallGraph,
+    pipInstallAndInspect,
+    PythonGraph,
+    installedPythonGraph,
+    pipObserveGraph,
+    PipTargetInstall (..),
+    pipInstallForPlatform,
 
     -- * The served index
     advertisedFiles,
@@ -19,18 +26,28 @@ module Ecluse.E2E.Harness.Pip (
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
-import System.Directory (doesDirectoryExist)
-import System.FilePath ((</>))
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
+import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath (takeDirectory, (</>))
 import Test.Hspec (Expectation, expectationFailure)
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
+import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet, shouldSucceedThroughProxy)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Contract.Install (InstallDriver (..), installsObserved)
-import Ecluse.Test.InstalledTree (InstalledTree, snapshotTree)
+import Ecluse.Test.Contract.Mirror (Observed (..))
+import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile), snapshotTree)
+
+-- | Add the fixture's URL-safe Basic credentials to its local HTTP index URL.
+pipCredentialUrl :: Text -> Text -> Text -> Text
+pipCredentialUrl username password = T.replace "http://" ("http://" <> username <> ":" <> password <> "@")
 
 -- | Pin @project==version@ to @digest@ in an isolated project removed after the action.
 withPipProject :: E2E -> Text -> Text -> Text -> (PipProject -> IO a) -> IO a
@@ -70,6 +87,30 @@ pipInstallIn proj =
         , ppDir proj </> targetDir
         , "--requirement"
         , ppDir proj </> requirementsFile
+        ]
+
+-- | Resolve without hash mode, which makes pip fetch the declared metadata companion.
+pipResolveIn :: PipProject -> Text -> Text -> IO ClientResult
+pipResolveIn proj project version =
+    runClient
+        (ppDir proj)
+        (ppEnv proj)
+        "python3"
+        [ "-m"
+        , "pip"
+        , "--isolated"
+        , "install"
+        , "--dry-run"
+        , "--ignore-installed"
+        , "--no-cache-dir"
+        , "--disable-pip-version-check"
+        , "--no-input"
+        , "--only-binary=:all:"
+        , "--index-url"
+        , toString (ppIndex proj)
+        , "--target"
+        , ppDir proj </> targetDir
+        , toString (project <> "==" <> version)
         ]
 
 -- | Install the fixture wheel with its advertised digest and assert its installed metadata exists.
@@ -142,3 +183,177 @@ requirementsFile = "requirements.txt"
 
 targetDir :: FilePath
 targetDir = "site"
+
+-- | Capture every site-package file and package-installed script from a fresh virtual environment.
+pipInstallGraph :: E2E -> Text -> Text -> IO InstalledTree
+pipInstallGraph proxy project version = do
+    (result, tree) <- pipInstallAndInspect proxy project version
+    void (shouldSucceedThroughProxy proxy result)
+    pure tree
+
+-- | Return the native install outcome, all site packages, and the installed package scripts.
+pipInstallAndInspect :: E2E -> Text -> Text -> IO (ClientResult, InstalledTree)
+pipInstallAndInspect proxy project version = withInstalledGraph proxy project version $ \installed ->
+    (piClient installed,) <$> snapshotInstallation installed
+
+-- | Installed versions and dependency declarations from each package's own metadata.
+type PythonGraph = Map Text (Text, [Text])
+
+-- | Observe graph, root exports, and the installed executable through the native virtual environment.
+pipObserveGraph :: E2E -> Text -> Text -> Text -> IO (Observed PythonGraph Value, Either Text [(Text, Text)])
+pipObserveGraph proxy project version executableName = withInstalledGraph proxy project version $ \installed -> do
+    tree <- snapshotInstallation installed
+    exported <-
+        observeJson
+            installed
+            (piPython installed)
+            ["-B", "-c", "import importlib,json,sys\nprint(json.dumps(importlib.import_module(sys.argv[1]).export(), sort_keys=True))", toString (T.replace "-" "_" project)]
+    executed <- observeJson installed (takeDirectory (piPython installed) </> toString executableName) []
+    pure (Observed (installedPythonGraph tree) exported (Just executed) tree (piClient installed) (piInitial installed), piSources installed)
+
+data PipInstallation = PipInstallation
+    { piClient :: ClientResult
+    , piDirectory :: FilePath
+    , piPython :: FilePath
+    , piSite :: FilePath
+    , piScriptRoots :: [FilePath]
+    , piEnvironment :: [(String, String)]
+    , piInitial :: [FilePath]
+    , piSources :: Either Text [(Text, Text)]
+    }
+
+withInstalledGraph :: E2E -> Text -> Text -> (PipInstallation -> IO a) -> IO a
+withInstalledGraph proxy project version use = withPipProject proxy project version "" $ \client -> do
+    let virtualenv = ppDir client </> "venv"
+        python = virtualenv </> "bin" </> "python"
+        report = ppDir client </> "report.json"
+        run executable arguments = runClient (ppDir client) (ppEnv client) executable arguments >>= shouldSucceedThroughProxy proxy
+    void $ run "python3" ["-m", "venv", "--without-pip", virtualenv]
+    location <- run python ["-B", "-c", "import sysconfig\nprint(sysconfig.get_path('purelib'))"]
+    scriptLocation <- run python ["-B", "-c", "import os,sysconfig\nprint(os.path.relpath(sysconfig.get_path('scripts'),sysconfig.get_path('purelib')))"]
+    let site = toString (T.strip (crStdout location))
+        scriptDirectory = toString (T.strip (crStdout scriptLocation))
+    bootstrapScripts <- listDirectory (site </> scriptDirectory)
+    initial <- listDirectory site
+    unless (null initial) (fail "new virtual environment contains installed packages")
+    result <-
+        runClient
+            (ppDir client)
+            (ppEnv client)
+            "python3"
+            [ "-m"
+            , "pip"
+            , "--isolated"
+            , "--python"
+            , python
+            , "install"
+            , "--no-cache-dir"
+            , "--no-compile"
+            , "--disable-pip-version-check"
+            , "--no-input"
+            , "--only-binary=:all:"
+            , "--index-url"
+            , toString (ppIndex client)
+            , "--report"
+            , report
+            , toString (project <> "==" <> version)
+            ]
+    scriptNames <- listDirectory (site </> scriptDirectory)
+    let scriptRoots = [scriptDirectory </> name | name <- scriptNames, name `notElem` bootstrapScripts]
+    reported <- doesFileExist report
+    sources <- if reported then reportSources <$> readFileBS report else pure (Left "pip wrote no installation report")
+    let environment =
+            filter ((`notElem` ["PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"]) . fst) (ppEnv client)
+                <> [("PATH", takeDirectory python <> ":" <> fromMaybe "" (lookup "PATH" (ppEnv client))), ("PYTHONDONTWRITEBYTECODE", "1")]
+    use (PipInstallation result (ppDir client) python site scriptRoots environment initial sources)
+
+snapshotInstallation :: PipInstallation -> IO InstalledTree
+snapshotInstallation installed = do
+    roots <- listDirectory (piSite installed)
+    snapshotTree (piSite installed) (roots <> piScriptRoots installed)
+
+observeJson :: PipInstallation -> FilePath -> [String] -> IO (Either Text Value)
+observeJson installed executable arguments = do
+    result <- runClient (piDirectory installed) (piEnvironment installed) executable arguments
+    pure $ case crExit result of
+        ExitSuccess -> first toText (Aeson.eitherDecodeStrict (encodeUtf8 (crStdout result)))
+        _ -> Left (crCommand result <> " failed: " <> crStderr result)
+
+-- | Read the actual installed metadata, rejecting missing identities and duplicate project names.
+installedPythonGraph :: InstalledTree -> Either Text PythonGraph
+installedPythonGraph tree = do
+    packages <- traverse metadata [bytes | (path, TreeFile _ bytes) <- Map.toList tree, ".dist-info/METADATA" `T.isSuffixOf` toText path]
+    let graph = Map.fromList packages
+    unless (Map.size graph == length packages) (Left "installed metadata repeats a project")
+    pure graph
+  where
+    metadata bytes = do
+        document <- first (const "installed metadata is not UTF-8") (TE.decodeUtf8' bytes)
+        let headers = T.lines (fst (T.breakOn "\n\n" document))
+            fields name = mapMaybe (T.stripPrefix (name <> ": ")) headers
+        name <- uniqueField "Name" (fields "Name")
+        version <- uniqueField "Version" (fields "Version")
+        pure (name, (version, fields "Requires-Dist"))
+    uniqueField _ [value] = Right value
+    uniqueField name _ = Left ("installed metadata lacks one " <> name)
+
+-- | Cross-target installation evidence. The target files are inspected without executing foreign code.
+data PipTargetInstall = PipTargetInstall
+    { ptiClient :: ClientResult
+    , ptiTree :: InstalledTree
+    , ptiSources :: Either Text [(Text, Text)]
+    }
+    deriving stock (Show)
+
+-- | Install the complete dependency graph for a named platform into a fresh target directory.
+pipInstallForPlatform :: E2E -> Text -> Text -> Text -> IO PipTargetInstall
+pipInstallForPlatform proxy project version platform = withPipProject proxy project version "" $ \client -> do
+    let destination = ppDir client </> "target"
+        report = ppDir client </> "report.json"
+    result <-
+        runClient
+            (ppDir client)
+            (ppEnv client)
+            "python3"
+            [ "-m"
+            , "pip"
+            , "--isolated"
+            , "install"
+            , "--no-cache-dir"
+            , "--no-compile"
+            , "--disable-pip-version-check"
+            , "--no-input"
+            , "--ignore-installed"
+            , "--platform"
+            , toString platform
+            , "--python-version"
+            , "3.12"
+            , "--only-binary=:all:"
+            , "--index-url"
+            , toString (ppIndex client)
+            , "--target"
+            , destination
+            , "--report"
+            , report
+            , toString (project <> "==" <> version)
+            ]
+    exists <- doesDirectoryExist destination
+    roots <- if exists then listDirectory destination else pure []
+    tree <- snapshotTree destination roots
+    reported <- doesFileExist report
+    sources <- if reported then reportSources <$> readFileBS report else pure (Left "pip wrote no installation report")
+    pure PipTargetInstall{ptiClient = result, ptiTree = tree, ptiSources = sources}
+
+reportSources :: ByteString -> Either Text [(Text, Text)]
+reportSources bytes =
+    first toText (Aeson.eitherDecodeStrict bytes) >>= \case
+        Object report | Just (Array installed) <- KeyMap.lookup "install" report -> traverse source (toList installed)
+        _ -> Left "pip report has no install array"
+  where
+    source (Object entry)
+        | Just (Object metadata) <- KeyMap.lookup "metadata" entry
+        , Just (String name) <- KeyMap.lookup "name" metadata
+        , Just (Object download) <- KeyMap.lookup "download_info" entry
+        , Just (String url) <- KeyMap.lookup "url" download =
+            Right (name, url)
+    source _ = Left "pip report omits a project's name or source URL"

@@ -162,11 +162,15 @@ for packages that differ from the corpus. The all-shape figure is the smallest t
 the highest peak among all the listings. Those add the heavy bases, merges whose private document
 holds far more text than its version count suggests.
 
-Native qualification of packed source `62b458ab54dbdff7a296458ed094be74621ec20b` against actual main
-`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` gives a PyPI full-read charge of 3.2 and read limit of 2.75.
-npm retains its charge of 1.1 and read limit of 1.0. Output charges and independent retained limits stay unchanged.
-The [qualified calibration](../testing.md#qualified-packed-integration) records the exact arithmetic and source context.
-The factor-update candidate still requires fresh review, CI, native measurements and default npm and PyPI loads.
+Canonical sidecars add retained read state. The [sidecar measurements](../testing.md#listing-peaks) give
+PyPI a full-read charge of 3.5 and a read limit of 3.25 under the formulas above and below.
+The per-source-byte charge rises 9.375% from 3.2, so the same admission budget admits less read work before pausing.
+npm retains its charge of 1.1 and read limit of 1.0.
+
+Earlier qualification of packed source `62b458ab54dbdff7a296458ed094be74621ec20b` against actual main
+`efece1f1fca410dc1d214dcc76a99f106e2a0ff7` gave PyPI a full-read charge of 3.2 and read limit of 2.75.
+The [qualified calibration](../testing.md#qualified-packed-integration) records that arithmetic and source context.
+A charge revision requires fresh review, CI, native measurements and default npm and PyPI loads.
 The following historical snapshots retain their original measurements and charge conclusions.
 
 #### Packed-file qualification before parser integration
@@ -248,8 +252,8 @@ response charge is 1.25 times the highest working set per basis byte that the re
 measures for one ecosystem, from one step of basis up, rounded up to a tenth. It takes the
 realistic shapes: a single document, and merges whose documents are identical, overlap, share no
 version, or put the newest quarter of the versions in the private copy, as a registry that holds
-the versions a deployment consumed does. The same run gives npm's charge as 2.0 (@aws-sdk/client-s3
-at 1.523900) and PyPI's as 1.6 (boto3 at 1.242301). The tier also renders heavy bases that render
+the versions a deployment consumed does. The measurements give npm's charge as 2.0 (@aws-sdk/client-s3
+at 1.523900). PyPI's charge is 1.9 (NumPy at 1.476585 after retaining canonical sidecars). The tier also renders heavy bases that render
 far more than their version count suggests, and from one step of basis up holds each of them
 within the output charge. Below one step, the whole meter steps a response pays for hold every
 listing's output working set, heavy bases included, and the tier checks that too.
@@ -259,8 +263,8 @@ or render outgrow what the meter holds for them, so a representation change cann
 outgrow a charge. From one step up, it fails once a single document's read peak or a realistic
 listing's output working set passes a regression limit. Each limit is the smallest quarter step at
 least 8% above its measured maximum. The current read limits sit 0.1 under npm's charge
-and 0.45 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
-npm and 1.5 for PyPI, 0.25 and 0.1 under their charges.
+and 0.25 under PyPI's charge. The output limits, set over the realistic shapes, are 1.75 per basis byte for
+npm and PyPI, 0.25 and 0.15 under their charges.
 
 A charge above what a request holds costs throughput. After each major collection the sampler
 measures the live data outside the charges, so the budget may grow until charges and that remainder

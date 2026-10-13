@@ -23,6 +23,7 @@ done < <(find test/support test/contracts runtime/test-support -name '*.hs' | se
 
 hpc-codecov "${mix_args[@]}" \
   -s . \
+  -s vendor/lzma-managed \
   -x Main \
   -x Paths_ecluse \
   "${support_exclude[@]}" \

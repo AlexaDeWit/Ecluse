@@ -11,6 +11,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Lexer (Cursor)
+import Data.Primitive.SmallArray (smallArrayFromList)
 import Hedgehog (Gen, PropertyT, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -21,7 +22,7 @@ import Ecluse.Core.Registry.Json.Intern (Entry, InternTable, Interned (..), deco
 import Ecluse.Core.Registry.Json.Packed (Packed, docTable, hasHole, packedBlob, packedBytes, packedEncodedLength, packedValue, urlPrefix, valueEnd)
 import Ecluse.Core.Registry.Json.Shape (Mode (..), Shape (Generic, Scalar), Trees (..), prepareMembers, readShape)
 import Ecluse.Core.Registry.Json.Walk (Steps (Finished), withElement)
-import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, replacedMember, sealValue)
+import Ecluse.Core.Registry.Json.Writer (Pick (..), decodePicked, decodeWhole, newWriter, packTree, replacedMember, sealValue)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
 import Ecluse.Test.Json (genValue)
@@ -33,6 +34,11 @@ import Ecluse.Test.Registry.Shape (genShape, shapeNames, toShape, toShapeWith)
 -- | A read that writes fails where the tree read fails, and otherwise holds the tree it would build.
 spec :: Spec
 spec = describe "Writer" $ do
+    it "packs a retained source tree with a URL rewrite position" $ do
+        let value = Object (KeyMap.fromList [("url", String "https://source.test/files/demo.whl"), ("note", String "retained")])
+            file = packTree ["url"] value
+        packedValue (docTable (smallArrayFromList [])) file `shouldBe` Just value
+        hasHole file `shouldBe` True
     modifyMaxSuccess (const 3000) $ do
         it "packs a value that decodes and renders as the tree aeson would hold, for generated shapes, bodies and chunks" $
             hedgehog $ do

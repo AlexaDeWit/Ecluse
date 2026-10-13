@@ -16,7 +16,6 @@ import Ecluse.Core.Package (Artifact (..), Hash (hashAlg), HashAlg (SHA256), Pac
 import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody, responseStatusCode))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl), AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
-import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -27,6 +26,7 @@ import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verify
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.RegistrySmoke (liveMetadata)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Metadata.Fetch (fetchTestBody)
 import Ecluse.Test.Support (expectRight, expectRightText)
 
 -- | Only transport unavailability skips a live document or integrity check.
@@ -60,7 +60,7 @@ downloadWheel manager artifact = do
     hashes <- maybe (fail "live wheel omitted integrity hashes") pure (nonEmpty (artHashes artifact))
     NE.toList hashes `shouldSatisfy` any ((== SHA256) . hashAlg)
     request <- expectRight (artifactByUrl (adapterArtifact pypiAdapter) Nothing (artUrl artifact))
-    fetched <- boundedFetch manager (progressFloor defaultLimits) (MirrorArtifactBodyLimit wheelByteLimit) request
+    fetched <- fetchTestBody manager (progressFloor defaultLimits) (MirrorArtifactBodyLimit wheelByteLimit) request
     case fetched of
         Left (FetchTransport fault) -> pendingWith ("PyPI files host unreachable: " <> show fault)
         _ -> do

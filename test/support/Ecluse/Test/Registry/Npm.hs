@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared npm fixtures: packument and version-object builders, the public-registry
-defaults, the mirror-write subject, the name grammar as a table, and the URL
-path-segment generators.
-
-'npmNameVerdicts' is the one list every entry point that splits an npm name asserts
-against, so a verdict cannot drift between the read path, the route, the URL rewrite,
-the publish allow-list, and the queue decode.
+{- | Shared npm source documents, mirror upload data, names, and client fixtures.
+The name-verdict table keeps the protocol entry points on one grammar.
 -}
 module Ecluse.Test.Registry.Npm (
     -- * Packument fixtures
@@ -26,6 +21,7 @@ module Ecluse.Test.Registry.Npm (
     dummyArtifact,
     isOddVersionDoc,
     sourceVersionDoc,
+    mirrorVersionDoc,
 
     -- * The npm name grammar, as a shared table
     npmNameVerdicts,
@@ -56,15 +52,16 @@ import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (Secret, bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Package (Artifact (artFilename, artHashes, artSize, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocToken), originClient)
 import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
+import Ecluse.Core.Server.Path (unFilename)
+import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Test.Package (sampleArtifact, sampleDetails, unsafeFilename, unsafeHash, unscopedNpm, validSha1)
 import Ecluse.Test.Server.Route (genPathSegmentFrom, genSegmentName)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
@@ -140,6 +137,16 @@ sourceVersionDoc details =
             { vsIntegrity = digestOf SRI
             , vsShasum = digestOf SHA1
             }
+
+-- | Pair publication fields with a descriptor for tests that vary the mirror input.
+mirrorVersionDoc :: PackageName -> Version -> CachedDoc -> MirrorArtifact -> VersionDoc
+mirrorVersionDoc name version raw artifact =
+    VersionDoc
+        { vdDetails = (sampleDetails name version){pkgArtifacts = selected :| []}
+        , vdRaw = Just raw
+        }
+  where
+    selected = sampleArtifact{artFilename = unFilename (maFilename artifact), artHashes = toList (maHashes artifact), artSize = maSize artifact}
 
 {- | The common fields of an npm version object. An extra pair in 'vsExtraPairs' overrides the
 common field with the same key.

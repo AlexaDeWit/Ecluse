@@ -77,6 +77,10 @@ data BootError
       The mirror could never publish, so the mount is refused rather than booted half-wired.
       -}
       MirrorTargetWithoutPublish Ecosystem
+    | -- | A PyPI mirror role cannot retain or validate its expected inventory without durable state.
+      MirrorStateRequired Ecosystem
+    | -- | An active native writer lacks its endpoint or credential convention.
+      UploadConfigurationRequired Ecosystem Text
     | -- | A publication target has no adapter that can write its ecosystem's protocol.
       PublicationTargetWithoutPublish Ecosystem
     | {- | A publication target is set and the mount declares no first-party namespaces, so the
@@ -272,6 +276,10 @@ renderBootError = \case
             <> " is set but this build writes nothing for the "
             <> ecosystemName eco
             <> " protocol: the mirror would drain its queue with no way to publish, so the mount is refused rather than served with a mirror that fails every job."
+    MirrorStateRequired eco ->
+        "mirrorState.url is required for mirroring on the " <> ecosystemName eco <> " mount"
+    UploadConfigurationRequired eco key ->
+        mountDocRef eco key <> " is required before this role writes native uploads"
     PublicationTargetWithoutPublish eco ->
         mountKeyRef eco "publicationTarget"
             <> " is set but this build writes nothing for the "

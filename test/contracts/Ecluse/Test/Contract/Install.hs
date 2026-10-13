@@ -6,6 +6,12 @@
 module Ecluse.Test.Contract.Install (
     ClientResult (..),
     InstallDriver (..),
+    TargetPortability (..),
+    TargetObservation (..),
+    TargetExpectation (..),
+    TargetRefusal (..),
+    crossTargetInstallCase,
+    targetInstallCase,
     InstallationDriver (..),
     installationContract,
     RefusalDriver (..),
@@ -18,12 +24,13 @@ module Ecluse.Test.Contract.Install (
     clientReport,
 ) where
 
+import Data.Map.Strict qualified as Map
+import Ecluse.Test.InstalledTree (InstalledTree, TreeEntry (TreeFile))
 import System.Exit (ExitCode (ExitSuccess))
-import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe)
+import Test.Hspec (Expectation, SpecWith, expectationFailure, it, shouldBe, shouldMatchList, shouldNotBe, shouldSatisfy)
 
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Ecluse.Test.Contract.Serving (ServingResponse, artifactDigestCase, artifactHeadCase)
-import Ecluse.Test.InstalledTree (InstalledTree)
 
 -- | The outcome of one client invocation: what ran, its exit code, and its captured output.
 data ClientResult = ClientResult
@@ -122,3 +129,63 @@ clientReport res outcome =
         <> crStdout res
         <> "\nSTDERR:\n"
         <> crStderr res
+
+-- | Portable artifacts make no foreign-architecture claim. Architecture-specific installs name their target.
+data TargetPortability = ArchitectureIndependent | ArchitectureSpecific Text
+    deriving stock (Eq, Show)
+
+-- | Independent expected selections and installed marker bytes for one target.
+data TargetExpectation = TargetExpectation
+    { targetExpectedPortability :: TargetPortability
+    , targetExpectedArtifacts :: [Text]
+    , targetExpectedMarkers :: [(FilePath, ByteString)]
+    }
+
+-- | Evidence from a real isolated installation, including its native source report and installed graph.
+data TargetObservation graph = TargetObservation
+    { targetPortability :: TargetPortability
+    , targetClient :: ClientResult
+    , targetGraph :: Either Text graph
+    , targetArtifacts :: Either Text [Text]
+    , targetTree :: InstalledTree
+    }
+
+-- | A real unsupported-target attempt and every file it left in its new destination.
+data TargetRefusal = TargetRefusal
+    { targetRefusedClient :: ClientResult
+    , targetRefusedTree :: InstalledTree
+    }
+
+-- | Require actual target selection, installed contents, and the applicable refusal control.
+crossTargetInstallCase :: (Eq graph, Show graph) => graph -> (TargetExpectation, TargetExpectation) -> (TargetObservation graph, TargetObservation graph) -> Maybe TargetRefusal -> Expectation
+crossTargetInstallCase graph (sourceExpected, mirrorExpected) (source, mirrored) refused = do
+    targetInstallCase graph sourceExpected source
+    targetInstallCase graph mirrorExpected mirrored
+    case (targetExpectedPortability sourceExpected, targetExpectedPortability mirrorExpected) of
+        (ArchitectureIndependent, ArchitectureIndependent) -> do
+            targetExpectedArtifacts sourceExpected `shouldMatchList` targetExpectedArtifacts mirrorExpected
+            isNothing refused `shouldBe` True
+        (ArchitectureSpecific sourceArchitecture, ArchitectureSpecific mirrorArchitecture) -> do
+            sourceArchitecture `shouldNotBe` ""
+            mirrorArchitecture `shouldNotBe` sourceArchitecture
+            mirrorArchitecture `shouldNotBe` ""
+            targetExpectedMarkers sourceExpected `shouldSatisfy` (not . null)
+            targetExpectedMarkers mirrorExpected `shouldSatisfy` (not . null)
+            case refused of
+                Just control -> do
+                    void (shouldFail (targetRefusedClient control))
+                    targetRefusedTree control `shouldBe` Map.empty
+                Nothing -> expectationFailure "architecture-specific installation lacks its unsupported-target control"
+        _ -> expectationFailure "source and mirror disagree about artifact portability"
+
+-- | Require the declared target, graph, artifact selection, and installed marker bytes.
+targetInstallCase :: (Eq graph, Show graph) => graph -> TargetExpectation -> TargetObservation graph -> Expectation
+targetInstallCase graph expected observed = do
+    void (shouldSucceed (targetClient observed))
+    targetPortability observed `shouldBe` targetExpectedPortability expected
+    targetGraph observed `shouldBe` Right graph
+    targetExpectedArtifacts expected `shouldSatisfy` (not . null)
+    actual <- either (fail . toString) pure (targetArtifacts observed)
+    actual `shouldMatchList` targetExpectedArtifacts expected
+    for_ (targetExpectedMarkers expected) $ \(path, bytes) ->
+        Map.lookup path (targetTree observed) `shouldBe` Just (TreeFile False bytes)

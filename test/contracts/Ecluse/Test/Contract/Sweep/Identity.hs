@@ -77,8 +77,8 @@ identityScenarios IdentityFixture{..} stores@StoreOps{..} ClientOps{..} SweepOps
         privateInitial <- storeSnapshot cache
         run <- runSweep plane WithoutConsent (FullIdentity (packageName identityDenied))
         (sweepExit run, sweepOutput run) `shouldSatisfy` ((/= ExitSuccess) . fst)
-        sweepOutput run `shouldSatisfy` T.isInfixOf (identityConsentKey <> " is not set")
-        sweepEvents run `shouldBe` []
+        sweepOutput run `shouldSatisfy` T.isInfixOf identityConsentDiagnostic
+        sweepEvents run `shouldBe` identityConsentEvents
         storeSnapshot cache `shouldReturn` privateInitial
         storeSnapshot e2e `shouldReturn` initial
 

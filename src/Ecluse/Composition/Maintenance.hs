@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Vet store backends, then build the boot role's maintenance or observation capabilities.
-The preview observes the declared private cache without constructing a deletion handle. No cleared
-type's constructor is exported, so a value a deletion handle builds from exists only where a pass
-here issued it.
--}
+-- | Vet store backends and build role-specific maintenance, observation and upstream probes.
 module Ecluse.Composition.Maintenance (
     -- * The config-decidable half
     ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest),
@@ -53,7 +49,7 @@ import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, byStoreRole, rule
 import Ecluse.Config (
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     DeletionConsent (DeletionPermitted, DeletionWithheld),
-    MirrorTarget (mtBackend, mtUrl),
+    MirrorTarget (mtBackend, mtUrl, mtUsername),
     Mount (mountRegistries),
     MountConfig (mntPrivateUpstream),
     MountMap,
@@ -69,7 +65,7 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Target (resolvePrivateBackend)
-import Ecluse.Core.Credential (ClientCredential, CredentialProvider, Secret, bareCredential, mintSecret)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), CredentialProvider, Secret, bareCredential, mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
@@ -129,18 +125,16 @@ import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation, newCodeArtifactUpstreamProbe)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
-{- | A store a deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends' and
-'vetPrivateCaches' issue one, so no store their passes did not clear gets a handle that can delete.
--}
+-- | A store cleared by its role-specific pass. Its constructor stays private.
 data ClearedBackend = ClearedBackend
     { cbUrl :: RegistryUrl
     -- ^ Where the store answers, which is both what a sweep reads and what it deletes from.
     , cbAlphabet :: NameAlphabet
     -- ^ The characters a full walk partitions this store's names by.
     , cbFetchManifest :: ManifestFetch
-    {- ^ The mount ecosystem's own manifest read, which the root leads over the store's endpoint
-    rather than over the public upstream.
-    -}
+    -- ^ The ecosystem's metadata read, directed at this store.
+    , cbUsername :: Maybe Text
+    -- ^ The target's resolved credential username, paired with each refreshed secret.
     , cbControl :: ClearedControl
     -- ^ The backend control plane.
     }
@@ -167,14 +161,10 @@ data ClearedProtocolStore = ClearedProtocolStore
     , cpsCodec :: PublishCodec
     }
 
-{- | How the pass resolves a mount's ecosystem to the adapter this build ships, injected so a
-spec drives the protocol rule over an adapter that fills no maintenance slice.
--}
+-- | Resolve each ecosystem to the adapter whose maintenance capabilities the pass checks.
 type ResolveMaintenanceAdapter = Ecosystem -> Maybe RegistryAdapter
 
-{- | The rule every declared mirror target meets: its resolved backend offers a control plane this
-build can sweep. Both store roles refuse a target that fails it, and a writing role ignores it.
--}
+-- | Require a sweepable backend for both Dredger modes. Writing roles skip this check.
 vetStoreBackends :: ResolveMaintenanceAdapter -> MountMap -> Vet (Map Ecosystem ClearedBackend)
 vetStoreBackends resolveAdapter mounts = withRole $ \role ->
     let resolved = resolvedFor role
@@ -214,7 +204,7 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
     resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
             (backend, store) <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
-            pure (Just backend, clearedBackend (tgtUrl target) adapter (ClearedCodeArtifactCache store))
+            pure (Just backend, clearedBackend (tgtUrl target) (Just "aws") adapter (ClearedCodeArtifactCache store))
         TagRegistry -> Left (PrivateCacheUnavailable "registry has no inventory control plane")
         TagVerdaccio -> do
             when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $
@@ -222,7 +212,7 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
             when (role == MirrorPruner && isNothing (preToken endpoint)) $
                 Left (PrivateCacheUnavailable (mountKeyRef eco "privateUpstream.verdaccio.token" <> " is not set"))
             store <- protocolStoreFor adapter TagVerdaccio (preToken endpoint) (preConsent endpoint) descriptor
-            pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) adapter (ClearedProtocol store))
+            pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) Nothing adapter (ClearedProtocol store))
       where
         target = preTarget endpoint
         adapter = resolveAdapter eco
@@ -236,8 +226,7 @@ unmaintainedOf (eco, outcome) = (eco,) <$> leftToMaybe outcome
 clearedOf :: [(Ecosystem, Either reason a)] -> Map Ecosystem a
 clearedOf resolved = Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
 
-{- Whether this role's boot needs the operator's own deletion key in hand. A preview reads the
-store and changes nothing, so the key is a finding it reports rather than one it refuses on. -}
+-- A preview reports missing consent instead of refusing boot.
 refusesWithoutConsent :: RegistryRole -> Bool
 refusesWithoutConsent = \case
     MirrorWriter -> False
@@ -246,7 +235,7 @@ refusesWithoutConsent = \case
 
 -- The store a resolved backend lets the Dredger reach, or why this build reaches none.
 sweepableStore :: RegistryRole -> Maybe RegistryAdapter -> Ecosystem -> MirrorTarget -> Either StoreMaintenanceReason ClearedBackend
-sweepableStore role mAdapter eco target = clearedBackend (mtUrl target) mAdapter <$> control
+sweepableStore role mAdapter eco target = clearedBackend (mtUrl target) (mtUsername target) mAdapter <$> control
   where
     backend = mtBackend target
     control = case sbControl backend of
@@ -256,12 +245,13 @@ sweepableStore role mAdapter eco target = clearedBackend (mtUrl target) mAdapter
             when (consent == DeletionWithheld && refusesWithoutConsent role) (Left (DeletionNotPermitted (sbTag backend)))
             ClearedProtocol <$> protocolStoreFor mAdapter (sbTag backend) (Just token) consent (consentDescriptor eco (sbTag backend))
 
-clearedBackend :: RegistryUrl -> Maybe RegistryAdapter -> ClearedControl -> ClearedBackend
-clearedBackend url adapter control =
+clearedBackend :: RegistryUrl -> Maybe Text -> Maybe RegistryAdapter -> ClearedControl -> ClearedBackend
+clearedBackend url username adapter control =
     ClearedBackend
         { cbUrl = url
         , cbAlphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) adapter
         , cbFetchManifest = maybe absentManifestRead (fetchManifest . metadataRead . adapterMetadata) adapter
+        , cbUsername = username
         , cbControl = control
         }
 
@@ -300,9 +290,7 @@ data StorePorts = StorePorts
     -- ^ What this store's requests are counted and paced through.
     }
 
-{- | What the boot knows about request capacity before any store is built: the gate for each
-capacity pool, and what the operator declared about those pools.
--}
+-- | Capacity declarations and request gates resolved before store construction.
 data BudgetPorts = BudgetPorts
     { bpGateFor :: QuotaScope -> RequestGate
     , bpOverrides :: Map Text QuotaOverride
@@ -310,19 +298,13 @@ data BudgetPorts = BudgetPorts
     -- ^ The sweep's own package pace, which a backend publishing no quota is taken to run at.
     }
 
-{- | How a boot builds one store's maintenance handle, under the response bound the plan resolved.
-Injected, as the queue builder is, so a spec drives the pruner's arm without an AWS identity.
--}
+-- | Build maintenance for a cleared store under the resolved response limits.
 type BuildStoreMaintenance = StorePorts -> Limits -> ClearedBackend -> IO StoreMaintenance
 
-{- | How a boot builds the observing calls for a cleared store, under the same bound. Nothing it
-builds can delete, write a marker, or publish.
--}
+-- | Build observations without deletion, marker writes or publication.
 type BuildStoreObservation = StorePorts -> Limits -> ClearedBackend -> IO StoreObservation
 
-{- | The builds a boot chooses between: one per Dredger authority, and the serving role's probe.
-The role picks its own, so a preview's boot never runs the build that holds a delete.
--}
+-- | Role-specific constructors. Preview construction never creates deletion handles.
 data StoreBuilds = StoreBuilds
     { sbDeleting :: BuildStoreMaintenance
     , sbObserving :: BuildStoreObservation
@@ -338,14 +320,10 @@ storeBuilds =
         , sbProbing = buildUpstreamProbe
         }
 
-{- | How a boot builds the probe for one mount's private upstream. Injected, as the store builds
-are, so a spec drives what a boot does with an answer without an AWS identity.
--}
+-- | Build the probe for one private upstream under the role's own authority.
 type BuildUpstreamProbe = Ecosystem -> PrivateEndpoint -> IO UpstreamSafety
 
-{- | The shipped build. It asks the backend the mount declared, over the role's own ambient
-identity, so no caller's credential reaches the call.
--}
+-- | Probe the declared backend with the role's ambient identity, never a caller's credential.
 buildUpstreamProbe :: BuildUpstreamProbe
 buildUpstreamProbe eco endpoint = case tgtTag target of
     -- 'vetPrivateRepository' refuses an endpoint addressing no repository, so this resolution
@@ -356,9 +334,7 @@ buildUpstreamProbe eco endpoint = case tgtTag target of
   where
     target = preTarget endpoint
 
-{- | Read every probe's answer. A backend reads its own identity and its own faults into an
-answer, so a throw that reaches here refuses the mount rather than passing for an open question.
--}
+-- | Collect probe answers and refuse the affected mounts when a probe throws.
 readUpstreamSafety :: [(Ecosystem, IO UpstreamSafety)] -> IO ([Advisory], Either [BootError] ())
 readUpstreamSafety probes = settled . partitionEithers <$> traverse answer probes
   where
@@ -368,9 +344,7 @@ readUpstreamSafety probes = settled . partitionEithers <$> traverse answer probe
         let (advisories, refused) = upstreamFindings answers
          in (advisories, refusals (concat thrown <> fromLeft [] refused))
 
-{- | What a boot does about the answers it read: an unsafe repository refuses the role, an open
-question advises, and a safe one says nothing.
--}
+-- | Refuse unsafe upstreams, advise on undecidable ones, and accept safe ones.
 upstreamFindings :: [(Ecosystem, UpstreamSafety)] -> ([Advisory], Either [BootError] ())
 upstreamFindings answers = (advisories, refusals unsafeMounts)
   where
@@ -381,9 +355,7 @@ upstreamFindings answers = (advisories, refusals unsafeMounts)
 refusals :: [BootError] -> Either [BootError] ()
 refusals found = if null found then Right () else Left found
 
-{- | The live handle for a cleared store. CodeArtifact discovers its credentials the standard AWS
-way, and both arms read and dial over one manager of the store's own.
--}
+-- | Build maintenance using store-local metadata reads and backend-owned control credentials.
 buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
   where
@@ -396,17 +368,14 @@ buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
                 deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
                 pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
 
-{- The handle under this store's resolved capacity, with every request it makes counted and paced.
-The capacity resolves first, because the pool it names is the pool the gate meters in. -}
+-- Resolve the capacity pool before metering requests against it.
 budgeted :: StorePorts -> ClearedBackend -> StoreMaintenance -> StoreMaintenance
 budgeted ports cleared handle =
     (meteredMaintenance (gateOver ports facts) handle){storeFacts = facts}
   where
     facts = resolvedFacts ports cleared (storeFacts handle)
 
-{- | The observing calls for a cleared store, built from the backend's own read capability rather
-than from a handle with its writes taken away.
--}
+-- | Build the cleared backend's observation capability without constructing deletion handles.
 buildStoreObservation :: BuildStoreObservation
 buildStoreObservation ports limits cleared = observed <$> built
   where
@@ -429,15 +398,11 @@ resolvedFacts ports cleared facts =
 gateOver :: StorePorts -> StoreFacts -> RequestGate
 gateOver ports facts = bpGateFor (spBudget ports) (bgScope (factBudget facts))
 
-{- | The pool a store falls in when its backend names none of its own: the store's own authority,
-so two paths on one host share it.
--}
+-- | Default to one capacity pool per authority, shared by paths on that host.
 storeScope :: RegistryUrl -> QuotaScope
 storeScope = mkQuotaScope . authorityLabel . registryUrlText
 
-{- | The spelling a declared capacity's key and a store URL are compared under, so a trailing
-slash or a difference of case cannot miss a match.
--}
+-- | Match capacity declarations without case or trailing-slash differences.
 overrideKey :: Text -> Text
 overrideKey = T.dropWhileEnd (== '/') . T.toLower . T.strip
 
@@ -447,9 +412,7 @@ matchingOverride overrides url = Map.lookup (overrideKey (registryUrlText url)) 
   where
     keyed = Map.fromList [(overrideKey key, override) | (key, override) <- Map.toList overrides]
 
-{- | The store's capacity as this boot resolves it: the backend's own description, the operator's
-declaration where there is one, else the pace a backend publishing no quota is derived to run at.
--}
+-- | Apply declared capacity over backend defaults, deriving any remaining quota from the sweep pace.
 resolvedBudget :: BudgetPorts -> RegistryUrl -> StoreBudget -> StoreBudget
 resolvedBudget ports url budget =
     -- The derivation runs last and only bites where nothing else declared a quota, so an entry
@@ -479,20 +442,17 @@ storeAccess ports limits cleared = do
     manager <- storeManager
     pure (storeManifestRead ports limits cleared manager, manager)
 
-{- One package's metadata as the store serves it, through the ecosystem's own codec. The token is
-minted per read, because a store that mints its own hands out a short-lived one. -}
+-- Resolve the current secret for each read because managed tokens expire.
 storeManifestRead :: StorePorts -> Limits -> ClearedBackend -> Manager -> StoreManifestRead
 storeManifestRead ports limits cleared manager name = do
     token <- traverse mintSecret (spCredential ports)
-    -- A minted store token carries no username: the store's own control plane, not a caller's.
     first storeFaultOfMetadata
-        <$> cbFetchManifest cleared (spTracing ports) (storeOrigin limits cleared manager (bareCredential <$> token)) name
+        <$> cbFetchManifest cleared (spTracing ports) (storeOrigin limits cleared manager (ClientCredential (cbUsername cleared) <$> token)) name
 
 storeOrigin :: Limits -> ClearedBackend -> Manager -> Maybe ClientCredential -> OriginClient
 storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
-{- No proxy tracing: these calls are not the data plane. Dropping http-client's hidden replay on
-a reused connection keeps every attempt one the request budget counted. -}
+-- Disable hidden HTTP replay so every attempt consumes the store's request budget.
 storeManager :: IO Manager
 storeManager = newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
 
@@ -520,17 +480,14 @@ protocolRead limits cleared store readManifest manager =
         , prConsentDescriptor = cpsConsentKey store
         }
 
-{- The key an operator sets, which the store's own withheld verdict names. The deleting role's
-pass refuses a store without it, and its preview reports the verdict instead. -}
+-- Deletion requires consent at boot. Preview reports withheld consent instead.
 consentDescriptor :: Ecosystem -> StoreTag -> Text
 consentDescriptor eco tag =
     "set "
         <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
         <> " to true: the Dredger deletes nothing from a store that does not carry it"
 
-{- | Build the booting role's own capabilities for each cleared store, or every refusal the live
-environment earns. The builds accumulate, so one launch reports every store that cannot be built.
--}
+-- | Build each cleared store and collect all construction refusals before returning.
 planStoreMaintenance ::
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->

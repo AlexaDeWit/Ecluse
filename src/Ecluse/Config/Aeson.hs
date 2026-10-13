@@ -48,6 +48,7 @@ mountDecoder eco =
         <*> optionalKey "publicationTarget" parsePublicationTarget
         <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
+        <*> optionalKey "maxRequestBytes" parsePositiveInt
         <* unreadKey "rules"
 
 -- Each endpoint admits exactly the tags and keys its cell of the store admission matrix names,
@@ -64,11 +65,12 @@ parseReadTarget = taggedTarget [readCase TagRegistry, readCase TagCodeArtifact, 
 parseMirrorTarget :: String -> Value -> Parser MirrorEndpoint
 parseMirrorTarget =
     taggedTarget
-        [ TagCase (tagKey TagRegistry) (MirrorEndpoint <$> targetUrl <*> (WriteRegistry <$> writeToken))
-        , TagCase (tagKey TagCodeArtifact) (MirrorEndpoint <$> targetUrl <*> (WriteCodeArtifact <$> mintLifetime))
-        , TagCase (tagKey TagVerdaccio) (MirrorEndpoint <$> targetUrl <*> (WriteVerdaccio <$> writeToken <*> deletionConsent))
+        [ TagCase (tagKey TagRegistry) (mirrorEndpoint (WriteRegistry <$> writeToken))
+        , TagCase (tagKey TagCodeArtifact) (mirrorEndpoint (WriteCodeArtifact <$> mintLifetime))
+        , TagCase (tagKey TagVerdaccio) (mirrorEndpoint (WriteVerdaccio <$> writeToken <*> deletionConsent))
         ]
   where
+    mirrorEndpoint write = MirrorEndpoint <$> targetUrl <*> write <*> optionalKey "uploadUrl" parseRegistryUrl <*> optionalKey "username" parseCredentialUsername
     writeToken = requiredKey "token" parseSecret
     mintLifetime = optionalKey "tokenDuration" parseCodeArtifactDuration
 
@@ -76,7 +78,12 @@ parsePublicationTarget :: String -> Value -> Parser PublicationEndpoint
 parsePublicationTarget = taggedTarget (map publishCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
   where
     publishCase tag =
-        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "token" parseSecret)
+        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "token" parseSecret <*> optionalKey "username" parseCredentialUsername)
+
+parseCredentialUsername :: String -> Text -> Parser Text
+parseCredentialUsername field username
+    | T.any (`elem` [':', '\r', '\n', '\0']) username = fail (field <> " contains a Basic credential delimiter")
+    | otherwise = pure username
 
 -- The one key every tag admits, refined by the egress boundary's own constructor.
 targetUrl :: GroupDecoder RegistryUrl
@@ -113,6 +120,7 @@ documentDecoder =
         <*> nestedKey "integrity" (decodeGroup "integrity" integrityDecoder)
         <*> nestedKey "egress" (decodeGroup "egress" egressDecoder)
         <*> nestedKey "advisories" (decodeGroup "advisories" advisoriesDecoder)
+        <*> nestedKey "mirrorState" (decodeGroup "mirrorState" (optionalKey "url" parseAdvisoryStoreUrl))
         <*> nestedKey "runtime" (decodeGroup "runtime" runtimeDecoder)
         <*> nestedKey "observability" (decodeGroup "observability" observabilityDecoder)
         <*> nestedKey "dredger" (decodeGroup "dredger" dredgerDecoder)

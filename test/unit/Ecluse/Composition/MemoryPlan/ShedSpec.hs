@@ -9,18 +9,18 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.MemoryPlan (MemoryPlan (..), QueueTenantDemand (NoQueueTenant), planCacheConfig, resolveMemoryPlan)
+import Ecluse.Composition.MemoryPlan (MemoryPlan (..), QueueTenantDemand (NoQueueTenant), planCacheConfig, resolveMemoryPlanForMounts)
 import Ecluse.Composition.Support (expectAppConfig, gib, mib, noCeiling, staticEnvVars)
 import Ecluse.Config (AppConfig (..), CacheSettings (..))
 import Ecluse.Core.Package (CodeExecSignal (RunsCodeOnInstall), PackageDetails (pkgInstallCode))
 import Ecluse.Core.Registry.Metadata (VersionRead)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Cache.Backend.Internal (CacheOccupancy (..), Recency (PreserveRecency), RetentionBackend (..))
-import Ecluse.Core.Server.Cache.Provider (localCacheProvider, providerAssembled, providerFull, providerVersion)
+import Ecluse.Core.Server.Cache.Provider (providerAssembled, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Types (CacheKey, Source (Source), versionKey)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Test.Package (npmVersion, sampleDetails, thingName, v1_0_0)
-import Ecluse.Test.Server.Cache (assembledKeyFor)
+import Ecluse.Test.Server.Cache (assembledKeyFor, localCacheProvider)
 import Ecluse.Test.Snapshot (untaggedRead)
 
 -- | Check count policy against retention, byte pressure, and explicit pins.
@@ -85,7 +85,7 @@ plannedCache :: Maybe Int -> Maybe Int -> IO CacheConfig
 plannedCache bytes entries = do
     app <- expectAppConfig staticEnvVars Nothing
     let settings = (cfgCache app){csMaxBytes = bytes, csMaxEntries = entries}
-        (plan, _) = resolveMemoryPlan settings (cfgLimits app) (cfgQueue app) Nothing noCeiling NoQueueTenant False
+        (plan, _) = resolveMemoryPlanForMounts settings (cfgLimits app) (cfgQueue app) Nothing noCeiling NoQueueTenant []
     mpOverrideViolations plan `shouldBe` []
     pure (planCacheConfig settings plan)
 

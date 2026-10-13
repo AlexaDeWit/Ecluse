@@ -19,13 +19,14 @@ import Ecluse.Core.Registry.Json.Shape (Members, Mode (..), Shape (..), Trees (.
 import Ecluse.Core.Registry.Json.Walk (FieldStep, Step, Steps (..), Walk, Walked (..), eachItem, eachMember, pureStep, skipFrom, skipRest, tooDeep, withElement)
 import Ecluse.Core.Registry.Json.Walk qualified as Walk
 import Ecluse.Core.Registry.PyPI.FileWriter (FileValue, FileWriter)
+import Ecluse.Core.Registry.PyPI.PendingSidecar (readPendingSidecar)
 import Ecluse.Core.Registry.PyPI.Project (FilenameMemo, filenameMemo)
 import Ecluse.Core.Registry.PyPI.Streaming (PyPIField (..), PyPIRead (..), SelectedFile (..), SelectedFileEvent (..), collectSelected, fileScalars, finishSelected, hashNames)
 import Ecluse.Core.Security (LimitError)
 
 -- | Members whose values differ in every file, so the table keeps them as read.
 fileUniqueFields :: [Text]
-fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance"]
+fileUniqueFields = ["filename", "url", "hashes", "upload-time", "provenance", "core-metadata"]
 
 -- | Walk an index into trees, retaining the first occurrence and the selected-file skip policy.
 pypiWalk :: Int -> PyPIRead -> (s -> PyPIField -> Either LimitError s) -> (s -> Bool) -> InternTable -> s -> Cursor -> Step s
@@ -59,6 +60,7 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     full = case mode of
         FullRead -> True
         SelectedRead{} -> False
+        MirrorRead{} -> True
     emit = Walk.emit step
     topField walked@(Walked table acc) name after continue = case nameBytes name of
         "name" -> envelope "name" (Scalar (depth - 1))
@@ -83,8 +85,11 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     -- A selected read carries its filename memo from file to file of one array.
     files = case mode of
         FullRead -> eachItem file
-        SelectedRead name wanted -> \done (Walked table acc) ->
-            eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
+        SelectedRead name wanted -> selected name wanted
+        MirrorRead name wanted -> selected name wanted
+
+    selected name wanted done (Walked table acc) =
+        eachItem (candidate Selection{selWanted = wanted, selBudget = depth - 3, selFields = fileFields, selHashes = hashFields}) (\(Selecting table' _ acc') -> done (Walked table' acc')) (Selecting table (filenameMemo name) acc)
 
     file (Walked table acc) position element rest continue
         | depth <= 2 = tooDeep element rest
@@ -108,8 +113,10 @@ walkIndex depth mode step finishRead readIndexFile table0 initial = start
     statusFields = namedMembers [(key, Scalar (depth - 2)) | key <- ["status", "reason"]]
 
 fileMembers :: Int -> (Members -> Members) -> Members
-fileMembers depth prepare = prepare (namedMembers (("hashes", ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) : [(key, Scalar (depth - 3)) | key <- fileScalars]))
+fileMembers depth prepare = prepare (namedMembers (digestMembers <> scalarMembers))
   where
+    digestMembers = [(key, ObjectWith (depth - 3) hashFields (Scalar (depth - 3))) | key <- ["hashes", "core-metadata"]]
+    scalarMembers = [(key, Scalar (depth - 3)) | key <- fileScalars]
     hashFields = prepare (knownMembers hashNames (Scalar (depth - 4)))
 
 data Selection = Selection
@@ -145,6 +152,8 @@ selectedFile Selection{selWanted = wanted, selBudget = budget, selFields = field
                     afterKey
             | otherwise -> readShape Trees (Scalar budget) Keep table value afterKey $ \scalar table' afterValue ->
                 continue (collect table' memo file (HashesValue scalar)) afterValue
+        "core-metadata" -> readPendingSidecar budget hashes table value afterKey $ \pending table' afterValue ->
+            continue (collect table' memo file (FileScalar "core-metadata" pending)) afterValue
         _ -> case listedMember fields name of
             Just (key, shape) -> readShape Trees shape Keep table value afterKey $ \scalar table' afterValue ->
                 case collect table' memo file (FileScalar key scalar) of

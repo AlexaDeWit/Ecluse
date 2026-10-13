@@ -23,6 +23,7 @@ module Ecluse.Core.Registry.Request (
     -- * Request building
     artifactRequestByUrl,
     joinPath,
+    sidecarUrl,
     parseRequestEither,
 ) where
 
@@ -135,3 +136,9 @@ parseRequestEither url =
     case parseRequest (toString url) of
         Just request -> Right (sealRequest request)
         Nothing -> Left (UnparseableUrl url)
+
+-- | Append the companion suffix to the path while preserving query and fragment text.
+sidecarUrl :: Text -> Text
+sidecarUrl url = path <> ".metadata" <> suffix
+  where
+    (path, suffix) = T.break (\character -> character == '?' || character == '#') url

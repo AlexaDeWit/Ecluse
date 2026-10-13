@@ -2,17 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror worker's vocabulary: the 'WorkerRuntime' the composition root assembles, the
-per-ecosystem 'WorkerPolicy' bundles a job is re-evaluated against, and the 'WorkerM' reader
-the loop runs in.
-
-The mirror write is not a runtime slot. It rides each ecosystem's bundle, so a job publishes
-only through its own ecosystem's capability. The loop is in "Ecluse.Core.Worker.Loop".
+{- | Worker capabilities bound to one mounted ecosystem and its current policy.
+The supervised loop owns receipts and records progress through this runtime.
 -}
 module Ecluse.Core.Worker.Types (
     -- * The runtime and its policy bundles
     WorkerRuntime (..),
     WorkerPolicy (..),
+    WorkerMirrorState (..),
+    WorkerStateBudget (..),
     WorkerPolicies,
 
     -- * The worker monad
@@ -32,6 +30,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Mirror.State (MirrorState, StateCharge, StateTarget)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MirrorJob (jobPackage, jobVersion), MirrorQueue)
@@ -40,6 +39,7 @@ import Ecluse.Core.Registry.Metadata (VersionEvaluation)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (HostPort, Limits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Telemetry.Span (WorkerTracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -71,18 +71,18 @@ are the serve path's own, so ingest and serve reach one decision over one policy
 data WorkerPolicy = WorkerPolicy
     { wpFirstParty :: PackageName -> Bool
     -- ^ Whether a name belongs to a namespace this deployment owns.
-    , wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
-    {- ^ Resolve one version's metadata through the guarded public origin. Total by type:
-    every failure, transport included, classifies as a 'VersionMetadataUnavailable' value.
-    -}
+    , wpResolveVersion :: StateCharge -> PackageName -> Version -> IO VersionEvaluation
+    -- ^ Resolve through the guarded public origin, charging retained source fields before parsing.
     , wpRules :: [PreparedRule]
     -- ^ The prepared rule set re-evaluated against the resolved version.
     , wpMinIntegrity :: MinIntegrity
     -- ^ The mount's public-integrity floor, re-applied through the shared admission gate.
     , wpArtifactHostHonoured :: Maybe HostPort -> Bool
-    {- ^ The mount's tarball-host gate, re-checked on the job's fetch URL. An unextractable
-    authority ('Nothing') is refused, because the queue payload is a trust boundary.
+    {- ^ The mount's tarball-host gate, applied to each source artifact location.
+    An unextractable authority ('Nothing') is refused.
     -}
+    , wpEgressUrl :: Text -> Either Text RegistryUrl
+    -- ^ The same URL validation policy used by the mounted serving path.
     , wpArtifact :: AdapterArtifact
     -- ^ The mount ecosystem's artifact capability. A job's @GET@ rides its by-URL member.
     , wpPublish :: MirrorPublish
@@ -93,8 +93,30 @@ data WorkerPolicy = WorkerPolicy
     {- ^ The bounded-fetch budget for the artifact download, set from the memory plan's
     mirror-artifact tenant so a publish envelope cannot breach the heap ceiling.
     -}
+    , wpMirrorState :: Maybe WorkerMirrorState
+    -- ^ Durable inventory storage within the worker admission reservation.
     , wpNow :: IO UTCTime
     -- ^ Wall-clock now for the rules, injected so the quarantine rule is deterministic.
+    }
+
+-- | Composition owns the admission ticket until the managed job returns.
+data WorkerMirrorState = WorkerMirrorState
+    { wmsStore :: MirrorState
+    , wmsTarget :: StateTarget
+    , wmsLimits :: Limits
+    , wmsWithinBudget :: forall a. (WorkerStateBudget -> IO a) -> IO (Maybe a)
+    -- ^ Keep all admission regions alive until final proof finishes.
+    }
+
+-- | Independent regions keep transient work separate from overlapping records, source bytes and archive data.
+data WorkerStateBudget = WorkerStateBudget
+    { wsbState :: StateCharge
+    , wsbRecords :: StateCharge
+    , wsbCompanions :: StateCharge
+    , wsbArtifacts :: StateCharge
+    , wsbArchive :: StateCharge
+    , wsbSource :: StateCharge
+    , wsbTargets :: StateCharge
     }
 
 {- | The bundles keyed by a job's package ecosystem. A job whose ecosystem is absent is

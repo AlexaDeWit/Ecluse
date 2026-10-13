@@ -33,6 +33,7 @@ pypiFields depth mode
     topField _ = mempty
     fullOnly parser = case mode of
         FullRead -> parser
+        MirrorRead{} -> parser
         SelectedRead{} -> mempty
     objectOrScalar budget fields
         | budget <= 0 = retainedValue 0
@@ -49,15 +50,15 @@ pypiFields depth mode
         | otherwise = case mode of
             FullRead -> Just <$> retainedObjectOr Null fileFields
             SelectedRead name wanted -> selectedFile (depth - 3) name wanted
-    versions = case mode of
-        SelectedRead{} -> mempty
-        FullRead ->
+            MirrorRead name wanted -> selectedFile (depth - 3) name wanted
+    versions =
+        fullOnly $
             J.arrayFound (VersionsShape True) IgnoredField (version <$> J.indexedArrayOf (scalar (depth - 2)))
                 <|> (VersionsShape True <$ J.jNull)
                 <|> pure (VersionsShape False)
     version (_, String _) = IgnoredField
     version (position, value) = InvalidVersionField position value
-    fileFields = namedMembers (("hashes", objectOrScalar (depth - 3) (everyMember (scalar (depth - 4)))) : [(key, scalar (depth - 3)) | key <- fileScalars])
+    fileFields = namedMembers ([(key, objectOrScalar (depth - 3) (everyMember (scalar (depth - 4)))) | key <- ["hashes", "core-metadata"]] <> [(key, scalar (depth - 3)) | key <- fileScalars])
     metaFields = namedMembers [("tracks", fullOnly (arrayOrScalar (depth - 2))), ("api-version", scalar (depth - 2)), ("_last-serial", fullOnly (scalar (depth - 2)))]
     statusFields = namedMembers [(key, scalar (depth - 2)) | key <- ["status", "reason"]]
 
@@ -74,6 +75,9 @@ selectedFile budget name wanted = finishSelected . fst <$> J.foldI collect initi
   where
     initial = (CandidateFile False [] Nothing False, filenameMemo name)
     collect (file, memo) = collectSelected wanted memo file
+    field "core-metadata"
+        | budget <= 0 = FileScalar "core-metadata" <$> retainedValue 0
+        | otherwise = FileScalar "core-metadata" <$> retainedObjectWith (scalar budget) (everyMember (scalar (budget - 1)))
     field "hashes"
         | budget <= 0 = HashesValue <$> retainedValue 0
         | otherwise =

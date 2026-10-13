@@ -10,6 +10,11 @@ module Ecluse.E2E.Fixtures.Contracts (
     npmInstallationFixture,
     pypiInstallationFixture,
     pypiTelemetryFixture,
+    pypiMirrorFixture,
+    pypiMirrorNativeFixture,
+    pypiPublicationFixture,
+    pypiPublicationNativeFixture,
+    pypiMirrorTelemetryFixture,
     npmMirrorFixture,
     npmPublicationFixture,
     npmDredgerFixture,
@@ -135,6 +140,7 @@ pypiPublicFixture =
                 , groupPartition = "pypi"
                 , groupCases =
                     [ Case "pypi/install/wheel" ["pypi/install"]
+                    , Case "pypi/install/metadata-companion" ["pypi/install"]
                     , Case "pypi/install/yanked-pin" ["pypi/install"]
                     , Case "pypi/install/yank-negative-control" ["pypi/install"]
                     , Case "pypi/install/sdist" ["pypi/install"]
@@ -267,25 +273,7 @@ npmPilotFixture =
 
 -- | PEP 440 canonicalisation remains explicit beside the common advisory laws.
 pypiAdvisoryNativeFixture :: ConcreteFixture Group
-pypiAdvisoryNativeFixture =
-    ConcreteFixture
-        { withFixture = withFixture pypiPilotFixture
-        , fixtureMetadata =
-            Group
-                { groupId = "pypi/advisory-native"
-                , groupContractId = "pypi/advisory-native"
-                , groupProfileId = familyProfile metadata
-                , groupTier = E2E
-                , groupPartition = "pypi"
-                , groupCases = [Case "pypi/advisories/canonical-fix" ["pypi/advisory-native"]]
-                , groupCapabilities = familyCapabilities metadata
-                , groupPrerequisites = familyPrerequisites metadata
-                , groupResources = familyResources metadata
-                , groupIsolation = familyIsolation metadata
-                }
-        }
-  where
-    metadata = fixtureMetadata pypiPilotFixture
+pypiAdvisoryNativeFixture = nativeFixture "pypi/advisory-native" ["pypi/advisories/canonical-fix"] pypiPilotFixture
 
 -- | Acquire native observations inside the canonical family's measured data-plane lifetime.
 concreteFamily :: ConcreteFixture FamilyMetadata -> (PhaseRecorder -> (a -> IO ()) -> GlobalDataPlane -> IO ()) -> FamilyFixture a
@@ -294,3 +282,74 @@ concreteFamily fixture acquire =
         { familyMetadata = fixtureMetadata fixture
         , familyAcquire = \recorder action -> timedFixture recorder (withFixture fixture) (acquire recorder action)
         }
+
+-- | Native PyPI mirroring uses SQS, S3, and the upload/read fixture.
+pypiMirrorFixture :: ConcreteFixture FamilyMetadata
+pypiMirrorFixture =
+    ConcreteFixture
+        { withFixture = withDataPlane pypiAdvisoryTopology
+        , fixtureMetadata =
+            FamilyMetadata
+                { familyId = "pypi/mirror"
+                , familyProfile = "pypi/write"
+                , familyCapabilities = ["read", "mirror", "client-install", "telemetry"]
+                , familyPrerequisites = ["docker", "image", "openssl", "tar", "python3", "pip"]
+                , familyResources = ["proxy", "nginx", "native-target", "ministack"]
+                , familyIsolation = ["docker-daemon-exclusive", "group-mutable-state", "serial-cases"]
+                }
+        }
+
+-- | Native field preservation, restart and lost-response cases retain separate identities.
+pypiMirrorNativeFixture :: ConcreteFixture Group
+pypiMirrorNativeFixture = nativeFixture "pypi/mirror-native" ["pypi/mirror-native/" <> name | name <- ["read-roundtrip", "lost-reply", "interruption"]] pypiMirrorFixture
+
+-- | First-party publication needs native HTTP storage and a fresh pip client, without AWS.
+pypiPublicationFixture :: ConcreteFixture FamilyMetadata
+pypiPublicationFixture =
+    pypiMirrorFixture
+        { withFixture = withDataPlane pypiTopology
+        , fixtureMetadata =
+            (fixtureMetadata pypiMirrorFixture)
+                { familyId = "pypi/publish"
+                , familyProfile = "pypi/publication"
+                , familyCapabilities = ["read", "publication", "client-install"]
+                , familyResources = ["proxy", "nginx", "native-target"]
+                }
+        }
+
+-- | Multipart identity conflicts and a disabled route remain required native controls.
+pypiPublicationNativeFixture :: ConcreteFixture Group
+pypiPublicationNativeFixture = nativeFixture "pypi/publish-native" ["pypi/publish-native/" <> name | name <- ["conflicting-names", "unconfigured"]] pypiPublicationFixture
+
+-- | Independent native projects provide worker and private-fetch telemetry.
+pypiMirrorTelemetryFixture :: ConcreteFixture FamilyMetadata
+pypiMirrorTelemetryFixture =
+    pypiMirrorFixture
+        { fixtureMetadata =
+            (fixtureMetadata pypiMirrorFixture)
+                { familyId = "pypi/telemetry-write"
+                , familyProfile = "pypi/write-telemetry"
+                , familyResources = ["proxy", "nginx", "native-target", "ministack", "collector"]
+                }
+        }
+
+nativeFixture :: Text -> [Text] -> ConcreteFixture FamilyMetadata -> ConcreteFixture Group
+nativeFixture identifier cases fixture =
+    ConcreteFixture
+        { withFixture = withFixture fixture
+        , fixtureMetadata =
+            Group
+                { groupId = identifier
+                , groupContractId = identifier
+                , groupProfileId = familyProfile metadata
+                , groupTier = E2E
+                , groupPartition = "pypi"
+                , groupCases = [Case name [identifier] | name <- cases]
+                , groupCapabilities = familyCapabilities metadata
+                , groupPrerequisites = familyPrerequisites metadata
+                , groupResources = familyResources metadata
+                , groupIsolation = familyIsolation metadata
+                }
+        }
+  where
+    metadata = fixtureMetadata fixture

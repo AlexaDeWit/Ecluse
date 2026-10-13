@@ -8,7 +8,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
-import Ecluse.Core.Registry.Publish (MirrorPublish (mpPublishArtifact))
+import Ecluse.Core.Queue (MirrorQueue (ack))
 import Ecluse.Core.Worker (
     Liveness (Liveness, liveHealthy, liveLastPoll),
     alwaysLive,
@@ -45,25 +45,28 @@ spec = do
                 heartbeat <- newWorkerHeartbeat
                 seen <- newIORef []
                 logRef <- newIORef emptyPublishLog
-                let base = recordingPublish logRef (Right ())
-                    snapshotOnPublish =
-                        base
-                            { mpPublishArtifact = \p v art doc -> do
+                baseQueue <- newTestMemoryQueue
+                let queue =
+                        baseQueue
+                            { ack = \receipt -> do
                                 lastPoll heartbeat >>= \snap -> modifyIORef' seen (snap :)
-                                mpPublishArtifact base p v art doc
+                                ack baseQueue receipt
                             }
-                queue <- newTestMemoryQueue
-                withWiredRuntimeHeartbeat heartbeat queue (withPublish snapshotOnPublish admitPolicies) noopWorkerMetricsPort $ \runtime -> do
-                    traverse_ (enqueue_ queue) (replicate 3 (jobWith url))
+                    publish = recordingPublish logRef (Right ())
+                withWiredRuntimeHeartbeat heartbeat queue (withPublish publish admitPolicies) noopWorkerMetricsPort $ \runtime -> do
+                    traverse_ (enqueue_ queue) (replicate 3 sampleMirrorJob)
                     messages <- receive_ queue
                     length messages `shouldBe` 3
-                    runWM runtime (processBatch messages)
+                    runWM (sourceAt url runtime) (processBatch messages)
                     snapshots <- reverse <$> readIORef seen
                     length snapshots `shouldBe` 3
                     drop 1 snapshots `shouldSatisfy` all isJust
                     let advanced = catMaybes snapshots
                     length advanced `shouldSatisfy` (>= 2)
-                    ordNub advanced `shouldBe` advanced
+                    and (zipWith (<) advanced (drop 1 advanced)) `shouldBe` True
+                    finished <- lastPoll heartbeat
+                    finished `shouldSatisfy` (\latest -> all (< latest) snapshots)
+                    length . plDocuments <$> readIORef logRef `shouldReturn` 1
     describe "heartbeatHealthy (the /livez staleness rule)" $ do
         it "is healthy at the startup deadline before the first poll" $
             heartbeatHealthy (addUTCTime workerHeartbeatStaleAfter epoch) epoch Nothing `shouldBe` True

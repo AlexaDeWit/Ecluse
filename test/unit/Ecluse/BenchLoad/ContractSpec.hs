@@ -28,11 +28,17 @@ spec = describe "canonical load contract" $ do
                     shortened = fixture{fixtureScenarios = filter ((/= name) . Just . scenarioName) (fixtureScenarios fixture)}
                     providers = shortened : filter ((/= fixtureEcosystem fixture) . fixtureEcosystem) fixtures
                 checkFixtureCoverage providers `shouldSatisfy` isLeft
+    it "requires every managed PyPI read comparison even when the provider omits it" $
+        for_ [ManagedMirrorBaseline, ManagedMirrorWarm, ManagedMirrorRevision] $ \law -> do
+            let selected = loadScenarioName PyPI law
+                shortened = filter ((/= selected) . Just) (names pypiFixture)
+            loadCoverageGaps ReadLoadFoundation PyPI shortened `shouldSatisfy` (not . null)
     it "preserves the npm complete load sequence" $
         loadCoverageGaps FullLoad Npm (names npmFixture) `shouldBe` []
-    it "names the missing PyPI worker measurement without hiding its read measurements" $ do
+    it "requires the complete PyPI worker measurement beside its reads" $ do
         loadCoverageGaps ReadLoadFoundation PyPI (names pypiFixture) `shouldBe` []
-        loadCoverageGaps FullLoad PyPI (names pypiFixture)
+        loadCoverageGaps FullLoad PyPI (names pypiFixture) `shouldBe` []
+        loadCoverageGaps FullLoad PyPI (filter (/= "worker-mirroring") (names pypiFixture))
             `shouldBe` [MissingLoadScenario MirrorWorker "worker-mirroring"]
     it "rejects duplicated extensions as well as duplicated read laws" $
         loadCoverageGaps FullLoad Npm (names npmFixture <> ["worker-mirroring"])
@@ -42,13 +48,14 @@ spec = describe "canonical load contract" $ do
             `shouldBe` [MissingLoadScenario PrivateArtifact "wheel-hot-path"]
     it "refuses a protocol without load drivers" $
         loadCoverageGaps FullLoad RubyGems [] `shouldBe` [NoLoadProtocol RubyGems]
-    it "requires the exact passes the real foundation fixtures execute under each shape" $
+    it "requires the exact passes the complete fixtures execute under each shape" $
         for_ scheduledPodShapes $ \shape ->
-            fmap (Set.fromList . map snd) ((<>) <$> requiredLoadPasses FullLoad Npm shape <*> requiredLoadPasses ReadLoadFoundation PyPI shape)
+            fmap (Set.fromList . map snd) ((<>) <$> requiredLoadPasses FullLoad Npm shape <*> requiredLoadPasses FullLoad PyPI shape)
                 `shouldBe` Right (checkedCounts shape)
-    it "retains both worker passes only under the unlimited shape" $ do
-        fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad Npm Unlimited)
-            `shouldBe` Right [(MirrorWorker, ("npm/worker-mirroring", Loaded)), (MirrorWorker, ("npm/worker-mirroring", ConcurrencyOne))]
-        fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad Npm twoCores) `shouldBe` Right []
+    it "retains both worker passes only under the unlimited shape" $
+        for_ [(Npm, "npm/worker-mirroring"), (PyPI, "pypi/worker-mirroring")] $ \(ecosystem, key) -> do
+            fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem Unlimited)
+                `shouldBe` Right [(MirrorWorker, (key, Loaded)), (MirrorWorker, (key, ConcurrencyOne))]
+            fmap (filter ((== MirrorWorker) . fst)) (requiredLoadPasses FullLoad ecosystem twoCores) `shouldBe` Right []
   where
     names = map scenarioName . fixtureScenarios

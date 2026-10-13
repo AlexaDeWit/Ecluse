@@ -47,15 +47,15 @@ import Network.HTTP.Types (
     status401,
     status403,
     status404,
+    status405,
     status500,
     status501,
     status502,
     status503,
  )
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, renderScope, unscopedName)
-import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.Npm.Project (projectName, tarballCoordinate)
 import Ecluse.Core.Registry.Npm.Serve (NpmError (NpmError), npmError, npmErrorCodec)
 import Ecluse.Core.Server.Context (
     MountRouter,
@@ -82,7 +82,6 @@ import Ecluse.Core.Server.Contract (
     variableOpaqueContract,
     variableResponse,
  )
-import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
@@ -101,7 +100,6 @@ import Ecluse.Core.Server.Route (
     safeSegment,
  )
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
-import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Match the first applicable route, otherwise answer 'npmNotFound'.
 npmRouter :: MountRouter
@@ -377,7 +375,9 @@ npmPublishContract =
 npmPublishReplies :: PublishReplies NpmPublishResponse
 npmPublishReplies =
     PublishReplies
-        { publishRelayed = variableResponse
+        { publishAllowedMethods = "GET, HEAD"
+        , publishDisabledReply = \headers _ -> publishError npmPublishReplies status405 headers "publishing is not enabled on this proxy (no publication target is configured); publish directly to the registry you intend to publish to"
+        , publishRelayed = variableResponse
         , publishError = \status headers message ->
             variableResponse status headers (encodeBody npmErrorCodec (NpmError message))
         }
@@ -409,7 +409,7 @@ buildPublish _method = \case
         Just
             ( RunPipeline
                 (publishError npmPublishReplies status500 [] "internal server error")
-                (servePublish npmPublishReplies name)
+                (servePublish npmPublishReplies (Just name))
             )
     _ -> Nothing
 
@@ -488,14 +488,6 @@ takeScoped seg rest
     | otherwise = case rest of
         (base : more) -> (,more) <$> rightToMaybe (projectName (seg <> "/" <> base))
         [] -> Nothing
-
--- | Parse an npm tarball-slot @file@ into the 'Version' and verbatim 'Filename' it names for @name@.
-tarballCoordinate :: PackageName -> Text -> Maybe (Version, Filename)
-tarballCoordinate name file =
-    case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
-        Just version
-            | not (T.null version) -> (mkVersion Npm version,) <$> mkFilename file
-        _ -> Nothing
 
 -- | Render through the artifact route so generated URLs obey its capture rules.
 tarballPath :: PackageName -> Text -> Maybe Text

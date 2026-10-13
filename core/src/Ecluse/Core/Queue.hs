@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-queue handle: the durable hand-off from the request path to the mirror worker.
-
-Mirroring is demand-driven, so the serve path 'enqueue's a 'MirrorJob' and answers at once
-while a worker 'receive's it, verifies the artifact, publishes it and 'ack's. At-least-once
-delivery is safe because publishing is idempotent, which is why retry is "do not 'ack'" and
-there is no @nack@. This cloud surface is the one whose API differs materially per provider,
-so it is a record of functions and 'ReceiptHandle' is opaque. See
-@docs\/architecture\/cloud-backends.md@, "Mirror Queue".
+{- | Version triggers and the durable queue capability.
+Workers derive artifact membership from current paired metadata, while the queue owns delivery and leases.
 -}
 module Ecluse.Core.Queue (
     -- * Queue handle
@@ -43,7 +37,7 @@ module Ecluse.Core.Queue (
     deliveryBudgetSpent,
 ) where
 
-import Data.Aeson (eitherDecodeStrict', object, withObject, (.:), (.:?), (.=))
+import Data.Aeson (eitherDecodeStrict', object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither)
 
@@ -51,26 +45,16 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, transportFault)
 import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, unScope, unscopedName)
 import Ecluse.Core.Queue.Lease (ReceiptLease (..), Seconds (..))
-import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
-{- | Everything the worker needs to back-fill one artifact into the mirror target. The payload
-is a __trust boundary__: it carries selection keys and never authority, so no digest, no size.
--}
+-- | A version-level demand trigger. Current paired metadata supplies every artifact location and identity.
 data MirrorJob = MirrorJob
     { jobPackage :: PackageName
-    -- ^ The package whose artifact the worker mirrors.
     , jobVersion :: Version
-    -- ^ The specific version to mirror.
-    , jobArtifactUrl :: RegistryUrl
-    {- ^ Where the worker fetches the artifact bytes from. A wire decode re-forms the validated
-    https egress witness rather than trusting the payload's text.
-    -}
-    , jobArtifactFilename :: Filename
-    {- ^ The serve-time-admitted artifact's filename: a selection key the admission gate
-    cross-checks against current metadata, not authority.
-    -}
+    , jobTriggerFilename :: Maybe Filename
+    -- ^ An optional admitted demand hint, never the complete inventory.
     , jobTraceContext :: Maybe RemoteSpanContext
     {- ^ The trace context of the span that enqueued the job, so the worker's per-job span links
     back across the asynchronous hop. 'Nothing' when the producer carried none.
@@ -96,12 +80,12 @@ encodeJob :: MirrorJob -> Text
 encodeJob job =
     decodeUtf8 . Aeson.encode $
         object
-            [ "ecosystem" .= ecosystemName (pkgEcosystem (jobPackage job))
+            [ "schemaVersion" .= (2 :: Int)
+            , "ecosystem" .= ecosystemName (pkgEcosystem (jobPackage job))
             , "namespace" .= (unScope <$> pkgNamespace (jobPackage job))
             , "name" .= unscopedName (jobPackage job)
             , "version" .= renderVersion (jobVersion job)
-            , "artifactUrl" .= registryUrlText (jobArtifactUrl job)
-            , "filename" .= unFilename (jobArtifactFilename job)
+            , "triggerFilename" .= fmap unFilename (jobTriggerFilename job)
             , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
             ]
 
@@ -114,13 +98,13 @@ encodeTraceContext rsc =
         , "tracestate" .= rscTracestate rsc
         ]
 
-{- | Decode a queue message body back into a 'MirrorJob'. The payload is a __trust boundary__, so
-the name, the filename, and the artifact URL each go back through their own gate.
+{- | Decode identities and trigger filenames. Validate and discard legacy artifact URLs.
+Schema 2 carries no URL: the worker resolves locations from current paired metadata.
 -}
 decodeJob ::
     -- | Read a wire namespace and base name through the ecosystem's own grammar.
     (Ecosystem -> Maybe Text -> Text -> Either Text PackageName) ->
-    -- | Re-form the artifact URL's validated https egress witness.
+    -- | Validate a legacy artifact URL before discarding it.
     (Text -> Either Text RegistryUrl) ->
     Text ->
     Either Text MirrorJob
@@ -134,6 +118,8 @@ parseMirrorJob ::
     Aeson.Value ->
     Parser MirrorJob
 parseMirrorJob packageName egressUrl = withObject "MirrorJob" $ \o -> do
+    schema <- o .:? "schemaVersion" .!= (1 :: Int)
+    unless (schema == 1 || schema == 2) (fail "unsupported mirror job schemaVersion")
     ecoName <- o .: "ecosystem"
     eco <- maybe (fail (unusable "ecosystem" ecoName)) pure (parseEcosystem ecoName)
     rawNamespace <- o .:? "namespace"
@@ -142,13 +128,14 @@ parseMirrorJob packageName egressUrl = withObject "MirrorJob" $ \o -> do
     -- and re-reads them rather than either field being trusted as given.
     package <- either (fail . toString) pure (packageName eco rawNamespace rawName)
     rawVersion <- o .: "version"
-    rawArtifactUrl <- o .: "artifactUrl"
-    -- The type the worker's fetch requires cannot be fabricated from an unvalidated string.
-    artifactUrl <- either (fail . toString) pure (egressUrl rawArtifactUrl)
-    rawFilename <- o .: "filename"
-    -- The filename is interpolated into an upstream path, so it is refused here unless it is a
-    -- safe path component.
-    filename <- maybe (fail (unusable "artifact filename" rawFilename)) pure (mkFilename rawFilename)
+    trigger <-
+        if schema == 1
+            then do
+                rawUrl <- o .: "artifactUrl"
+                void (either (fail . toString) pure (egressUrl rawUrl))
+                rawFilename <- o .: "filename"
+                Just <$> parseFilename rawFilename
+            else o .:? "triggerFilename" >>= traverse parseFilename
     -- A job enqueued with tracing off carries no "traceContext". It yields no span link
     -- rather than a decode failure.
     traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
@@ -156,10 +143,12 @@ parseMirrorJob packageName egressUrl = withObject "MirrorJob" $ \o -> do
         MirrorJob
             { jobPackage = package
             , jobVersion = mkVersion eco rawVersion
-            , jobArtifactUrl = artifactUrl
-            , jobArtifactFilename = filename
+            , jobTriggerFilename = trigger
             , jobTraceContext = traceContext
             }
+
+parseFilename :: Text -> Parser Filename
+parseFilename raw = maybe (fail (unusable "artifact filename" raw)) pure (mkFilename raw)
 
 -- The refusal a trust-boundary field reports when its own gate rejects the payload's text.
 -- 'String' because that is what aeson's 'fail' takes.

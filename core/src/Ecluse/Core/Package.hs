@@ -34,6 +34,7 @@ module Ecluse.Core.Package (
 
     -- * Artifacts
     Artifact (..),
+    CoreMetadata (..),
     Hash,
     hashAlg,
     hashValue,
@@ -211,9 +212,15 @@ data Availability
       Yanked
     deriving stock (Eq, Show)
 
-{- | One distribution file in a version's 'NonEmpty' list: one for npm, an sdist and wheels
-for PyPI, or one per platform for RubyGems.
--}
+-- | The upstream companion declaration, preserving raw digest names and values.
+data CoreMetadata
+    = -- | The index declares availability without a digest.
+      MetadataAvailable Bool
+    | -- | Algorithm names and digest strings exactly as declared by the index.
+      MetadataDigests (Map Text Text)
+    deriving stock (Eq, Show)
+
+-- | One distribution file with its source coordinate and optional metadata companion.
 data Artifact = Artifact
     { artEntryKey :: EntryKey
     -- ^ The coordinate in its source snapshot. Admission preserves it unchanged.
@@ -221,6 +228,8 @@ data Artifact = Artifact
     , artUrl :: Text
     , artHashes :: [Hash]
     -- ^ Integrity digests. The client verifies the download against these.
+    , artCoreMetadata :: Maybe CoreMetadata
+    -- ^ The optional companion declaration, independent of distribution integrity.
     , artSize :: Maybe Int
     {- ^ The registry-declared size, if reported. Not always the tarball byte count: npm populates
     it from @dist.unpackedSize@, the size of the unpacked tree.

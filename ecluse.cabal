@@ -31,6 +31,7 @@ extra-source-files:
   core/test/unit/fixtures/json-stream/*.json
   core/test/unit/fixtures/json-stream/README.md
   core/test/unit/fixtures/version-ordering.txt
+  test/fixtures/package-store/pypi/README.md
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
   test/fixtures/osv/withdrawal/*.json
@@ -129,6 +130,19 @@ library ecluse-core
   import:          shared
   hs-source-dirs:  core/src
   exposed-modules:
+    Ecluse.Core.Mirror.State
+    Ecluse.Core.Mirror.State.Internal
+    Ecluse.Core.Mirror.State.Codec
+    Ecluse.Core.Mirror.State.Weight
+    Ecluse.Core.Registry.PyPI.Archive
+    Ecluse.Core.Registry.PyPI.Archive.Path
+    Ecluse.Core.Registry.PyPI.Archive.BZip
+    Ecluse.Core.Registry.PyPI.Archive.Inflate
+    Ecluse.Core.Registry.PyPI.Archive.Lzma
+    Ecluse.Core.Registry.PyPI.Archive.Tar
+    Ecluse.Core.Registry.PyPI.UploadMetadata
+    Ecluse.Core.Registry.PyPI.Publish
+    Ecluse.Core.Registry.PyPI.Publish.Multipart
     Ecluse.Core.Breaker
     Ecluse.Core.BuildIdentity
     Ecluse.Core.Clock
@@ -211,7 +225,10 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Progress
+    Ecluse.Core.Registry.MirrorUpload
+    Ecluse.Core.Registry.MirrorUpload.Internal
     Ecluse.Core.Registry.Publish
+    Ecluse.Core.Registry.Publish.Internal
     Ecluse.Core.Registry.Sweep
     Ecluse.Core.Registry.Sweep.Candidates
     Ecluse.Core.Registry.Sweep.Deletion
@@ -229,6 +246,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
+    Ecluse.Core.Registry.PyPI.PendingSidecar
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.PyPI.Reader
     Ecluse.Core.Registry.PyPI.Request
@@ -262,6 +280,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Cache.Types
     Ecluse.Core.Server.Cache.VersionWeight
+    Ecluse.Core.Server.Cache.VersionWeight.Fields
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Brake
@@ -277,10 +296,12 @@ library ecluse-core
     Ecluse.Core.Server.Framing
     Ecluse.Core.Server.MemoryModel
     Ecluse.Core.Server.Metadata
+    Ecluse.Core.Server.MirrorView
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Diagnostics
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
+    Ecluse.Core.Server.Pipeline.Sidecar
     Ecluse.Core.Server.Pipeline.Tarball
     Ecluse.Core.Server.Pipeline.Tarball.Private
     Ecluse.Core.Server.Pipeline.Tarball.Public
@@ -313,6 +334,7 @@ library ecluse-core
       Ecluse.Core.Worker.Fetch
       Ecluse.Core.Worker.Integrity
       Ecluse.Core.Worker.Job
+      Ecluse.Core.Worker.Managed
       Ecluse.Core.Worker.Lease
       Ecluse.Core.Worker.Liveness
       Ecluse.Core.Worker.Loop
@@ -347,6 +369,12 @@ library ecluse-core
     exposed-modules: Ecluse.Core.Security.Egress.DevHttp
 
   build-depends:
+    , tar ^>=0.6.4
+    , bzlib-conduit ^>=0.3.0.4
+    , digest ^>=0.0.2
+    , ecluse-lzma-managed ^>=0.0.1
+    , zlib ^>=0.7
+    , wai-extra ^>=3.1
     , aeson                 >=2.2      && <2.4
     , autodocodec           ^>=0.5
     , bytestring            ^>=0.12
@@ -439,6 +467,7 @@ library
     Ecluse.Composition.MemoryPlan.Types
     Ecluse.Composition.MirrorQueue
     Ecluse.Composition.MirrorRole
+    Ecluse.Composition.MirrorState
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Types
@@ -453,6 +482,7 @@ library
     Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig
     Ecluse.Config.Parser
+    Ecluse.Config.Mirror
     Ecluse.Config.QueueTarget
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
@@ -515,6 +545,8 @@ library ecluse-runtime
   import:          shared
   hs-source-dirs:  runtime/src
   exposed-modules:
+    Ecluse.Runtime.Mirror.State.S3
+    Ecluse.Runtime.Mirror.State.S3.Internal
     Ecluse.Runtime.Aws.Env
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
@@ -700,6 +732,10 @@ library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
   exposed-modules:
+    Ecluse.Test.Mirror.State
+    Ecluse.Test.Mirror.Read
+    Ecluse.Test.Registry.PyPI.Multipart
+    Ecluse.Test.Registry.PyPI.Archive
     Ecluse.Test.Collector
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
@@ -715,6 +751,7 @@ library ecluse-test-support
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Env
+    Ecluse.Test.Exposition
     Ecluse.Test.InstalledTree
     Ecluse.Test.Json
     Ecluse.Test.Log
@@ -728,6 +765,7 @@ library ecluse-test-support
     Ecluse.Test.Port
     Ecluse.Test.Queue
     Ecluse.Test.Registry
+    Ecluse.Test.Registry.Publish
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.Npm.Metadata
     Ecluse.Test.Registry.Npm.StoredVersions
@@ -761,16 +799,16 @@ library ecluse-test-support
     Ecluse.Test.Version
     Ecluse.Test.Wai
     Ecluse.Test.WireVocab
-    Ecluse.Test.Worker
 
-  -- The mount fixture binds a mount's upstreams to in-process plain-http stubs, so it needs
-  -- the flag-gated loopback former (Ecluse.Core.Security.Egress.DevHttp). A release-posture
-  -- build has the flag off and still builds this sublibrary for `executable perf-acceptance`,
-  -- which does not use this module. Every consumer is a test suite or `bench-load`.
+  -- Loopback mount and worker fixtures need the dev-only URL constructor.
+  -- Their callers are test suites and bench-load, never production components.
   if flag(dev-http-egress)
-    exposed-modules: Ecluse.Test.Server.Mount
+    exposed-modules:
+      Ecluse.Test.Server.Mount
+      Ecluse.Test.Worker
 
   build-depends:
+    , tar ^>=0.6.4
     , ecluse:ecluse-core
     , ecluse:ecluse-json-stream
     , aeson             >=2.2 && <2.4
@@ -857,6 +895,9 @@ library ecluse-test-contracts
     exposed-modules:
       Ecluse.Test.Contract.Metadata.Fetch
       Ecluse.Test.Contract.PackageStore.Protocol
+      Ecluse.Test.Contract.PackageStore.Provider
+      Ecluse.Test.Contract.PackageStore.PyPI
+    other-modules: Ecluse.Test.Contract.PackageStore.PyPI.Fixtures
 
   build-depends:
     , ecluse:ecluse-core
@@ -876,6 +917,7 @@ library ecluse-test-contracts
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
     , universe-base     ^>=1.1
+    , wai-extra         ^>=3.1
     , zlib              ^>=0.7
 
 -- Internal runtime-test-support library shared by suites that depend on the runtime tier.
@@ -904,6 +946,7 @@ library ecluse-runtime-test-support
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
     , katip             ^>=0.8.8
+    , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
 
@@ -956,6 +999,18 @@ test-suite ecluse-core-unit
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
+    Ecluse.Core.Mirror.StateSpec
+    Ecluse.Core.Mirror.State.WeightSpec
+    Ecluse.Core.Mirror.State.CodecSpec
+    Ecluse.Core.Registry.PyPI.ArchiveSpec
+    Ecluse.Core.Registry.PyPI.Archive.PathSpec
+    Ecluse.Core.Registry.PyPI.Archive.BZipSpec
+    Ecluse.Core.Registry.PyPI.Archive.InflateSpec
+    Ecluse.Core.Registry.PyPI.Archive.LzmaSpec
+    Ecluse.Core.Registry.PyPI.Archive.TarSpec
+    Ecluse.Core.Registry.PyPI.UploadMetadataSpec
+    Ecluse.Core.Registry.PyPI.PublishSpec
+    Ecluse.Core.Registry.PyPI.Publish.MultipartSpec
     Data.JsonStream.LexerSpec
     Data.JsonStream.ParserSpec
     Data.JsonStream.UnescapeSpec
@@ -1038,6 +1093,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.VersionWriterSpec
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
+    Ecluse.Core.Registry.MirrorUpload.InternalSpec
     Ecluse.Core.Registry.PublishSpec
     Ecluse.Core.Registry.PyPI.AdapterSpec
     Ecluse.Core.Registry.PyPI.CredentialSpec
@@ -1046,6 +1102,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.FilterSpec
     Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.PyPI.MetadataSpec
+    Ecluse.Core.Registry.PyPI.PendingSidecarSpec
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
@@ -1088,11 +1145,13 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.FramingSpec
     Ecluse.Core.Server.MemoryModelSpec
     Ecluse.Core.Server.MetadataSpec
+    Ecluse.Core.Server.MirrorViewSpec
     Ecluse.Core.Server.PathSpec
     Ecluse.Core.Server.Pipeline.DiagnosticsSpec
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.SidecarSpec
     Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
     Ecluse.Core.Server.Pipeline.Tarball.PublicSpec
     Ecluse.Core.Server.Pipeline.Tarball.RefusalSpec
@@ -1116,8 +1175,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Version.SemverSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
+    Ecluse.Core.Worker.FetchSpec
     Ecluse.Core.Worker.IntegritySpec
     Ecluse.Core.Worker.JobSpec
+    Ecluse.Core.Worker.ManagedSpec
     Ecluse.Core.Worker.LeaseSpec
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
@@ -1138,11 +1199,15 @@ test-suite ecluse-core-unit
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
+    Ecluse.Worker.Support.Managed
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , tar ^>=0.6.4
+    , bzlib ^>=0.5
+    , lzma ==0.0.1.1
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , ecluse:ecluse-test-contracts
@@ -1209,6 +1274,7 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit bench/load
   other-modules:
     Ecluse.Test.ContainersSpec
+    Ecluse.Test.ExpositionSpec
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
@@ -1226,10 +1292,14 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.FixtureSpec
     Ecluse.BenchLoad.Npm
+    Ecluse.BenchLoad.Worker
+    Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.PatternScenario
     Ecluse.BenchLoad.PrivateCopy
     Ecluse.BenchLoad.PrivateCopySpec
     Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.ManagedMirror
     Ecluse.BenchLoad.PyPISpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.BenchLoad.PodSpec
@@ -1293,6 +1363,7 @@ test-suite ecluse-unit
     Ecluse.Config.AmbientSpec
     Ecluse.Config.DocCoverageSpec
     Ecluse.Config.ParserSpec
+    Ecluse.Config.MirrorSpec
     Ecluse.Config.QueueTargetSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
@@ -1319,6 +1390,8 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , zlib ^>=0.7
+    , amazonka ^>=2.0
     , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-bench-load
@@ -1395,6 +1468,7 @@ test-suite ecluse-runtime-unit
     SpecHook
     Ecluse.Runtime.Test.Contract.UnitCatalogueSpec
     Ecluse.Runtime.Test.PackageStoreSpec
+    Ecluse.Runtime.Mirror.State.S3.InternalSpec
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec
@@ -1433,6 +1507,7 @@ test-suite ecluse-runtime-unit
     , containers        ^>=0.7
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
+    , HUnit             ^>=1.6
     , hspec             ^>=2.11
     , hspec-wai         ^>=0.11
     , microlens         ^>=0.4.13
@@ -1469,10 +1544,13 @@ test-suite ecluse-integration
   hs-source-dirs:     test/integration
   other-modules:
     Ecluse.Server.Pipeline.ServingDriver
+    Ecluse.Runtime.Mirror.State.S3.InternalIntegrationSpec
+    Ecluse.Runtime.Mirror.State.S3IntegrationSpec
     Ecluse.AwsEndToEndIntegrationSpec
     Ecluse.Core.Security.EgressIntegrationSpec
     Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
     Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec
+    Ecluse.Core.Server.MirrorViewIntegrationSpec
     Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
     Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
     Ecluse.Core.Server.Pipeline.SharedIntegrationSpec
@@ -1536,6 +1614,7 @@ test-suite ecluse-residency
   type:               exitcode-stdio-1.0
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
+  c-sources:          test/residency/cbits/archive-native-memory.c
   other-modules:
     Data.JsonStream.LexerResidencySpec
     Ecluse.Core.Registry.Json.WalkProbe
@@ -1543,13 +1622,24 @@ test-suite ecluse-residency
     Ecluse.Core.Registry.MetadataResidencySpec
     Ecluse.Core.Registry.Npm.ReaderResidencySpec
     Ecluse.Core.Registry.PyPI.ReaderResidencySpec
+    Ecluse.Core.Registry.PyPI.ArchiveResidencySpec
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
+    Ecluse.Core.Server.MirrorViewResidencySpec
+    Ecluse.Core.Mirror.State.WeightResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
 
   build-depends:
     , aeson             >=2.2 && <2.4
+    , bzlib ^>=0.5
+    , conduit ^>=1.3
+    , directory ^>=1.3
+    , filepath ^>=1.4 || ^>=1.5
+    , ecluse-lzma-managed ^>=0.0.1
+    , lzma ==0.0.1.1
+    , temporary ^>=1.3
+    , zlib ^>=0.7
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
@@ -1625,6 +1715,18 @@ library ecluse-e2e-test-support
     buildable: False
   hs-source-dirs:     test/e2e
   exposed-modules:
+    Ecluse.E2E.Fixtures.PyPI.Mirror
+    Ecluse.E2E.Fixtures.PyPI.Dredger
+    Ecluse.E2E.Harness.PyPIMirror
+    Ecluse.E2E.Harness.CodeArtifact
+    Ecluse.E2E.Harness.PyPIDredger
+    Ecluse.E2E.Harness.PyPIDredger.Client
+    Ecluse.E2E.Harness.Sweep
+    Ecluse.E2E.PyPI.MirrorInstallE2ESpec
+    Ecluse.E2E.PyPI.PublishE2ESpec
+    Ecluse.E2E.PyPI.DredgerE2ESpec
+    Ecluse.E2E.PyPI.MirrorEvidence
+    Ecluse.E2E.PyPI.TelemetryE2ESpec
     Ecluse.E2E.Catalogue
     Ecluse.E2E.Requirements
     Ecluse.E2E.Fixtures.Contracts
@@ -1662,6 +1764,11 @@ library ecluse-e2e-test-support
     Ecluse.E2E.TelemetryE2ESpec
 
   build-depends:
+    , amazonka ^>=2.0
+    , ecluse:ecluse-runtime
+    , wai ^>=3.2
+    , wai-extra ^>=3.1
+    , warp ^>=3.4
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12
     , containers     ^>=0.7
@@ -1881,6 +1988,7 @@ benchmark ecluse-bench
     Ecluse.Core.CacheBench
     Ecluse.Core.ColdReadBench
     Ecluse.Core.DigestBench
+    Ecluse.Core.MirrorReadBench
     Ecluse.Core.MergeBench
     Ecluse.Core.PackedBench
     Ecluse.Core.RouteBench
@@ -1936,10 +2044,14 @@ executable bench-load
     Ecluse.BenchLoad.Fixture
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
+    Ecluse.BenchLoad.Worker
+    Ecluse.BenchLoad.PyPI.Worker
+    Ecluse.BenchLoad.PyPI.WorkerFixture
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.ProxyProcess
     Ecluse.BenchLoad.ProxyServe
     Ecluse.BenchLoad.PyPI
+    Ecluse.BenchLoad.ManagedMirror
     Ecluse.BenchLoad.Replay
     Ecluse.BenchLoad.Report
     Ecluse.BenchLoad.RtsProbe
@@ -1948,6 +2060,9 @@ executable bench-load
     Ecluse.BenchLoad.PrivateCopy
 
   build-depends:
+    , zlib ^>=0.7
+    , wai-extra ^>=3.1
+    , amazonka ^>=2.0
     , ecluse
     , ecluse:ecluse-bench-load
     , ecluse:ecluse-core

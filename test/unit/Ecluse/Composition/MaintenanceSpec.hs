@@ -4,6 +4,7 @@
 
 module Ecluse.Composition.MaintenanceSpec (spec) where
 
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
@@ -64,13 +65,15 @@ import Ecluse.Config (
     Target (Target),
     sbControl,
  )
+import Ecluse.Core.Credential (AuthToken (AuthToken), CredentialProvider (CredentialProvider), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
-import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance, adapterMetadata), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (AdapterMaintenance, maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
+    AdapterMetadata (metadataRead),
  )
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
@@ -81,7 +84,8 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (faultRetry),
     StoreMaintenance (readStoreManifest, storeFacts, verifyConsent),
-    StoreObservation (obFacts, obVerifyConsent),
+    StoreManifestRead,
+    StoreObservation (obFacts, obReadManifest, obVerifyConsent),
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (StoreRequests),
@@ -101,14 +105,18 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (ConfigurationEvidence),
     UpstreamSafety (Safe, Undecidable, Unsafe),
  )
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Origin (OriginClient, originClient)
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataFetch))
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl, originClient)
+import Ecluse.Core.Security (Limits, defaultLimits)
+import Ecluse.Core.Text (joinUrlPath, registryPath)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
+import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (unsafeRegistryUrl, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
+import Network.HTTP.Client (Manager, Request (path, requestHeaders), defaultManagerSettings, newManager)
+import Network.HTTP.Types.Header (hAuthorization)
 
 spec :: Spec
 spec = do
@@ -116,13 +124,12 @@ spec = do
     passSpec
     protocolSpec
     buildSpec
+    metadataCredentialSpec
     planSpec
     probeSpec
     previewCachesSpec
     budgetSpec
 
-{- Both issuers at the boundary their refusals draw: a store a pass refused reaches no handle at
-all, because every cleared value in the map below came from the pass that returned it. -}
 boundarySpec :: Spec
 boundarySpec = describe "the cleared backend boundary" $ do
     it "issues a mirror store's backend only where the deleting role's pass cleared it" $ do
@@ -138,8 +145,6 @@ boundarySpec = describe "the cleared backend boundary" $ do
         cleared <- expectConfig codeArtifactEnvVars Nothing
         fmap Map.keys (privateCaches adapterFor MirrorPruner cleared) `shouldBe` Right [Npm]
 
-{- The rule as the boot applies it: over the loaded mounts, under each role. The deleting role
-is the one that refuses, and the checker's warning for it is what a writing role leaves behind. -}
 passSpec :: Spec
 passSpec = describe "vetStoreBackends" $ do
     it "clears the deleting role the backend for each mirror target this build can sweep" $ do
@@ -184,8 +189,6 @@ passSpec = describe "vetStoreBackends" $ do
                     `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
             other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
 
-{- The protocol arm: a store with no vendor control plane, swept through the ecosystem's own
-verbs. Consent and the ecosystem's verbs are separate refusals, and the writing role reads neither. -}
 protocolSpec :: Spec
 protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem protocol" $ do
     it "clears the deleting role a consenting Verdaccio target" $ do
@@ -237,8 +240,6 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
         consenting <- mountsFor (verdaccioEnv "true")
         clearsNothing (runVet MirrorWriter (vetStoreBackends withoutMaintenance consenting)) `shouldBe` True
 
-{- The live build of a protocol store's handle. It opens a connection to nothing, so the facts
-and the verdicts it supplies are readable without a store to dial. -}
 buildSpec :: Spec
 buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosystem protocol" $ do
     it "supplies the backend's standing facts under the tag the store was declared with" $ do
@@ -269,8 +270,64 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
                 descriptor `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
             other -> expectationFailure ("expected a withheld verdict, got: " <> show other)
 
-{- The handle the live builder makes for the cleared Verdaccio store, under the role whose pass
-clears it and the deletion consent an operator wrote. -}
+metadataCredentialSpec :: Spec
+metadataCredentialSpec = describe "maintenance metadata credentials" $ do
+    for_ metadataBuilders $ \(role, build) ->
+        for_ [Npm, PyPI] $ \eco ->
+            it ("refreshes credentials on both " <> show eco <> " targets during " <> role) $ withAmbientAws $ do
+                config <- expectConfig twoStoreEnv Nothing
+                mirrors <- either (fail . show) pure (snd (vetted MirrorPruner (configMounts config)))
+                caches <- either (fail . show) pure (privateCaches adapterFor MirrorPruner config)
+                mirror <- maybe (fail "missing mirror") pure (Map.lookup eco mirrors)
+                (_, cache) <- maybe (fail "missing private cache") pure (Map.lookup eco caches)
+                for_ [mirror, cache] $ \cleared -> do
+                    counter <- newIORef (0 :: Int)
+                    let provider = CredentialProvider $ do
+                            modifyIORef' counter (+ 1)
+                            count <- readIORef counter
+                            pure (AuthToken (mkSecret ("token-" <> show count)) Nothing)
+                    requests <- captureMetadataRequests eco build cleared (Just provider)
+                    map (lookup hAuthorization . requestHeaders) requests `shouldBe` expectedHeaders eco
+                    map path requests `shouldBe` replicate 2 (expectedPath eco (clearedUrl cleared))
+                    readIORef counter `shouldReturn` 2
+    it "keeps an anonymous private observation unauthenticated" $ do
+        config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
+        caches <- either (fail . show) pure (privateCaches adapterFor MirrorPreviewer config)
+        (_, cleared) <- maybe (fail "missing private cache") pure (Map.lookup Npm caches)
+        requests <- captureMetadataRequests Npm observingMetadata cleared Nothing
+        map (lookup hAuthorization . requestHeaders) requests `shouldBe` [Nothing, Nothing]
+  where
+    expectedHeaders PyPI = [Just "Basic YXdzOnRva2VuLTE=", Just "Basic YXdzOnRva2VuLTI="]
+    expectedHeaders _ = [Just "Bearer token-1", Just "Bearer token-2"]
+    expectedPath PyPI url = encodeUtf8 (joinUrlPath (registryPath url) "simple/leftpad/")
+    expectedPath _ url = encodeUtf8 (joinUrlPath (registryPath url) "leftpad")
+
+metadataBuilders :: [(String, StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead)]
+metadataBuilders =
+    [ ("deletion", \ports limits cleared -> readStoreManifest <$> buildStoreMaintenance ports limits cleared)
+    , ("preview", observingMetadata)
+    ]
+
+observingMetadata :: StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead
+observingMetadata ports limits cleared = obReadManifest <$> buildStoreObservation ports limits cleared
+
+captureMetadataRequests ::
+    Ecosystem ->
+    (StorePorts -> Limits -> ClearedBackend -> IO StoreManifestRead) ->
+    ClearedBackend ->
+    Maybe CredentialProvider ->
+    IO [Request]
+captureMetadataRequests eco build cleared credential = do
+    adapter <- maybe (fail "missing adapter") pure (adapterFor eco)
+    captured <- newIORef []
+    let capture _ origin name = do
+            request <- either (fail . show) pure (erRequest (metadataRead (adapterMetadata adapter)) (originBaseUrl origin) (ocToken origin) name)
+            modifyIORef' captured (<> [request])
+            pure (Left MetadataAbsent)
+    readManifest <- build anonymousPorts{spCredential = credential} defaultLimits cleared{cbFetchManifest = capture}
+    replicateM_ 2 (void (readManifest aPackage))
+    readIORef captured
+
 protocolHandleFor :: RegistryRole -> String -> IO StoreMaintenance
 protocolHandleFor role permitDeletion = do
     cleared <- clearedBackendsFor role (verdaccioEnv permitDeletion)
@@ -278,8 +335,6 @@ protocolHandleFor role permitDeletion = do
         [backend] -> buildStoreMaintenance anonymousPorts defaultLimits backend
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
 
-{- The ports a handle is built over when no live process supplies them: a passthrough tracing
-port, and no credential, which the store's origin then presents none of. -}
 anonymousPorts :: StorePorts
 anonymousPorts =
     StorePorts
@@ -288,8 +343,6 @@ anonymousPorts =
         , spBudget = unpacedBudget
         }
 
-{- Ports that count nothing and wait for nothing, for the cases about the handles a boot builds
-rather than the rate they run at. -}
 unpacedBudget :: BudgetPorts
 unpacedBudget =
     BudgetPorts{bpGateFor = const ungatedRequests, bpOverrides = Map.empty, bpNominalPace = testNominalPace}
@@ -307,8 +360,6 @@ nowhere manager = originClient defaultLimits manager (unsafeRegistryUrl "https:/
 absentRead :: Text
 absentRead = "this build serves the mount's ecosystem no metadata read"
 
-{- The environment tier over the cleared backends. It builds one handle per store, and its
-refusals accumulate rather than stopping at the first store whose client cannot be built. -}
 planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
@@ -348,8 +399,6 @@ planSpec = describe "planStoreMaintenance" $ do
             StoreMaintenanceUnavailable eco (ClientBuildFailed (T.takeWhile (/= '\n') detail))
         err -> err
 
-{- What a boot does with each backend's answer about its private upstream, and which backends
-answer at all. The severity is the same for every role that asks. -}
 probeSpec :: Spec
 probeSpec = describe "the private upstream's answer" $ do
     it "refuses on an unsafe repository and says which connection it carries" $
@@ -424,8 +473,6 @@ withoutMaintenance eco =
                     }
             }
 
-{- The name a cleared store's own facts carry, which names the arm the pass cleared: a protocol
-store answers under its declared tag, and a vendor store under the vendor's. -}
 clearedBackendName :: ClearedBackend -> IO Text
 clearedBackendName cleared = factBackend . obFacts <$> buildStoreObservation anonymousPorts defaultLimits cleared
 
@@ -573,8 +620,6 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")
 
-{- A store's capacity pool is its own authority, and a CodeArtifact repository's is the account
-and Region that meters it. A backend publishing no quota is derived one from the sweep's own pace. -}
 budgetSpec :: Spec
 budgetSpec = describe "the request capacity a boot resolves for a store" $ do
     it "puts two paths on one host in the same pool" $

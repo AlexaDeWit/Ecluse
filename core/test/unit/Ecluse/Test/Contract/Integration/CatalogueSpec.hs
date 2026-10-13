@@ -31,10 +31,10 @@ spec = do
     it "rejects a newly registered ecosystem without coverage" $
         validateCatalogue integrationCatalogue{catalogueProductionEcosystems = "new-ecosystem" : catalogueProductionEcosystems integrationCatalogue} `shouldSatisfy` isLeft
     it "declares all integration groups in the fixed integration component" $ do
-        length (catalogueGroups integrationCatalogue) `shouldBe` 17
+        length (catalogueGroups integrationCatalogue) `shouldBe` 20
         map groupPartition (catalogueGroups integrationCatalogue) `shouldSatisfy` all (== "integration")
     it "retains every unique integration case" $
-        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 254
+        length (concatMap groupCases (catalogueGroups integrationCatalogue)) `shouldBe` 346
 
 removeCase :: Group -> Case -> Group -> Group
 removeCase selected item candidate

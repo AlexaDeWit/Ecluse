@@ -14,6 +14,7 @@ import Ecluse.Composition.BootError (
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MinProgressBytesNotPositive,
+        MirrorStateRequired,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
         MissingAdapter,
@@ -24,7 +25,8 @@ import Ecluse.Composition.BootError (
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
         RuleBlockedOnMount,
-        StoreTagConflict
+        StoreTagConflict,
+        UploadConfigurationRequired
     ),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
@@ -36,30 +38,35 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     publicGateEnv,
+    pypiMirrorEnv,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
     withoutPrivateUpstreamUrl,
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (BootRole (..), MirrorRole (..), RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter), registryRoleOf)
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpProgressFloor, vpPublications, vpSettings),
     VettedMount (vmEcosystem, vmMount),
-    VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticCredential, vpubTarget),
     vetBoot,
+    vetBootWith,
+    vetMirrorCapabilities,
  )
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
-    AppConfig (cfgMounts),
-    Config,
+    AppConfig (cfgMirrorState, cfgMounts),
+    Config (configApp),
     FirstParty (FirstPartyNpmScopes),
+    MirrorEndpoint (meUploadUrl, meUsername),
     MountConfig (mntMirrorTarget),
     StoreTag (TagRegistry),
     mountPolicy,
  )
-import Ecluse.Core.Credential (unSecret)
+import Ecluse.Core.Credential (ClientCredential (credSecret), unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (mkScope)
+import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterPublish), adapterFor)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), RuleType (AllowScopeType, DenyInstallTimeExecutionType), ruleName)
 import Ecluse.Core.Security (mkProgressFloor, serveCapSeconds)
@@ -68,12 +75,72 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 -- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
 spec = do
+    mirrorCapabilitiesSpec
+    publicationCapabilitiesSpec
     ruleBlocksSpec
     clearedSpec
     refusalSpec
     advisoryStoreSpec
     firstPartyAuthoritySpec
     privatePublicationSpec
+
+mirrorCapabilitiesSpec :: Spec
+mirrorCapabilitiesSpec = describe "role-specific mirror capabilities" $ do
+    it "requires durable state on a producer without requiring a writer endpoint" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = withoutWriteSettings (configApp config)
+        capabilityResult (BootMirrorPipeline ServeOnly) app `shouldBe` Right ()
+        capabilityResult (BootMirrorPipeline ServeOnly) app{cfgMirrorState = Nothing} `shouldBe` Left [MirrorStateRequired PyPI]
+    it "requires native write settings in embedded and standalone workers" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        for_ [ServeAndMirror, MirrorOnly] $ \role ->
+            capabilityResult (BootMirrorPipeline role) app
+                `shouldBe` Left
+                    [ MirrorStateRequired PyPI
+                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.uploadUrl"
+                    , UploadConfigurationRequired PyPI "mirrorTarget.registry.username"
+                    ]
+    it "does not add mirror-state or writer dependencies to Dredger and Pilot" $ do
+        config <- expectConfig pypiMirrorEnv Nothing
+        let app = (withoutWriteSettings (configApp config)){cfgMirrorState = Nothing}
+        for_ [BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role -> capabilityResult role app `shouldBe` Right ()
+  where
+    withoutWriteSettings app = app{cfgMounts = Map.adjust stripWriter PyPI (cfgMounts app)}
+    stripWriter mount = mount{mntMirrorTarget = fmap (\endpoint -> endpoint{meUploadUrl = Nothing, meUsername = Nothing}) (mntMirrorTarget mount)}
+    capabilityResult role = snd . runVet (registryRoleOf role) . vetMirrorCapabilities role
+
+publicationCapabilitiesSpec :: Spec
+publicationCapabilitiesSpec = describe "PyPI publication credentials by boot role" $ do
+    for_ [BootMirrorPipeline ServeAndMirror, BootMirrorPipeline ServeOnly] $ \role ->
+        describe (show role) $ do
+            it "refuses a static token without an explicit username" $ do
+                config <- expectConfig tokenEnv Nothing
+                result role config `shouldBe` Left [UploadConfigurationRequired PyPI "publicationTarget.registry.username"]
+            it "accepts a static token with an explicit username" $ do
+                config <- expectConfig (overrideEnv (publicationKey <> "USERNAME") "publisher" tokenEnv) Nothing
+                result role config `shouldBe` Right [PyPI]
+            it "accepts anonymous publication without a token or username" $ do
+                config <- expectConfig publicationEnv Nothing
+                result role config `shouldBe` Right [PyPI]
+    for_ [BootMirrorPipeline MirrorOnly, BootStorePruner, BootStorePreview, BootWithoutPipeline] $ \role ->
+        it ("does not require a publication username under " <> show role) $ do
+            config <- expectConfig tokenEnv Nothing
+            result role config `shouldBe` Right [PyPI]
+  where
+    publicationKey = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__"
+    publicationEnv =
+        [ ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
+        , ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+        , ("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", "acme-*")
+        , ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+        , (publicationKey <> "URL", "https://publish.example.test/legacy/")
+        ]
+            <> publicGateEnv
+    tokenEnv = overrideEnv (publicationKey <> "TOKEN") "publish-write-token" publicationEnv
+    result role config =
+        fmap (Map.keys . vpPublications) . snd . runVet (registryRoleOf role) $
+            vetBoot config <* vetMirrorCapabilities role (configApp config)
 
 ruleBlocksSpec :: Spec
 ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
@@ -140,8 +207,6 @@ ruleBlocksSpec = describe "vetBoot -- ecosystem rule blocks" $ do
     installBlock = RuleBlockedOnMount PyPI DenyInstallTimeExecutionType "Most PyPI releases offer a source distribution, which runs its own build on install, so this rule would deny nearly every release."
     scopeBlock = RuleBlockedOnMount PyPI AllowScopeType "A PyPI project name has no scope, so this rule can never match one."
 
-{- An advisory deny cannot decide without a database, so the pairing is a refusal in every role
-that evaluates rules, whatever the rule's own onUnavailable setting says. -}
 advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do
     forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role ->
@@ -230,7 +295,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
                 vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
-                fmap unSecret (vpubStaticToken publication) `shouldBe` Just "publish-write-token"
+                fmap (unSecret . credSecret) (vpubStaticCredential publication) `shouldBe` Just "publish-write-token"
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
@@ -264,25 +329,25 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" staticEnvVars)
             `shouldReturn` [MissingAdapter RubyGems]
 
-    it "refuses a mirror target on a mount whose ecosystem this build writes nothing for" $
-        refusalsFor
-            MirrorWriter
-            ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-                overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
-                    overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" "https://mirror.example.test/pypi/" $
-                        overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "t" staticEnvVars
-            )
-            `shouldReturn` [MirrorTargetWithoutPublish PyPI]
-
-    it "refuses a publication target on a mount whose ecosystem this build writes nothing for" $
-        refusalsFor
-            MirrorWriter
-            ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
+    forM_
+        [ ("mirror", MirrorTargetWithoutPublish PyPI, pypiMirrorEnv)
+        ,
+            ( "publication"
+            , PublicationTargetWithoutPublish PyPI
+            , overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__FIRST_PARTY" "acme-*" $
                     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
                         overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" staticEnvVars
             )
-            `shouldReturn` [PublicationTargetWithoutPublish PyPI]
+        ]
+        $ \(target, refusal, env) -> describe (target <> " publisher capability") $ do
+            it "refuses the target when its adapter has no publisher" $ do
+                config <- expectConfig env Nothing
+                let withoutPublisher PyPI = (\adapter -> adapter{adapterPublish = Nothing}) <$> adapterFor PyPI
+                    withoutPublisher eco = adapterFor eco
+                void (snd (runVet MirrorWriter (vetBootWith withoutPublisher config))) `shouldBe` Left [refusal]
+            it "clears the target with the real PyPI publisher" $
+                refusalsFor MirrorWriter env `shouldReturn` []
 
     it "refuses a publication target that leaves the anti-shadowing guard nothing to enforce" $
         refusalsFor MirrorWriter (withoutFirstParty publishingEnv)
@@ -370,15 +435,12 @@ expectVetted role envVars = do
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role envVars = fromLeft [] . vetted role <$> expectConfig envVars Nothing
 
--- | Declare an advisory store, which is what an advisory deny needs to clear the boot.
 withAdvisoryStore :: [(String, String)] -> [(String, String)]
 withAdvisoryStore = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories"
 
--- | Add the named advisory deny to the shared policy, failing closed as its own default does.
 denyingOn :: String -> [(String, String)] -> [(String, String)]
 denyingOn ruleType = denyingWith ruleType "deny"
 
--- | 'denyingOn' under a chosen @onUnavailable@, at the threshold the rule's own type reads.
 denyingWith :: String -> String -> [(String, String)] -> [(String, String)]
 denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
   where

@@ -98,5 +98,6 @@ nothingQueued RolloutFixture{..} ClientOps{..} RolloutOps{..} plane queue proxy 
     void $ clientInstall proxy (packageName rolloutSentinel) Nothing >>= shouldSucceed
     withWorkerRole plane queue $ \worker -> do
         awaitPublished worker (packageName rolloutSentinel <> "@" <> packageVersion rolloutSentinel) `shouldReturn` True
+        coordinate <- publicationCoordinate denied
         logs <- workerLogs worker
-        logs `shouldSatisfy` (not . T.isInfixOf ("mirrored artifact published: " <> denied))
+        logs `shouldSatisfy` (not . T.isInfixOf ("mirrored artifact published: " <> coordinate))

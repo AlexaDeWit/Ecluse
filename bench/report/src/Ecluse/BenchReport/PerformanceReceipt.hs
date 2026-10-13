@@ -98,9 +98,9 @@ publishSubject root kind conditions outcome attempt native ecosystem = do
 -- | Diagnostic reasons and floor eligibility share the native audit's policy.
 receiptDiagnostic :: Text -> Map Text Text -> Maybe NativePerformance -> Maybe Text
 receiptDiagnostic kind conditions native
-    | kind == "load-foundation" && nonempty "thrashLimitsMiB" = Just "GC-thrash probe"
-    | kind == "load-foundation" && nonempty "selectedScenarios" = Just "selected scenarios"
-    | kind == "load-foundation" = native >>= loadFloorProblem . npConditions
+    | kind `elem` ["load", "load-foundation"] && nonempty "thrashLimitsMiB" = Just "GC-thrash probe"
+    | kind `elem` ["load", "load-foundation"] && nonempty "selectedScenarios" = Just "selected scenarios"
+    | kind `elem` ["load", "load-foundation"] = native >>= loadFloorProblem . npConditions
     | kind == "live-allocation" && any ((== NativeUnavailable) . npOutcome) native = Just "live upstream unavailable"
     | otherwise = Nothing
   where

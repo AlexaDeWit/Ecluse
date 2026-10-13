@@ -34,8 +34,9 @@ recoverySpec = describe "PyPI recovers the Basic pair a Python client presents" 
         recover [("Authorization", "Basic X190b2tlbl9fOnB5cGktQWdFSQ==")]
             `shouldBe` Just (ClientCredential (Just "__token__") (mkSecret "pypi-AgEI"))
 
-    it "reads an empty username as no username at all" $
-        recover [("Authorization", "Basic OnNlY3JldA==")] `shouldBe` Just (bareCredential (mkSecret "secret"))
+    it "preserves an empty username" $ do
+        recover [("Authorization", "Basic OnNlY3JldA==")] `shouldBe` Just (ClientCredential (Just "") (mkSecret "secret"))
+        recover [("Authorization", "Basic OnB5cGktQWdFSQ==")] `shouldBe` Just (ClientCredential (Just "") (mkSecret "pypi-AgEI"))
 
     it "splits at the first colon, so a password may carry one" $
         credSecret <$> recover [("Authorization", "Basic dXNlcjpwYTpzcw==")] `shouldBe` Just (mkSecret "pa:ss")
@@ -67,10 +68,10 @@ encodingSpec = describe "PyPI carries an outbound credential as Basic on Authori
         let headers = Client.requestHeaders (attachCredential pypiCredential alicePair req)
         lookup "Authorization" headers `shouldBe` Just "Basic YWxpY2U6aHVudGVyMg=="
 
-    it "renders a credential of its own under twine's fixed username" $ do
+    it "does not invent a username for a credential without one" $ do
         req <- parseRequestOrFail "https://index.test/simple/requests/"
         let headers = Client.requestHeaders (attachCredential pypiCredential (Just (bareCredential (mkSecret "pypi-AgEI"))) req)
-        lookup "Authorization" headers `shouldBe` Just "Basic X190b2tlbl9fOnB5cGktQWdFSQ=="
+        lookup "Authorization" headers `shouldBe` Just "Basic OnB5cGktQWdFSQ=="
 
     it "writes no credential header when the request is anonymous" $ do
         req <- parseRequestOrFail "https://index.test/simple/requests/"

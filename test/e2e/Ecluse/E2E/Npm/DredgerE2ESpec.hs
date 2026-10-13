@@ -5,11 +5,10 @@
 -- | npm and Verdaccio providers for the maintenance business contracts.
 module Ecluse.E2E.Npm.DredgerE2ESpec (npmSweepDriver) where
 
-import Data.Aeson (encode, object, (.=))
-import Data.Aeson.Types (Pair)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture (..))
+import Ecluse.Test.Contract.Ecosystem (FamilyMetadata (..))
 import Ecluse.Test.Contract.Phase (PhaseRecorder, timedFixture)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
@@ -33,11 +32,10 @@ import Ecluse.E2E.Fixtures.Npm (
  )
 import Ecluse.E2E.Harness
 import Ecluse.E2E.Harness.Lifecycle (timedFixtureWith)
-import Ecluse.Test.Contract.Ecosystem (FamilyMetadata)
+import Ecluse.E2E.Harness.Sweep
 import Ecluse.Test.Contract.Sweep (listed)
 import Ecluse.Test.Contract.Sweep.Composition (SweepDriver (..))
 import Ecluse.Test.Contract.Sweep.Types
-import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
 
 -- | Preserve four independent store lifetimes under the canonical Dredger composition.
@@ -93,26 +91,6 @@ cacheOnlyVersion = "3.0.0"
 consentKey :: Text
 consentKey = "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
 
-sweepEnvUnder :: Text -> [(Text, Text)]
-sweepEnvUnder rules =
-    [ ("ECLUSE_RULES", rules)
-    , ("ECLUSE_DREDGER__FULL_WALK", "true")
-    ]
-
-identityRule :: Text -> Text
-identityRule name = identityRules [name]
-
-identityRules :: [Text] -> Text
-identityRules = renderRules . zipWith identityEntry [1 :: Int ..]
-
-identityEntry :: Int -> Text -> Pair
-identityEntry position revoked =
-    fromString ("revoke-" <> show position) .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
-
-admissionOnlyEntry :: Text -> Pair
-admissionOnlyEntry revoked =
-    "revoke-at-admission" .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked, "appliesTo" .= (["admission"] :: [Text])]
-
 -- The first generation precedes boot because readiness waits for a successful advisory sync.
 withAdvisoryStore :: ((GlobalDataPlane, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
 withAdvisoryStore action plane = do
@@ -122,13 +100,6 @@ withAdvisoryStore action plane = do
 
 revocationProxyEnv :: [(Text, Text)]
 revocationProxyEnv = advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules), ("ECLUSE_CACHE__TTL", "1")]
-
-advisoryRules :: Text
-advisoryRules =
-    renderRules
-        [ "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (0 :: Int)]
-        , "deny-cve" .= object ["type" .= ("DenyIfCve" :: Text), "minCvss" .= (7.0 :: Double)]
-        ]
 
 compileGeneration :: GlobalDataPlane -> CorpusVersion -> IO ()
 compileGeneration plane generation = do
@@ -191,9 +162,6 @@ withRelaxedProxy plane action = withE2EWith defaultE2EConfig{ecExtraEnv = relaxe
 recoveryRules :: Text
 recoveryRules = denyingRules recoveryDenials
 
-minAgeRule :: Pair
-minAgeRule = "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (0 :: Int)]
-
 recoveryDenials :: [Text]
 recoveryDenials =
     (psName recoveryPkg <> "@" <> deniedRecoveryVersion)
@@ -241,31 +209,8 @@ withServeOnlyProxy plane queueUrl extraEnv action = withE2EWith config action pl
 permissiveEnv :: [(Text, Text)]
 permissiveEnv = [("ECLUSE_RULES", permissiveRules), ("ECLUSE_CACHE__TTL", "1")]
 
-permissiveRules :: Text
-permissiveRules = renderRules [minAgeRule]
-
-denyingRules :: [Text] -> Text
-denyingRules denied = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] denied)
-
 publishedLine :: Text -> Text
 publishedLine published = "mirrored artifact published: " <> published
-
-renderRules :: [Pair] -> Text
-renderRules = decodeUtf8 . toStrict . encode . object
-
-auditMessages :: RoleRun -> [Text]
-auditMessages run = mapMaybe lineMessage (T.lines (roleOutput run))
-
-sweepMessages :: RoleRun -> [Text]
-sweepMessages run = filter isSweepMessage (map withoutTarget (auditMessages run))
-
-isSweepMessage :: Text -> Bool
-isSweepMessage message = any (`T.isPrefixOf` message) ["deleting ", "dry run, would delete ", "mirror sweep cycle "]
-
-withoutTarget :: Text -> Text
-withoutTarget message
-    | any (`T.isPrefixOf` message) ["mirrorTarget ", "privateUpstream "] = T.drop 2 (snd (T.breakOn ": " message))
-    | otherwise = message
 
 storeOps :: StoreOps E2E
 storeOps =
@@ -310,17 +255,6 @@ sweepOpsWith extra =
     arguments _ = ["--once"]
     environment mode policy = policyEnvironment policy <> extra <> [(consentKey, "false") | mode == WithoutConsent]
 
-policyEnvironment :: SweepPolicy -> [(Text, Text)]
-policyEnvironment = \case
-    FullIdentity name -> sweepEnvUnder (identityRule name)
-    AdmissionOnly name -> sweepEnvUnder (renderRules [admissionOnlyEntry name])
-    IdentityPolicy names -> [("ECLUSE_RULES", identityRules names)]
-    PermissivePolicy -> [("ECLUSE_RULES", permissiveRules)]
-    AdvisoryPolicy -> advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules)]
-
-observeRun :: RoleRun -> SweepRun
-observeRun run = SweepRun (roleExit run) (roleOutput run) (auditMessages run) (sweepMessages run)
-
 recoveryOps :: RecoveryOps GlobalDataPlane E2E
 recoveryOps =
     RecoveryOps
@@ -329,6 +263,7 @@ recoveryOps =
         , withDeletesRefused = withPrivateCacheDeletesRefused
         , directPublisher = publishingDirectly
         , refusedDeleteTarget = privateTarget
+        , refusedDeleteDiagnostic = "the backend refused the delete, HTTP 503"
         }
 
 rolloutOps :: RolloutOps GlobalDataPlane E2E
@@ -339,6 +274,7 @@ rolloutOps =
         , withWorkerRole = \plane queue -> withMirrorRole plane (mirrorRoleEnv queue permissiveRules)
         , awaitPublished = \worker release -> awaitContainerLog worker (T.isInfixOf (publishedLine release)) 240
         , workerLogs = containerLogs
+        , publicationCoordinate = pure
         }
   where
     servingEnvironment PermissivePolicy = permissiveEnv <> publishTargetEnv
@@ -369,7 +305,8 @@ identityFixture =
         , identityPreviewVersion = "2.0.0"
         , identityListingPrefix = "e"
         , identityAbsentPrefix = "z"
-        , identityConsentKey = consentKey
+        , identityConsentDiagnostic = consentKey <> " is not set"
+        , identityConsentEvents = []
         , identityMirrorDiagnostic = "npm mirror store on mirrorTarget " <> stubUrl Mirror
         , identityCacheDiagnostic = "npm private cache on " <> privateTarget
         }

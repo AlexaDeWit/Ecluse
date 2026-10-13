@@ -13,15 +13,25 @@ document it publishes as JSON, so the page and the document always agree.
 | Registry | Status |
 | --- | --- |
 | npm | Served, mirrored, and published |
-| PyPI | Served |
+| PyPI | Served, mirrored, and published |
 | RubyGems | Planned |
 
 A **served** registry answers reads: the metadata a client resolves against and the artifact
 bytes it installs, both gated by the same rules, integrity floors, and egress controls.
 
-A `pypi` mount serves reads and nothing else. It writes nothing, so a `publicationTarget` or a
-`mirrorTarget` on it refuses the boot naming the ecosystem and the key, and its upload endpoint
-answers `405`. Mirroring and first-party publishing for PyPI land in later releases.
+[Complete PyPI setup](@/docs/pypi-setup.md) explains how to configure these capabilities together.
+
+A `pypi` mount accepts native multipart publication when `publicationTarget` is configured.
+The upload route otherwise answers `405`. The first-party guard validates every declared project
+name before relaying the original bytes and Content-Type. Caller Basic credentials retain both
+username and password, including an empty username.
+
+PyPI mirroring requires an explicit upload endpoint and a durable mirror-state store. It copies
+all admitted supported wheels and source distributions for a version. A different recorded wheel
+then serves from the hot target without another public admission. Completion requires current
+per-file digest proof and all declared retained companions. Incremental physical uploads do not
+make an incomplete version complete through Écluse. A registry that cannot provide usable file
+identity cannot satisfy this proof.
 
 The age rule measures a PyPI release from its newest file upload. Every offered file must
 have a usable upload timestamp. If any timestamp is absent or malformed, the release age
@@ -33,8 +43,13 @@ constraint, size, upload time, yank status and provenance URL. The proxy also pr
 project name, API version, serial, tracking declarations, alternate locations and project status.
 It derives the served version list from the admitted releases.
 
-The proxy omits unknown fields and metadata sidecar declarations while reading the index.
-Installers read distribution metadata from the wheel or source archive instead.
+The proxy retains canonical `core-metadata` declarations, including their exact digest names and values.
+It omits unknown fields and the legacy `dist-info-metadata` and `data-dist-info-metadata` aliases.
+A true declaration or a nonempty digest map enables `GET` and `HEAD` for the distribution's `.metadata` companion.
+Absent, false and empty-map declarations enable no companion fetch.
+Both wheel and source-distribution companions require the parent's origin-specific host and integrity checks.
+The companion path checks edge authentication and private access, but does not evaluate package rules or enqueue a mirror.
+The resolver verifies advertised companion digests on ordinary upstream reads. For mirrored versions, the worker verifies and retains declared companions, and Écluse verifies retained bytes before serving them.
 Distribution bytes stay unchanged. The proxy hashes the complete upstream index for response
 validators, including fields omitted from the served response.
 

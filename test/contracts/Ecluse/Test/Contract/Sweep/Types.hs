@@ -92,6 +92,7 @@ data RecoveryOps plane store = RecoveryOps
     , withDeletesRefused :: forall a. plane -> IO a -> IO a
     , directPublisher :: store -> IO store
     , refusedDeleteTarget :: Text
+    , refusedDeleteDiagnostic :: Text
     }
 
 -- | Independently scheduled roles expose publication evidence through the worker's own log.
@@ -101,6 +102,7 @@ data RolloutOps plane store = RolloutOps
     , withWorkerRole :: forall a. plane -> Text -> (String -> IO a) -> IO a
     , awaitPublished :: String -> Text -> IO Bool
     , workerLogs :: String -> IO Text
+    , publicationCoordinate :: Text -> IO Text
     }
 
 -- | Generation publication returns process evidence and waits for the proxy's observed swap.
@@ -122,7 +124,8 @@ data IdentityFixture = IdentityFixture
     , identityPreviewVersion :: Text
     , identityListingPrefix :: Text
     , identityAbsentPrefix :: Text
-    , identityConsentKey :: Text
+    , identityConsentDiagnostic :: Text
+    , identityConsentEvents :: [Text]
     , identityMirrorDiagnostic :: Text
     , identityCacheDiagnostic :: Text
     }

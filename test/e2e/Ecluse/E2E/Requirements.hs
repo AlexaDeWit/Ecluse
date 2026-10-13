@@ -23,7 +23,7 @@ obligations =
         "npm/mirror"
         Supported
         ["read", "mirror", "client-install"]
-        ["npm/mirror/dependency-graph", "npm/mirror/module-exports", "npm/mirror/linked-executable", "npm/mirror/origin-evidence", "npm/mirror/installed-tree", "npm/mirror/empty-store-control"]
+        ["npm/mirror/cross-target-install", "npm/mirror/dependency-graph", "npm/mirror/module-exports", "npm/mirror/linked-executable", "npm/mirror/origin-evidence", "npm/mirror/installed-tree", "npm/mirror/empty-store-control"]
     , Obligation
         "npm/publish"
         "npm/registry"
@@ -44,7 +44,7 @@ obligations =
         "pypi/install"
         Supported
         ["read", "client-install"]
-        ["pypi/install/wheel", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
+        ["pypi/install/wheel", "pypi/install/metadata-companion", "pypi/install/yanked-pin", "pypi/install/yank-negative-control", "pypi/install/sdist", "pypi/install/outage"]
     , Obligation
         "pypi/advisories"
         "pypi/advisories"
@@ -108,7 +108,47 @@ obligations =
         Supported
         ["read", "telemetry", "client-install"]
         ["pypi/telemetry/signals", "pypi/telemetry/disabled", "pypi/telemetry/export-failure", "pypi/telemetry/datadog"]
-    , Obligation "pypi/mirror" "pypi/write" "mirror" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/765") ["mirror"] []
-    , Obligation "pypi/publication" "pypi/write" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1133") ["publication"] []
+    , Obligation
+        "pypi/mirror"
+        "pypi/write"
+        "pypi/mirror"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/mirror/cross-target-install", "pypi/mirror/dependency-graph", "pypi/mirror/module-exports", "pypi/mirror/linked-executable", "pypi/mirror/origin-evidence", "pypi/mirror/installed-tree", "pypi/mirror/empty-store-control"]
+    , Obligation
+        "pypi/mirror-native"
+        "pypi/write"
+        "pypi/mirror-native"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/mirror-native/read-roundtrip", "pypi/mirror-native/lost-reply", "pypi/mirror-native/interruption"]
+    , Obligation
+        "pypi/publish"
+        "pypi/publication"
+        "pypi/publish"
+        Supported
+        ["read", "publication", "client-install"]
+        ["pypi/publish/publish-install", "pypi/publish/scope-refusal"]
+    , Obligation
+        "pypi/publish-native"
+        "pypi/publication"
+        "pypi/publish-native"
+        Supported
+        ["read", "publication", "client-install"]
+        ["pypi/publish-native/conflicting-names", "pypi/publish-native/unconfigured"]
+    , Obligation
+        "pypi/telemetry-write"
+        "pypi/write-telemetry"
+        "pypi/telemetry-write"
+        Supported
+        ["read", "mirror", "client-install", "telemetry"]
+        ["pypi/telemetry/domain-spans", "pypi/telemetry/private-fetch"]
+    , Obligation
+        "pypi/dredger"
+        "pypi/maintenance"
+        "pypi/dredger"
+        Supported
+        ["read", "mirror", "maintenance", "advisories"]
+        (map ("pypi/dredger/" <>) ["inventory", "admission-only", "denied-versions", "dry-run", "consent-refusal", "first-party", "two-stores", "advisory-revocation", "denied-install", "delete-recovery", "refill", "missing-source", "late-copy", "old-worker", "old-dredger-refill", "old-dredger-loss"])
     , Obligation "s3/packages" "s3/packages" "publication" (Planned "https://github.com/AlexaDeWit/Ecluse/issues/1239") ["publication"] []
     ]

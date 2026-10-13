@@ -4,21 +4,22 @@
 
 module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Ecluse.Test.Contract.Catalogue (caseLabel)
 import Network.HTTP.Types (status200, status201, status409, status503)
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SRI), mkPackageName)
+import Ecluse.Core.Package (Artifact (artFilename), HashAlg (SRI), PackageDetails (pkgArtifacts), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
     Seconds (Seconds),
  )
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails), VersionEvaluation (VersionPresent))
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Core.Worker (WorkerPolicies)
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (wpResolveVersion))
 import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
     defaultQueueOptions,
@@ -29,6 +30,7 @@ import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
+    observeAcknowledgement,
     publishedAtLeast,
     runLoopFor,
     runLoopUntil,
@@ -37,8 +39,9 @@ import Ecluse.Integration.WorkerLoop (
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Rules (admitRule, denyRule)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (allCaptured, stubBaseUrl, withStub)
 import Ecluse.Test.Support (expectRightIO)
+import Ecluse.Test.Worker (workerSourceAt)
 
 {- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
 visibility, redelivery, and boot-policy semantics the in-memory double cannot reproduce.
@@ -51,15 +54,31 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-success" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         policies <- faithfulPolicies mirrorUrl
-                        expectRightIO (enqueue queue (job upstreamUrl))
-                        runLoopUntil policies env (publishedAtLeast publishLog 1)
+                        expectRightIO (enqueue queue job)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
+                        acknowledged `shouldReturn` True
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The worker acked the job, so it does not redeliver.
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
+
+            it (caseLabel "integration/worker/native-009" "retires an incomplete npm inventory without fetching or publishing a selected subset") $ \container ->
+                withStub status200 "artifact bytes" $ \upstream ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-incomplete-upload-data" defaultQueueOptions
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
+                        policies <- Map.map duplicateInventory <$> faithfulPolicies mirrorUrl
+                        expectRightIO (enqueue queue job)
+                        runLoopUntil (workerSourceAt (stubBaseUrl upstream) policies) env acknowledged
+                        acknowledged `shouldReturn` True
+                        readIORef publishLog `shouldReturn` []
+                        allCaptured upstream `shouldReturn` []
+                        expectRightIO (receive queue) `shouldReturn` []
 
             it (caseLabel "integration/worker/native-002" "publishes nothing when the artifact fails its integrity digest") $ \container ->
                 withUpstream $ \upstreamUrl ->
@@ -69,21 +88,21 @@ spec =
                         -- The re-admitted digest is well-formed but does not match the served
                         -- bytes: a tampered artifact the worker must refuse to publish.
                         tamperPolicies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
-                        expectRightIO (enqueue queue (job upstreamUrl))
-                        runLoopFor tamperPolicies env 4_000_000
+                        expectRightIO (enqueue queue job)
+                        runLoopFor (workerSourceAt upstreamUrl tamperPolicies) env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
 
-            it (caseLabel "integration/worker/native-003" "treats a 409 (version already present) as idempotent success and acks") $ \container ->
+            it (caseLabel "integration/worker/native-003" "requires target identity proof after a 409 and acknowledges the whole version") $ \container ->
                 withUpstream $ \upstreamUrl ->
-                    -- The mirror target answers 409 (the version is already present). 409-is-
-                    -- success, so the worker acks and the job does not redeliver.
-                    withMirrorTarget status409 $ \mirrorUrl publishLog -> do
+                    withMirrorTarget status409 $ \mirrorUrl _publishLog -> do
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         policies <- faithfulPolicies mirrorUrl
-                        expectRightIO (enqueue queue (job upstreamUrl))
-                        runLoopUntil policies env (publishedAtLeast publishLog 1)
+                        expectRightIO (enqueue queue job)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env acknowledged
+                        acknowledged `shouldReturn` True
                         leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
@@ -95,10 +114,10 @@ spec =
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- newQueueEnv queue
                         policies <- faithfulPolicies mirrorUrl
-                        expectRightIO (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue job)
                         -- A second PUT exists only because the un-acked 503 message redelivered
                         -- through 'releaseForRetry'. Stopping at the first PUT races that release.
-                        runLoopUntil policies env (publishedAtLeast publishLog 2)
+                        runLoopUntil (workerSourceAt upstreamUrl policies) env (publishedAtLeast publishLog 2)
                         published <- readIORef publishLog
                         -- At least twice, not an exact count: the loop keeps redriving until
                         -- teardown, so "redelivered at least once" is the invariant.
@@ -113,8 +132,8 @@ spec =
                         -- A fetch cap below the artifact's size. The bounded fetch aborts fail-
                         -- closed, so the worker dead-letters the job and never mirrors it.
                         policies <- mirrorPoliciesAt (Just 8) mirrorUrl (unsafeHash SRI trueSri :| [])
-                        expectRightIO (enqueue queue (job upstreamUrl))
-                        runLoopFor policies env 4_000_000
+                        expectRightIO (enqueue queue job)
+                        runLoopFor (workerSourceAt upstreamUrl policies) env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
 
@@ -126,8 +145,8 @@ spec =
                         -- A permissive role queued this job. The queue carries no policy, so the
                         -- worker's own boot rules decide, and a deny is terminal rather than retried.
                         strict <- mirrorPoliciesUnderAt [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
-                        expectRightIO (enqueue queue (job upstreamUrl))
-                        runLoopFor strict env rolloutLoopWindow
+                        expectRightIO (enqueue queue job)
+                        runLoopFor (workerSourceAt upstreamUrl strict) env rolloutLoopWindow
                         readIORef publishLog `shouldReturn` []
                         assertQueueDrained queue
 
@@ -137,10 +156,10 @@ spec =
                         queue <- freshQueue container "worker-rollout-old" rolloutQueueOptions
                         env <- newQueueEnv queue
                         old <- mirrorPoliciesUnderAt [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
-                        expectRightIO (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue job)
                         -- A fixed window rather than a stop at the first publish, so the ack lands
                         -- inside the run and a missing one shows up as a second delivery.
-                        runLoopFor old env rolloutLoopWindow
+                        runLoopFor (workerSourceAt upstreamUrl old) env rolloutLoopWindow
                         readIORef publishLog `shouldReturn` [npmPublishPath]
                         assertQueueDrained queue
 
@@ -195,28 +214,28 @@ mismatchSri = sriSha512Of "completely-different-bytes"
 faithfulPolicies :: Text -> IO WorkerPolicies
 faithfulPolicies mirrorUrl = mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI trueSri :| [])
 
--- The path the job's artifact URL appends to the upstream stub base.
-artifactPath :: Text
-artifactPath = "/left-pad/-/left-pad-1.3.0.tgz"
-
--- The path an npm publish PUTs to: @\/{package}@. The mirror-target stub records it, so
--- the redelivery case asserts each delivery's PUT landed here.
 npmPublishPath :: ByteString
 npmPublishPath = "/left-pad"
 
--- A mirror job pointing at the upstream stub. The payload names the artifact by
--- filename only: the digests the worker verifies against live on the policies.
-job :: Text -> MirrorJob
-job upstreamUrl =
+-- Source metadata supplies every location and digest, independently of this version trigger.
+job :: MirrorJob
+job =
     MirrorJob
         { jobPackage = mkPackageName Npm Nothing "left-pad"
         , jobVersion = mkVersion Npm "1.3.0"
-        , -- The flag-gated loopback former: the job points at an in-process http stub.
-          jobArtifactUrl = loopbackRegistryUrl (upstreamUrl <> artifactPath)
-        , jobArtifactFilename = unsafeFilename "left-pad-1.3.0.tgz"
+        , jobTriggerFilename = Just (unsafeFilename "left-pad-1.3.0.tgz")
         , jobTraceContext = Nothing
         }
 
 -- A WAI upstream serving the artifact bytes at any path, yielding its base URL.
 withUpstream :: (Text -> IO a) -> IO a
 withUpstream body = withStub status200 tarballBytes (body . stubBaseUrl)
+
+duplicateInventory :: WorkerPolicy -> WorkerPolicy
+duplicateInventory policy = policy{wpResolveVersion = \pay name version -> duplicateVersionInventory <$> wpResolveVersion policy pay name version}
+
+duplicateVersionInventory :: VersionEvaluation -> VersionEvaluation
+duplicateVersionInventory (VersionPresent doc latest) =
+    let details = vdDetails doc
+     in VersionPresent doc{vdDetails = details{pkgArtifacts = fmap (\artifact -> artifact{artFilename = "another.tgz"}) (pkgArtifacts details) <> pkgArtifacts details}} latest
+duplicateVersionInventory other = other

@@ -18,6 +18,7 @@ module Ecluse.Core.Registry.PyPI.Wire (
     YankState (..),
     yankState,
     decodeIndexFiles,
+    parseCoreMetadata,
 ) where
 
 import Data.Aeson (
@@ -36,6 +37,7 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Json.Lenient (lenientOptional, lenientOptionalWith)
 import Ecluse.Core.Package (
+    CoreMetadata (..),
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile, InvalidVersionListing),
  )
@@ -87,6 +89,8 @@ data IndexFile = IndexFile
     -- ^ The per-file publication instant used to compute release age.
     , ifYanked :: YankState
     -- ^ Whether PEP 592 withdraws this file from resolution.
+    , ifCoreMetadata :: Maybe CoreMetadata
+    -- ^ The canonical companion declaration, retaining unrecognised digest algorithms.
     , ifProvenance :: Maybe Text
     -- ^ The URL of a PEP 740 attestation bundle, if the index names one.
     }
@@ -102,7 +106,14 @@ instance FromJSON IndexFile where
             <*> lenientOptional o "size"
             <*> lenientOptionalWith parsePublishTime o "upload-time"
             <*> (yankState <$> o .:? "yanked")
+            <*> traverse parseCoreMetadata (KeyMap.lookup "core-metadata" o)
             <*> o .:? "provenance"
+
+-- | Decode a canonical declaration without interpreting its digest algorithms.
+parseCoreMetadata :: Value -> Parser CoreMetadata
+parseCoreMetadata (Bool available) = pure (MetadataAvailable available)
+parseCoreMetadata value@(Object _) = MetadataDigests <$> parseJSON value
+parseCoreMetadata _ = fail "core-metadata must be a Boolean or digest map"
 
 -- | A PEP 592 yank withdraws a file from ranges while allowing exact pins.
 data YankState

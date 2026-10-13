@@ -16,7 +16,7 @@ module Ecluse.Composition.MemoryPlan (
     TransientBudget (..),
 
     -- * Resolution
-    resolveMemoryPlan,
+    resolveMemoryPlanForMounts,
     planCacheConfig,
     mirrorArtifactEnvelopeMultiplier,
     mirrorArtifactBytesCap,
@@ -59,19 +59,9 @@ import Ecluse.Config (CacheSettings (..), LimitsSettings, QueueSettings)
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, provenanceClause)
 
-{- | Resolve the memory plan and its boot lines. The caller selects the mirror-queue
-backend first, since 'QueueTenantDemand' projects from that choice.
--}
-resolveMemoryPlan ::
-    CacheSettings ->
-    LimitsSettings ->
-    QueueSettings ->
-    Maybe Int ->
-    EffectiveRuntimePlan ->
-    QueueTenantDemand ->
-    Bool ->
-    (MemoryPlan, [Text])
-resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission runtime queueDemand publishConfigured =
+-- | Reserve the largest mount override without changing the inherited request cap.
+resolveMemoryPlanForMounts :: CacheSettings -> LimitsSettings -> QueueSettings -> Maybe Int -> EffectiveRuntimePlan -> QueueTenantDemand -> [Maybe Int] -> (MemoryPlan, [Text])
+resolveMemoryPlanForMounts cacheSettings limitsSettings queueSettings explicitAdmission runtime queueDemand mountRequests =
     maybe (fallbackPlan inputs) (solvedPlan inputs) heapCeiling
   where
     (heapCeiling, ceilingProvenance) = effectiveHeapCeiling runtime
@@ -84,7 +74,8 @@ resolveMemoryPlan cacheSettings limitsSettings queueSettings explicitAdmission r
             , piLimits = limitsSettings
             , piQueue = queueSettings
             , piExplicitAdmission = explicitAdmission
-            , piPublishConfigured = publishConfigured
+            , piPublishConfigured = not (null mountRequests)
+            , piPublishRequestCaps = mountRequests
             , piQueueDemand = queueDemand
             , piCapabilities = capabilities
             , piAllocAreaBytes = max 1 (erpAllocAreaBytes runtime)
@@ -157,7 +148,7 @@ fallbackPlan inputs =
     (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp (cacheEntriesFloor, cacheEntriesCap) (cacheBytes `div` cacheEntryExpectedBytes))
     (queueDepth, queueDepthLine) = fallbackOr "memory-queue depth" (opDepth pins) queueDepthFallback
     (artifactBytes, artifactLine) = fallbackOr "mirror artifact byte cap" (opArtifact pins) mirrorArtifactBytesCap
-    publishTenant = PublishTenant{ptAggregateBytes = publishAggregateFallbackRequests * requestBytes} <$ guard (piPublishConfigured inputs)
+    publishTenant = PublishTenant{ptAggregateBytes = publishAggregateFallbackRequests * foldl' max 0 (map (fromMaybe requestBytes) (piPublishRequestCaps inputs))} <$ guard (piPublishConfigured inputs)
     mirrorArtifactTenant = MirrorArtifactTenant{matMaxBytes = artifactBytes} <$ guard (anyMountMirrors demand)
 
 fallbackOr :: Text -> Maybe Int -> Int -> (Int, Text)

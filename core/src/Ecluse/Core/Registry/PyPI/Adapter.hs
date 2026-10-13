@@ -1,29 +1,43 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+-- TupleSections pairs optional media-type values with their header names.
+{-# LANGUAGE TupleSections #-}
 
-{- | PyPI's read-only adapter and the rule types its ecosystem cannot support.
+{- | PyPI's adapter and the rule types its ecosystem cannot support.
 Its protocol exposes no store listing or deletion. A separate control plane can supply those verbs.
 -}
 module Ecluse.Core.Registry.PyPI.Adapter (
     pypiAdapter,
+    pypiPublish,
 ) where
 
 import Data.Map.Strict qualified as Map
+import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
+import Network.HTTP.Types (hContentType)
+
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable))
+import Ecluse.Core.Registry.Exchange (boundedRelay, formThen)
+import Ecluse.Core.Registry.Request (attachCredential, parseRequestEither)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes, progressFloor))
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMaintenance (..),
     AdapterMetadata (..),
+    AdapterPublish (..),
+    PublishRequestBody (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
-import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (pypiChargeFactors, pypiRead)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
+import Ecluse.Core.Registry.PyPI.Publish (pypiPublishCodec)
+import Ecluse.Core.Registry.PyPI.Publish.Multipart qualified as Multipart
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
 
@@ -60,11 +74,32 @@ pypiAdapter =
                 , artifactHosts = PyPIRequest.pypiArtifactHosts
                 }
         , adapterProjectName = rightToMaybe . projectName
-        , adapterPublish = Nothing
+        , adapterPublish = Just pypiPublish
         , adapterMaintenance =
             AdapterMaintenance
                 { maintenanceListing = Nothing
                 , maintenanceVersionDelete = Nothing
                 , maintenanceAlphabet = mkNameAlphabet pypiNameLeadChars
                 }
+        }
+
+-- | Preserve client upload bytes and response statuses without mirror duplicate classification.
+pypiPublish :: AdapterPublish
+pypiPublish =
+    AdapterPublish
+        { publishRelay = \origin _ body ->
+            formThen
+                FetchUrlUnformable
+                (boundedRelay (ocManager origin) (progressFloor (ocLimits origin)) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
+                ( do
+                    base <- parseRequestEither (originBaseUrl origin)
+                    pure . attachCredential pypiCredential (ocToken origin) $
+                        base
+                            { method = "POST"
+                            , requestHeaders = maybeToList (fmap (hContentType,) (publishBodyContentType body)) <> requestHeaders base
+                            , requestBody = RequestBodyBS (publishBodyBytes body)
+                            }
+                )
+        , publishDeclaredNames = \limits body -> Multipart.declaredNames limits (publishBodyContentType body) (publishBodyBytes body)
+        , publishCodec = pypiPublishCodec
         }

@@ -8,15 +8,27 @@ does not bound active input, parser, policy, merge, or output memory.
 -}
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
+    expandWireBytesInteger,
     chargeForResident,
     mirrorJobEstimatedBytes,
+    bufferedChunkCharge,
+    decodedDocumentCharge,
 ) where
+
+import Data.ByteString qualified as BS
 
 {- | Estimate retained bytes from a compact representation charge using the 7.5 factor.
 This factor is independent of source-byte regression envelopes and active-work admission.
 -}
 expandWireBytes :: Int -> Int
-expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
+expandWireBytes = expandWireCharge
+
+-- | Expand retained-state terms before their final saturating conversion to Int.
+expandWireBytesInteger :: Integer -> Integer
+expandWireBytesInteger = expandWireCharge
+
+expandWireCharge :: (Integral a) => a -> a
+expandWireCharge wireBytes = wireBytes * fromIntegral residentRatioNumerator `div` fromIntegral residentRatioDenominator
 
 -- | The smallest compact charge that 'expandWireBytes' expands to at least the given heap bytes.
 chargeForResident :: Int -> Int
@@ -31,3 +43,17 @@ residentRatioDenominator = 2
 -- | The resident-byte allowance per in-memory mirror queue slot.
 mirrorJobEstimatedBytes :: Int
 mirrorJobEstimatedBytes = 1024
+
+-- | Allow four overlapping byte copies and builder/list cells before retaining a nonempty chunk.
+bufferedChunkCharge :: Int -> Int
+bufferedChunkCharge bytes
+    | bytes <= 0 = 0
+    | otherwise = fromInteger (min (toInteger (maxBound :: Int)) (4 * toInteger bytes + 128))
+
+-- | Estimate scalar copies and tree/domain slots from actual JSON or XML bytes before decoding.
+decodedDocumentCharge :: ByteString -> Int
+decodedDocumentCharge bytes
+    | BS.null bytes = 0
+    | otherwise = fromInteger (min (toInteger (maxBound :: Int)) (4096 + 8 * toInteger (BS.length bytes) + 512 * markers))
+  where
+    markers = BS.foldl' (\count byte -> if byte `elem` [34, 44, 58, 60, 62, 91, 93, 123, 125] then count + 1 else count) 0 bytes

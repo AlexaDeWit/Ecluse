@@ -196,7 +196,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newTestMemoryQueue
-        withProxyEnvQueue queue privateUp publicUp Nothing $ \app env publicPort -> do
+        withProxyEnvQueue queue privateUp publicUp Nothing $ \app env _publicPort -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
@@ -205,8 +205,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
                 `shouldBe` [
                                ( mkPackageName Npm Nothing "thing"
                                , mkVersion Npm "1.0.0"
-                               , localhost publicPort <> "/thing/-/thing-1.0.0.tgz"
-                               , "thing-1.0.0.tgz"
+                               , Just "thing-1.0.0.tgz"
                                )
                            ]
 

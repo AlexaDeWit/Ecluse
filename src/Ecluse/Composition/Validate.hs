@@ -9,10 +9,12 @@ module Ecluse.Composition.Validate (
     -- * The validate phase
     ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPrivateCaches, vpProgressFloor, vpSettings),
     vetBoot,
+    vetBootWith,
+    vetMirrorCapabilities,
 
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
-    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticToken),
+    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticCredential, vpubMaxRequestBytes),
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -26,13 +28,15 @@ import Ecluse.Composition.BootError (
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MinProgressBytesNotPositive,
+        MirrorStateRequired,
         MirrorTargetWithoutPublish,
         MissingAdapter,
         ProgressWindowNotBelowServeCap,
         ProgressWindowNotPositive,
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge,
-        RuleBlockedOnMount
+        RuleBlockedOnMount,
+        UploadConfigurationRequired
     ),
  )
 import Ecluse.Composition.Endpoints (
@@ -40,32 +44,36 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
+import Ecluse.Composition.Maintenance (ClearedBackend, ResolveMaintenanceAdapter, overrideKey, vetPrivateCaches, vetStoreBackends)
+import Ecluse.Composition.Types (BootRole, MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), pipelineRoleOf)
 import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, decided, rule)
 import Ecluse.Config (
     AdvisoriesSettings (advUrl),
-    AppConfig (cfgAdvisories, cfgDredger, cfgLimits, cfgMounts, cfgServer),
+    AppConfig (cfgAdvisories, cfgDredger, cfgLimits, cfgMirrorState, cfgMounts, cfgServer),
     Config (configApp, configMounts),
     DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
     LimitsSettings (limMinProgressBytes, limProgressWindow),
+    MirrorEndpoint (meUploadUrl, meUsername),
     MirrorTarget (mtUrl),
     Mount,
-    MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
+    MountConfig (mntFirstParty, mntMaxRequestBytes, mntMirrorTarget, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
-    PublicationEndpoint (peTarget, peToken),
+    PublicationEndpoint (peTarget, peToken, peUsername),
     QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
-    StoreTag,
+    StoreTag (TagCodeArtifact),
     Target (tgtTag, tgtUrl),
+    meTarget,
     mountAdvisoryDenials,
     mountPolicy,
     mountRegistries,
     regMirrorTarget,
+    storeTagName,
  )
-import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), Secret)
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish, adapterRuleBlocks)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), ruleType)
@@ -111,22 +119,48 @@ anti-shadowing guard enforces, and the static credential the inbound edge gate c
 data VettedPublication = VettedPublication
     { vpubTarget :: PublicationTarget
     , vpubFirstParty :: FirstParty
-    , vpubStaticToken :: Maybe Secret
+    , vpubStaticCredential :: Maybe ClientCredential
+    , vpubMaxRequestBytes :: Maybe Int
     }
+
+-- | Require only capabilities this process uses. Store maintenance never opens mirror state or uploads packages.
+vetMirrorCapabilities :: BootRole -> AppConfig -> Vet ()
+vetMirrorCapabilities role app = decided $ case missing of
+    [] -> Right ()
+    errors -> Left errors
+  where
+    pipeline = pipelineRoleOf role
+    mirrorWrites = pipeline `elem` [Just ServeAndMirror, Just MirrorOnly]
+    clientWrites = pipeline `elem` [Just ServeAndMirror, Just ServeOnly]
+    missing = concatMap missingOnMount (Map.toList (cfgMounts app))
+    missingOnMount (eco, mount)
+        | eco /= PyPI = []
+        | otherwise = maybe [] (mirrorNeeds eco) (mntMirrorTarget mount) <> maybe [] (publicationNeeds eco) (mntPublicationTarget mount)
+    mirrorNeeds eco endpoint =
+        [MirrorStateRequired eco | isJust pipeline, isNothing (cfgMirrorState app)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "uploadUrl" | mirrorWrites, isNothing (meUploadUrl endpoint)]
+            <> [required eco "mirrorTarget" (meTarget endpoint) "username" | mirrorWrites, tgtTag (meTarget endpoint) /= TagCodeArtifact, isNothing (meUsername endpoint)]
+    publicationNeeds eco endpoint =
+        [required eco "publicationTarget" (peTarget endpoint) "username" | clientWrites, isJust (peToken endpoint), tgtTag (peTarget endpoint) /= TagCodeArtifact, isNothing (peUsername endpoint)]
+    required eco endpoint target key = UploadConfigurationRequired eco (endpoint <> "." <> storeTagName (tgtTag target) <> "." <> key)
 
 -- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
-vetBoot config =
+vetBoot = vetBootWith adapterFor
+
+-- | Vet every adapter-dependent capability through one lookup, including absent capabilities.
+vetBootWith :: ResolveMaintenanceAdapter -> Config -> Vet ValidatedPlan
+vetBootWith resolveAdapter config =
     assemble
-        <$> vetMounts config
+        <$> vetMounts resolveAdapter config
         <*> vetPublishPolicy app
         <*> vetEndpoints (cfgMounts app)
-        <*> vetStoreBackends adapterFor (configMounts config)
-        <*> vetPrivateCaches adapterFor (cfgMounts app) (configMounts config)
+        <*> vetStoreBackends resolveAdapter (configMounts config)
+        <*> vetPrivateCaches resolveAdapter (cfgMounts app) (configMounts config)
         <*> vetProgressFloor app
         <* vetSweepPacing app
         <* vetAdvisoryStore config
-        <* vetRuleBlocks config
+        <* vetRuleBlocks resolveAdapter config
         <* vetQuotaOverrides config
         <* vetQuotaScopes app
   where
@@ -142,7 +176,7 @@ vetBoot config =
             , vpSettings = app
             }
 
-    cleared target (firstParty, staticToken) = VettedPublication target firstParty staticToken
+    cleared target (firstParty, credential, requestBytes) = VettedPublication target firstParty credential requestBytes
 
 -- Every role dials upstreams, so every role refuses a floor the window and byte count cannot make.
 vetProgressFloor :: AppConfig -> Vet ProgressFloor
@@ -179,14 +213,14 @@ vetAdvisoryStore config =
         | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
 
 -- A blocked declaration refuses every role, even when another rule outranks it.
-vetRuleBlocks :: Config -> Vet ()
-vetRuleBlocks config = traverse_ vetMountRules (activeMounts config)
+vetRuleBlocks :: ResolveMaintenanceAdapter -> Config -> Vet ()
+vetRuleBlocks resolveAdapter config = traverse_ vetMountRules (activeMounts config)
   where
     vetMountRules (eco, (mount, _)) =
         traverse_ (rule (const (Refuse (uncurry (RuleBlockedOnMount eco)))) blocked) (mountPolicy mount)
       where
         blocked preceded = do
-            adapter <- adapterFor eco
+            adapter <- resolveAdapter eco
             let ty = ruleType (prRule preceded)
             reason <- Map.lookup ty (adapterRuleBlocks adapter)
             pure (ty, reason)
@@ -230,8 +264,8 @@ declaredStoreUrls config =
     [registryUrlText (mtUrl target) | mount <- Map.elems (configMounts config), Just target <- [regMirrorTarget (mountRegistries mount)]]
         <> [registryUrlText (tgtUrl (preTarget endpoint)) | mcfg <- Map.elems (cfgMounts (configApp config)), Just endpoint <- [mntPrivateUpstream mcfg]]
 
-vetMounts :: Config -> Vet [VettedMount]
-vetMounts config = catMaybes <$> traverse vetMount (activeMounts config)
+vetMounts :: ResolveMaintenanceAdapter -> Config -> Vet [VettedMount]
+vetMounts resolveAdapter config = catMaybes <$> traverse (vetMount resolveAdapter) (activeMounts config)
 
 {- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for entry, so the two
 maps share a keyset and this pairing is total. -}
@@ -240,18 +274,18 @@ activeMounts config =
     Map.toAscList (Map.intersectionWith (,) (configMounts config) (cfgMounts (configApp config)))
 
 -- 'Nothing' only where the rule refused, and a refused pass yields no plan to carry it into.
-vetMount :: (Ecosystem, (Mount, MountConfig)) -> Vet (Maybe VettedMount)
-vetMount (eco, (mount, mcfg)) =
+vetMount :: ResolveMaintenanceAdapter -> (Ecosystem, (Mount, MountConfig)) -> Vet (Maybe VettedMount)
+vetMount resolveAdapter (eco, (mount, mcfg)) =
     vetted
         <$ rule (const (Refuse MissingAdapter)) unservedEcosystem eco
         <* rule (const (Refuse MirrorTargetWithoutPublish)) (declaredWithoutPublish mirrors) eco
         <* rule (const (Refuse PublicationTargetWithoutPublish)) (declaredWithoutPublish publishes) eco
         <* rule (const (Refuse FirstPartyWithoutPrivateUpstream)) firstPartyWithoutPrivateUpstream (eco, mcfg)
   where
-    vetted = adapterFor eco <&> \adapter -> VettedMount eco adapter mount mcfg
+    vetted = resolveAdapter eco <&> \adapter -> VettedMount eco adapter mount mcfg
 
     unservedEcosystem e
-        | isNothing (adapterFor e) = Just e
+        | isNothing (resolveAdapter e) = Just e
         | otherwise = Nothing
 
     mirrors = isJust (regMirrorTarget (mountRegistries mount))
@@ -259,7 +293,7 @@ vetMount (eco, (mount, mcfg)) =
 
     declaredWithoutPublish declared e = do
         guard declared
-        adapter <- adapterFor e
+        adapter <- resolveAdapter e
         guard (isNothing (adapterPublish adapter))
         pure e
 
@@ -269,7 +303,7 @@ firstPartyWithoutPrivateUpstream (eco, mcfg) =
 
 {- The two couplings a declared publication target carries: the first-party namespaces the
 guard enforces, and the inbound edge a static publish credential needs. -}
-vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe Secret))
+vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe ClientCredential, Maybe Int))
 vetPublishPolicy app =
     Map.fromList . catMaybes <$> traverse (vetPublication (srvAuthToken (cfgServer app))) publishingMounts
   where
@@ -279,13 +313,20 @@ vetPublishPolicy app =
         , isJust (mntPublicationTarget mcfg)
         ]
 
-vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe Secret)))
+vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe ClientCredential, Maybe Int)))
 vetPublication inboundToken subject@(eco, mcfg) =
     cleared
         <$ rule (const (Refuse FirstPartyMissing)) firstPartyMissing subject
         <* rule (const (Refuse (uncurry PublishStaticCredentialNeedsEdge))) (staticWithoutEdge inboundToken) subject
   where
-    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationToken mcfg))
+    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationCredential mcfg, mntMaxRequestBytes mcfg))
+
+publicationCredential :: MountConfig -> Maybe ClientCredential
+publicationCredential mount = do
+    endpoint <- mntPublicationTarget mount
+    token <- peToken endpoint
+    let username = if tgtTag (peTarget endpoint) == TagCodeArtifact then Just "aws" else peUsername endpoint
+    pure (ClientCredential username token)
 
 publicationToken :: MountConfig -> Maybe Secret
 publicationToken mcfg = peToken =<< mntPublicationTarget mcfg

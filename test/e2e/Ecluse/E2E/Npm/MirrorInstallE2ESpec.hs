@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Compare fresh public and mirror-only installs of the fixture graph. The oracle covers installed trees,
-lockfiles, dependency resolution, module exports, and the linked executable's output.
--}
+-- | Native npm observations for the complete mirror contract.
 module Ecluse.E2E.Npm.MirrorInstallE2ESpec (npmMirrorFamily) where
 
 import Data.Aeson (Value)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Ecluse.E2E.Fixtures.Contracts (ConcreteFixture, concreteFamily)
 import Ecluse.Test.Contract.Ecosystem (FamilyFixture, FamilyMetadata)
+import Ecluse.Test.Contract.Install (TargetExpectation (..), TargetObservation (..), TargetPortability (ArchitectureIndependent))
 
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
@@ -32,10 +32,11 @@ npmMirrorFamily :: ConcreteFixture FamilyMetadata -> (MirrorFixture (Set Resolve
 npmMirrorFamily fixture =
     ( MirrorFixture
         { mirrorExpectedGraph = expectedGraph
+        , mirrorExpectedTargets = Right (portableTarget, portableTarget)
         , mirrorExpectedExport = graphExport
         , mirrorExpectedVersions = [(psName pkg, [psVersion pkg]) | pkg <- graphPackages]
         , mirrorRequiredPaths = neededOfMirror
-        , mirrorExpectedSources = [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
+        , mirrorExpectedSources = Right [redactedProxy <> npmTarballPath (psName pkg) (psVersion pkg) | pkg <- graphPackages]
         }
     , concreteFamily fixture (\_ action plane -> action (mirrorDriver plane))
     )
@@ -59,6 +60,7 @@ installFromPublic proxy = do
     pure
         PublicPhase
             { publicObserved = observed
+            , publicTargetObserved = portableObserved observed
             , publicReachable = reachable
             , publicVersionsBefore = versionsBefore
             , publicVersionsAfter = versionsAfter
@@ -73,6 +75,8 @@ installFromMirror proxy = do
     pure
         OfflinePhase
             { offlineObserved = observed
+            , offlineTargetObserved = portableObserved observed
+            , offlineUnsupportedTarget = Nothing
             , offlinePublicReachable = reachable
             , offlineMirrorPaths = servedByMirror answered
             , offlinePublicAnswers = map show (filter answeredByPublic answered)
@@ -125,3 +129,19 @@ servedByMirror answered =
 emptyPrivateStore :: E2EConfig
 emptyPrivateStore =
     defaultE2EConfig{ecExtraEnv = [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", stubUrl EmptyPrivate)]}
+
+portableTarget :: TargetExpectation
+portableTarget =
+    TargetExpectation
+        ArchitectureIndependent
+        [T.takeWhileEnd (/= '/') (npmTarballPath (psName package) (psVersion package)) | package <- graphPackages]
+        []
+
+portableObserved :: Observed graph value -> TargetObservation graph
+portableObserved observed =
+    TargetObservation
+        ArchitectureIndependent
+        (obClient observed)
+        (obGraph observed)
+        (Right (map (T.takeWhileEnd (/= '/')) (lockedSources (obTree observed))))
+        (obTree observed)

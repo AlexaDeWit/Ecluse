@@ -2,13 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared wiring for the ecosystem load fixtures: loopback stub upstreams in the harness process,
-and a proxy process in front of them. HTTP preflights reject a wrong response before the measured
-window starts.
--}
+-- | Loopback upstreams and a separate measured proxy, with HTTP preflights before load.
 module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
+    withProxyPortsConfigured,
     httpTarget,
     longCacheTtl,
     artifactBytes,
@@ -42,19 +40,21 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 import Ecluse.Test.Wai (rebaseAuthority)
 
-{- | Boot a proxy in front of the private and public stubs with this cache TTL in seconds and an
-optional entry bound. The body gets the proxy and the URL mix for its port.
--}
+-- | Boot a proxy over two stubs with the given cache TTL and optional entry bound.
 withProxyOverStubs :: Ecosystem -> LoadKnobs -> Int -> Maybe Int -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
 withProxyOverStubs ecosystem knobs ttl entries =
     withProxyConfigured ecosystem knobs (\_ -> pure (\settings -> settings{psCacheTtlSeconds = ttl, psCacheMaxEntries = entries}))
 
 -- | 'withProxyOverStubs' with settings derived once the public stub's port is known.
 withProxyConfigured :: Ecosystem -> LoadKnobs -> (Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
-withProxyConfigured ecosystem knobs configure privateApp publicApp mkMix body =
+withProxyConfigured ecosystem knobs configure = withProxyPortsConfigured ecosystem knobs (const configure)
+
+-- | Configure a measured proxy after both registry ports are available.
+withProxyPortsConfigured :: Ecosystem -> LoadKnobs -> (Int -> Int -> IO (ProxySettings -> ProxySettings)) -> Application -> Application -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
+withProxyPortsConfigured ecosystem knobs configure privateApp publicApp mkMix body =
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            adjust <- configure publicPort
+            adjust <- configure privatePort publicPort
             withProxyProcess (adjust knobSettings) publicPort (Just privatePort) $ \proxy ->
                 body proxy (mkMix (proxyPort proxy))
   where

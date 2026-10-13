@@ -2,14 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The nginx stub's routes. One nginx terminates TLS for every registry name the product dials and tells them apart by @server_name@, so the product reaches https-only endpoints. A case holds a fault
-on a route by rendering the configuration with it, and reads what each route answered from the access log. "Ecluse.E2E.Harness.Docker" applies the configuration and fetches the log.
--}
+-- | TLS registry routes, deterministic faults, and access-log parsing for the product image.
 module Ecluse.E2E.Harness.Stub (
     -- * Routes
     StubRoute (..),
     stubHosts,
     stubUrl,
+    nativeUploadLimit,
 
     -- * Faults
     StubFault (..),
@@ -39,6 +38,12 @@ data StubRoute
       PrivateCache
     | -- | The front of the Verdaccio every writing role mirrors into.
       Mirror
+    | -- | The native PyPI upload/read fixture.
+      PyPIMirror
+    | -- | Native PyPI repositories behind the deterministic AWS control plane.
+      PyPICodeArtifactData
+    | -- | The AWS API host resolved on the isolated fixture network.
+      PyPICodeArtifactControl
     deriving stock (Eq, Show, Enum, Bounded)
 
 -- | Every name the stub answers to: its network aliases, and the names its certificate carries.
@@ -57,20 +62,29 @@ stubHost = \case
     EmptyPrivate -> "private-upstream"
     PrivateCache -> "private-cache"
     Mirror -> "mirror"
+    PyPIMirror -> "pypi-mirror"
+    PyPICodeArtifactData -> "contract-domain-123456789012.d.codeartifact.us-east-1.amazonaws.com"
+    PyPICodeArtifactControl -> "codeartifact.us-east-1.amazonaws.com"
 
 -- | A fault the stub holds on its routes. It holds one at a time.
 data StubFault
-    = {- | Both public upstreams, npm's and PyPI's, close every connection with no answer. The
-      other routes keep answering, so only a private store can supply a client.
-      -}
+    = -- | Close both public upstreams without answering while private routes continue serving.
       PublicUpstreamsDown
     | -- | The private cache refuses every write method and still answers reads.
       PrivateCacheWritesRefused
+    | -- | Forward PyPI writes to the host fixture, optionally holding public unavailable.
+      PyPIMirrorBackend Int Bool
+    | -- | Route native PyPI stores and the AWS API to one host fixture.
+      PyPICodeArtifactBackend Int
     deriving stock (Eq, Show)
 
 -- | The stub's configuration: every route in declaration order, under the fault if there is one.
 stubConfig :: Maybe StubFault -> Text
-stubConfig fault = T.unlines (readLogFormat : concatMap (serverBlock fault) universe)
+stubConfig fault =
+    T.unlines $
+        -- The CodeArtifact fixture hostname exceeds nginx's default 64-byte hash bucket.
+        ["server_names_hash_bucket_size 128;", readLogFormat]
+            <> concatMap (serverBlock fault) universe
 
 -- One line for each finished request, in the fields 'stubReads' reads back.
 readLogFormat :: Text
@@ -89,14 +103,27 @@ serverBlock fault route =
     , "    access_log /var/log/nginx/access.log stub_read;"
     ]
         <> maybe [] (`faultLines` route) fault
-        <> routeLines route
+        <> ( case (fault, route) of
+                (Just (PyPIMirrorBackend port _), PyPIMirror) -> forwarded nativeUploadLimit port
+                (Just (PyPICodeArtifactBackend port), PyPICodeArtifactData) -> forwarded 16777216 port
+                (Just (PyPICodeArtifactBackend port), PyPICodeArtifactControl) -> forwarded 16777216 port
+                _ -> routeLines route
+           )
         <> ["}"]
+
+forwarded :: Int -> Int -> [Text]
+forwarded limit port =
+    [ "    client_max_body_size " <> show limit <> ";"
+    , "    location / { proxy_pass http://203.0.113.1:" <> show port <> "; }"
+    ]
 
 -- nginx evaluates these before it picks a location, so a fault covers its whole route.
 faultLines :: StubFault -> StubRoute -> [Text]
 faultLines = \case
     PublicUpstreamsDown -> \route -> [closeUnanswered | isPublic route]
     PrivateCacheWritesRefused -> \route -> [refuseWrites | route == PrivateCache]
+    PyPIMirrorBackend _ down -> \route -> [closeUnanswered | down && isPublic route]
+    PyPICodeArtifactBackend _ -> const []
   where
     closeUnanswered = "    return " <> show unansweredStatus <> ";"
     refuseWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
@@ -113,6 +140,9 @@ isPublic = \case
     EmptyPrivate -> False
     PrivateCache -> False
     Mirror -> False
+    PyPIMirror -> False
+    PyPICodeArtifactData -> False
+    PyPICodeArtifactControl -> False
 
 routeLines :: StubRoute -> [Text]
 routeLines = \case
@@ -141,6 +171,7 @@ routeLines = \case
           "        try_files $uri/index.json $uri =404;"
         , "    }"
         ]
+    PyPIMirror -> ["    location / { return 404; }"]
     EmptyPrivate ->
         [ "    location / {"
         , "        return 404;"
@@ -167,10 +198,10 @@ routeLines = \case
         , "        proxy_set_header X-Forwarded-For $remote_addr;"
         , "    }"
         ]
+    PyPICodeArtifactData -> ["    location / { return 503; }"]
+    PyPICodeArtifactControl -> ["    location / { return 503; }"]
 
-{- | How many worker processes the stub's log shows nginx has started, over every reload. A reload
-starts a new set, so the count taken before one is the number it must retire.
--}
+-- | Count started workers so a reload can wait for the previous generation to retire.
 startedWorkers :: Text -> Int
 startedWorkers = T.count "start worker process "
 
@@ -201,3 +232,7 @@ stubReads = mapMaybe (readOf . words) . lines
 -- | Whether a public upstream answered the request, where an outage leaves it unanswered.
 answeredByPublic :: StubRead -> Bool
 answeredByPublic r = isPublic (srRoute r) && srStatus r /= unansweredStatus
+
+-- | The native fixture's maximum multipart request body, shared with its TLS forwarder.
+nativeUploadLimit :: Int
+nativeUploadLimit = 1024 * 1024

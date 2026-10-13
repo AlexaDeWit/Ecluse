@@ -2,15 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | PyPI's credential presentation: the HTTP Basic pair a Python client sends on
-@Authorization@, recovered here and attached under the same scheme going upstream.
-
-The username is a client-side convention rather than an identity the index checks, so the
-recovery admits any username and the edge gate compares the password half alone. A credential
-Écluse holds rather than receives carries no username and travels under @__token__@, the name
-PyPI's own tooling writes for a token. A pair a client sent travels verbatim, because rewriting
-a username would authenticate as somebody else.
--}
+-- | Preserve the supplied HTTP Basic username and password when forwarding PyPI credentials.
 module Ecluse.Core.Registry.PyPI.Credential (
     pypiCredential,
 ) where
@@ -35,20 +27,13 @@ recoverBasic headers = do
     let (username, afterUser) = T.break (== ':') (decodeUtf8 decoded)
     password <- T.stripPrefix ":" afterUser
     guard (not (T.null password))
-    pure (ClientCredential (usernameGiven username) (mkSecret password))
+    pure (ClientCredential (Just username) (mkSecret password))
 
 renderBasic :: ClientCredential -> ByteString
 renderBasic credential =
     "Basic " <> convertToBase Base64 (encodeUtf8 pair :: ByteString)
   where
-    pair = fromMaybe tokenUsername (credUsername credential) <> ":" <> unSecret (credSecret credential)
-
-tokenUsername :: Text
-tokenUsername = "__token__"
-
--- An empty username is no username, which is how a client that names none presents itself.
-usernameGiven :: Text -> Maybe Text
-usernameGiven username = if T.null username then Nothing else Just username
+    pair = fromMaybe "" (credUsername credential) <> ":" <> unSecret (credSecret credential)
 
 decodeBase64 :: ByteString -> Maybe ByteString
 decodeBase64 = rightToMaybe . convertFromBase Base64

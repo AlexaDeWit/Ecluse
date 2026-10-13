@@ -22,6 +22,7 @@ module Ecluse.E2E.Harness.Docker (
 
     -- * Fixture controls
     withPublicUpstreamsDown,
+    withStubFault,
     withPrivateCacheDeletesRefused,
     withPublicArtifactWithheld,
     stubReadsNow,
@@ -247,15 +248,11 @@ withDredgerPrivateCache plane mirror action = do
         unless ready (fail "the private preview cache did not become ready")
         action cache
 
-{- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then tear it
-down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
--}
+-- | Run a ready proxy on the shared data plane, removing it on every exit path.
 withE2E :: (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2E = withE2EWith defaultE2EConfig
 
-{- | 'withE2E' parameterised by an 'E2EConfig', layering extra proxy environment. It may stand up
-an OTLP collector at @otelcol@, up before the proxy so no export is missed.
--}
+-- | Run a configured proxy, starting its optional collector before the proxy.
 withE2EWith :: E2EConfig -> (E2E -> IO a) -> GlobalDataPlane -> IO a
 withE2EWith cfg action gdp =
     usingExistingPlane >>= \case
@@ -354,9 +351,7 @@ mirrorTargetEnv =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     ]
 
-{- | The dedicated worker's environment: the queue it drains, the rules it boots with, and the
-mirror target it writes into, which is the store a proxy reads privately.
--}
+-- | Configure a dedicated worker to write the store the proxy reads privately.
 mirrorRoleEnv :: Text -> Text -> [(Text, Text)]
 mirrorRoleEnv queueUrl rules =
     [ ("ECLUSE_SERVER__PORT", "4873")
@@ -376,9 +371,7 @@ mirrorRoleEnv queueUrl rules =
 ministackEndpoint :: Text
 ministackEndpoint = "http://ministack:4566"
 
-{- | The AWS environment every role boots with. A role that is given an advisory store prepares its sync
-at boot, so each needs a credential chain and an endpoint inside the test network.
--}
+-- | Supply emulator credentials and an in-network endpoint to each product role.
 ministackAwsEnv :: [(Text, Text)]
 ministackAwsEnv =
     [ -- The generic endpoint override (AWS-SDK-standard) the S3 advisory client reads. The
@@ -409,9 +402,7 @@ withOptionalCollector cfg labelArgs net coll body
 collectorAlias :: Text
 collectorAlias = "otelcol"
 
-{- | The in-cluster OTLP endpoint the proxy exports to, reached by the collector's network alias. A
-scenario names it through 'otlpCollectorEnv' or derives it from @DD_AGENT_HOST@.
--}
+-- | The collector endpoint shared by the OpenTelemetry and Datadog scenarios.
 collectorOtlpEndpoint :: Text
 collectorOtlpEndpoint = "http://" <> collectorAlias <> ":4318"
 
@@ -425,9 +416,7 @@ telemetryExportTuning =
     , ("OTEL_BSP_SCHEDULE_DELAY", "1000")
     ]
 
-{- | Proxy environment for the vanilla-OpenTelemetry dialect: telemetry on, endpoint in
-@OTEL_EXPORTER_OTLP_ENDPOINT@. With @ecCollector = False@ it exercises graceful degradation.
--}
+-- | Enable OTLP export. Without a collector, this configuration exercises exporter failure.
 otlpCollectorEnv :: [(Text, Text)]
 otlpCollectorEnv =
     [ ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
@@ -435,15 +424,13 @@ otlpCollectorEnv =
     ]
         <> telemetryExportTuning
 
--- | The Datadog unified-service-tag identity configured in the proxy environment.
+-- | The shared Datadog service identity used by configuration and assertions.
 ddTagService, ddTagEnv, ddTagVersion :: Text
 ddTagService = "ecluse-e2e-dd"
 ddTagEnv = "e2e-staging"
 ddTagVersion = "9.9.9-e2e"
 
-{- | Proxy environment for the Datadog dialect: @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@ plus
-@DD_AGENT_HOST@ pointing the resolver at the collector. Pair with @ecCollector = True@.
--}
+-- | Configure Datadog identity and export to the optional collector.
 datadogCollectorEnv :: [(Text, Text)]
 datadogCollectorEnv =
     [ ("ECLUSE_OBSERVABILITY__TELEMETRY", "on")
@@ -464,17 +451,13 @@ collectorConfig =
         <> "traces: {receivers: [otlp], exporters: [debug]}, "
         <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
-{- | What one product-image run reported: the status a scheduler reads, and the JSONL log lines
-it wrote. The run is not detached, so it ends when the role's own work does.
--}
+-- | The exit status and JSONL logs from a completed product-image invocation.
 data RoleRun = RoleRun
     { roleExit :: ExitCode
     , roleOutput :: Text
     }
 
-{- | The advisory data directory the shipped image defaults to. A role that syncs or compiles an
-artifact writes here, so every product-image container mounts it writable.
--}
+-- | The image's advisory directory, mounted writable for sync and compilation.
 advisoryDataDir :: FilePath
 advisoryDataDir = "/var/lib/ecluse/advisories"
 
@@ -483,9 +466,7 @@ advisoryDataDir = "/var/lib/ecluse/advisories"
 advisoryDataTmpfs :: String
 advisoryDataTmpfs = advisoryDataDir <> ":mode=1777"
 
-{- | Run the product image to completion on the shared data plane, under the caller's environment and
-arguments. It joins the plane's network, so it addresses the same stores the proxy does.
--}
+-- | Run a product role to completion on the shared network with the supplied environment.
 runRoleOnce :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO RoleRun
 runRoleOnce gdp env args = do
     run <- roleRun gdp env args
@@ -510,9 +491,7 @@ roleRun gdp env args = do
             , drCmd = args
             }
 
-{- | Create a mirror queue on the shared emulator and return its URL, for a scenario whose
-roles must all drain the one queue rather than each create its own.
--}
+-- | Create one emulator queue that several product roles can share.
 sharedMirrorQueue :: GlobalDataPlane -> IO Text
 sharedMirrorQueue gdp = do
     manager <- newManager defaultManagerSettings
@@ -520,18 +499,14 @@ sharedMirrorQueue gdp = do
     port <- ministackPort gdp
     createMinistackQueue manager port ("ecluse-e2e-shared-queue-" <> T.pack sfx)
 
-{- | Run a dedicated @ecluse mirror@ worker on the shared data plane for the action, removed on every exit
-path. The action gets the container name, so a case can wait on the worker's own log.
--}
+-- | Run a dedicated mirror worker, passing its container name and removing it on every exit.
 withMirrorRole :: GlobalDataPlane -> [(Text, Text)] -> (String -> IO a) -> IO a
 withMirrorRole gdp env action = do
     run <- roleRun gdp env ["mirror"]
     labelArgs <- dockerLabelArgs "e2e"
     withDockerContainer labelArgs run action
 
-{- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
-@extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.
--}
+-- | Run Dredger once against the proxy's mirror target with the supplied environment overrides.
 runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
 runDredgerOnce gdp flags extraEnv =
     runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
@@ -645,19 +620,15 @@ verdaccioConfig =
         , "log: { type: stdout, format: pretty, level: warn }"
         ]
 
-{- | Take both public upstreams down for the action, npm's and PyPI's: the stub closes every connection to
-them unanswered, while the mirror, the private upstream, and the private cache answer.
--}
+-- | Close both public routes without answering, while private routes remain available.
 withPublicUpstreamsDown :: GlobalDataPlane -> IO a -> IO a
 withPublicUpstreamsDown plane = withStubFault plane PublicUpstreamsDown
 
-{- | Refuse every write method on the private-cache route for the duration of the action, so
-that one target's deletes fail while its reads keep answering.
--}
+-- | Refuse private-cache writes while continuing to answer reads.
 withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
 withPrivateCacheDeletesRefused plane = withStubFault plane PrivateCacheWritesRefused
 
--- The stub holds one fault at a time, so leaving the action restores every route.
+-- | Hold one route fault, restoring the default configuration when the action ends.
 withStubFault :: GlobalDataPlane -> StubFault -> IO a -> IO a
 withStubFault plane fault action =
     finally (reloadStub plane (Just fault) >> action) (reloadStub plane Nothing)
@@ -679,15 +650,11 @@ reloadStub plane fault = do
 stubReadsNow :: GlobalDataPlane -> IO [StubRead]
 stubReadsNow plane = stubReads <$> containerLogs (gdpStub plane)
 
-{- | The requests the stub finished after its first @seen@, polled until they satisfy @complete@ or the
-budget lapses. The log trails a response by a moment, so a case names the reads it waits for.
--}
+-- | Poll requests after @seen@ until @complete@ holds or the attempt budget expires.
 awaitStubReads :: GlobalDataPlane -> Int -> ([StubRead] -> Bool) -> IO [StubRead]
 awaitStubReads plane seen complete = pollUntil 40 250000 complete (drop seen <$> stubReadsNow plane)
 
-{- | Withhold one public artifact for the duration of the action, leaving its metadata served,
-and put the file back on every exit path.
--}
+-- | Withhold a public artifact without changing its metadata, restoring it on every exit.
 withPublicArtifactWithheld :: GlobalDataPlane -> Text -> Text -> IO a -> IO a
 withPublicArtifactWithheld plane name version =
     bracket_ (renamePath served withheld) (renamePath withheld served)

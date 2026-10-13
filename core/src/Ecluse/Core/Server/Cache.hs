@@ -12,7 +12,6 @@ module Ecluse.Core.Server.Cache (
 
     -- * The cache handle
     MetadataCache,
-    newMetadataCache,
     newMetadataCacheWithProvider,
 
     -- * Cache entries
@@ -32,7 +31,7 @@ module Ecluse.Core.Server.Cache (
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
-import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProvider, providerAssembled, providerFull, providerVersion)
+import Ecluse.Core.Server.Cache.Provider (CacheProvider, providerAssembled, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     PreparedStore,
@@ -54,10 +53,6 @@ data MetadataCache = MetadataCache
     , mcVersion :: SingleFlight MetadataError CacheKey VersionRead
     , mcAssembled :: SingleFlight Void CacheKey ByteString
     }
-
--- | Select the shipped local provider without an external service dependency.
-newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg = localCacheProvider cfg >>= newMetadataCacheWithProvider
 
 -- | Create only transient flight state. The selected provider owns every retained representation.
 newMetadataCacheWithProvider :: CacheProvider -> IO MetadataCache

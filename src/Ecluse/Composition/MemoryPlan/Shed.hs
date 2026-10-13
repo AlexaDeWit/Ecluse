@@ -97,7 +97,7 @@ shedCacheStep d overshoot =
 -- Step 2: the publish aggregate shrinks to one maximum request.
 shedPublishStep :: TenantDemands -> Int -> ShedStep
 shedPublishStep d overshoot =
-    shedStep overshoot desired (if tdPublishConfigured d then max 0 (desired - tdRequestFinal d) else 0)
+    shedStep overshoot desired (if tdPublishConfigured d then max 0 (desired - tdLargestRequest d) else 0)
   where
     desired = tdPublishDesired d
 
