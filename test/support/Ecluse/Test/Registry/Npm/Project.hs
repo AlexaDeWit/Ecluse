@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Whole-tree reference projection and held-byte adapters for npm parser comparisons.
-module Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList) where
+module Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList, parseVersionBytes) where
 
 import Data.Aeson (Value, parseJSON, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither)
@@ -50,7 +50,10 @@ parsePackageInfoFromValue requested value = do
 
 -- | Parse caller-owned bytes through the production selective inventory parser.
 parseVersionList :: RegistryResponse -> Either ParseError [Version]
-parseVersionList response = do
-    let body = responseBody response
+parseVersionList = parseVersionBytes . responseBody
+
+-- | Read caller-owned bytes without manufacturing an HTTP response.
+parseVersionBytes :: ByteString -> Either ParseError [Version]
+parseVersionBytes body = do
     streamed <- first (ParseError . show) (parseJsonChunks (MetadataBodyLimit (BS.length body)) (versionListParser defaultLimits) (collectVersionList defaultLimits) emptyVersionList [body])
     streamValue streamed >>= finishVersionList

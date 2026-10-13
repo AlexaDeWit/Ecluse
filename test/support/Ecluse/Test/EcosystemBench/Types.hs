@@ -7,11 +7,12 @@ Raw corpus bytes cross the interface, while prepared serving uses the production
 -}
 module Ecluse.Test.EcosystemBench.Types (
     EcosystemBench (..),
-    LoadedEntry,
+    LoadedEntry (..),
     RouteCase (..),
     RouteScaling (..),
 ) where
 
+import Data.Aeson (Value)
 import Network.HTTP.Types (Method)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -28,6 +29,13 @@ data EcosystemBench = EcosystemBench
     { ebEcosystem :: Ecosystem
     , ebCorpus :: [LoadedEntry]
     , ebUpstream :: CaptureUpstream
+    , ebOrigin :: Text
+    -- ^ Cold HTTP reads retain their original base URL.
+    , ebTreeRead :: PackageName -> ByteString -> Either MetadataError (PackageInfo, CachedDoc)
+    -- ^ Independent native tree reader, separate from the production read driver.
+    , ebTreeDocument :: CachedDoc -> Maybe CachedDoc
+    , ebKeepVersions :: PackageInfo -> Set Text -> Value -> Value
+    , ebHeavyBase :: Int -> Value -> Value
     , ebSynthetic :: Int -> ByteString
     -- ^ Positive counts produce that many distinct releases under 'ebSyntheticName'.
     , ebSyntheticName :: PackageName
@@ -48,8 +56,13 @@ data EcosystemBench = EcosystemBench
     , ebRouteScaling :: [RouteScaling]
     }
 
--- | A capture's bytes with their production full read: its typed view, and its document under its digest.
-type LoadedEntry = (CorpusPackage, ByteString, PackageInfo, Snapshot CachedDoc)
+-- | A capture and its production read. Lazy fields preserve the original tuple's evaluation boundaries.
+data LoadedEntry = LoadedEntry
+    { lePackage :: ~CorpusPackage
+    , leBytes :: ~ByteString
+    , leInfo :: ~PackageInfo
+    , leSnapshot :: ~(Snapshot CachedDoc)
+    }
 
 -- | A named request batch, including the ecosystem's supported and refused paths.
 data RouteCase = RouteCase

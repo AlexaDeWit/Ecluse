@@ -19,8 +19,6 @@ module Ecluse.Test.RegistryCapture (
     parseRegistryVersions,
 ) where
 
-import Data.ByteString qualified as BS
-
 import Control.Exception (try)
 import Data.Aeson (FromJSON (parseJSON), Object, eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
@@ -38,11 +36,10 @@ import Network.HTTP.Client (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
-import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Corpus (readCorpusPins)
-import Ecluse.Test.Registry.Npm.Project (parseVersionList)
+import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
 
@@ -116,7 +113,7 @@ fetchVersions manager eco pkg =
 -- | Extract a registry response's published version strings through each ecosystem's __canonical__ wire decoder, never a re-parse here.
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
-    Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse 200 (BS.length (BSL.toStrict body)) (BSL.toStrict body)))
+    Npm -> rightToMaybe (map renderVersion <$> parseVersionBytes (BSL.toStrict body))
     PyPI -> PyPI.projectVersions <$> decode' body
     RubyGems -> RubyGems.listingVersions <$> decode' body
   where

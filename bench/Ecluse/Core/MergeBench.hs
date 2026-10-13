@@ -23,7 +23,7 @@ import Ecluse.Core.Package.Merge (
     mergePackuments,
  )
 import Ecluse.Core.Snapshot (Snapshot)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Snapshot (syntheticSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
@@ -32,7 +32,7 @@ benchmarks :: EcosystemBench -> Benchmark
 benchmarks ecosystem =
     bgroup "package.mergePackuments" $
         [ bench (entryName le) (whnf mergeDepth (entryInfo le <$ served))
-        | le@(_, _, _, served) <- ebCorpus ecosystem
+        | le@LoadedEntry{leSnapshot = served} <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinear
                     "scales linearly in version count"

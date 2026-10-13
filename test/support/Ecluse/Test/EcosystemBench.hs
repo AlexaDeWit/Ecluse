@@ -8,6 +8,7 @@ Corpus loading reads each capture through the production read driver before a ha
 module Ecluse.Test.EcosystemBench (
     module Ecluse.Test.EcosystemBench.Types,
     ecosystemBenches,
+    ecosystemBenchFor,
     benchmarkEcosystems,
     checkBenchmarkCoverage,
 ) where
@@ -15,15 +16,13 @@ module Ecluse.Test.EcosystemBench (
 import Prelude hiding (universe)
 
 import Data.Aeson (Value, eitherDecodeStrict)
-import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
 import Network.HTTP.Types (Method, methodGet, methodPut)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName, infoVersions)
-import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
@@ -38,13 +37,14 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpTier), corpusPackages, cpName, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, readCapture)
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
+import Ecluse.Test.Corpus.Subset (heavyNpmBase, heavyPyPIBase, keepNpmVersions, keepPyPIVersions)
 import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, captureManifest, captureVersion)
-import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull)
-import Ecluse.Test.Registry.Npm.Project (parseVersionList)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmFull, projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Project (parseVersionBytes)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, simpleValue)
 import Ecluse.Test.Registry.PyPI.Project (readThrough)
@@ -71,6 +71,13 @@ checkBenchmarkCoverage actual
     required = [Npm, PyPI]
     production = filter (isJust . adapterFor) universe
 
+-- | The explicit provider registry, without loading captures or running measured operations.
+ecosystemBenchFor :: Ecosystem -> Maybe EcosystemBench
+ecosystemBenchFor = \case
+    Npm -> Just npmBench
+    PyPI -> Just pypiBench
+    RubyGems -> Nothing
+
 benchmarkRegistrations :: [(EcosystemBench, [CorpusPackage])]
 benchmarkRegistrations = [(npmBench, corpusPackages), (pypiBench, pypiCorpusPackages)]
 
@@ -81,12 +88,12 @@ loadEcosystem ecosystem packages = do
     pure ecosystem{ebCorpus = entries}
   where
     loadOne package = do
-        raw <- readFileBS (cpPath package)
+        raw <- readCapture package
         manifest <- ebRead ecosystem (cpPackage package) (captureChunks raw) >>= either (fail . failure package . show) pure
         when (Map.null (infoVersions (manifestInfo manifest))) (fail (failure package "projected to zero versions"))
         decoded <- either (fail . failure package . toString) pure (ebDecode ecosystem (cpPackage package) raw)
         when (null decoded) (fail (failure package "decoded to zero versions"))
-        pure (package, raw, manifestInfo manifest, Snapshot (manifestDigest manifest) (manifestRaw manifest))
+        pure (LoadedEntry package raw (manifestInfo manifest) (Snapshot (manifestDigest manifest) (manifestRaw manifest)))
     failure package reason = "corpus capture " <> toString (cpName package) <> ": " <> reason
 
 npmBench :: EcosystemBench
@@ -95,9 +102,14 @@ npmBench =
         { ebEcosystem = Npm
         , ebCorpus = []
         , ebUpstream = npmCaptureUpstream
+        , ebOrigin = "https://registry.npmjs.org"
+        , ebTreeRead = \name -> fmap (second (fst npmCached)) . projectNpmManifest defaultLimits name
+        , ebTreeDocument = (fst npmCached <$>) . snd npmCached
+        , ebKeepVersions = const keepNpmVersions
+        , ebHeavyBase = heavyNpmBase
         , ebSynthetic = syntheticPackumentBytes
         , ebSyntheticName = benchPackageName
-        , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . (\body -> RegistryResponse 200 (BS.length body) body)
+        , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionBytes
         , ebProject = projectNpmFull defaultLimits
         , ebRead = captureManifest (adapterMetadata npmAdapter) npmCaptureUpstream
         , ebSelective = \name version -> fmap (fmap readDetails) . captureVersion (adapterMetadata npmAdapter) npmCaptureUpstream name version
@@ -115,6 +127,11 @@ pypiBench =
         { ebEcosystem = PyPI
         , ebCorpus = []
         , ebUpstream = pypiCaptureUpstream
+        , ebOrigin = "https://pypi.org"
+        , ebTreeRead = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
+        , ebTreeDocument = (fst pypiSimpleCached <$>) . snd pypiSimpleCached
+        , ebKeepVersions = keepPyPIVersions
+        , ebHeavyBase = heavyPyPIBase
         , ebSynthetic = syntheticIndexBytes
         , ebSyntheticName = benchProject
         , ebDecode = \name raw -> pypiReleaseKeys name . siFiles <$> first toText (eitherDecodeStrict raw)

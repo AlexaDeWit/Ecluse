@@ -16,7 +16,7 @@ import Ecluse.Core.Package (PackageInfo, artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.Package.Filter.Internal (ArtifactOrigin, artifactOrigin, locateArtifact)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Test.Corpus (CaptureUpstream (..))
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Test.Tasty (withResource)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfAppIO, whnfIO)
 
@@ -32,7 +32,7 @@ benchmarks ecosystem =
                     , bench "checkVersionCount" (whnf versionCountDepth (entryInfo entry))
                     , bench "artifact locations" (whnf (locatedArtifacts origin) (entryInfo entry))
                     ]
-               | entry@(_, _, _, document) <- ebCorpus ecosystem
+               | entry@LoadedEntry{leSnapshot = document} <- ebCorpus ecosystem
                ]
             <> [ bench
                     "checkNestingDepth (synthetic / 100000)"

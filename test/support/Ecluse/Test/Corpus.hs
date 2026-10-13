@@ -16,6 +16,9 @@ module Ecluse.Test.Corpus (
     npmCaptureUpstream,
     pypiCaptureUpstream,
     readCorpusPins,
+    FilePin (..),
+    readPinned,
+    readCapture,
     CaptureRecord (..),
     readCaptureRecords,
     captureTexts,
@@ -23,21 +26,23 @@ module Ecluse.Test.Corpus (
     permissiveAgeRules,
 ) where
 
-import Data.Aeson (Object, eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (parseJSON), Object, Value (Object), eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, nominalDay)
+import System.FilePath ((</>))
 import Test.Hspec (shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName)
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), ecosystemArtifactAuthorities)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Package (hexSha256Of, unscopedNpm)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Support (expectRight)
@@ -125,10 +130,27 @@ readCorpusPins parser = do
   where
     pinsPath = "bench/corpus/pins.json"
 
--- | A committed capture's recorded byte count, SHA-256 digest, and capture time.
+-- | A file under @bench/corpus@ with its committed size and SHA-256 digest.
+data FilePin = FilePin
+    { fpPath :: FilePath
+    , fpBytes :: Int64
+    , fpSha256 :: Text
+    }
+
+instance FromJSON FilePin where
+    parseJSON = withObject "file pin" $ \pin -> FilePin <$> pin .: "path" <*> pin .: "bytes" <*> pin .: "sha256"
+
+-- | Read a catalogue-relative file, refusing a changed size or digest before measurements start.
+readPinned :: FilePin -> IO LByteString
+readPinned pin = do
+    raw <- readFileBS ("bench/corpus" </> fpPath pin)
+    unless (fromIntegral (BS.length raw) == fpBytes pin && hexSha256Of raw == fpSha256 pin) $
+        fail ("bench/corpus/" <> fpPath pin <> " differs from its size or SHA-256 in bench/corpus/pins.json")
+    pure (fromStrict raw)
+
+-- | A committed capture's file identity and capture time.
 data CaptureRecord = CaptureRecord
-    { crBytes :: Int64
-    , crSha256 :: Text
+    { crPin :: FilePin
     , crCapturedAt :: UTCTime
     }
 
@@ -137,7 +159,17 @@ readCaptureRecords :: Ecosystem -> IO (Either String (Map Text CaptureRecord))
 readCaptureRecords eco = readCorpusPins $ \pins -> do
     recorded <- pins .: "captures"
     entries <- recorded .: fromString (toString (ecosystemName eco))
-    traverse (withObject "capture" (\capture -> CaptureRecord <$> capture .: "bytes" <*> capture .: "sha256" <*> capture .: "capturedAt")) entries
+    traverse (withObject "capture" (\capture -> CaptureRecord <$> parseJSON (Object capture) <*> capture .: "capturedAt")) entries
+
+-- | Authenticate a registered capture, refusing missing pins and mismatched paths.
+readCapture :: CorpusPackage -> IO ByteString
+readCapture package = do
+    records <- readCaptureRecords (pkgEcosystem (cpPackage package)) >>= either fail pure
+    record <- maybe (fail ("missing capture pin for " <> toString (cpName package))) pure (Map.lookup (cpName package) records)
+    let pin = crPin record
+    unless ("bench/corpus" </> fpPath pin == cpPath package) $
+        fail ("capture pin path differs for " <> toString (cpName package))
+    toStrict <$> readPinned pin
 
 -- | Read each capture entry, rejecting empty captures and entries below the requested text count.
 captureTexts :: Int -> J.Parser [Text] -> CorpusPackage -> IO [[Text]]

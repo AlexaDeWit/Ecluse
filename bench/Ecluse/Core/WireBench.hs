@@ -13,7 +13,7 @@ import Ecluse.Bench.Corpus (entryName)
 import Ecluse.Core.Package (PackageInfo, artHashes, infoVersions, pkgArtifacts)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Test.Corpus (cpPackage)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
@@ -27,7 +27,7 @@ benchmarks ecosystem =
             [ bench "version identifiers" (whnf (either (const (-1)) length . ebDecode ecosystem (cpPackage package)) raw)
             , bench "full metadata projection" (whnfAppIO (fmap (either (const (-1)) (infoDepth . manifestInfo)) . ebRead ecosystem (cpPackage package)) (captureChunks raw))
             ]
-        | entry@(package, raw, _, _) <- ebCorpus ecosystem
+        | entry@LoadedEntry{lePackage = package, leBytes = raw} <- ebCorpus ecosystem
         ]
 
 infoDepth :: PackageInfo -> Int

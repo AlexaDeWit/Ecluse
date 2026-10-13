@@ -43,11 +43,10 @@ import Ecluse.Acceptance (
     renderLiveReport,
  )
 import Ecluse.Acceptance.Evidence (capturesEvidence, liveEvidence)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestDigest, manifestInfo, manifestRaw))
-import Ecluse.Core.Registry.Npm.Request qualified as Npm
-import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
+import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead (erRequest))
 import Ecluse.Core.Rules (RuleDeps)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), defaultLimits, maxMetadataBytes)
@@ -56,7 +55,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Rts (RtsPosture (rpAllocAreaBytes, rpCapabilities), currentRtsPosture)
 import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt), CorpusPackage (cpPackage), cpName, permissiveAgeRules, readCaptureRecords)
 import Ecluse.Test.Corpus.Advisories (allAdvisoryRules, checkCapturesServed, compileCorpusAdvisories, shippedPolicy)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..), ecosystemBenches)
 import Ecluse.Test.OsvDb (withServedArtifact)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks, fetchTestBody)
 import Ecluse.Test.Rules (inertRuleDeps)
@@ -76,7 +75,7 @@ captures = do
     benches <- ecosystemBenches
     runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories -> do
         records <- readCaptureRecords (ebEcosystem bench) >>= either fail pure
-        outcomes <- forM (ebCorpus bench) $ \(package, raw, _, _) ->
+        outcomes <- forM (ebCorpus bench) $ \LoadedEntry{lePackage = package, leBytes = raw} ->
             case crCapturedAt <$> Map.lookup (cpName package) records of
                 Nothing -> pure (Failed (cpName package) "bench/corpus/pins.json records no capture time")
                 Just clock -> outcomeFrom (cpName package) Nothing <$> fullAllocationContract bench advisories (EvalContext clock Nothing) (cpPackage package) raw
@@ -95,7 +94,7 @@ live = do
     manager <- newManager tlsManagerSettings
     now <- getCurrentTime
     runs <- forM benches $ \bench -> withCorpusAdvisories bench $ \advisories ->
-        (ebEcosystem bench,) <$> traverse (\(package, _, _, _) -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
+        (ebEcosystem bench,) <$> traverse (\LoadedEntry{lePackage = package} -> measureLive manager advisories (EvalContext now Nothing) bench package) (ebCorpus bench)
     op <- operatingPoint
     writeObservations (liveEvidence op runs)
     publish (renderLiveReport op runs)
@@ -108,7 +107,7 @@ withCorpusAdvisories bench use =
     withSystemTempDirectory "ecluse-acceptance-advisories" $ \dir -> do
         artifact <- compileCorpusAdvisories eco dir
         withServedArtifact eco artifact $ \deps _ -> do
-            checkCapturesServed deps [cpPackage package | (package, _, _, _) <- ebCorpus bench] >>= either (fail . toString) pure
+            checkCapturesServed deps [cpPackage package | LoadedEntry{lePackage = package} <- ebCorpus bench] >>= either (fail . toString) pure
             use deps
   where
     eco = ebEcosystem bench
@@ -116,7 +115,7 @@ withCorpusAdvisories bench use =
 measureLive :: Manager -> RuleDeps -> EvalContext -> EcosystemBench -> CorpusPackage -> IO PackageOutcome
 measureLive manager advisories ctx bench package = do
     t0 <- getMonotonicTime
-    fetched <- fetchDocument manager (ebEcosystem bench) pkg
+    fetched <- fetchDocument manager bench pkg
     t1 <- getMonotonicTime
     case fetched of
         Unreachable reason -> pure (Unavailable name reason)
@@ -126,18 +125,15 @@ measureLive manager advisories ctx bench package = do
     pkg = cpPackage package
     name = cpName package
 
-fetchDocument :: Manager -> Ecosystem -> PackageName -> IO Fetched
-fetchDocument manager eco pkg = case liveRequest eco pkg of
+fetchDocument :: Manager -> EcosystemBench -> PackageName -> IO Fetched
+fetchDocument manager ecosystem pkg = case liveRequest ecosystem pkg of
     Left reason -> pure (Refused reason)
     Right request ->
         classifyFetch
             <$> fetchTestBody manager (progressFloor defaultLimits) (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
 
-liveRequest :: Ecosystem -> PackageName -> Either Text Request
-liveRequest eco pkg = case eco of
-    Npm -> first show (Npm.metadataRequest "https://registry.npmjs.org" Nothing Npm.Full pkg)
-    PyPI -> first show (PyPI.simpleIndexRequest "https://pypi.org" Nothing pkg)
-    RubyGems -> Left "no registered performance adapter for rubygems"
+liveRequest :: EcosystemBench -> PackageName -> Either Text Request
+liveRequest ecosystem = first show . erRequest (metadataRead (ebMetadata ecosystem)) (ebOrigin ecosystem) Nothing
 
 outcomeFrom :: Text -> Maybe Double -> Either Text (Int, [(Leg, Measurement)]) -> PackageOutcome
 outcomeFrom name upstreamMs = \case
