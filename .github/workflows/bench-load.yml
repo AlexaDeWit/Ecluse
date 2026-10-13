@@ -76,6 +76,8 @@ jobs:
       matrix:
         pod-shape: ${{ fromJSON((inputs.pod-shape == '' || inputs.pod-shape == 'all') && '["unlimited","2cpu-1gib","4cpu-1gib","4cpu-2gib"]' || format('["{0}"]', inputs.pod-shape)) }}
     env:
+      BENCH_LOAD_PROBE_RTT: "0"
+      BENCH_LOAD_UPSTREAM_LATENCY_MS: "5"
       # The probe sets its own shape per step, so the shape here only matters for the passes.
       BENCH_LOAD_POD: ${{ matrix.pod-shape == 'thrash' && 'unlimited' || matrix.pod-shape }}
       BENCH_LOAD_THRASH_LIMITS_MIB: ${{ matrix.pod-shape == 'thrash' && (inputs.thrash-limits-mib || '2048,1536,1024,768,512') || '' }}
