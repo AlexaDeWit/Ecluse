@@ -13,9 +13,10 @@ import Data.Text.Encoding qualified as TE
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeBaseName, (</>))
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Test.Contract.Manifest (digest, readJsonFile, writeJsonFile)
-import Ecluse.Test.Corpus (CaptureRecord (..), CorpusPackage (cpPath), corpusPackages, cpName, readCaptureRecords, readCorpusPins)
+import Ecluse.BenchReport.RefactorFiles (writeComparisonText)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile, writeJsonFile)
+import Ecluse.Test.Corpus (CaptureRecord (..), CorpusPackage (cpPath), corpusPackages, cpName, pypiCorpusPackages, readCaptureRecords, readCorpusPins)
 
 -- | Input identity is prepared outside every measured process.
 data Input = Input
@@ -50,11 +51,18 @@ prepareInputs root = do
             member name = "\"" <> name <> "\":{\"description\":\"" <> T.replicate 512 "x" <> "\",\"versions\":[1,2,3]}"
             body = TE.encodeUtf8 ("{" <> T.intercalate "," (map member names <> ["\"_updated\":42", "\"invalid/name/extra\":null", "\"package-000001\":{}"]) <> "}")
         BS.writeFile path body
-        writeFileText (root </> toString label <> ".expected") (T.unlines names)
-        pure (Input label path label "" (digest body) (digest (TE.encodeUtf8 (T.unlines names))) (BS.length body))
+        writeJsonFile (root </> toString label <> ".expected") names
+        pure (Input label path label "" (digest body) (digest (jsonLine names)) (BS.length body))
     writeJsonFile (root </> "versions.json") versions
     writeJsonFile (root </> "listings.json") listings
-    writeFileText (root </> "versions.tsv") (T.unlines (map versionCommand versions))
+    writeComparisonText (root </> "versions.tsv") (T.unlines (map versionCommand versions))
+    pypiRecords <- readCaptureRecords PyPI >>= either fail pure
+    pypiSizes <- forM pypiCorpusPackages $ \package -> do
+        record <- maybe (fail "missing PyPI capture") pure (Map.lookup (cpName package) pypiRecords)
+        bytes <- BS.readFile (cpPath package)
+        unless (fromIntegral (BS.length bytes) == crBytes record && digest bytes == crSha256 record) (fail "unauthenticated PyPI capture")
+        pure (cpName package, toInteger (crBytes record))
+    writeJsonFile (root </> "capture-sizes.json") (Map.fromList ([(inputPackage input, toInteger (inputBytes input)) | input <- versions] <> pypiSizes))
     -- Re-read the written identities before Task can start either source.
     written <- readJsonFile (root </> "versions.json") :: IO [Input]
     unless (length written == 9 && length listings == 2) (fail "unexpected maintenance workload coverage")

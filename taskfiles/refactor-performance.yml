@@ -4,12 +4,13 @@ vars:
   BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
   CANDIDATE: '{{env "REFRACTOR_CANDIDATE"}}'
   EVIDENCE: '{{.COMPARISON_ROOT}}/evidence'
-  COMPARISON_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs bench/report/src/Ecluse/BenchReport/RefactorInputs.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs taskfiles/refactor-performance/listing/Main.hs taskfiles/refactor-performance/listing/Before.hs taskfiles/refactor-performance/listing/After.hs
+  COMPARISON_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs bench/report/src/Ecluse/BenchReport/RefactorInputs.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs bench/report/src/Ecluse/BenchReport/RefactorFiles.hs bench/report/src/Ecluse/BenchReport/RefactorEvidence.hs bench/report/src/Ecluse/BenchReport/RefactorEvidenceControls.hs taskfiles/refactor-performance/listing/Main.hs taskfiles/refactor-performance/listing/Before.hs taskfiles/refactor-performance/listing/After.hs
 tasks:
   run:
     desc: Run the temporary issue 1565 comparison on one ARM64 worker
     preconditions:
       - test "$(uname -m)" = aarch64
+      - test -z "${GHCRTS:-}"
       - '[[ "$REFRACTOR_CANDIDATE" =~ ^[0-9a-f]{40}$ ]]'
       - git cat-file -e "$REFRACTOR_CANDIDATE^{commit}"
       - test ! -e '{{.COMPARISON_ROOT}}'
@@ -23,6 +24,14 @@ tasks:
         lscpu >> '{{.EVIDENCE}}/worker.txt'
       - task: controller
       - '"$(cat ''{{.EVIDENCE}}/validator-path.txt'')" comparison-inputs ''{{.EVIDENCE}}/inputs'''
+      - |
+        set -euo pipefail
+        "$(cat '{{.EVIDENCE}}/validator-path.txt')" conditions '{{.EVIDENCE}}/run.json' \
+          run="$GITHUB_RUN_ID" attempt="$GITHUB_RUN_ATTEMPT" architecture="$(uname -m)" \
+          runner="$RUNNER_NAME" image="${ImageVersion:-unknown}" \
+          controllerSource="$(git rev-parse HEAD)" controllerTree="$(git rev-parse HEAD^{tree})" \
+          sourceA='{{.BASELINE}}' treeA="$(git rev-parse '{{.BASELINE}}^{tree}')" \
+          sourceB='{{.CANDIDATE}}' treeB="$(git rev-parse '{{.CANDIDATE}}^{tree}')"
       - task: prepare
         vars: {SIDE: A}
       - task: prepare
@@ -75,9 +84,11 @@ tasks:
         vars: {SIDE: B, KIND: listing, PASS: B2}
       - |
         set -euo pipefail
-        find '{{.EVIDENCE}}' -type f -name receipt.json | sort > '{{.EVIDENCE}}/receipt-paths.txt'
+        find '{{.EVIDENCE}}' -type f -name receipt.json -printf '%P\n' | sort > '{{.EVIDENCE}}/receipt-paths.txt'
         bash scripts/process-capture.sh '{{.EVIDENCE}}/comparison-audit.status' '{{.EVIDENCE}}/comparison-audit.log' \
-          "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-audit '{{.EVIDENCE}}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" '{{.BASELINE}}' '{{.CANDIDATE}}' taskfiles/refactor-performance/expected-rows.txt
+          "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-audit '{{.EVIDENCE}}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+          '{{.BASELINE}}' "$(git rev-parse '{{.BASELINE}}^{tree}')" '{{.CANDIDATE}}' "$(git rev-parse '{{.CANDIDATE}}^{tree}')" \
+          taskfiles/refactor-performance/expected-rows.txt
       - |
         set -euo pipefail
         bash scripts/process-status.sh \
@@ -109,6 +120,9 @@ tasks:
     cmds:
       - git worktree add --detach '{{.SOURCE_DIR}}' '{{.SOURCE}}'
       - mkdir -p '{{.EVIDENCE}}/build-{{.SIDE}}'
+      - mkdir -p '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/bench' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/acceptance'
+      - cp -a '{{.SOURCE_DIR}}/bench/corpus' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/bench/'
+      - cp '{{.SOURCE_DIR}}/acceptance/criteria.json' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/acceptance/'
       - bash scripts/process-capture.sh '{{.EVIDENCE}}/build-{{.SIDE}}/status' '{{.EVIDENCE}}/build-{{.SIDE}}/output.txt' task --exit-code performance:comparison:build SIDE={{.SIDE}}
       - bash scripts/process-status.sh '{{.EVIDENCE}}/build-{{.SIDE}}/status'
 
@@ -134,6 +148,8 @@ tasks:
     cmds:
       - task: verify-source
       - test ! -d dist-newstyle
+      - mkdir '{{.EVIDENCE}}/build-{{.SIDE}}/config'
+      - cp ecluse.cabal cabal.project cabal.project.freeze flake.lock '{{.EVIDENCE}}/build-{{.SIDE}}/config/'
       - task --exit-code performance:reporter
       - cabal build bench:ecluse-bench --enable-optimization=1 --disable-profiling
       - cabal build exe:perf-acceptance --enable-optimization=1 --disable-profiling
@@ -164,14 +180,17 @@ tasks:
     vars: *comparison
     cmds:
       - mkdir '{{.PASS_DIR}}'
-      - 'printf "%s start %s %s\n" "$(date --iso-8601=ns)" "{{.KIND}}" "{{.PASS}}" >> "{{.EVIDENCE}}/order.txt"'
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/conditions.status' '{{.PASS_DIR}}/conditions.log' "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-pass-conditions '{{.EVIDENCE}}' '{{.KIND}}' '{{.PASS}}'
+      - 'printf "%s start %s %s\n" "$(date --iso-8601=ns)" "{{.KIND}}" "{{.PASS}}" | tee -a "{{.PASS_DIR}}/events.txt" >> "{{.EVIDENCE}}/order.txt"'
       - bash scripts/process-capture.sh '{{.PASS_DIR}}/pass.status' '{{.PASS_DIR}}/pass.log' task --exit-code performance:comparison:pass SIDE={{.SIDE}} KIND={{.KIND}} PASS={{.PASS}}
-      - 'printf "%s end %s %s status=%s\n" "$(date --iso-8601=ns)" "{{.KIND}}" "{{.PASS}}" "$(cat "{{.PASS_DIR}}/pass.status")" >> "{{.EVIDENCE}}/order.txt"'
+      - 'printf "%s end %s %s status=%s\n" "$(date --iso-8601=ns)" "{{.KIND}}" "{{.PASS}}" "$(cat "{{.PASS_DIR}}/pass.status")" | tee -a "{{.PASS_DIR}}/events.txt" >> "{{.EVIDENCE}}/order.txt"'
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/binding.status' '{{.PASS_DIR}}/binding.log' "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-bind '{{.EVIDENCE}}' '{{.KIND}}' '{{.PASS}}'
 
   pass:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
     cmds:
+      - bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.PASS_DIR}}/conditions.status'
       - task: verify-source
       - task: identity
         vars: {IDENTITY_DIR: '{{.PASS_DIR}}/before'}
@@ -229,6 +248,7 @@ tasks:
         set -euo pipefail
         git -C '{{.LISTING_DIR}}' diff --binary HEAD > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.patch'
         cp '{{.LISTING_DIR}}/test/residency/ListingAdapter.hs' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/ListingAdapter.hs'
+        cp '{{.LISTING_DIR}}/test/residency/Main.hs' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/Main.hs'
         sha256sum '{{.LISTING_DIR}}'/test/residency/{Main,ListingAdapter}.hs > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'
         git -C '{{.LISTING_DIR}}' rev-parse HEAD HEAD^{tree} > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/source.txt'
       - bash scripts/process-capture.sh '{{.EVIDENCE}}/listing-build-{{.SIDE}}/status' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/output.txt' task --exit-code performance:comparison:listing-build SIDE={{.SIDE}}
@@ -247,13 +267,6 @@ tasks:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
     cmds:
-      - |
-        set -euo pipefail
-        input_name='{{if eq .KIND "versions"}}versions{{else}}listings{{end}}'
-        input_digest="$(sha256sum '{{.EVIDENCE}}/inputs/'"$input_name"'.json' | cut -d ' ' -f 1)"
-        "$(cat '{{.EVIDENCE}}/validator-path.txt')" conditions '{{.PASS_DIR}}/conditions.json' \
-          source='{{.SOURCE}}' run="$GITHUB_RUN_ID" attempt="$GITHUB_RUN_ATTEMPT" kind='{{.KIND}}' pass='{{.PASS}}' \
-          architecture="$(uname -m)" rts='-N1 -A4m -T' inputs="$input_digest"
       - bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --dir '{{.ROOT_DIR}}' --exit-code performance:comparison:{{.KIND}}-measure SIDE={{.SIDE}} KIND={{.KIND}} PASS={{.PASS}}
       - cp '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/audit.status'
 
@@ -281,6 +294,7 @@ tasks:
       - cmp '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.patch' '{{.PASS_DIR}}/overlay.patch'
       - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'
       - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.sha256'
+      - sha256sum "$(cat '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt')" > '{{.PASS_DIR}}/listing-before.sha256'
       - |
         set -euo pipefail
         executable="$(cat '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt')"
@@ -291,6 +305,7 @@ tasks:
         done
         bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.PASS_DIR}}'/*.status
       - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.sha256'
+      - sha256sum "$(cat '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt')" > '{{.PASS_DIR}}/listing-after.sha256'
       - git diff --binary HEAD > '{{.PASS_DIR}}/overlay-after.patch'
       - cmp '{{.PASS_DIR}}/overlay.patch' '{{.PASS_DIR}}/overlay-after.patch'
       - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'

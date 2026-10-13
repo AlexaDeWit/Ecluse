@@ -20,6 +20,17 @@ Mutable cache rows remain unclassified diagnostics. Each row requires review reg
 The report records that scope limit and makes no universal parity claim.
 Timing and process peak RSS remain informational. Every signed delta stays visible, including reductions outside a tolerance.
 Separate lower and higher allocation tables retain every pair. `audit-faults.txt` records invalid evidence. `tolerance-breaches.tsv` records measured changes.
+Each pass writes `binding.json` after its final status. The binding names the source tree, run, attempt, worker, RTS recipe, executable digest and build-plan digest.
+It hashes the native outputs, input files, receipts, source snapshots, build records, statuses and per-pass event records.
+The aggregate audit rehashes every required file and checks the recorded serial order before it compares numbers.
+Native receipt digests independently cover the copied CSV, Markdown, observation JSON and archived corpus inputs.
+Missing or changed evidence blocks numeric qualification. The archive retains the available raw output.
+Artifact paths in bindings are relative to the archive root. The archive records binary digests, rather than distributing the executables.
+Those digests come from the recorder's live hashes before and after each pass. They do not provide an independent build attestation.
+
+The listing residency comparison includes the retained document as well as the peak fields.
+It multiplies `document_per_source_byte` by the authenticated capture size and rounds to the nearest integer byte, with ties to even.
+The recovered figure uses the same 1 KiB allowance. A control changes only this figure by 1,025 bytes.
 
 R9a calls the unchanged `StreamedVersions` command on all nine authenticated npm captures, including TypeScript.
 R9b reads fixed listings with 20 and 20,000 valid names through the native bounded reader.
@@ -33,3 +44,5 @@ The adapter selects the old combinator or the new walk. It changes no production
 The artifacts record each overlay patch, adapter hash, source tree, build plan and executable hash.
 The custom probe executable is an overlaid build. The native benchmark and existing residency executables remain unmodified builds.
 Failed reads, builds and audits retain their statuses and available output. A completed report alone does not establish performance parity.
+Remote controls remove or alter each recorded artifact class and replace a complete 343-row CSV with stale values.
+The native receipt check also rejects that stale CSV after the control regenerates its outer binding.

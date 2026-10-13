@@ -21,7 +21,7 @@ import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamBytes, streamValue))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Core.Server.MemoryModel.Probe (HeapSample (..), sample)
-import Ecluse.Test.Contract.Manifest (digest)
+import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile)
 import Ecluse.Test.Registry.JsonStream (heldChunks)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import ListingAdapter (readListing)
@@ -37,7 +37,7 @@ run path oracle = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "listing probe requires RTS -T")
     body <- BS.readFile path
-    expected <- T.lines <$> readFileText oracle
+    expected <- readJsonFile oracle
     let chunks = captureChunks body
         size = BS.length body
     void (evaluate (sum (map BS.length chunks)))
@@ -54,7 +54,7 @@ run path oracle = do
         , "sha256" .= digest body
         , "wireBytes" .= consumed
         , "packages" .= count
-        , "oracleSha256" .= digest (encodeUtf8 (T.unlines expected))
+        , "oracleSha256" .= digest (jsonLine expected)
         , "allocated" .= (sampleAllocated held - sampleAllocated before)
         , "retained" .= (toInteger (live held) - toInteger (live before))
         , "released" .= (toInteger (live released) - toInteger (live before))

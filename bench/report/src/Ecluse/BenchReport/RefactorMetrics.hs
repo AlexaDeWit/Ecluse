@@ -17,8 +17,9 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.BenchReport (BenchRow (..), parseCsv)
 import Ecluse.BenchReport.Markdown (hasColumns, records, tableHeading, tables)
 import Ecluse.BenchReport.Performance (allocationRequiredRows)
+import Ecluse.BenchReport.RefactorFiles (readComparisonText, writeComparisonText)
 import Ecluse.BenchReport.RefactorInputs (Input (..))
-import Ecluse.Test.Contract.Manifest (readJsonFile)
+import Ecluse.Test.Contract.Manifest (jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Result (auditExactIds)
 import Ecluse.Test.Corpus (corpusPackages, cpName, pypiCorpusPackages)
 
@@ -34,7 +35,7 @@ data Observation = Observation Text [Metric]
 -- | Publish all comparisons before returning audit faults or measured tolerance breaches.
 auditMetrics :: FilePath -> IO ([Text], [Text])
 auditMetrics root = do
-    writeFileText (root </> "scope-limitations.txt") "Mutable cache rows remain unclassified diagnostics. Each row requires review regardless of its delta. Checked criteria do not establish universal parity.\n"
+    writeComparisonText (root </> "scope-limitations.txt") "Mutable cache rows remain unclassified diagnostics. Each row requires review regardless of its delta. Checked criteria do not establish universal parity.\n"
     outcomes <- forM ["benchmark", "allocation", "residency", "versions", "listing"] $ \kind -> do
         result <- tryAny (readKind kind >>= compareKind kind)
         pure $ either (\problem -> ([kind <> ": " <> show problem], [])) id result
@@ -44,10 +45,10 @@ auditMetrics root = do
     compareKind kind measured = do
         let pairs = [(left, right) | (i, left) <- zip [0 :: Int ..] measured, (j, right) <- zip [0 ..] measured, i < j]
         rows <- concat <$> traverse (uncurry (comparePasses kind)) pairs
-        writeFileText (root </> toString kind <> "-comparison.tsv") $
+        writeComparisonText (root </> toString kind <> "-comparison.tsv") $
             T.unlines ("scope\tkind\tbefore-pass\tafter-pass\trow\tmetric\tbefore\tafter\tdelta\trule\tresult" : map fst rows)
         forM_ [("lower", "-"), ("higher", "+")] $ \(direction, sign) ->
-            writeFileText (root </> toString (kind <> "-" <> direction <> "-allocation.tsv")) $
+            writeComparisonText (root </> toString (kind <> "-" <> direction <> "-allocation.tsv")) $
                 T.unlines [line | (line, _) <- rows, let fields = T.splitOn "\t" line, fields !!? 5 `elem` map Just ["allocated", "preparationAllocated"], maybe False (T.isPrefixOf sign) (fields !!? 8)]
         pure ([], [line | (line, failed) <- rows, failed])
 
@@ -61,11 +62,13 @@ readPass root kind passName = do
     let directory = root </> toString (kind <> "-" <> passName)
     observations <- case kind of
         "benchmark" -> do
-            csv <- readFileText (directory </> "bench-results.csv")
+            csv <- readComparisonText (directory </> "bench-results.csv")
             rows <- either (fail . toString) pure (parseCsv csv)
             traverse benchmark rows
-        "allocation" -> readFileText (directory </> "perf-allocation-report.md") >>= either (fail . toString) pure . allocation
-        "residency" -> readFileText (directory </> "measure.log") >>= either (fail . toString) pure . residency
+        "allocation" -> readComparisonText (directory </> "perf-allocation-report.md") >>= either (fail . toString) pure . allocation
+        "residency" -> do
+            sizes <- readJsonFile (root </> "inputs/capture-sizes.json")
+            readComparisonText (directory </> "measure.log") >>= either (fail . toString) pure . residency sizes
         _ -> do
             inputs <- readJsonFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json")
             traverse (sourceObservation directory kind) inputs
@@ -79,7 +82,7 @@ observationId (Observation name _) = name
 
 expectedIds :: FilePath -> Text -> IO [Text]
 expectedIds root = \case
-    "benchmark" -> T.lines <$> readFileText "taskfiles/refactor-performance/expected-rows.txt"
+    "benchmark" -> T.lines <$> readComparisonText "taskfiles/refactor-performance/expected-rows.txt"
     "allocation" -> pure (concatMap (uncurry allocationRequiredRows) catalogues)
     "residency" -> pure [kind <> "/" <> name <> "/" <> shape | (_, names) <- catalogues, name <- names, (kind, shapes) <- residencyShapes, shape <- shapes]
     kind -> map inputId <$> (readJsonFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json") :: IO [Input])
@@ -117,8 +120,8 @@ allocation raw = traverse row [(fromMaybe "" (tableHeading table), record) | tab
     field key = maybe (Left ("missing allocation " <> key)) Right . Map.lookup key
     number key record = field key record >>= maybe (Left ("invalid allocation " <> key)) Right . readMaybe . toString
 
-residency :: Text -> Either Text [Observation]
-residency raw = traverse readLine [(kind, T.drop (T.length kind + 1) line) | line <- T.lines raw, (kind, _) <- residencyShapes, (kind <> " ") `T.isPrefixOf` line]
+residency :: Map Text Integer -> Text -> Either Text [Observation]
+residency sizes raw = traverse readLine [(kind, T.drop (T.length kind + 1) line) | line <- T.lines raw, (kind, _) <- residencyShapes, (kind <> " ") `T.isPrefixOf` line]
   where
     readLine (kind, line) = first toText (eitherDecodeStrict' (TE.encodeUtf8 line) >>= parseEither (withObject "residency row" (row kind)))
     row kind record = do
@@ -129,8 +132,19 @@ residency raw = traverse readLine [(kind, T.drop (T.length kind + 1) line) | lin
             "metadata-evaluation" -> sequence [metric record "weak_head_retained" WithinKiB, metric record "forcing" WithinKiB, metric record "versions" Exact]
             _ -> do
                 peaks <- record .: "peaks"
-                sequence [metric peaks key rule | (key, rule) <- [("listingSourceBytes", Exact), ("listingBasisBytes", Exact), ("listingServedBytes", Exact), ("listingBaseline", WithinKiB), ("listingReadPeak", WithinKiB), ("listingEntryLive", WithinKiB), ("listingPeak", WithinKiB)]]
+                peakMetrics <- sequence [metric peaks key rule | (key, rule) <- [("listingSourceBytes", Exact), ("listingBasisBytes", Exact), ("listingServedBytes", Exact), ("listingBaseline", WithinKiB), ("listingReadPeak", WithinKiB), ("listingEntryLive", WithinKiB), ("listingPeak", WithinKiB)]]
+                document <- if kind == "metadata-listing" then documentRetention sizes package record peaks else pure []
+                pure (peakMetrics <> document)
         pure (Observation (kind <> "/" <> package <> "/" <> shape) metrics)
+
+documentRetention :: Map Text Integer -> Text -> Object -> Object -> Parser [Metric]
+documentRetention sizes package record peaks = do
+    size <- maybe (fail "missing authenticated capture size") pure (Map.lookup package sizes)
+    observedSize <- peaks .: "listingSourceBytes"
+    ratio <- record .: "document_per_source_byte"
+    unless (size > 0 && size == observedSize && isFinite ratio && ratio > 0) (fail "invalid document retention identity")
+    -- The native Double ratio retains enough precision to recover whole bytes by nearest-integer rounding, with ties to even.
+    pure [Metric "document_live_bytes" (round (ratio * fromInteger size)) WithinKiB]
 
 measurement :: Object -> Parser [Metric]
 measurement record = sequence [metric record key rule | (key, rule) <- [("wireBytes", Exact), ("versions", Exact), ("baselineLive", WithinKiB), ("heldLive", WithinKiB), ("releasedLive", WithinKiB), ("preparationAllocated", Inform), ("preparationMaxLive", Inform)]]
@@ -143,11 +157,11 @@ metric record key rule = do
 
 sourceObservation :: FilePath -> Text -> Input -> IO Observation
 sourceObservation directory kind input = do
-    status <- T.strip <$> readFileText (directory </> toString (inputId input) <> ".status")
+    status <- T.strip <$> readComparisonText (directory </> toString (inputId input) <> ".status")
     unless (status == "0") (fail "source probe returned failure")
     value <- readJsonFile (directory </> toString (inputId input) <> ".json")
     observed <- either fail pure (parseEither (sourceMetrics kind input) value)
-    rssText <- readFileText (directory </> toString (inputId input) <> ".rss")
+    rssText <- readComparisonText (directory </> toString (inputId input) <> ".rss")
     rss <- maybe (fail "missing process peak RSS") pure (readMaybe (toString (T.strip rssText)) :: Maybe Integer)
     when (rss <= 0) (fail "nonpositive process peak RSS")
     pure (Observation (inputId input) (observed <> [Metric "peak_rss_kib" rss Inform]))
@@ -242,7 +256,14 @@ metricControls =
             <> ["valid version measurement rejected" | isLeft (parseEither (sourceMetrics "versions" fixtureInput) versionFixture)]
             <> ["missing version observation accepted" | Object members <- [versionFixture], key <- KeyMap.keys members, isRight (parseEither (sourceMetrics "versions" fixtureInput) (Object (KeyMap.delete key members)))]
             <> ["mismatched version input accepted" | isRight (parseEither (sourceMetrics "versions" fixtureInput{inputDigest = "different"}) versionFixture)]
+            <> ["document retention breach omitted" | not documentControl]
   where
     fixtureInput = Input "small" "unused" "small" "" "digest" "oracle" 100
     fixture = object ["status" .= ("ok" :: Text), "sha256" .= ("digest" :: Text), "oracleSha256" .= ("oracle" :: Text), "architecture" .= ("aarch64" :: Text), "capabilities" .= (1 :: Int), "wireBytes" .= (100 :: Int), "packages" .= (20 :: Int), "allocated" .= (50 :: Int), "retained" .= (10 :: Int), "released" .= (0 :: Int), "peak" .= (500 :: Int), "read_project_ns" .= (200 :: Int)]
     versionFixture = object ["status" .= ("ok" :: Text), "sha256" .= ("digest" :: Text), "package" .= ("small" :: Text), "selected_version" .= ("" :: Text), "ecosystem" .= ("npm" :: Text), "path" .= ("unused" :: Text), "mode" .= ("StreamedVersions" :: Text), "body_limit" .= (134217728 :: Int), "chunk_bytes" .= (32768 :: Int), "read_project_ns" .= (200 :: Int), "measurement" .= object ["wireBytes" .= (100 :: Int), "versions" .= (2 :: Int), "baselineLive" .= (50 :: Int), "heldLive" .= (60 :: Int), "releasedLive" .= (50 :: Int), "preparationAllocated" .= (500 :: Int), "preparationMaxLive" .= (100 :: Int)]]
+    documentControl = case traverse (residency (Map.singleton "control" 1000) . ("metadata-listing " <>) . TE.decodeUtf8 . jsonLine . listingFixture) [2, 3.025] of
+        Right [[Observation _ before], [Observation _ after]] ->
+            [name | (Metric name a rule, Metric _ b _) <- zip before after, violates rule a b] == ["document_live_bytes"]
+        _ -> False
+    listingFixture :: Double -> Value
+    listingFixture ratio = object ["package" .= ("control" :: Text), "document_per_source_byte" .= ratio, "peaks" .= object [fromString (toString key) .= (value :: Integer) | (key, value) <- [("listingSourceBytes" :: Text, 1000), ("listingBasisBytes", 1000), ("listingServedBytes", 100), ("listingBaseline", 100), ("listingReadPeak", 1000), ("listingEntryLive", 900), ("listingPeak", 1100)]]]

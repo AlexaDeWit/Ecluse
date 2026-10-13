@@ -2147,6 +2147,9 @@ library ecluse-bench-report
     Ecluse.BenchReport.PerformanceCommand
     Ecluse.BenchReport.PerformanceReceipt
     Ecluse.BenchReport.RefactorComparison
+    Ecluse.BenchReport.RefactorEvidence
+    Ecluse.BenchReport.RefactorEvidenceControls
+    Ecluse.BenchReport.RefactorFiles
     Ecluse.BenchReport.RefactorInputs
     Ecluse.BenchReport.RefactorMetrics
   build-depends:

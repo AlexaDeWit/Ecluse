@@ -8,57 +8,55 @@ module Ecluse.BenchReport.RefactorComparison (audit, controls) where
 import Data.Aeson (eitherDecodeStrict')
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import System.FilePath ((</>))
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv)
 import Ecluse.BenchReport.PerformanceCommand (compileObligation)
+import Ecluse.BenchReport.RefactorEvidence (passSchedule, receiptArtifactFaults, verifyEvidence)
+import Ecluse.BenchReport.RefactorEvidenceControls (evidenceControls)
+import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
 import Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls)
-import Ecluse.Test.Contract.Manifest (digest, digestFile, jsonLine, readJsonFile)
+import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (..), auditExactIds)
 
 -- | Require the historical full row list and all twenty pass-specific receipts.
-audit :: FilePath -> Text -> Text -> Text -> Text -> FilePath -> IO ()
-audit root runId attempt baseline candidate manifest = do
+audit :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> FilePath -> IO ()
+audit root runId attempt baseline baselineTree candidate candidateTree manifest = do
     expected <- manifestRows manifest
-    actualPaths <- T.lines <$> readComparisonText (root </> "receipt-paths.txt")
+    pathsResult <- tryAny (T.lines <$> readComparisonText (root </> "receipt-paths.txt"))
+    let actualPaths = fromRight [] pathsResult
+        pathFaults = either (one . show) (const []) pathsResult
     problems <- forM schedule $ \(kind, passName) -> do
         let source = if "A" `T.isPrefixOf` passName then baseline else candidate
             passRunId = runId <> "-" <> attempt <> "-" <> kind <> "-" <> passName
             directory = root </> toString (kind <> "-" <> passName)
-        csvProblems <- if kind == "benchmark" then capture $ rowProblems expected <$> readComparisonText (directory </> "bench-results.csv") else pure []
-        receiptProblems <- forM subjects $ \subject -> capture $ do
+        csvProblems <- if kind == "benchmark" then captureProblems $ rowProblems expected <$> readComparisonText (directory </> "bench-results.csv") else pure []
+        receiptProblems <- forM subjects $ \subject -> captureProblems $ do
             receipt <- readJsonFile (directory </> "receipts" </> toString subject </> "receipt.json")
             reference <- readJsonFile (root </> toString (kind <> "-A1") </> "receipts" </> toString subject </> "receipt.json")
             let conditions = npConditions (prNative receipt)
             obligation <- either (fail . toString) pure (compileObligation kind subject conditions)
             let expectedIdentity = ExecutionIdentity source "not-applicable" "arm64" (digest (jsonLine obligation)) passRunId
-            pure (receiptFaults (source, passRunId, attempt, kind, subject) receipt <> auditPerformanceReceipts expectedIdentity attempt [obligation] [receipt] <> conditionFaults (npConditions (prNative reference)) conditions)
+            artifactFaults <- receiptArtifactFaults root kind passName receipt
+            pure (artifactFaults <> receiptFaults (source, passRunId, attempt, kind, subject) receipt <> auditPerformanceReceipts expectedIdentity attempt [obligation] [receipt] <> conditionFaults (npConditions (prNative reference)) conditions)
         pure (map ((kind <> "-" <> passName <> ": ") <>) (csvProblems <> concat receiptProblems))
-    let expectedPaths = [toText (root </> toString (kind <> "-" <> passName) </> "receipts" </> toString subject </> "receipt.json") | (kind, passName) <- schedule, subject <- subjects]
-    (metricFaults, breaches) <- auditMetrics root
-    identityFaults <- concat <$> traverse (probeIdentity root runId attempt baseline candidate) [(kind, passName) | kind <- ["versions", "listing"], passName <- ["A1", "B1", "A2", "B2"]]
-    let faults = auditExactIds "receipt path" expectedPaths actualPaths <> concat problems <> metricFaults <> identityFaults
-    writeFileText (root </> "audit-faults.txt") (T.unlines faults)
-    writeFileText (root </> "tolerance-breaches.tsv") (T.unlines breaches)
+    let expectedPaths = [toText (toString (kind <> "-" <> passName) </> "receipts" </> toString subject </> "receipt.json") | (kind, passName) <- schedule, subject <- subjects]
+    identityFaults <- verifyEvidence root runId attempt baseline baselineTree candidate candidateTree
+    let evidenceFaults = pathFaults <> auditExactIds "receipt path" expectedPaths actualPaths <> concat problems <> identityFaults
+    (metricFaults, breaches) <- if null evidenceFaults then auditMetrics root else pure ([], [])
+    let faults = evidenceFaults <> metricFaults
+    writeComparisonText (root </> "audit-faults.txt") (T.unlines faults)
+    writeComparisonText (root </> "tolerance-breaches.tsv") (T.unlines breaches)
     putTextLn ("Audit faults: " <> show (length faults) <> ". Measured tolerance breaches: " <> show (length breaches) <> ".")
     finish (faults <> ["measured tolerance breaches require review" | not (null breaches)])
-
-probeIdentity :: FilePath -> Text -> Text -> Text -> Text -> (Text, Text) -> IO [Text]
-probeIdentity root runId attempt baseline candidate (kind, passName) = capture $ do
-    conditions <- readJsonFile (root </> toString (kind <> "-" <> passName) </> "conditions.json")
-    inputDigest <- digestFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json")
-    let source = if "A" `T.isPrefixOf` passName then baseline else candidate
-        expected = Map.fromList [("source", source), ("run", runId), ("attempt", attempt), ("kind", kind), ("pass", passName), ("architecture", "aarch64"), ("rts", "-N1 -A4m -T"), ("inputs", inputDigest)]
-    pure (conditionFaults expected conditions)
 
 conditionFaults :: Map Text Text -> Map Text Text -> [Text]
 conditionFaults expected actual = ["probe condition differs: " <> key | (key, value) <- Map.toList expected, Map.lookup key actual /= Just value]
 
 schedule :: [(Text, Text)]
-schedule = [("benchmark", passName) | passName <- ["A1", "A2", "B1", "A3", "B2", "B3"]] <> [("allocation", passName) | passName <- ["A1", "B1", "A2", "B2"]]
+schedule = filter ((`elem` ["benchmark", "allocation"]) . fst) passSchedule
 
 subjects :: [Text]
 subjects = ["ecosystem-npm", "ecosystem-pypi"]
@@ -101,12 +99,6 @@ receiptFaults (source, runId, attempt, kind, subject) receipt =
     native = prNative receipt
     observations = npObservations native
 
-readComparisonText :: FilePath -> IO Text
-readComparisonText path = readFileBS path >>= either throwIO pure . TE.decodeUtf8'
-
-capture :: IO [Text] -> IO [Text]
-capture action = either (pure . show) id <$> tryAny action
-
 finish :: [Text] -> IO ()
 finish problems = unless (null problems) $ traverse_ putTextLn problems >> exitFailure
 
@@ -116,6 +108,7 @@ controls manifest = do
     _ <- manifestRows manifest
     metricControls
     nativeControls
+    evidenceControls manifest
     let header = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory\n"
         row = "\"All.group.quoted, \"\"name\"\"\",1,0,2,0,3\n"
         expected = ["group.quoted, \"name\""]
