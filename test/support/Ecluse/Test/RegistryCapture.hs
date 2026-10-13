@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared package catalogue and registry capture helpers for live test tiers.
-Unavailable or undecodable upstream data yields absence so a live test can pend.
--}
+-- | Shared live registry captures. Synchronous failures yield absence. Cancellation propagates.
 module Ecluse.Test.RegistryCapture (
     -- * The curated catalogue
     Catalogue (..),
@@ -21,7 +19,6 @@ module Ecluse.Test.RegistryCapture (
 
 import Data.ByteString qualified as BS
 
-import Control.Exception (try)
 import Data.Aeson (FromJSON (parseJSON), Object, eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as BSL
@@ -36,6 +33,7 @@ import Network.HTTP.Client (
     responseTimeout,
     responseTimeoutMicro,
  )
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
@@ -46,7 +44,7 @@ import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
 
--- | The curated package catalogue: the per-ecosystem smoke names and the benchmark-corpus capture pins, decoded from the shared JSON source.
+-- | Curated smoke names and benchmark pins from the shared catalogue.
 data Catalogue = Catalogue
     { catSmokeNames :: Map Ecosystem [Text]
     -- ^ Curated gnarly-version package names per ecosystem, for the version-oracle differential.
@@ -78,11 +76,11 @@ decodeCatalogue = eitherDecode
 loadCatalogue :: IO Catalogue
 loadCatalogue = readCorpusPins catalogueFields >>= either fail pure
 
--- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem. This is the shape the version-oracle differential iterates.
+-- | Curated smoke names, ordered by ecosystem.
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]
 smokeRegistryPackages = Map.toList . catSmokeNames
 
--- | The registry endpoint that lists a package's published versions. It percent-encodes a scoped npm name (@\@types\/node@ → @\@types%2Fnode@).
+-- | The versions endpoint, with scoped npm names percent-encoded.
 registryUrl :: Ecosystem -> Text -> Text
 registryUrl eco pkg = case eco of
     Npm -> "https://registry.npmjs.org/" <> T.replace "/" "%2F" pkg
@@ -93,10 +91,10 @@ registryUrl eco pkg = case eco of
 captureUserAgent :: ByteString
 captureUserAgent = "ecluse-registry-capture"
 
--- | Return 'Nothing' on network failure or non-success status so live tests can report unavailable upstreams.
+-- | Return 'Nothing' for synchronous fetch failures. Propagate cancellation.
 fetchPackumentBody :: Manager -> Ecosystem -> Text -> IO (Maybe LByteString)
 fetchPackumentBody manager eco pkg = do
-    result <- try $ do
+    result <- tryAny $ do
         req0 <- parseUrlThrow (toString (registryUrl eco pkg))
         let req =
                 req0
@@ -105,7 +103,7 @@ fetchPackumentBody manager eco pkg = do
                     }
         responseBody <$> httpLbs req manager
     pure $ case result of
-        Left (_ :: SomeException) -> Nothing
+        Left _ -> Nothing
         Right body -> Just body
 
 -- | Fetch a package's published version strings from its registry.
@@ -113,7 +111,7 @@ fetchVersions :: Manager -> Ecosystem -> Text -> IO (Maybe [Text])
 fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
--- | Extract a registry response's published version strings through each ecosystem's __canonical__ wire decoder, never a re-parse here.
+-- | Read published versions through each ecosystem's wire decoder.
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
     Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse 200 (BS.length (BSL.toStrict body)) (BSL.toStrict body)))
