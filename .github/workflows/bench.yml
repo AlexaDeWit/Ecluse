@@ -126,6 +126,7 @@ jobs:
         with:
           ref: ${{ inputs.focused_source }}
           path: scratchpad/focused-source
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up pinned toolchain
         id: toolchain

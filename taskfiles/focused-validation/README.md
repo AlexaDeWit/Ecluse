@@ -23,3 +23,16 @@ The Task file explicitly schedules those cases. The native generator smoke case 
 No extra worker or shutdown mutation replaces the committed controls in the full integration run.
 Artifacts retain the source and tree, exact patches, build and runtime logs, native statuses, and restored outcomes.
 A failed stage stops qualification. The upload step keeps available partial evidence.
+
+The candidate must descend from these reviewed support commits:
+
+- #1672: `eda18683ca81e0f38ef5ee64ced7e373514f868c`.
+- #1674: `d6caea0fe85624275a4256db6eb37a174a797d4e`.
+- #1673: `aee7742706e9b8fcb4b270afce05ada3ac493244`.
+
+The harness owns the required runtime identities in `required-*-controls.txt`.
+Unit logs must contain each required example once and have zero failures or pending results.
+This includes eight version-loader controls, three ecosystem comparisons, the delayed-refresh control, and the generator consistency case.
+Integration reports must contain each required identity once with status `passed`.
+Only the redirect mutation requires `integration/egress/native-003` to fail. Its separate check still requires the named 302-to-503 assertion.
+These requirements supplement the complete integration audit. A candidate cannot remove them from its own catalogue.

@@ -2,6 +2,8 @@
 # Require the production redirect mutation to fail only its named runtime assertion.
 set -euo pipefail
 evidence="${1:?result directory}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$here/integration-controls.sh" "$evidence" integration/egress/native-003
 test "$(cat "$evidence/integration/native-status")" -eq 1
 test "$(cat "$evidence/integration/audit-status")" -ne 0
 test -s "$evidence/integration/plan.json"

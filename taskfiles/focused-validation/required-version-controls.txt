@@ -1,0 +1,11 @@
+ignores only comments and blank lines
+reports the malformed row's line: npm|1|2
+reports the malformed row's line: cargo|1|2|LT
+reports the malformed row's line: npm||2|LT
+reports the malformed row's line: npm|1|2|BAD
+rejects missing Npm comparisons
+rejects missing PyPI comparisons
+rejects missing RubyGems comparisons
+Npm ordering matches the reference
+PyPI ordering matches the reference
+RubyGems ordering matches the reference

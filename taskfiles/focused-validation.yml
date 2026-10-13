@@ -126,13 +126,15 @@ tasks:
         vars: {NAME: lease-control, SELECTION: Ecluse.Core.Worker.Lease, SEED: '101'}
       - task: core
         vars: {NAME: refresh-control, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: '102'}
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/refresh-control" "{{.PATCHES}}/required-refresh-controls.txt"
       - task: core
         vars: {NAME: supervision-control, SELECTION: Ecluse.Core.Supervision.Internal, SEED: '103'}
       - task: core
         vars: {NAME: version-control, SELECTION: Ecluse.Core.Version, SEED: '104'}
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/version-control" "{{.PATCHES}}/required-version-controls.txt"
       - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/oracle"
-      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/oracle/status" "{{.EVIDENCE}}/oracle/run.log" timeout 180 "$(cabal list-bin ecluse-smoke)" --match regenerating --no-color
-      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/oracle" pass
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/oracle/status" "{{.EVIDENCE}}/oracle/run.log" timeout 180 "$(cabal list-bin ecluse-smoke)" --match regenerating --format=specdoc --no-color
+      - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/oracle" "{{.PATCHES}}/required-oracle-controls.txt"
       - task: integration
         vars: {NAME: integration-control}
   repetitions:
@@ -180,7 +182,7 @@ tasks:
     cmds:
       - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/{{.NAME}}"
       - 'printf "%s\n" "$SELECTION" "$SEED" > "{{.EVIDENCE}}/{{.NAME}}/selection-and-seed.txt"'
-      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed "$SEED" --no-color +RTS -N1 -RTS
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed "$SEED" --format=specdoc --no-color +RTS -N1 -RTS
       - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}" pass
   integration:
     env:
@@ -191,6 +193,7 @@ tasks:
       - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/{{.NAME}}"
       - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" task --exit-code test-integration
       - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/{{.NAME}}/status"
+      - bash "{{.LEAVES}}/integration-controls.sh" "{{.EVIDENCE}}/{{.NAME}}"
   perturbation:
     vars:
       RESULT: '{{.EVIDENCE}}/{{.CASE}}'

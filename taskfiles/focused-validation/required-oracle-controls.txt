@@ -1,0 +1,1 @@
+regenerating from node-semver / packaging / Gem::Version reproduces the committed fixture
