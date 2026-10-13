@@ -22,20 +22,20 @@ audit :: FilePath -> Text -> Text -> Text -> Text -> FilePath -> IO ()
 audit root runId attempt baseline candidate manifest = do
     expected <- manifestRows manifest
     actualPaths <- T.lines <$> readComparisonText (root </> "receipt-paths.txt")
-    problems <- forM schedule $ \(kind, pass) -> do
-        let source = if "A" `T.isPrefixOf` pass then baseline else candidate
-            identity = runId <> "-" <> attempt <> "-" <> kind <> "-" <> pass
-            directory = root </> toString (kind <> "-" <> pass)
+    problems <- forM schedule $ \(kind, passName) -> do
+        let source = if "A" `T.isPrefixOf` passName then baseline else candidate
+            passRunId = runId <> "-" <> attempt <> "-" <> kind <> "-" <> passName
+            directory = root </> toString (kind <> "-" <> passName)
         csvProblems <- if kind == "benchmark" then capture $ rowProblems expected <$> readComparisonText (directory </> "bench-results.csv") else pure []
         receiptProblems <- forM subjects $ \subject -> capture $ do
             receipt <- readJsonFile (directory </> "receipts" </> toString subject </> "receipt.json")
-            pure (receiptFaults (source, identity, attempt, kind, subject) receipt)
-        pure (map ((kind <> "-" <> pass <> ": ") <>) (csvProblems <> concat receiptProblems))
-    let expectedPaths = [toText (root </> toString (kind <> "-" <> pass) </> "receipts" </> toString subject </> "receipt.json") | (kind, pass) <- schedule, subject <- subjects]
+            pure (receiptFaults (source, passRunId, attempt, kind, subject) receipt)
+        pure (map ((kind <> "-" <> passName <> ": ") <>) (csvProblems <> concat receiptProblems))
+    let expectedPaths = [toText (root </> toString (kind <> "-" <> passName) </> "receipts" </> toString subject </> "receipt.json") | (kind, passName) <- schedule, subject <- subjects]
     finish (auditExactIds "receipt path" expectedPaths actualPaths <> concat problems)
 
 schedule :: [(Text, Text)]
-schedule = [("benchmark", pass) | pass <- ["A1", "A2", "B1", "A3", "B2", "B3"]] <> [("allocation", pass) | pass <- ["A1", "B1", "A2", "B2"]]
+schedule = [("benchmark", passName) | passName <- ["A1", "A2", "B1", "A3", "B2", "B3"]] <> [("allocation", passName) | passName <- ["A1", "B1", "A2", "B2"]]
 
 subjects :: [Text]
 subjects = ["ecosystem-npm", "ecosystem-pypi"]
@@ -94,7 +94,7 @@ controls manifest = do
         row = "\"All.group.quoted, \"\"name\"\"\",1,0,2,0,3\n"
         expected = ["group.quoted, \"name\""]
         receipt = PerformanceReceipt 1 (ExecutionIdentity "source" "image" "aarch64" "plan" "run") "1" "benchmark" "ecosystem-npm" (NativePerformance NativePassed [PerformanceObservation "row" NativePassed] Map.empty) (Map.singleton "artifact" "digest")
-        identity = ("source", "run", "1", "benchmark", "ecosystem-npm")
+        expectedReceiptIdentity = ("source", "run", "1", "benchmark", "ecosystem-npm")
         invalidReceipts =
             [ receipt{prIdentity = (prIdentity receipt){identityRunId = "other"}}
             , receipt{prIdentity = (prIdentity receipt){identityRunId = ""}}
@@ -121,8 +121,8 @@ controls manifest = do
     finish $
         ["valid quoted CSV rejected" | not (null (rowProblems expected (header <> row)))]
             <> ["invalid CSV accepted" | csv <- invalidCsv, null (rowProblems expected csv)]
-            <> ["valid receipt rejected" | not (null (receiptFaults identity receipt))]
-            <> ["invalid receipt accepted" | bad <- invalidReceipts, null (receiptFaults identity bad)]
+            <> ["valid receipt rejected" | not (null (receiptFaults expectedReceiptIdentity receipt))]
+            <> ["invalid receipt accepted" | bad <- invalidReceipts, null (receiptFaults expectedReceiptIdentity bad)]
             <> ["invalid receipt set accepted" | paths <- [[], ["a", "a"], ["a", "other"]], null (auditExactIds "receipt" ["a", "b"] paths)]
             <> ["missing receipt identity accepted" | isRight (eitherDecodeStrict' "{}" :: Either String PerformanceReceipt)]
     putTextLn "comparison controls passed"
