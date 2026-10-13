@@ -16,6 +16,7 @@ module Ecluse.BenchReport.Performance (
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv, splitName, stripAnsi)
 import Ecluse.Test.Contract.Performance
@@ -74,7 +75,7 @@ benchmarkRequiredRows ecosystem packages =
                 <> ["managed mirror read: 1000 versions, three files per version." <> row | ecosystem == "pypi", row <- ["cold record and listing", "warm conditional 304 and listing", "cold listing then changed revision adding a file"]]
             )
   where
-    prefix = "ecosystem: " <> ecosystem <> "."
+    prefix = ecosystemPrefix <> ecosystem <> "."
     guards =
         [ "native/" <> prefix <> family <> ".scales linearly in version count"
         | family <- ["rules.evalRules", "package.mergePackuments", "serve (filter + merge-assemble)"]
@@ -101,7 +102,7 @@ subjectObservations obligation native = native{npObservations = filter belongs (
         Just name ->
             any (`T.isPrefixOf` observationId observation) $
                 if poKind obligation == "benchmark"
-                    then ["ecosystem: " <> name <> ".", "native/ecosystem: " <> name <> ".", "native/synthetic generators." <> name <> "."]
+                    then [ecosystemPrefix <> name <> ".", "native/" <> ecosystemPrefix <> name <> ".", "native/synthetic generators." <> name <> "."]
                     else [name <> "/"]
 
 -- | Keep a native failure even when every observed row passed before the process failed.

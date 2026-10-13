@@ -41,12 +41,8 @@ import Data.JsonStream.Lexer qualified as Lexer
 import GHC.Exts (oneShot)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, Name, decodedName, plainName)
-import Ecluse.Core.Registry.JsonStream (Step, Steps (..), StreamResult, readSteps)
+import Ecluse.Core.Registry.JsonStream (Step, Steps (..), StreamResult, nestingLimit, readSteps)
 import Ecluse.Core.Security (BodyLimit, LimitError)
-
--- | The parse error that marks a retained value past its structural budget.
-nestingLimit :: Text
-nestingLimit = "retained JSON nesting limit"
 
 -- | What a walk's continuations return: a read that needs input, has failed or been refused, or is done.
 class Walk r where

@@ -16,10 +16,10 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artHashes), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, hashValue)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource), mergePackuments)
-import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), nestingLimit)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -40,7 +40,7 @@ import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
-import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionBytes)
 import Ecluse.Test.Registry.Publish (checkedNpmUpload)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (digestOf)
@@ -244,7 +244,7 @@ spec = describe "npmFields" $ do
             infoVersions info `shouldSatisfy` Map.null
             selected <- expectRight (projectNpmVersion defaultLimits name (mkVersion Npm "1.0.0") raw)
             vrVersion selected `shouldBe` Nothing
-            parseVersionList (RegistryResponse 200 (BS.length raw) raw) `shouldBe` Right []
+            parseVersionBytes raw `shouldBe` Right []
 
     it "excludes entries with unusable discriminators from version lists" $ do
         let versions =
@@ -254,7 +254,7 @@ spec = describe "npmFields" $ do
                     , "3.0.0" .= invalidScripts
                     ]
             raw = toStrict (encode (object ["versions" .= versions]))
-        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length raw) raw)) `shouldBe` Right ["1.0.0"]
+        fmap (map renderVersion) (parseVersionBytes raw) `shouldBe` Right ["1.0.0"]
 
 name :: PackageName
 name = unscopedNpm "thing"
@@ -472,7 +472,7 @@ depthBoundary mode label levels source = do
         streamValue result `shouldBe` Right ()
     it (toString label <> " refuses one fewer level in " <> show mode) $ do
         result <- extractFields (levels - 1) mode source
-        streamValue result `shouldBe` Left (ParseError "retained JSON nesting limit")
+        streamValue result `shouldBe` Left (ParseError nestingLimit)
 
 -- The one release object retained when every supported field, and one unknown field, holds 'nestedValue'.
 nestedRelease :: NpmRead -> IO (KeyMap.KeyMap Value)
@@ -495,7 +495,7 @@ corpusRead =
         , crMetadata = adapterMetadata npmAdapter
         , crVersionReads = \selected document version ->
             [("selected", rendered (selectedFacts <$> selected)), ("mirror", rendered (selectNpmVersionDoc version document))]
-        , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionList (RegistryResponse 200 (BS.length raw) raw)))]
+        , crDocumentReads = \_ raw -> [("versions", rendered (parseVersionBytes raw))]
         }
 
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())

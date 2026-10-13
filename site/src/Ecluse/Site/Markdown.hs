@@ -2,13 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The Markdown vocabulary of the generated OpenAPI reference: headings that carry
-an anchor and CSS classes, tables, and the inline forms a table cell needs.
-
-A fragment is embedded in a Zola page, so the emitted text is CommonMark plus the
-heading-attribute extension and inline HTML. An attribute block only takes effect
-at the end of a heading line.
--}
+-- | CommonMark fragments with Zola heading attributes for the generated OpenAPI reference.
 module Ecluse.Site.Markdown (
     -- * Blocks
     heading,
@@ -27,6 +21,7 @@ module Ecluse.Site.Markdown (
 
 import Data.Char (isAlphaNum)
 import Data.Text qualified as T
+import Ecluse.Report.Markdown (cells)
 
 -- | A heading at the given level, which is clamped to at least one.
 heading :: Int -> Text -> Text
@@ -39,10 +34,7 @@ attributedHeading level anchor classes text =
 
 -- | A left-aligned table: the header cells, then one line per row.
 table :: [Text] -> [[Text]] -> [Text]
-table header rows = tableRow header : tableRow (":--" <$ header) : map tableRow rows
-
-tableRow :: [Text] -> Text
-tableRow cells = "| " <> T.intercalate " | " cells <> " |"
+table header rows = cells header : cells (":--" <$ header) : map cells rows
 
 -- | Bold inline text.
 bold :: Text -> Text

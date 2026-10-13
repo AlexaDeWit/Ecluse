@@ -28,6 +28,7 @@ import Ecluse.Core.StreamBench qualified as StreamBench
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
+import Ecluse.Report.BenchLabels (ecosystemPrefix, tierName)
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
@@ -48,7 +49,7 @@ main = do
         AdvisoryRulesBench.withBenchmarks ecosystems $ \advisoryRules ->
             defaultMain
                 [ bgroup
-                    "ecluse-core (work-per-request)"
+                    (toString tierName)
                     (map fullBenchmarkContract ecosystems <> coldReads <> digests <> packed <> advisoryRules <> [StreamBench.benchmarks, cacheBenchmarks, mirrorReads])
                 , testGroup "synthetic generators" (map generatorTests ecosystems)
                 ]
@@ -57,7 +58,7 @@ main = do
 fullBenchmarkContract :: EcosystemBench -> TestTree
 fullBenchmarkContract ecosystem =
     bgroup
-        ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem)))
+        (toString (ecosystemPrefix <> ecosystemName (ebEcosystem ecosystem)))
         [ benchmarkGroup ecosystem
         | benchmarkGroup <-
             [ RouteBench.benchmarks

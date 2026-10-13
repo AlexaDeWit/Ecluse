@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Json.Packed (Pieces (ArrayPieces, ObjectPieces), Ren
 import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEncoding, simpleEnvelope, simpleFiles)
 import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Test.Corpus (syntheticProxyBase)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Server.Transform (serveDocumentSize)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf, whnfAppIO)
 
@@ -36,7 +36,7 @@ benchmarks :: EcosystemBench -> Benchmark
 benchmarks ecosystem =
     bgroup "serve (filter + merge-assemble)" $
         [ bench (entryName entry) (whnfAppIO serveDepth (served, info))
-        | entry@(_, _, info, served) <- ebCorpus ecosystem
+        | entry@LoadedEntry{leInfo = info, leSnapshot = served} <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinearIO
                     "scales linearly in version count"
@@ -70,7 +70,7 @@ pypiEncodingBenchmarks ecosystem =
                       , fileCount <- [0, 1]
                       ]
             ]
-        | entry@(_, _, _, source) <- ebCorpus ecosystem
+        | entry@LoadedEntry{leSnapshot = source} <- ebCorpus ecosystem
         , Just retained <- [snd pypiSimpleCached (snapshotValue source)]
         ]
   where
@@ -97,7 +97,7 @@ npmAssemblyBenchmarks ecosystem =
             | (label, survivors) <- [("all", Map.keysSet (infoVersions info)), ("one", Set.fromList (take 1 (Map.keys (infoVersions info))))]
             , Just plan <- [mergePackuments [(GatedSource, restrictToSurvivors survivors info <$ source)]]
             ]
-        | entry@(_, _, info, source) <- ebCorpus ecosystem
+        | entry@LoadedEntry{leInfo = info, leSnapshot = source} <- ebCorpus ecosystem
         , isJust (snd npmPacked (snapshotValue source))
         ]
 

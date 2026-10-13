@@ -58,6 +58,9 @@ resolveWithRequests :: IORef [Metric.CacheResult] -> IO () -> SingleFlight Store
 resolveWithRequests seen afterClaim sf key fetch =
     resolveSingleFlight (\r -> atomicModifyIORef' seen (\rs -> (r : rs, ()))) (const pass) pass sf key (afterClaim >> fetch)
 
+resolveJoining :: MVar () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
+resolveJoining joined = resolveSingleFlight (\request -> when (request == Metric.Collapsed) (putMVar joined ())) (const pass) pass
+
 resolveOk :: SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOk sf key fetch = either (throwIO . UnexpectedFault) pure =<< resolve sf key (Right <$> fetch)
 
@@ -253,26 +256,29 @@ spec = do
 
     describe "resolveSingleFlight -- collapse" $ do
         it "collapses concurrent resolutions of one key to a single fetch" $ do
-            sf <- roomyStore
-            calls <- newIORef (0 :: Int)
-            started <- newEmptyMVar
-            release <- newEmptyMVar
+            completed <- timeout 5_000_000 $ do
+                sf <- roomyStore
+                calls <- newIORef (0 :: Int)
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                joined <- newEmptyMVar
 
-            let fetch = do
-                    atomicModifyIORef' calls (\n -> (n + 1, ()))
-                    _ <- tryPutMVar started ()
-                    takeMVar release
-                    pure "raw"
-            (results, ()) <-
-                concurrently
-                    (mapConcurrently (const (resolveOk sf "hot" fetch)) [1 .. 8 :: Int])
-                    ( do
-                        takeMVar started
-                        threadDelay 30000 -- give the others time to coalesce
-                        putMVar release ()
-                    )
-            results `shouldBe` replicate 8 ("raw" :: Text)
-            readIORef calls `shouldReturn` 1
+                let fetch = do
+                        atomicModifyIORef' calls (\n -> (n + 1, ()))
+                        _ <- tryPutMVar started ()
+                        takeMVar release
+                        pure "raw"
+                (results, ()) <-
+                    concurrently
+                        (mapConcurrently (const (either (throwIO . UnexpectedFault) pure =<< resolveJoining joined sf "hot" (Right <$> fetch))) [1 .. 8 :: Int])
+                        ( do
+                            takeMVar started
+                            replicateM_ 7 (takeMVar joined)
+                            putMVar release ()
+                        )
+                results `shouldBe` replicate 8 ("raw" :: Text)
+                readIORef calls `shouldReturn` 1
+            completed `shouldBe` Just ()
 
         for_ [(flatWeight, Metric.Hit, 0), (flatWeight - 1, Metric.Miss, 1)] $ \(budget, nextResult, refusalCount) ->
             it ("counts collapsed work once with byte budget " <> show budget) $ do
@@ -315,42 +321,47 @@ spec = do
 
     describe "resolveSingleFlight -- typed failure channel" $ do
         it "hands the leader's Left to every coalesced follower, caching nothing" $ do
-            sf <- roomyStore
-            calls <- newIORef (0 :: Int)
-            started <- newEmptyMVar
-            release <- newEmptyMVar
-            let failing = do
-                    atomicModifyIORef' calls (\n -> (n + 1, ()))
-                    _ <- tryPutMVar started ()
-                    takeMVar release
-                    pure (Left StoreFault)
-            (results, ()) <-
-                concurrently
-                    (mapConcurrently (const (resolve sf "shared-fault" failing)) [1 .. 8 :: Int])
-                    ( do
-                        takeMVar started
-                        threadDelay 30000 -- give the others time to coalesce
-                        putMVar release ()
-                    )
-            results `shouldBe` replicate 8 (Left StoreFault)
-            readIORef calls `shouldReturn` 1
-            lookupStore sf "shared-fault" `shouldReturn` Nothing
+            completed <- timeout 5_000_000 $ do
+                sf <- roomyStore
+                calls <- newIORef (0 :: Int)
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                joined <- newEmptyMVar
+                let failing = do
+                        atomicModifyIORef' calls (\n -> (n + 1, ()))
+                        _ <- tryPutMVar started ()
+                        takeMVar release
+                        pure (Left StoreFault)
+                (results, ()) <-
+                    concurrently
+                        (mapConcurrently (const (resolveJoining joined sf "shared-fault" failing)) [1 .. 8 :: Int])
+                        ( do
+                            takeMVar started
+                            replicateM_ 7 (takeMVar joined)
+                            putMVar release ()
+                        )
+                results `shouldBe` replicate 8 (Left StoreFault)
+                readIORef calls `shouldReturn` 1
+                lookupStore sf "shared-fault" `shouldReturn` Nothing
+            completed `shouldBe` Just ()
 
         it "re-raises a synchronously escaping leader to its followers (the invariant channel)" $ do
             result <- timeout 5_000_000 $ do
                 sf <- roomyStore
                 started <- newEmptyMVar
                 release <- newEmptyMVar
+                joined <- newEmptyMVar
                 let escaping = do
                         putMVar started ()
                         () <- takeMVar release
                         throwIO LeaderEscaped
-                leader <- async (try (resolveOk sf "escape" escaping) :: IO (Either LeaderEscaped Text))
-                takeMVar started
-                follower <- async (try (resolveOk sf "escape" escaping) :: IO (Either LeaderEscaped Text))
-                threadDelay 30000 -- give the follower time to register on the marker
-                putMVar release ()
-                (,) <$> wait leader <*> wait follower
+                let run = try (resolveJoining joined sf "escape" (Right <$> escaping)) :: IO (Either LeaderEscaped (Either StoreFault Text))
+                withAsync run $ \leader -> do
+                    takeMVar started
+                    withAsync run $ \follower -> do
+                        takeMVar joined
+                        putMVar release ()
+                        (,) <$> wait leader <*> wait follower
             case result of
                 Nothing -> expectationFailure "wedged: an escaping leader parked its follower"
                 Just (leaderOutcome, followerOutcome) -> do
@@ -397,6 +408,7 @@ spec = do
                 calls <- newIORef (0 :: Int)
                 reached <- newEmptyMVar
                 release <- newEmptyMVar
+                joined <- newEmptyMVar
                 armed <- newIORef True -- only the first (cancelled) leader parks
                 let fetch = Right <$> countingFetch calls "raw"
                     afterClaim = do
@@ -404,13 +416,12 @@ spec = do
                         when wasArmed $ do
                             putMVar reached () -- claimed the slot, parked at the handoff
                             takeMVar release -- block interruptibly so the cancel lands here
-                leader <- async (resolveWith afterClaim sf "wedge" fetch)
-                takeMVar reached
-
-                follower <- async (try (resolve sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
-                threadDelay 30000 -- give the follower time to register on the marker
-                cancel leader -- cancel in the handoff window: the slot must still free
-                wait follower
+                withAsync (resolveWith afterClaim sf "wedge" fetch) $ \leader -> do
+                    takeMVar reached
+                    withAsync (try (resolveJoining joined sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text))) $ \follower -> do
+                        takeMVar joined
+                        cancel leader
+                        wait follower
             case result of
                 Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
                 Just (Left _) -> expectationFailure "follower failed instead of recovering"
