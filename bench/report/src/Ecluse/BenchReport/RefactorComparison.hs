@@ -13,7 +13,9 @@ import System.FilePath ((</>))
 import UnliftIO.Exception (throwIO, tryAny)
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv)
-import Ecluse.Test.Contract.Manifest (readJsonFile)
+import Ecluse.BenchReport.PerformanceCommand (compileObligation)
+import Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls)
+import Ecluse.Test.Contract.Manifest (digest, digestFile, jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (..), auditExactIds)
 
@@ -29,10 +31,31 @@ audit root runId attempt baseline candidate manifest = do
         csvProblems <- if kind == "benchmark" then capture $ rowProblems expected <$> readComparisonText (directory </> "bench-results.csv") else pure []
         receiptProblems <- forM subjects $ \subject -> capture $ do
             receipt <- readJsonFile (directory </> "receipts" </> toString subject </> "receipt.json")
-            pure (receiptFaults (source, passRunId, attempt, kind, subject) receipt)
+            reference <- readJsonFile (root </> toString (kind <> "-A1") </> "receipts" </> toString subject </> "receipt.json")
+            let conditions = npConditions (prNative receipt)
+            obligation <- either (fail . toString) pure (compileObligation kind subject conditions)
+            let expectedIdentity = ExecutionIdentity source "not-applicable" "arm64" (digest (jsonLine obligation)) passRunId
+            pure (receiptFaults (source, passRunId, attempt, kind, subject) receipt <> auditPerformanceReceipts expectedIdentity attempt [obligation] [receipt] <> conditionFaults (npConditions (prNative reference)) conditions)
         pure (map ((kind <> "-" <> passName <> ": ") <>) (csvProblems <> concat receiptProblems))
     let expectedPaths = [toText (root </> toString (kind <> "-" <> passName) </> "receipts" </> toString subject </> "receipt.json") | (kind, passName) <- schedule, subject <- subjects]
-    finish (auditExactIds "receipt path" expectedPaths actualPaths <> concat problems)
+    (metricFaults, breaches) <- auditMetrics root
+    identityFaults <- concat <$> traverse (probeIdentity root runId attempt baseline candidate) [(kind, passName) | kind <- ["versions", "listing"], passName <- ["A1", "B1", "A2", "B2"]]
+    let faults = auditExactIds "receipt path" expectedPaths actualPaths <> concat problems <> metricFaults <> identityFaults
+    writeFileText (root </> "audit-faults.txt") (T.unlines faults)
+    writeFileText (root </> "tolerance-breaches.tsv") (T.unlines breaches)
+    putTextLn ("Audit faults: " <> show (length faults) <> ". Measured tolerance breaches: " <> show (length breaches) <> ".")
+    finish (faults <> ["measured tolerance breaches require review" | not (null breaches)])
+
+probeIdentity :: FilePath -> Text -> Text -> Text -> Text -> (Text, Text) -> IO [Text]
+probeIdentity root runId attempt baseline candidate (kind, passName) = capture $ do
+    conditions <- readJsonFile (root </> toString (kind <> "-" <> passName) </> "conditions.json")
+    inputDigest <- digestFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json")
+    let source = if "A" `T.isPrefixOf` passName then baseline else candidate
+        expected = Map.fromList [("source", source), ("run", runId), ("attempt", attempt), ("kind", kind), ("pass", passName), ("architecture", "aarch64"), ("rts", "-N1 -A4m -T"), ("inputs", inputDigest)]
+    pure (conditionFaults expected conditions)
+
+conditionFaults :: Map Text Text -> Map Text Text -> [Text]
+conditionFaults expected actual = ["probe condition differs: " <> key | (key, value) <- Map.toList expected, Map.lookup key actual /= Just value]
 
 schedule :: [(Text, Text)]
 schedule = [("benchmark", passName) | passName <- ["A1", "A2", "B1", "A3", "B2", "B3"]] <> [("allocation", passName) | passName <- ["A1", "B1", "A2", "B2"]]
@@ -62,6 +85,7 @@ receiptFaults (source, runId, attempt, kind, subject) receipt =
     [ "receipt identity or native coverage differs"
     | prSchemaVersion receipt /= 1
         || identitySource (prIdentity receipt) /= source
+        || identityArchitecture (prIdentity receipt) /= "arm64"
         || identityRunId (prIdentity receipt) /= runId
         || prAttempt receipt /= attempt
         || prKind receipt /= kind
@@ -90,15 +114,18 @@ finish problems = unless (null problems) $ traverse_ putTextLn problems >> exitF
 controls :: FilePath -> IO ()
 controls manifest = do
     _ <- manifestRows manifest
+    metricControls
+    nativeControls
     let header = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory\n"
         row = "\"All.group.quoted, \"\"name\"\"\",1,0,2,0,3\n"
         expected = ["group.quoted, \"name\""]
-        receipt = PerformanceReceipt 1 (ExecutionIdentity "source" "image" "aarch64" "plan" "run") "1" "benchmark" "ecosystem-npm" (NativePerformance NativePassed [PerformanceObservation "row" NativePassed] Map.empty) (Map.singleton "artifact" "digest")
+        receipt = PerformanceReceipt 1 (ExecutionIdentity "source" "image" "arm64" "plan" "run") "1" "benchmark" "ecosystem-npm" (NativePerformance NativePassed [PerformanceObservation "row" NativePassed] Map.empty) (Map.singleton "artifact" "digest")
         expectedReceiptIdentity = ("source", "run", "1", "benchmark", "ecosystem-npm")
         invalidReceipts =
             [ receipt{prIdentity = (prIdentity receipt){identityRunId = "other"}}
             , receipt{prIdentity = (prIdentity receipt){identityRunId = ""}}
             , receipt{prIdentity = (prIdentity receipt){identitySource = "other"}}
+            , receipt{prIdentity = (prIdentity receipt){identityArchitecture = "x86_64"}}
             , receipt{prAttempt = "2"}
             , receipt{prSubject = "ecosystem-pypi"}
             , receipt{prKind = "allocation"}
@@ -125,4 +152,17 @@ controls manifest = do
             <> ["invalid receipt accepted" | bad <- invalidReceipts, null (receiptFaults expectedReceiptIdentity bad)]
             <> ["invalid receipt set accepted" | paths <- [[], ["a", "a"], ["a", "other"]], null (auditExactIds "receipt" ["a", "b"] paths)]
             <> ["missing receipt identity accepted" | isRight (eitherDecodeStrict' "{}" :: Either String PerformanceReceipt)]
+            <> ["probe identity mismatch accepted" | key <- ["source", "run", "attempt", "rts", "inputs"], let expectedConditions = Map.singleton key "expected", actual <- [Map.empty, Map.singleton key "different"], null (conditionFaults expectedConditions actual)]
     putTextLn "comparison controls passed"
+
+nativeControls :: IO ()
+nativeControls = forM_ ["benchmark", "allocation"] $ \kind -> do
+    let declarations = Map.fromList [("compiler", "declared"), ("optimisation", "-O1"), ("profiling", "off"), ("rts", "-T"), ("stdev", "10"), ("mode", "captures"), ("passes", "5")]
+    obligation <- either (fail . toString) pure (compileObligation kind "ecosystem-npm" declarations)
+    let execution = ExecutionIdentity "source" "not-applicable" "arm64" (digest (jsonLine obligation)) "run"
+        native = NativePerformance NativePassed [PerformanceObservation row NativePassed | row <- poRows obligation] (poConditions obligation)
+        receipt = PerformanceReceipt 1 execution "1" kind "ecosystem-npm" native (Map.singleton "artifact" (T.replicate 64 "0"))
+        faults value = auditPerformanceReceipts execution "1" [obligation] [value]
+        missing = receipt{prNative = native{npObservations = drop 1 (npObservations native)}}
+        altered = receipt{prNative = native{npConditions = Map.insert (if kind == "benchmark" then "rts" else "passes") "different" (npConditions native)}}
+    finish (["complete native control rejected" | not (null (faults receipt))] <> ["missing native observation accepted" | null (faults missing)] <> ["changed native conditions accepted" | null (faults altered)])

@@ -9,19 +9,20 @@ on:
   workflow_dispatch:
     inputs:
       refactor_comparison:
-        description: Run the fixed issue 1565 comparison on one worker
+        description: Run the issue 1565 comparison on one worker
         type: boolean
         default: false
+      refactor_source:
+        description: Exact 40-character candidate commit for the temporary comparison
+        type: string
+        default: ''
 
-# One run per ref. Cancel a superseded PR run when a newer commit lands, because only
-# the latest commit's numbers matter. Never cancel a manual dispatch.
+# Keep manual measurements running when a newer commit arrives.
 concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
+# Artifact upload uses the runtime token.
 permissions:
   contents: read
 
@@ -33,6 +34,7 @@ jobs:
     timeout-minutes: 240
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
+      REFRACTOR_CANDIDATE: ${{ inputs.refactor_source }}
     steps:
       - name: Checkout comparison controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

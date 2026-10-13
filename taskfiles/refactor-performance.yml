@@ -2,13 +2,16 @@ version: '3'
 vars:
   COMPARISON_ROOT: '{{.ROOT_DIR}}/scratchpad/refactor-comparison'
   BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
-  CANDIDATE: 2610f2defcfa9d3d296d392a12f48d768b428817
+  CANDIDATE: '{{env "REFRACTOR_CANDIDATE"}}'
   EVIDENCE: '{{.COMPARISON_ROOT}}/evidence'
+  COMPARISON_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs bench/report/src/Ecluse/BenchReport/RefactorInputs.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs taskfiles/refactor-performance/listing/Main.hs taskfiles/refactor-performance/listing/Before.hs taskfiles/refactor-performance/listing/After.hs
 tasks:
   run:
-    desc: Run the temporary fixed issue 1565 comparison on one ARM64 worker
+    desc: Run the temporary issue 1565 comparison on one ARM64 worker
     preconditions:
       - test "$(uname -m)" = aarch64
+      - '[[ "$REFRACTOR_CANDIDATE" =~ ^[0-9a-f]{40}$ ]]'
+      - git cat-file -e "$REFRACTOR_CANDIDATE^{commit}"
       - test ! -e '{{.COMPARISON_ROOT}}'
     cmds:
       - mkdir -p '{{.EVIDENCE}}'
@@ -19,6 +22,7 @@ tasks:
         uname -a >> '{{.EVIDENCE}}/worker.txt'
         lscpu >> '{{.EVIDENCE}}/worker.txt'
       - task: controller
+      - '"$(cat ''{{.EVIDENCE}}/validator-path.txt'')" comparison-inputs ''{{.EVIDENCE}}/inputs'''
       - task: prepare
         vars: {SIDE: A}
       - task: prepare
@@ -49,6 +53,26 @@ tasks:
         vars: {SIDE: A, KIND: residency, PASS: A1}
       - task: record-pass
         vars: {SIDE: B, KIND: residency, PASS: B1}
+      - task: record-pass
+        vars: {SIDE: A, KIND: versions, PASS: A1}
+      - task: record-pass
+        vars: {SIDE: B, KIND: versions, PASS: B1}
+      - task: record-pass
+        vars: {SIDE: A, KIND: versions, PASS: A2}
+      - task: record-pass
+        vars: {SIDE: B, KIND: versions, PASS: B2}
+      - task: listing-prepare
+        vars: {SIDE: A}
+      - task: listing-prepare
+        vars: {SIDE: B}
+      - task: record-pass
+        vars: {SIDE: A, KIND: listing, PASS: A1}
+      - task: record-pass
+        vars: {SIDE: B, KIND: listing, PASS: B1}
+      - task: record-pass
+        vars: {SIDE: A, KIND: listing, PASS: A2}
+      - task: record-pass
+        vars: {SIDE: B, KIND: listing, PASS: B2}
       - |
         set -euo pipefail
         find '{{.EVIDENCE}}' -type f -name receipt.json | sort > '{{.EVIDENCE}}/receipt-paths.txt'
@@ -60,10 +84,12 @@ tasks:
           '{{.EVIDENCE}}/comparison-audit.status' \
           '{{.EVIDENCE}}'/benchmark-{A1,A2,B1,A3,B2,B3}/pass.status \
           '{{.EVIDENCE}}'/allocation-{A1,B1,A2,B2}/pass.status \
-          '{{.EVIDENCE}}'/residency-{A1,B1}/pass.status
+          '{{.EVIDENCE}}'/residency-{A1,B1}/pass.status \
+          '{{.EVIDENCE}}'/{versions,listing}-{A1,B1,A2,B2}/pass.status
 
   controller:
     cmds:
+      - task: wiring-controls
       - bash scripts/process-capture.sh '{{.EVIDENCE}}/controller-build.status' '{{.EVIDENCE}}/controller-build.log' task --exit-code performance:reporter
       - bash scripts/process-status.sh '{{.EVIDENCE}}/controller-build.status'
       - cabal list-bin exe:bench-report > '{{.EVIDENCE}}/validator-path.txt'
@@ -79,6 +105,7 @@ tasks:
       SOURCE: '{{if eq .SIDE "A"}}{{.BASELINE}}{{else}}{{.CANDIDATE}}{{end}}'
       SOURCE_DIR: '{{.COMPARISON_ROOT}}/source-{{.SIDE}}'
       PASS_DIR: '{{.EVIDENCE}}/{{.KIND}}-{{.PASS}}'
+      LISTING_DIR: '{{.COMPARISON_ROOT}}/listing-{{.SIDE}}'
     cmds:
       - git worktree add --detach '{{.SOURCE_DIR}}' '{{.SOURCE}}'
       - mkdir -p '{{.EVIDENCE}}/build-{{.SIDE}}'
@@ -149,14 +176,14 @@ tasks:
       - task: identity
         vars: {IDENTITY_DIR: '{{.PASS_DIR}}/before'}
       - cmp '{{.EVIDENCE}}/build-{{.SIDE}}/executables.sha256' '{{.PASS_DIR}}/before/executables.sha256'
-      - task: '{{if eq .KIND "residency"}}residency{{else}}measure{{end}}'
+      - task: '{{if eq .KIND "residency"}}residency{{else if or (eq .KIND "versions") (eq .KIND "listing")}}probes{{else}}measure{{end}}'
       - task: identity
         vars: {IDENTITY_DIR: '{{.PASS_DIR}}/after'}
       - task: verify-source
       - cmp '{{.PASS_DIR}}/before/executables.sha256' '{{.PASS_DIR}}/after/executables.sha256'
       - |
         set -euo pipefail
-        {{if ne .KIND "residency"}}
+        {{if or (eq .KIND "benchmark") (eq .KIND "allocation")}}
         test -s '{{.PASS_DIR}}/receipts/ecosystem-npm/receipt.json'
         test -s '{{.PASS_DIR}}/receipts/ecosystem-pypi/receipt.json'
         {{end}}
@@ -187,17 +214,123 @@ tasks:
       - cp '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/audit.status'
       - find dist-newstyle -type f -path '*/test/*.log' -exec cp --parents '{}' '{{.PASS_DIR}}/' \;
 
+  listing-prepare:
+    vars: *comparison
+    cmds:
+      - git worktree add --detach '{{.LISTING_DIR}}' '{{.SOURCE}}'
+      - mkdir -p '{{.EVIDENCE}}/listing-build-{{.SIDE}}'
+      - cp taskfiles/refactor-performance/listing/Main.hs '{{.LISTING_DIR}}/test/residency/Main.hs'
+      - cp 'taskfiles/refactor-performance/listing/{{if eq .SIDE "A"}}Before{{else}}After{{end}}.hs' '{{.LISTING_DIR}}/test/residency/ListingAdapter.hs'
+      - |
+        sed -i '/^test-suite ecluse-residency$/,/^  build-depends:/{
+          /^  other-modules:$/a\    ListingAdapter
+        }' '{{.LISTING_DIR}}/ecluse.cabal'
+      - |
+        set -euo pipefail
+        git -C '{{.LISTING_DIR}}' diff --binary HEAD > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.patch'
+        cp '{{.LISTING_DIR}}/test/residency/ListingAdapter.hs' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/ListingAdapter.hs'
+        sha256sum '{{.LISTING_DIR}}'/test/residency/{Main,ListingAdapter}.hs > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'
+        git -C '{{.LISTING_DIR}}' rev-parse HEAD HEAD^{tree} > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/source.txt'
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/listing-build-{{.SIDE}}/status' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/output.txt' task --exit-code performance:comparison:listing-build SIDE={{.SIDE}}
+
+  listing-build:
+    vars: *comparison
+    dir: '{{.LISTING_DIR}}'
+    cmds:
+      - test ! -d dist-newstyle
+      - cabal build test:ecluse-residency
+      - cabal list-bin test:ecluse-residency > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt'
+      - cp dist-newstyle/cache/plan.json '{{.EVIDENCE}}/listing-build-{{.SIDE}}/plan.json'
+      - sha256sum "$(cat '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt')" > '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.sha256'
+
+  probes:
+    vars: *comparison
+    dir: '{{.SOURCE_DIR}}'
+    cmds:
+      - |
+        set -euo pipefail
+        input_name='{{if eq .KIND "versions"}}versions{{else}}listings{{end}}'
+        input_digest="$(sha256sum '{{.EVIDENCE}}/inputs/'"$input_name"'.json' | cut -d ' ' -f 1)"
+        "$(cat '{{.EVIDENCE}}/validator-path.txt')" conditions '{{.PASS_DIR}}/conditions.json' \
+          source='{{.SOURCE}}' run="$GITHUB_RUN_ID" attempt="$GITHUB_RUN_ATTEMPT" kind='{{.KIND}}' pass='{{.PASS}}' \
+          architecture="$(uname -m)" rts='-N1 -A4m -T' inputs="$input_digest"
+      - bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --dir '{{.ROOT_DIR}}' --exit-code performance:comparison:{{.KIND}}-measure SIDE={{.SIDE}} KIND={{.KIND}} PASS={{.PASS}}
+      - cp '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/audit.status'
+
+  versions-measure:
+    vars: *comparison
+    dir: '{{.SOURCE_DIR}}'
+    cmds:
+      - |
+        set -euo pipefail
+        executable="$(cabal list-bin test:ecluse-residency)"
+        while IFS=$'\t' read -r input package version path; do
+          bash '{{.ROOT_DIR}}/scripts/process-capture.sh' "{{.PASS_DIR}}/$input.status" "{{.PASS_DIR}}/$input.json" \
+            /usr/bin/time -f '%M' -o "{{.PASS_DIR}}/$input.rss" "$executable" \
+            --metadata-source-probe npm StreamedVersions "$package" "$version" 134217728 "$path" +RTS -N1 -A4m -T -RTS
+        done < '{{.EVIDENCE}}/inputs/versions.tsv'
+        bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.PASS_DIR}}'/*.status
+
+  listing-measure:
+    vars: *comparison
+    dir: '{{.LISTING_DIR}}'
+    cmds:
+      - bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.EVIDENCE}}/listing-build-{{.SIDE}}/status'
+      - test "$(git rev-parse HEAD)" = '{{.SOURCE}}'
+      - git diff --binary HEAD > '{{.PASS_DIR}}/overlay.patch'
+      - cmp '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.patch' '{{.PASS_DIR}}/overlay.patch'
+      - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'
+      - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.sha256'
+      - |
+        set -euo pipefail
+        executable="$(cat '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.txt')"
+        for input in small large; do
+          bash '{{.ROOT_DIR}}/scripts/process-capture.sh' "{{.PASS_DIR}}/$input.status" "{{.PASS_DIR}}/$input.json" \
+            /usr/bin/time -f '%M' -o "{{.PASS_DIR}}/$input.rss" "$executable" \
+            "{{.EVIDENCE}}/inputs/$input.json" "{{.EVIDENCE}}/inputs/$input.expected" +RTS -N1 -A4m -T -RTS
+        done
+        bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.PASS_DIR}}'/*.status
+      - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/executable.sha256'
+      - git diff --binary HEAD > '{{.PASS_DIR}}/overlay-after.patch'
+      - cmp '{{.PASS_DIR}}/overlay.patch' '{{.PASS_DIR}}/overlay-after.patch'
+      - sha256sum --check '{{.EVIDENCE}}/listing-build-{{.SIDE}}/overlay.sha256'
+
   format:
     cmds:
-      - fourmolu --mode inplace bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
+      - hlint {{.COMPARISON_HASKELL}}
+      - fourmolu --mode inplace {{.COMPARISON_HASKELL}}
+
+  wiring-controls:
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p scratchpad
+        trial_dir="$(mktemp -d scratchpad/refactor-wiring.XXXXXX)"
+        cp ecluse.cabal "$trial_dir/original.cabal"
+        sed '/^test-suite ecluse-residency$/,/^  build-depends:/{
+          /^  other-modules:$/a\    ListingAdapter
+        }' "$trial_dir/original.cabal" > "$trial_dir/overlay.cabal"
+        test "$(grep -c '^    ListingAdapter$' "$trial_dir/overlay.cabal")" = 1
+        sed '/^    ListingAdapter$/d' "$trial_dir/overlay.cabal" > "$trial_dir/restored.cabal"
+        cmp "$trial_dir/original.cabal" "$trial_dir/restored.cabal"
+        bash scripts/process-capture.sh "$trial_dir/failed.status" "$trial_dir/failed.log" bash -c 'printf "retained failure output\n"; exit 7'
+        test "$(cat "$trial_dir/failed.status")" = 7
+        test "$(cat "$trial_dir/failed.log")" = 'retained failure output'
+        if bash scripts/process-status.sh "$trial_dir/failed.status"; then exit 1; fi
+        printf 'comparison wiring controls passed\n'
 
   lint:
     cmds:
-      - fourmolu --mode check bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
-      - hlint bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
+      - hlint {{.COMPARISON_HASKELL}}
+      - fourmolu --mode check {{.COMPARISON_HASKELL}}
       - actionlint .github/workflows/bench.yml
       - zizmor .github/workflows/bench.yml
       - task --dry performance:comparison:record-pass SIDE=A KIND=benchmark PASS=A1
       - task --dry performance:comparison:pass SIDE=A KIND=benchmark PASS=A1 SOURCE_DIR='{{.ROOT_DIR}}'
       - task --dry performance:comparison:pass SIDE=B KIND=allocation PASS=B1 SOURCE_DIR='{{.ROOT_DIR}}'
       - task --dry performance:comparison:pass SIDE=B KIND=residency PASS=B1 SOURCE_DIR='{{.ROOT_DIR}}'
+      - task --dry performance:comparison:pass SIDE=A KIND=versions PASS=A1 SOURCE_DIR='{{.ROOT_DIR}}'
+      - task --dry performance:comparison:pass SIDE=B KIND=listing PASS=B1 SOURCE_DIR='{{.ROOT_DIR}}' LISTING_DIR='{{.ROOT_DIR}}'
+      - task --dry performance:comparison:listing-prepare SIDE=B
+      - task --dry performance:comparison:versions-measure SIDE=A KIND=versions PASS=A1 SOURCE_DIR='{{.ROOT_DIR}}'
+      - task --dry performance:comparison:listing-measure SIDE=B KIND=listing PASS=B1 LISTING_DIR='{{.ROOT_DIR}}'

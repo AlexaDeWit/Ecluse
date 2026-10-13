@@ -18,10 +18,12 @@ import Ecluse.BenchReport.AgainstMain.Load qualified as Load
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.RefactorComparison qualified as Comparison
+import Ecluse.BenchReport.RefactorInputs qualified as ComparisonInputs
 
 main :: IO ()
 main =
     getArgs >>= \case
+        ["comparison-inputs", root] -> ComparisonInputs.prepareInputs root
         ["comparison-controls", manifest] -> Comparison.controls manifest
         ["comparison-audit", root, runId, attempt, baseline, candidate, manifest] -> Comparison.audit root (toText runId) (toText attempt) (toText baseline) (toText candidate) manifest
         "conditions" : path : arguments -> Receipt.writeConditions path (map toText arguments)
