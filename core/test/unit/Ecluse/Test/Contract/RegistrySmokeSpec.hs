@@ -6,11 +6,11 @@
 module Ecluse.Test.Contract.RegistrySmokeSpec (spec) where
 
 import Control.Exception (AsyncException (ThreadKilled))
+import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldThrow)
 import Test.Hspec.Core.Spec qualified as Hspec
-import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageInfo (infoVersions), renderPackageName)
@@ -41,7 +41,7 @@ spec = describe "liveMetadata" $ do
         it ("fails the status refusal " <> show fault) $
             liveMetadata "expected" (pure (Left fault)) `shouldThrow` isFailureException
     it "propagates cancellation from the fetch" $
-        liveMetadata "expected" (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
+        liveMetadata "expected" (Exception.throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
     it "fails malformed JSON from the production read" $ do
         result <- readBody defaultLimits "{ not json"
         case result of

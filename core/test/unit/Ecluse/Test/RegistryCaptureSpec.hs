@@ -5,6 +5,7 @@
 module Ecluse.Test.RegistryCaptureSpec (spec) where
 
 import Control.Exception (AsyncException (ThreadKilled))
+import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (ManagerSettings (managerModifyRequest), defaultManagerSettings, newManager, parseUrlThrow)
 import Network.HTTP.Types.Status (status200)
@@ -32,7 +33,7 @@ spec = do
             manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> throwIO (TestContractEscape "request failed")}
             fetchPackumentBody manager Npm "demo" `shouldReturn` Nothing
         it "propagates cancellation before network access" $ do
-            manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> throwIO ThreadKilled}
+            manager <- newManager defaultManagerSettings{managerModifyRequest = \_ -> Exception.throwIO ThreadKilled}
             fetchPackumentBody manager Npm "demo" `shouldThrow` (== ThreadKilled)
         it "returns successful response bytes unchanged" $
             withStub status200 npmBody $ \stub -> do
