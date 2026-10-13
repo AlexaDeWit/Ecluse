@@ -2146,6 +2146,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.Performance
     Ecluse.BenchReport.PerformanceCommand
     Ecluse.BenchReport.PerformanceReceipt
+    Ecluse.BenchReport.RefactorComparison
   build-depends:
     , ecluse:ecluse-report-format
     , aeson >=2.2 && <2.4

@@ -1,0 +1,343 @@
+ecosystem: npm.route.match.mixed requests
+ecosystem: npm.wire+project (per package).lodash (medium).version identifiers
+ecosystem: npm.wire+project (per package).lodash (medium).full metadata projection
+ecosystem: npm.wire+project (per package).request (medium).version identifiers
+ecosystem: npm.wire+project (per package).request (medium).full metadata projection
+ecosystem: npm.wire+project (per package).react (large).version identifiers
+ecosystem: npm.wire+project (per package).react (large).full metadata projection
+ecosystem: npm.wire+project (per package).@babel/core (large).version identifiers
+ecosystem: npm.wire+project (per package).@babel/core (large).full metadata projection
+ecosystem: npm.wire+project (per package).typescript (large).version identifiers
+ecosystem: npm.wire+project (per package).typescript (large).full metadata projection
+ecosystem: npm.wire+project (per package).express (large).version identifiers
+ecosystem: npm.wire+project (per package).express (large).full metadata projection
+ecosystem: npm.wire+project (per package).@aws-sdk/client-s3 (heavy).version identifiers
+ecosystem: npm.wire+project (per package).@aws-sdk/client-s3 (heavy).full metadata projection
+ecosystem: npm.wire+project (per package).webpack (heavy).version identifiers
+ecosystem: npm.wire+project (per package).webpack (heavy).full metadata projection
+ecosystem: npm.wire+project (per package).@types/node (heavy).version identifiers
+ecosystem: npm.wire+project (per package).@types/node (heavy).full metadata projection
+ecosystem: npm.single-version metadata (per package).lodash (medium).full decode + select
+ecosystem: npm.single-version metadata (per package).lodash (medium).selective decode
+ecosystem: npm.single-version metadata (per package).request (medium).full decode + select
+ecosystem: npm.single-version metadata (per package).request (medium).selective decode
+ecosystem: npm.single-version metadata (per package).react (large).full decode + select
+ecosystem: npm.single-version metadata (per package).react (large).selective decode
+ecosystem: npm.single-version metadata (per package).@babel/core (large).full decode + select
+ecosystem: npm.single-version metadata (per package).@babel/core (large).selective decode
+ecosystem: npm.single-version metadata (per package).typescript (large).full decode + select
+ecosystem: npm.single-version metadata (per package).typescript (large).selective decode
+ecosystem: npm.single-version metadata (per package).express (large).full decode + select
+ecosystem: npm.single-version metadata (per package).express (large).selective decode
+ecosystem: npm.single-version metadata (per package).@aws-sdk/client-s3 (heavy).full decode + select
+ecosystem: npm.single-version metadata (per package).@aws-sdk/client-s3 (heavy).selective decode
+ecosystem: npm.single-version metadata (per package).webpack (heavy).full decode + select
+ecosystem: npm.single-version metadata (per package).webpack (heavy).selective decode
+ecosystem: npm.single-version metadata (per package).@types/node (heavy).full decode + select
+ecosystem: npm.single-version metadata (per package).@types/node (heavy).selective decode
+ecosystem: npm.version (parse + order + latest, per package).lodash (medium)
+ecosystem: npm.version (parse + order + latest, per package).request (medium)
+ecosystem: npm.version (parse + order + latest, per package).react (large)
+ecosystem: npm.version (parse + order + latest, per package).@babel/core (large)
+ecosystem: npm.version (parse + order + latest, per package).typescript (large)
+ecosystem: npm.version (parse + order + latest, per package).express (large)
+ecosystem: npm.version (parse + order + latest, per package).@aws-sdk/client-s3 (heavy)
+ecosystem: npm.version (parse + order + latest, per package).webpack (heavy)
+ecosystem: npm.version (parse + order + latest, per package).@types/node (heavy)
+ecosystem: npm.rules.evalRules.lodash (medium)
+ecosystem: npm.rules.evalRules.request (medium)
+ecosystem: npm.rules.evalRules.react (large)
+ecosystem: npm.rules.evalRules.@babel/core (large)
+ecosystem: npm.rules.evalRules.typescript (large)
+ecosystem: npm.rules.evalRules.express (large)
+ecosystem: npm.rules.evalRules.@aws-sdk/client-s3 (heavy)
+ecosystem: npm.rules.evalRules.webpack (heavy)
+ecosystem: npm.rules.evalRules.@types/node (heavy)
+ecosystem: npm.package.mergePackuments.lodash (medium)
+ecosystem: npm.package.mergePackuments.request (medium)
+ecosystem: npm.package.mergePackuments.react (large)
+ecosystem: npm.package.mergePackuments.@babel/core (large)
+ecosystem: npm.package.mergePackuments.typescript (large)
+ecosystem: npm.package.mergePackuments.express (large)
+ecosystem: npm.package.mergePackuments.@aws-sdk/client-s3 (heavy)
+ecosystem: npm.package.mergePackuments.webpack (heavy)
+ecosystem: npm.package.mergePackuments.@types/node (heavy)
+ecosystem: npm.serve (filter + merge-assemble).lodash (medium)
+ecosystem: npm.serve (filter + merge-assemble).request (medium)
+ecosystem: npm.serve (filter + merge-assemble).react (large)
+ecosystem: npm.serve (filter + merge-assemble).@babel/core (large)
+ecosystem: npm.serve (filter + merge-assemble).typescript (large)
+ecosystem: npm.serve (filter + merge-assemble).express (large)
+ecosystem: npm.serve (filter + merge-assemble).@aws-sdk/client-s3 (heavy)
+ecosystem: npm.serve (filter + merge-assemble).webpack (heavy)
+ecosystem: npm.serve (filter + merge-assemble).@types/node (heavy)
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.lodash (medium).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.lodash (medium).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.request (medium).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.request (medium).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.react (large).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.react (large).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@babel/core (large).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@babel/core (large).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.typescript (large).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.typescript (large).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.express (large).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.express (large).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@aws-sdk/client-s3 (heavy).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@aws-sdk/client-s3 (heavy).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.webpack (heavy).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.webpack (heavy).one
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@types/node (heavy).all
+ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@types/node (heavy).one
+ecosystem: npm.security guards.boundedRead (8 MiB body, 64 KiB chunks)
+ecosystem: npm.security guards.lodash (medium).checkNestingDepth
+ecosystem: npm.security guards.lodash (medium).checkVersionCount
+ecosystem: npm.security guards.lodash (medium).artifact locations
+ecosystem: npm.security guards.request (medium).checkNestingDepth
+ecosystem: npm.security guards.request (medium).checkVersionCount
+ecosystem: npm.security guards.request (medium).artifact locations
+ecosystem: npm.security guards.react (large).checkNestingDepth
+ecosystem: npm.security guards.react (large).checkVersionCount
+ecosystem: npm.security guards.react (large).artifact locations
+ecosystem: npm.security guards.@babel/core (large).checkNestingDepth
+ecosystem: npm.security guards.@babel/core (large).checkVersionCount
+ecosystem: npm.security guards.@babel/core (large).artifact locations
+ecosystem: npm.security guards.typescript (large).checkNestingDepth
+ecosystem: npm.security guards.typescript (large).checkVersionCount
+ecosystem: npm.security guards.typescript (large).artifact locations
+ecosystem: npm.security guards.express (large).checkNestingDepth
+ecosystem: npm.security guards.express (large).checkVersionCount
+ecosystem: npm.security guards.express (large).artifact locations
+ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).checkNestingDepth
+ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).checkVersionCount
+ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).artifact locations
+ecosystem: npm.security guards.webpack (heavy).checkNestingDepth
+ecosystem: npm.security guards.webpack (heavy).checkVersionCount
+ecosystem: npm.security guards.webpack (heavy).artifact locations
+ecosystem: npm.security guards.@types/node (heavy).checkNestingDepth
+ecosystem: npm.security guards.@types/node (heavy).checkVersionCount
+ecosystem: npm.security guards.@types/node (heavy).artifact locations
+ecosystem: npm.security guards.checkNestingDepth (synthetic / 100000)
+ecosystem: npm.security guards.checkVersionCount (synthetic / 2000)
+ecosystem: pypi.route.match.mixed requests
+ecosystem: pypi.route.match.normal sdist
+ecosystem: pypi.route.match.normal wheel
+ecosystem: pypi.wire+project (per package).requests (medium).version identifiers
+ecosystem: pypi.wire+project (per package).requests (medium).full metadata projection
+ecosystem: pypi.wire+project (per package).numpy (large).version identifiers
+ecosystem: pypi.wire+project (per package).numpy (large).full metadata projection
+ecosystem: pypi.wire+project (per package).boto3 (heavy).version identifiers
+ecosystem: pypi.wire+project (per package).boto3 (heavy).full metadata projection
+ecosystem: pypi.single-version metadata (per package).requests (medium).full decode + select
+ecosystem: pypi.single-version metadata (per package).requests (medium).selective decode
+ecosystem: pypi.single-version metadata (per package).numpy (large).full decode + select
+ecosystem: pypi.single-version metadata (per package).numpy (large).selective decode
+ecosystem: pypi.single-version metadata (per package).boto3 (heavy).full decode + select
+ecosystem: pypi.single-version metadata (per package).boto3 (heavy).selective decode
+ecosystem: pypi.version (parse + order + latest, per package).requests (medium)
+ecosystem: pypi.version (parse + order + latest, per package).numpy (large)
+ecosystem: pypi.version (parse + order + latest, per package).boto3 (heavy)
+ecosystem: pypi.rules.evalRules.requests (medium)
+ecosystem: pypi.rules.evalRules.numpy (large)
+ecosystem: pypi.rules.evalRules.boto3 (heavy)
+ecosystem: pypi.package.mergePackuments.requests (medium)
+ecosystem: pypi.package.mergePackuments.numpy (large)
+ecosystem: pypi.package.mergePackuments.boto3 (heavy)
+ecosystem: pypi.serve (filter + merge-assemble).requests (medium)
+ecosystem: pypi.serve (filter + merge-assemble).numpy (large)
+ecosystem: pypi.serve (filter + merge-assemble).boto3 (heavy)
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).retained envelope and files.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).retained envelope and files.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).retained envelope and files.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).retained envelope and files.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).retained envelope and files.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).retained envelope and files.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 1.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 0.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 0.direct pairs
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 1.previous encoder
+ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 1.direct pairs
+ecosystem: pypi.security guards.boundedRead (8 MiB body, 64 KiB chunks)
+ecosystem: pypi.security guards.requests (medium).checkNestingDepth
+ecosystem: pypi.security guards.requests (medium).checkVersionCount
+ecosystem: pypi.security guards.requests (medium).artifact locations
+ecosystem: pypi.security guards.numpy (large).checkNestingDepth
+ecosystem: pypi.security guards.numpy (large).checkVersionCount
+ecosystem: pypi.security guards.numpy (large).artifact locations
+ecosystem: pypi.security guards.boto3 (heavy).checkNestingDepth
+ecosystem: pypi.security guards.boto3 (heavy).checkVersionCount
+ecosystem: pypi.security guards.boto3 (heavy).artifact locations
+ecosystem: pypi.security guards.checkNestingDepth (synthetic / 100000)
+ecosystem: pypi.security guards.checkVersionCount (synthetic / 2000)
+ecosystem: npm.cold production reads (per package).lodash (medium).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).lodash (medium).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).request (medium).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).request (medium).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).react (large).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).react (large).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).@babel/core (large).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).@babel/core (large).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).typescript (large).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).typescript (large).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).express (large).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).express (large).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).@aws-sdk/client-s3 (heavy).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).@aws-sdk/client-s3 (heavy).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).webpack (heavy).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).webpack (heavy).default cap 134217728 bytes: success.selected version
+ecosystem: npm.cold production reads (per package).@types/node (heavy).default cap 134217728 bytes: success.full document
+ecosystem: npm.cold production reads (per package).@types/node (heavy).default cap 134217728 bytes: success.selected version
+ecosystem: pypi.cold production reads (per package).requests (medium).default cap 134217728 bytes: success.full document
+ecosystem: pypi.cold production reads (per package).requests (medium).default cap 134217728 bytes: success.selected version
+ecosystem: pypi.cold production reads (per package).numpy (large).default cap 134217728 bytes: success.full document
+ecosystem: pypi.cold production reads (per package).numpy (large).default cap 134217728 bytes: success.selected version
+ecosystem: pypi.cold production reads (per package).boto3 (heavy).default cap 134217728 bytes: success.full document
+ecosystem: pypi.cold production reads (per package).boto3 (heavy).default cap 134217728 bytes: success.selected version
+ecosystem: npm.source digest (32 KiB chunks).lodash (medium)
+ecosystem: npm.source digest (32 KiB chunks).request (medium)
+ecosystem: npm.source digest (32 KiB chunks).react (large)
+ecosystem: npm.source digest (32 KiB chunks).@babel/core (large)
+ecosystem: npm.source digest (32 KiB chunks).typescript (large)
+ecosystem: npm.source digest (32 KiB chunks).express (large)
+ecosystem: npm.source digest (32 KiB chunks).@aws-sdk/client-s3 (heavy)
+ecosystem: npm.source digest (32 KiB chunks).webpack (heavy)
+ecosystem: npm.source digest (32 KiB chunks).@types/node (heavy)
+ecosystem: pypi.source digest (32 KiB chunks).requests (medium)
+ecosystem: pypi.source digest (32 KiB chunks).numpy (large)
+ecosystem: pypi.source digest (32 KiB chunks).boto3 (heavy)
+packed served form (full read and listing render).lodash (medium).full read, aeson's tree
+packed served form (full read and listing render).lodash (medium).listing render, aeson's tree
+packed served form (full read and listing render).lodash (medium).listing render, as served
+packed served form (full read and listing render).request (medium).full read, aeson's tree
+packed served form (full read and listing render).request (medium).listing render, aeson's tree
+packed served form (full read and listing render).request (medium).listing render, as served
+packed served form (full read and listing render).react (large).full read, aeson's tree
+packed served form (full read and listing render).react (large).listing render, aeson's tree
+packed served form (full read and listing render).react (large).listing render, as served
+packed served form (full read and listing render).@babel/core (large).full read, aeson's tree
+packed served form (full read and listing render).@babel/core (large).listing render, aeson's tree
+packed served form (full read and listing render).@babel/core (large).listing render, as served
+packed served form (full read and listing render).typescript (large).full read, aeson's tree
+packed served form (full read and listing render).typescript (large).listing render, aeson's tree
+packed served form (full read and listing render).typescript (large).listing render, as served
+packed served form (full read and listing render).express (large).full read, aeson's tree
+packed served form (full read and listing render).express (large).listing render, aeson's tree
+packed served form (full read and listing render).express (large).listing render, as served
+packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).full read, aeson's tree
+packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).listing render, aeson's tree
+packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).listing render, as served
+packed served form (full read and listing render).webpack (heavy).full read, aeson's tree
+packed served form (full read and listing render).webpack (heavy).listing render, aeson's tree
+packed served form (full read and listing render).webpack (heavy).listing render, as served
+packed served form (full read and listing render).@types/node (heavy).full read, aeson's tree
+packed served form (full read and listing render).@types/node (heavy).listing render, aeson's tree
+packed served form (full read and listing render).@types/node (heavy).listing render, as served
+packed served form (full read and listing render).requests (medium).full read, aeson's tree
+packed served form (full read and listing render).requests (medium).listing render, aeson's tree
+packed served form (full read and listing render).requests (medium).listing render, as served
+packed served form (full read and listing render).numpy (large).full read, aeson's tree
+packed served form (full read and listing render).numpy (large).listing render, aeson's tree
+packed served form (full read and listing render).numpy (large).listing render, as served
+packed served form (full read and listing render).boto3 (heavy).full read, aeson's tree
+packed served form (full read and listing render).boto3 (heavy).listing render, aeson's tree
+packed served form (full read and listing render).boto3 (heavy).listing render, as served
+ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.react (large)
+ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.typescript (large)
+ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.@types/node (heavy)
+ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.react (large)
+ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.typescript (large)
+ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.@types/node (heavy)
+ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.react (large)
+ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.typescript (large)
+ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.@types/node (heavy)
+ecosystem: npm.rules with an advisory database (per package).all advisory rules over synthetic advisories.typescript (large)
+ecosystem: pypi.rules with an advisory database (per package).shipped policy without a database.numpy (large)
+ecosystem: pypi.rules with an advisory database (per package).shipped policy over corpus advisories.numpy (large)
+ecosystem: pypi.rules with an advisory database (per package).all advisory rules over corpus advisories.numpy (large)
+ecosystem: pypi.rules with an advisory database (per package).all advisory rules over synthetic advisories.numpy (large)
+stream (pump flush strategy).4096B chunks.flush-each (shipped)
+stream (pump flush strategy).4096B chunks.flush-threshold-64k
+stream (pump flush strategy).4096B chunks.flush-end-only
+stream (pump flush strategy).16384B chunks.flush-each (shipped)
+stream (pump flush strategy).16384B chunks.flush-threshold-64k
+stream (pump flush strategy).16384B chunks.flush-end-only
+stream (pump flush strategy).65536B chunks.flush-each (shipped)
+stream (pump flush strategy).65536B chunks.flush-threshold-64k
+stream (pump flush strategy).65536B chunks.flush-end-only
+cache maintenance.100000 resolutions without retention
+cache maintenance.key construction.full key: npm name
+cache maintenance.key construction.selected-version key: npm name
+cache maintenance.key construction.assembled key: npm name
+cache maintenance.key construction.full key: scoped npm name
+cache maintenance.key construction.selected-version key: scoped npm name
+cache maintenance.key construction.assembled key: scoped npm name
+cache maintenance.key construction.full key: PyPI name
+cache maintenance.key construction.selected-version key: PyPI name
+cache maintenance.key construction.assembled key: PyPI name
+cache maintenance.256.cold fill
+cache maintenance.256.eligible-store churn
+cache maintenance.256.100000 hot hits
+cache maintenance.1024.cold fill
+cache maintenance.1024.eligible-store churn
+cache maintenance.1024.100000 hot hits
+cache maintenance.4096.cold fill
+cache maintenance.4096.eligible-store churn
+cache maintenance.4096.100000 hot hits
+ecosystem: pypi.managed mirror read: 1000 versions, three files per version.cold record and listing
+ecosystem: pypi.managed mirror read: 1000 versions, three files per version.warm conditional 304 and listing
+ecosystem: pypi.managed mirror read: 1000 versions, three files per version.cold listing then changed revision adding a file

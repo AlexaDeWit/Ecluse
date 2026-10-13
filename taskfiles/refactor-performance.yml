@@ -18,6 +18,7 @@ tasks:
         printf '%s\n' "run=$GITHUB_RUN_ID" "attempt=$GITHUB_RUN_ATTEMPT" "runner=$RUNNER_NAME" "image=${ImageVersion:-unknown}" > '{{.EVIDENCE}}/worker.txt'
         uname -a >> '{{.EVIDENCE}}/worker.txt'
         lscpu >> '{{.EVIDENCE}}/worker.txt'
+      - task: controller
       - task: prepare
         vars: {SIDE: A}
       - task: prepare
@@ -50,10 +51,28 @@ tasks:
         vars: {SIDE: B, KIND: residency, PASS: B1}
       - |
         set -euo pipefail
+        find '{{.EVIDENCE}}' -type f -name receipt.json | sort > '{{.EVIDENCE}}/receipt-paths.txt'
+        bash scripts/process-capture.sh '{{.EVIDENCE}}/comparison-audit.status' '{{.EVIDENCE}}/comparison-audit.log' \
+          "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-audit '{{.EVIDENCE}}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" '{{.BASELINE}}' '{{.CANDIDATE}}' taskfiles/refactor-performance/expected-rows.txt
+      - |
+        set -euo pipefail
         bash scripts/process-status.sh \
+          '{{.EVIDENCE}}/comparison-audit.status' \
           '{{.EVIDENCE}}'/benchmark-{A1,A2,B1,A3,B2,B3}/pass.status \
           '{{.EVIDENCE}}'/allocation-{A1,B1,A2,B2}/pass.status \
           '{{.EVIDENCE}}'/residency-{A1,B1}/pass.status
+
+  controller:
+    cmds:
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/controller-build.status' '{{.EVIDENCE}}/controller-build.log' task --exit-code performance:reporter
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/controller-build.status'
+      - cabal list-bin exe:bench-report > '{{.EVIDENCE}}/validator-path.txt'
+      - |
+        set -euo pipefail
+        sha256sum "$(cat '{{.EVIDENCE}}/validator-path.txt')" taskfiles/refactor-performance/expected-rows.txt > '{{.EVIDENCE}}/validator.sha256'
+        bash scripts/process-capture.sh '{{.EVIDENCE}}/controls.status' '{{.EVIDENCE}}/controls.log' \
+          "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-controls taskfiles/refactor-performance/expected-rows.txt
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/controls.status'
 
   prepare:
     vars: &comparison
@@ -143,13 +162,13 @@ tasks:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
     cmds:
-      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --exit-code performance:{{.KIND}}-measure
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --exit-code performance:{{.KIND}}-measure RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}"
       - |
         set -euo pipefail
         outcome=failure
         if [ "$(cat '{{.PASS_DIR}}/measure.status')" = 0 ]; then outcome=success; fi
         bash scripts/process-capture.sh '{{.PASS_DIR}}/audit.status' '{{.PASS_DIR}}/audit.log' \
-          env PERF_NATIVE_OUTCOME="$outcome" task --exit-code performance:{{.KIND}}-receipt
+          env PERF_NATIVE_OUTCOME="$outcome" task --exit-code performance:{{.KIND}}-receipt RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}"
       - |
         set -euo pipefail
         for path in {{if eq .KIND "benchmark"}}bench-results.csv bench-output.txt{{else}}perf-allocation-report.md perf-allocation-observations.json{{end}}; do
@@ -164,8 +183,14 @@ tasks:
       - cp '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/audit.status'
       - find dist-newstyle -type f -path '*/test/*.log' -exec cp --parents '{}' '{{.PASS_DIR}}/' \;
 
+  format:
+    cmds:
+      - fourmolu --mode inplace bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
+
   lint:
     cmds:
+      - fourmolu --mode check bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
+      - hlint bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs
       - actionlint .github/workflows/bench.yml
       - zizmor .github/workflows/bench.yml
       - task --dry performance:comparison:record-pass SIDE=A KIND=benchmark PASS=A1
