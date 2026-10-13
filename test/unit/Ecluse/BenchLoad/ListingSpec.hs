@@ -13,7 +13,7 @@ import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, listingWork
 import Ecluse.BenchLoad.Npm (npmPrivateCopy)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (pcPackages))
 import Ecluse.BenchLoad.PyPI (pypiPrivateCopy)
-import Ecluse.Test.Corpus (cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
 
 spec :: Spec
 spec = describe "listing setup" $
@@ -35,7 +35,7 @@ rejectedSetup copy =
     ListingSetup
         { lsCopy = copy
         , lsPrivate = \_ _ _ -> throwIO (BenchLoadError "invalid eviction called a private stub")
-        , lsCapturePackages = id
+        , lsCapturePackages = map (\package -> package{cpPath = "bench/corpus/rejected-eviction-must-not-read.json"})
         , lsPreflight = const (expectationFailure "invalid eviction reached preflight")
         , lsEvictionEntries = \_ _ -> Left "rejected eviction"
         , lsRevalidateError = "unused revalidation"
