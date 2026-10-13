@@ -360,7 +360,7 @@ To calibrate them:
 - Add the ecosystem to the residency tier as the metadata residency row of
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap,
   read-peak and output limits. Supply an exact `Calibration` and the record's probe hooks.
-  The tier refuses a missing residency provider for a registered adapter during setup.
+  The residency coverage check fails when a registered adapter lacks its provider.
   Each provider needs non-empty authenticated captures and its own limits and envelopes.
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
