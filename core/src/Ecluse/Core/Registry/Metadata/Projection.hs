@@ -15,7 +15,8 @@ import Data.Aeson (Value, parseJSON)
 import Data.Aeson.Types (parseMaybe)
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (ParseError (ParseError))
+import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Registry.JsonStream (isNestingLimit)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
@@ -40,6 +41,7 @@ projectionResult = \case
 
 -- | Translate incremental parser bounds without requiring validity of skipped data.
 streamError :: Limits -> ParseError -> MetadataError
-streamError limits = \case
-    ParseError "retained JSON nesting limit" -> MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
-    _ -> MetadataUndecodable
+streamError limits err =
+    if isNestingLimit err
+        then MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
+        else MetadataUndecodable
