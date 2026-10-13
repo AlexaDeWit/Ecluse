@@ -5,7 +5,8 @@
 -- | Whole-version membership, retained source coordinates, and verified publication bytes.
 module Ecluse.Core.Registry.MirrorUpload.InternalSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value (Bool, Object), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -17,7 +18,7 @@ import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload.Internal
-import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleFiles)
+import Ecluse.Core.Registry.PyPI.Document (simpleDocument, simpleEnvelope, simpleFiles)
 import Ecluse.Test.Package (hexSha256Of, hexSha512Of, pypiVersion, sampleArtifact, sampleDetails, sriSha256Of, unsafeHash, unscopedPyPI, validSha1)
 import Ecluse.Test.Support (expectRight)
 
@@ -85,6 +86,22 @@ spec = do
                 checkedMirrorInventory (pkgName admitted) (pkgVersion admitted) doc readData `shouldBe` Left refusal
                 restoreMirrorFragment admitted readData `shouldBe` Left refusal
             _ -> expectationFailure "expected PyPI source fields"
+
+    it "refuses a changed companion declaration with the admitted digest and coordinate" $ do
+        inventory <- expectRight (sourceInventory (wheel :| []))
+        let admitted = inventoryDetails inventory
+            artifact :| _ = pkgArtifacts admitted
+            refusal = PublishSourceUnavailable "the source file facts do not match the admitted artifact"
+        artCoreMetadata artifact `shouldBe` Nothing
+        case inventoryReadData inventory of
+            PyPIMirrorRead document
+                | [(key, Object fields)] <- simpleFiles document -> do
+                    let changed = simpleDocument (simpleEnvelope document) [(key, Object (KeyMap.insert "core-metadata" (Bool True) fields))]
+                        readData = PyPIMirrorRead changed
+                        doc = VersionDoc admitted (Just (fst pypiSimpleCached changed))
+                    checkedMirrorInventory (pkgName admitted) (pkgVersion admitted) doc readData `shouldBe` Left refusal
+                    restoreMirrorFragment admitted readData `shouldBe` Left refusal
+            _ -> expectationFailure "expected one PyPI source file object"
 
     it "rejects a fragment carrying an undeclared source entry" $ do
         inventory <- expectRight (sourceInventory (wheel :| [sdist]))
