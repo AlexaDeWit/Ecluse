@@ -251,10 +251,8 @@ spec = do
 
     describe "withLeasedBatch -- cancellation" $
         it "leaves an unfinished receipt unacknowledged and stops every renewal" $ do
-            -- Shutdown cancels the loop thread. An un-acked message simply redelivers, which is
-            -- safe because publishing is idempotent, so nothing may be disposed on the way out.
-            -- Leaving the batch's scope cancels every task and waits for it, so the renewal log
-            -- is already settled by the time the timeout returns.
+            -- Cancellation leaves unfinished receipts for idempotent redelivery.
+            -- Scope exit waits for renewal tasks, so the log is settled when the timeout returns.
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             disposed <- newIORef (0 :: Int)
@@ -351,9 +349,7 @@ renewInWorld world answer receipt (Seconds window) = do
             now <- readTVarIO (lwNow world)
             Right () <$ atomicModifyIORef' (lwVisible world) (\visible -> (Map.insert receipt (now + fromIntegral window) visible, ()))
 
-{- Park the caller at its target and block there. Registering before blocking is what lets the
-stepper tell a waiter that is waiting from one that is between waits and must not be stepped
-over. -}
+-- Register before blocking so the clock cannot advance past a thread between waits.
 waitUntilInWorld :: LeaseWorld -> MonoTime -> IO ()
 waitUntilInWorld world (MonoTime target) = do
     waiter <- myThreadId
@@ -364,9 +360,7 @@ waitUntilInWorld world (MonoTime target) = do
         readTVar (lwNow world) >>= check . (>= target)
         modifyTVar' (lwParked world) (Map.delete waiter)
 
-{- Step the world's clock for the body. It settles on its own the moment every renewal task is
-parked, so no real-time pacing decides anything. The one timed part is reaping a task that
-ended instead of parking again, and reaping late only ever pauses the clock. -}
+-- Reap ended tasks on a timer. Late reaping delays the virtual clock without changing event order.
 withWorldClock :: LeaseWorld -> IO a -> IO a
 withWorldClock world body = withAsync stepping (const body)
   where
@@ -394,9 +388,7 @@ awaitStep world = do
 worldHorizon :: Double
 worldHorizon = 1_000
 
-{- Stop waiting on the tasks whose threads have ended, so a dropped or disposed receipt cannot
-stall the clock for its siblings. A thread that has finished never resumes, so this can only
-ever release the clock late, never early. -}
+-- Finished threads cannot resume, so removing them can release the clock late but never early.
 reapEndedWaiters :: LeaseWorld -> IO ()
 reapEndedWaiters world = do
     seen <- readTVarIO (lwSeen world)

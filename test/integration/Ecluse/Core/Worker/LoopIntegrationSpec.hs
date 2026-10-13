@@ -86,12 +86,14 @@ spec =
                 withUpstream $ \upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
-                        env <- newQueueEnv queue
+                        (observedQueue, acknowledged) <- observeAcknowledgement queue
+                        env <- newQueueEnv observedQueue
                         -- The re-admitted digest is well-formed but does not match the served
                         -- bytes: a tampered artifact the worker must refuse to publish.
                         tamperPolicies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
                         expectRightIO (enqueue queue job)
-                        runLoopFor (workerSourceAt upstreamUrl tamperPolicies) env 4_000_000
+                        runLoopUntil (workerSourceAt upstreamUrl tamperPolicies) env acknowledged
+                        acknowledged `shouldReturn` True
                         published <- readIORef publishLog
                         published `shouldBe` []
 
