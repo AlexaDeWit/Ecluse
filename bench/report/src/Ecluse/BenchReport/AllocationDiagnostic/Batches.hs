@@ -5,9 +5,7 @@
 -- | Validate raw batch arithmetic without changing native estimates.
 module Ecluse.BenchReport.AllocationDiagnostic.Batches (auditBatches, batchControls) where
 
-import Data.Int (Int64)
 import Data.Text qualified as T
-import Data.Word (Word64)
 import System.FilePath ((</>))
 import UnliftIO.Exception (tryAny)
 
