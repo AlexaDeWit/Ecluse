@@ -10,6 +10,7 @@ import Test.Hspec
 
 import Ecluse.Composition.Support (expectConfig, overrideEnv, pubUrlEnv, pypiMirrorEnv)
 import Ecluse.Config
+import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Security.Egress (registryUrlText)
 
@@ -26,6 +27,36 @@ spec = describe "native mirror declarations" $ do
         fmap mtUsername target `shouldBe` Just (Just "publisher")
     it "refuses an upload endpoint on a public upstream host" $
         loadConfig (overrideEnv uploadKey "https://pypi.org/legacy/" pypiMirrorEnv) Nothing `shouldSatisfy` isLeft
+    describe "publication credentials" $ do
+        for_ [("REGISTRY", "https://publish.example.test/legacy/"), ("CODE_ARTIFACT", codeArtifactHost <> "/pypi/cache/")] $ \(tag, url) ->
+            it ("refuses a username without a token for " <> tag) $
+                loadConfig (overrideEnv (publicationPrefix tag <> "USERNAME") "aws" (publicationEnv tag url)) Nothing
+                    `shouldBe` Left [ParseError "publicationTarget.username requires a static token"]
+        it "preserves a generic credential pair" $ do
+            config <-
+                expectConfig
+                    ( overrideEnv (publicationPrefix "REGISTRY" <> "USERNAME") "publisher" $
+                        overrideEnv (publicationPrefix "REGISTRY" <> "TOKEN") "publish-token" $
+                            publicationEnv "REGISTRY" "https://publish.example.test/legacy/"
+                    )
+                    Nothing
+            let target = mntPublicationTarget =<< Map.lookup PyPI (cfgMounts (configApp config))
+            fmap peUsername target `shouldBe` Just (Just "publisher")
+            fmap (fmap unSecret . peToken) target `shouldBe` Just (Just "publish-token")
+        it "refuses a non-aws CodeArtifact username with a token" $
+            loadConfig (overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "USERNAME") "publisher" codeArtifactPublicationEnv) Nothing
+                `shouldBe` Left [ParseError "CodeArtifact requires the aws credential username"]
+        it "accepts CodeArtifact publication without static credentials" $ do
+            config <- expectConfig (publicationEnv "CODE_ARTIFACT" (codeArtifactHost <> "/pypi/cache/")) Nothing
+            let target = mntPublicationTarget =<< Map.lookup PyPI (cfgMounts (configApp config))
+            fmap peUsername target `shouldBe` Just Nothing
+            fmap peToken target `shouldBe` Just Nothing
+        for_ [Nothing, Just "aws"] $ \username ->
+            it ("accepts the CodeArtifact username " <> show username) $ do
+                let env = maybe codeArtifactPublicationEnv (\name -> overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "USERNAME") name codeArtifactPublicationEnv) username
+                config <- expectConfig env Nothing
+                let target = mntPublicationTarget =<< Map.lookup PyPI (cfgMounts (configApp config))
+                fmap peUsername target `shouldBe` Just (toText <$> username)
     describe "CodeArtifact upload endpoints" $ do
         for_ ["/pypi/cache/", "/pypi/cache/legacy/"] $ \path ->
             it ("accepts the native upload path " <> path) $ do
@@ -96,3 +127,18 @@ codeArtifactEnv upload =
     , (codeArtifactPrefix <> "UPLOAD_URL", upload)
     ]
         <> filter (not . List.isPrefixOf "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__" . fst) pypiMirrorEnv
+
+publicationPrefix :: String -> String
+publicationPrefix tag = "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__" <> tag <> "__"
+
+publicationEnv :: String -> String -> [(String, String)]
+publicationEnv tag url =
+    pubUrlEnv
+        <> [ ("ECLUSE_MOUNTS__PYPI__ENABLED", "true")
+           , (publicationPrefix tag <> "URL", url)
+           ]
+
+codeArtifactPublicationEnv :: [(String, String)]
+codeArtifactPublicationEnv =
+    overrideEnv (publicationPrefix "CODE_ARTIFACT" <> "TOKEN") "publish-token" $
+        publicationEnv "CODE_ARTIFACT" (codeArtifactHost <> "/pypi/cache/")

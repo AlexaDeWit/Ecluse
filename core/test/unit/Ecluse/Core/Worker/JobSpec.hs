@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
  )
-import Ecluse.Core.Registry.MirrorUpload (inventoryDetails)
+import Ecluse.Core.Registry.MirrorUpload (MirrorInventory, inventoryDetails)
 import Ecluse.Core.Registry.MirrorUpload.Internal (restoreMirrorInventory)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
@@ -50,7 +50,7 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Inability (NoDatabaseLoaded, RuleThrew), Reason (RuleUnable), Rule (AllowIfOlderThan, DenyIfDeprecated, DenyIfYanked), Transience (WillResolve, WontResolve), ruleName)
-import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit, MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits, hostPortAddress)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Worker (
@@ -101,6 +101,40 @@ spec = do
                     policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
                 runManaged fixture{mfPolicy = policy} >>= (`shouldSatisfy` isRetried)
                 readIORef (mfUploads fixture) `shouldReturn` []
+
+        for_
+            [ ("dead-letters a bounded state read", StateBound (BodyTooLarge (MetadataBodyLimit 1024)), DeadLettered)
+            , ("dead-letters a state identity mismatch", StateIdentityMismatch, DeadLettered)
+            , ("retries a state transport failure before publication", StateTransport (transportFault TransportUnreachable "connection reset"), Retried BeforePublish)
+            ]
+            $ \(label, fault, expected) ->
+                it label $
+                    withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                        fixture <- managedFixture (stubBaseUrl upstream) False
+                        writeIORef (mfStateFault fixture) (Just fault)
+                        runManaged fixture `shouldReturn` expected ("mirror state unavailable: " <> show fault)
+                        readIORef (mfProbes fixture) `shouldReturn` 1
+                        readIORef (mfResolves fixture) `shouldReturn` 0
+                        readIORef (mfUploads fixture) `shouldReturn` []
+                        readIORef (mfRecord fixture) `shouldReturn` Nothing
+                        allCaptured upstream `shouldReturn` []
+
+        it "drops a companion retention conflict without publishing the remaining files" $
+            withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                fixture <- managedFixture (stubBaseUrl upstream) True
+                let fault = StateCompanionConflict (mirrorFilename 1)
+                    binding = mfBinding fixture
+                    store = (wmsStore binding){msRetainCompanion = \_ _ -> pure (Left fault)}
+                    policy = (mfPolicy fixture){wpMirrorState = Just binding{wmsStore = store}}
+                runManaged fixture{mfPolicy = policy} `shouldReturn` Dropped ("mirror state unavailable: " <> show fault)
+                readIORef (mfProbes fixture) `shouldReturn` 1
+                readIORef (mfUploads fixture) `shouldReturn` [mirrorFilename 1]
+                readIORef (mfCompanions fixture) `shouldReturn` mempty
+                recorded <- readIORef (mfRecord fixture)
+                fmap versionCompanions (recordVersion mirrorVersion =<< recorded)
+                    `shouldBe` Just (Map.fromList [(mirrorFilename number, CompanionPending) | number <- [1, 2, 3]])
+                requests <- allCaptured upstream
+                map capPath requests `shouldBe` map encodeUtf8 ["/" <> mirrorFilename 1, "/" <> mirrorFilename 1 <> ".metadata"]
 
         it "restarts after a partial failure and fetches only missing distributions" $
             withStub status200 (toLazy tarballBytes) $ \upstream -> do
@@ -176,9 +210,7 @@ spec = do
             withUpstream $ \url -> do
                 fixture <- managedFixture url False
                 initial <- managedInventory url False [1, 2, 3]
-                let details = inventoryDetails initial
-                    files = fmap (\file -> file{artHashes = [unsafeHash SHA512 trueSha512Hex]}) (pkgArtifacts details)
-                changed <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "sha512 source"))
+                changed <- sha512Source initial
                 writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
                 writeIORef (mfTargetTransform fixture) (\file -> file{artHashes = [unsafeHash SHA256 trueSha256]})
                 runManaged fixture `shouldReturn` Succeeded
@@ -189,15 +221,37 @@ spec = do
             withUpstream $ \url -> do
                 fixture <- managedFixture url False
                 initial <- managedInventory url False [1, 2, 3]
-                let details = inventoryDetails initial
-                    files = fmap (\file -> file{artHashes = [unsafeHash SHA512 trueSha512Hex]}) (pkgArtifacts details)
-                changed <- expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "sha512 source"))
+                changed <- sha512Source initial
                 writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
-                writeIORef (mfTarget fixture) (toList (pkgArtifacts details))
+                writeIORef (mfTarget fixture) (toList (pkgArtifacts (inventoryDetails initial)))
                 runManaged fixture `shouldReturn` Succeeded
                 readIORef (mfUploads fixture) `shouldReturn` []
                 writeIORef (mfSource fixture) VersionMetadataUnavailable
                 runManaged fixture `shouldReturn` Succeeded
+
+        for_
+            [ ("drops a conflicting SHA-256 target after verifying SHA-512 source bytes", unsafeHash SHA256 someSha256, Dropped ("mirror target identity conflicts: " <> mirrorFilename 1))
+            , ("retries an incompatible Blake2b target after verifying SHA-512 source bytes", unsafeHash Blake2b trueBlake2b, Retried BeforePublish ("mirror file lacks compatible current identity: " <> mirrorFilename 1))
+            ]
+            $ \(label, targetHash, expected) ->
+                it label $
+                    withStub status200 (toLazy tarballBytes) $ \upstream -> do
+                        fixture <- managedFixture (stubBaseUrl upstream) False
+                        initial <- managedInventory (stubBaseUrl upstream) False [1, 2, 3]
+                        changed <- sha512Source initial
+                        let target = map (\file -> file{artHashes = [targetHash]}) (toList (pkgArtifacts (inventoryDetails initial)))
+                        writeIORef (mfSource fixture) (VersionPresent (sourceDocument changed) Nothing)
+                        writeIORef (mfTarget fixture) target
+                        runManaged fixture `shouldReturn` expected
+                        readIORef (mfProbes fixture) `shouldReturn` 1
+                        readIORef (mfResolves fixture) `shouldReturn` 1
+                        readIORef (mfUploads fixture) `shouldReturn` []
+                        readIORef (mfTarget fixture) `shouldReturn` target
+                        requests <- allCaptured upstream
+                        map capPath requests `shouldBe` [encodeUtf8 ("/" <> mirrorFilename 1)]
+                        recorded <- readIORef (mfRecord fixture)
+                        fmap versionVerifiedIdentities (recordVersion mirrorVersion =<< recorded)
+                            `shouldBe` Just (Map.singleton (mirrorFilename 1) (unsafeHash SHA256 trueSha256))
 
         it "refuses conflicting target bytes without repeated publication" $
             withUpstream $ \url -> do
@@ -934,9 +988,13 @@ spec = do
                     plans <- plPlans <$> readIORef logRef
                     map ppLatest plans `shouldBe` [ver]
 
-{- | Each digest the worker recomputes, as the only one current metadata carries. A row the
-worker could not compute would drop an artifact the public floor had already admitted.
--}
+sha512Source :: MirrorInventory -> IO MirrorInventory
+sha512Source inventory = do
+    let details = inventoryDetails inventory
+        files = fmap (\file -> file{artHashes = [unsafeHash SHA512 trueSha512Hex]}) (pkgArtifacts details)
+    expectRight (restoreMirrorInventory details{pkgArtifacts = files} (mirrorSource files "sha512 source"))
+
+-- Each admitted digest must remain verifiable without a second algorithm in the source.
 soleAdmittedDigests :: [(String, Hash)]
 soleAdmittedDigests =
     [ ("a sha512 SRI", unsafeHash SRI trueSri)
