@@ -5,9 +5,8 @@
 -- | Bind focused React diagnostics without issuing full-suite acceptance receipts.
 module Ecluse.BenchReport.AllocationDiagnostic (recordBuild, writeConditions, bindPass, bindRun, audit) where
 
-import Data.Aeson (Value (Object), object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (Value (Object), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (doesFileExist, listDirectory)
@@ -16,6 +15,7 @@ import System.FilePath (isAbsolute, splitDirectories, (</>))
 import Ecluse.BenchReport (BenchRow (..), parseCsv, splitName)
 import Ecluse.BenchReport.AllocationDiagnostic.Batches (auditBatches)
 import Ecluse.BenchReport.AllocationDiagnostic.Inventory
+import Ecluse.BenchReport.BuildPlan (planUnits, projectPlanUnits)
 import Ecluse.BenchReport.RefactorEvidence (Binding (..))
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
 import Ecluse.Test.Contract.Manifest (digestFile, readJsonFile, writeJsonFile)
@@ -39,7 +39,7 @@ recordBuild root build source = do
 checkPlan :: FilePath -> Text -> IO ()
 checkPlan root build = do
     plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
-    units <- either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Value])
+    units <- either fail pure (planUnits plan)
     let matches = [unit | Object unit <- units, KeyMap.lookup "pkg-name" unit == Just (toJSON ("tasty-bench" :: Text))]
     case matches of
         [unit] -> do
@@ -225,8 +225,8 @@ auditPlans root = do
     externalPlan :: Text -> IO [Value]
     externalPlan build = do
         plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
-        units <- either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Value])
-        pure [Object (foldr KeyMap.delete unit ["pkg-src", "dist-dir", "build-info"]) | Object unit <- units, KeyMap.lookup "pkg-name" unit `notElem` map (Just . toJSON) (["ecluse", "tasty-bench"] :: [Text])]
+        units <- either fail pure (planUnits plan)
+        pure (projectPlanUnits ["ecluse", "tasty-bench"] ["pkg-src", "dist-dir", "build-info"] units)
 
 auditInputs :: FilePath -> IO ()
 auditInputs root = auditManifest (root </> "build-C-A/identity/corpus.sha256") "bench/" (root </> "inputs")

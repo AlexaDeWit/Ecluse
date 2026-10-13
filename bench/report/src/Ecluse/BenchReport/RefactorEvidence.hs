@@ -16,6 +16,7 @@ module Ecluse.BenchReport.RefactorEvidence (
     equalFile,
     zeroStatus,
     required,
+    safePath,
     verifyEvidence,
     bindingFaults,
     receiptArtifactFaults,
@@ -332,6 +333,7 @@ required key = maybe (fail ("missing run field " <> toString key)) pure . Map.lo
 validHex :: Int -> Text -> Bool
 validHex size value = T.length value == size && T.all (`elem` ("0123456789abcdef" :: String)) value
 
+-- | Reject absolute paths and parent components before reading archived artifacts.
 safePath :: FilePath -> Bool
 safePath path = not (null path || isAbsolute path) && all (`notElem` ["..", "."]) (splitDirectories path)
 
