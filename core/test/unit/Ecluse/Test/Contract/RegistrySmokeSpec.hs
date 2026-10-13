@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldThrow)
 import Test.Hspec.Core.Spec qualified as Hspec
-import UnliftIO.Exception (fromException, throwIO)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageInfo (infoVersions), renderPackageName)
