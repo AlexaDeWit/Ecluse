@@ -24,10 +24,10 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrVersion
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
-import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (emptyTreeRead, finishTree, treeStep)
+import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
@@ -38,9 +38,10 @@ import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath, npmCaptureUpstream
 import Ecluse.Test.Corpus.Outputs (CorpusRead (..), captureOutputs, recordedOutputs, rendered, selectedFacts)
 import Ecluse.Test.Json (fieldAt, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sameTexts, sharesKey, sharesString, walkJsonChunks)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionBytes)
+import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Test.Registry.Publish (checkedNpmUpload)
 import Ecluse.Test.Security.Limits (checkNestingDepth)
 import Ecluse.Test.Snapshot (digestOf)
@@ -456,7 +457,7 @@ retainedDepthSpec = describe "retained field depth" $ do
             dependencyMeta = object ["dep" .= object ["optional" .= True]]
             source = object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= withKeys [("dependenciesMeta", dependencyMeta)] release]]
             bytes = toStrict (encode source)
-        result <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (versionListParser limits) (collectVersionList limits) emptyVersionList [bytes])
+        result <- expectRight (walkJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmVersionListWalk limits (collectVersionList limits) emptyVersionList) [bytes])
         (streamValue result >>= finishVersionList) `shouldBe` Right [mkVersion Npm "1.0.0"]
     forM_ [FullRead, SelectedRead "1.0.0", VersionListRead] $ \mode ->
         it ("skips unknown nested values beyond the retained depth: " <> show mode) $ do
@@ -499,9 +500,17 @@ corpusRead =
         }
 
 extractFields :: Int -> NpmRead -> Value -> IO (StreamResult ())
-extractFields levels mode source =
+extractFields levels mode source = do
     let bytes = toStrict (encode source)
-     in expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmFields levels mode) (\_ _ -> Right ()) () (map BS.singleton (BS.unpack bytes)))
+        chunks = map BS.singleton (BS.unpack bytes)
+        bound = MetadataBodyLimit (BS.length bytes)
+    reference <- expectRight (parseJsonChunks bound (npmFields levels mode) (\_ _ -> Right ()) () chunks)
+    case mode of
+        VersionListRead -> do
+            walked <- expectRight (walkJsonChunks bound (npmVersionListWalk defaultLimits{maxNestingDepth = levels} (\_ _ -> Right ()) ()) chunks)
+            streamValue walked `shouldBe` streamValue reference
+            pure walked
+        _ -> pure reference
 
 inventoryDepthCases :: [(Text, Int, Value)]
 inventoryDepthCases =

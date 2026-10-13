@@ -19,7 +19,7 @@ import Data.Conduit (ConduitT, yield)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
 
-import Data.JsonStream.Parser qualified as J
+import Data.JsonStream.Lexer (Cursor)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     VersionDelete (deleteDocumentRequest, deleteRequests),
  )
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
+import Ecluse.Core.Registry.Json.Walk (Step)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
@@ -75,8 +76,8 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), fetchVersionList)
-import Ecluse.Core.Registry.VersionList (VersionListItem)
+import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListWalk), fetchVersionList)
+import Ecluse.Core.Registry.VersionList (VersionListState)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -206,15 +207,14 @@ listingUnavailable status =
             <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
         )
 
-{- The presence probe's read, which already projects a store's version list for the mirror
-worker. A store that holds no document for a package holds no versions of it either. -}
+-- A store without a document for a package holds no versions of it.
 listVersions :: ProtocolRead -> PackageName -> IO (Either StoreFault [StoredVersion])
-listVersions store name = case pcVersionListParser (prCodec store) of
+listVersions store name = case pcVersionListWalk (prCodec store) of
     Nothing -> pure (Left (protocolFault "the adapter provides no version-list reader"))
-    Just parser -> listVersionsWith store name parser
+    Just walk -> listVersionsWith store name walk
 
-listVersionsWith :: ProtocolRead -> PackageName -> (Limits -> J.Parser VersionListItem) -> IO (Either StoreFault [StoredVersion])
-listVersionsWith store name parser =
+listVersionsWith :: ProtocolRead -> PackageName -> (Limits -> Cursor -> Step VersionListState) -> IO (Either StoreFault [StoredVersion])
+listVersionsWith store name walk =
     formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
         Right (SuccessBody _ listed) -> first (parseFault "version list") (map stored <$> listed)
@@ -223,7 +223,7 @@ listVersionsWith store name parser =
   where
     origin = prOrigin store
     codec = prCodec store
-    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (parser (ocLimits origin)) request
+    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (walk (ocLimits origin)) request
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
 deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]

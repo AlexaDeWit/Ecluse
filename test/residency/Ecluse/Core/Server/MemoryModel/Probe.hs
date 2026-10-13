@@ -61,13 +61,14 @@ import Ecluse.Core.Registry (ParseError)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataRead, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, estimateValueBytes, npmCached, weighCachedDoc)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Json.Walk (readJsonWalk)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), VersionDoc (..), VersionRead (vrBodyBytes, vrVersion))
 import Ecluse.Core.Registry.Metadata.Fetch (readManifest, readVersion)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (Body, ReadTerms (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Registry.Npm.Project (versionListParser)
 import Ecluse.Core.Registry.Npm.Project qualified as Npm
+import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
@@ -582,7 +583,7 @@ readSource mode limits name version next = do
     bound = MetadataBodyLimit (maxMetadataBytes limits)
 
 readVersionList :: Limits -> IO ByteString -> IO (Either Text (Held, Int, Maybe ContentDigest))
-readVersionList limits next = readJsonStream (MetadataBodyLimit (maxMetadataBytes limits)) (versionListParser limits) (collectVersionList limits) emptyVersionList next <&> (first show >=> versionsResult)
+readVersionList limits next = readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) (npmVersionListWalk limits (collectVersionList limits) emptyVersionList) next <&> (first show >=> versionsResult)
   where
     versionsResult streamed = do
         selected <- first show (streamValue streamed >>= finishVersionList)
