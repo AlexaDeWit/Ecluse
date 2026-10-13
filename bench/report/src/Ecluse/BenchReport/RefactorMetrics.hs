@@ -68,12 +68,12 @@ readPass root kind passName = do
             traverse benchmark rows
         "allocation" -> readComparisonText (directory </> "perf-allocation-report.md") >>= either (fail . toString) pure . allocation
         "residency" -> do
-            sizes <- expectedCaptureSizes
+            sizes <- expectedCaptureSizes root
             readComparisonText (directory </> "measure.log") >>= either (fail . toString) pure . residency sizes
         _ -> do
-            inputs <- expectedProbeInputs kind
+            inputs <- expectedProbeInputs root kind
             traverse (sourceObservation directory kind) inputs
-    expected <- expectedIds kind
+    expected <- expectedIds root kind
     require (auditExactIds "measurement" expected (map observationId observations))
     require ["empty metrics: " <> name | Observation name metrics <- observations, null metrics]
     pure observations
@@ -81,12 +81,12 @@ readPass root kind passName = do
 observationId :: Observation -> Text
 observationId (Observation name _) = name
 
-expectedIds :: Text -> IO [Text]
-expectedIds = \case
+expectedIds :: FilePath -> Text -> IO [Text]
+expectedIds root = \case
     "benchmark" -> T.lines <$> readComparisonText "taskfiles/refactor-performance/expected-rows.txt"
     "allocation" -> pure (concatMap (uncurry allocationRequiredRows) catalogues)
     "residency" -> pure [kind <> "/" <> name <> "/" <> shape | (_, names) <- catalogues, name <- names, (kind, shapes) <- residencyShapes, shape <- shapes]
-    kind -> map inputId <$> expectedProbeInputs kind
+    kind -> map inputId <$> expectedProbeInputs root kind
 
 catalogues :: [(Text, [Text])]
 catalogues = [("npm", map cpName corpusPackages), ("pypi", map cpName pypiCorpusPackages)]

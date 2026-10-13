@@ -1,15 +1,13 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE TemplateHaskell #-}
 
--- | Workload obligations come from compiled catalogues and pins, independently of archived declarations.
+-- | Workload obligations use a compiled catalogue and capture pins authenticated by a fixed digest.
 module Ecluse.BenchReport.RefactorInputAudit (expectedProbeInputs, expectedCaptureSizes, auditInputs) where
 
 import Data.Aeson (eitherDecodeStrict', withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
-import Data.FileEmbed (embedFile)
 import Data.Map.Strict qualified as Map
 import System.FilePath (takeBaseName, (</>))
 
@@ -19,25 +17,29 @@ import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Result (auditExactIds)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), corpusPackages, cpName, pypiCorpusPackages)
 
-trustedPins :: ByteString
-trustedPins = $(embedFile "bench/corpus/pins.json")
+trustedPins :: FilePath -> IO ByteString
+trustedPins root = do
+    bytes <- BS.readFile (root </> "source-inputs-A/bench/corpus/pins.json")
+    unless (digest bytes == "5f7a6509afb84a8269cf9e382ffa60b5255628dac9d33dece010248c480db14a") (fail "capture pins differ from the fixed baseline SHA-256")
+    pure bytes
 
 -- | Probe coverage and every input field come from the fixed workload, not the observed manifest.
-expectedProbeInputs :: Text -> IO [Input]
-expectedProbeInputs = \case
-    "versions" -> fst <$> trustedCaptures
+expectedProbeInputs :: FilePath -> Text -> IO [Input]
+expectedProbeInputs root = \case
+    "versions" -> fst <$> trustedCaptures root
     "listing" -> pure [input | (input, _, _) <- listingWorkloads]
     _ -> fail "unknown maintenance probe workload"
 
--- | Residency byte recovery uses sizes declared by the compiled capture pins.
-expectedCaptureSizes :: IO (Map Text Integer)
-expectedCaptureSizes = do
-    (npm, pypi) <- trustedCaptures
+-- | Residency byte recovery uses sizes from the authenticated pins under the evidence root.
+expectedCaptureSizes :: FilePath -> IO (Map Text Integer)
+expectedCaptureSizes root = do
+    (npm, pypi) <- trustedCaptures root
     pure (Map.fromList [(inputPackage input, toInteger (inputBytes input)) | input <- npm <> pypi])
 
-trustedCaptures :: IO ([Input], [Input])
-trustedCaptures = do
-    parsed <- either fail pure (eitherDecodeStrict' trustedPins >>= parseEither parser)
+trustedCaptures :: FilePath -> IO ([Input], [Input])
+trustedCaptures root = do
+    pins <- trustedPins root
+    parsed <- either fail pure (eitherDecodeStrict' pins >>= parseEither parser)
     unless (length (fst parsed) == 9 && length (snd parsed) == 3) (fail "compiled capture catalogue differs from the fixed comparison")
     pure parsed
   where
@@ -62,14 +64,15 @@ trustedCaptures = do
 -- | Authenticate both source archives, all probe declarations, the command list and the residency size map.
 auditInputs :: FilePath -> IO [Text]
 auditInputs root = captureProblems $ do
-    (versions, pypi) <- trustedCaptures
-    listings <- expectedProbeInputs "listing"
+    pins <- trustedPins root
+    (versions, pypi) <- trustedCaptures root
+    listings <- expectedProbeInputs root "listing"
     actualVersions <- readJsonFile (root </> "inputs/versions.json")
     actualListings <- readJsonFile (root </> "inputs/listings.json")
     commands <- readComparisonText (root </> "inputs/versions.tsv")
     sizes <- readJsonFile (root </> "inputs/capture-sizes.json")
-    expectedSizes <- expectedCaptureSizes
-    archives <- concat <$> traverse (auditArchive (versions <> pypi)) ["A", "B"]
+    expectedSizes <- expectedCaptureSizes root
+    archives <- concat <$> traverse (auditArchive pins (versions <> pypi)) ["A", "B"]
     bodies <- forM listingWorkloads $ \(input, expectedBody, expectedNames) -> captureProblems $ do
         body <- BS.readFile (root </> inputPath input)
         oracle <- BS.readFile (root </> "inputs" </> toString (inputId input) <> ".expected")
@@ -86,11 +89,11 @@ auditInputs root = captureProblems $ do
             <> concat bodies
         )
   where
-    auditArchive captures side = do
+    auditArchive authenticatedPins captures side = do
         let archive = root </> "source-inputs-" <> side
         pinFaults <- captureProblems $ do
             pins <- BS.readFile (archive </> "bench/corpus/pins.json")
-            pure ["archived pins differ from compiled pins: " <> toText side | pins /= trustedPins]
+            pure ["archived pins differ from authenticated baseline pins: " <> toText side | pins /= authenticatedPins]
         faults <- forM captures $ \input -> captureProblems $ do
             bytes <- BS.readFile (archive </> inputPath input)
             pure ["archived capture differs from trusted pins: " <> toText side <> "/" <> inputPackage input | BS.length bytes /= inputBytes input || digest bytes /= inputDigest input]

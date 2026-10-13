@@ -24,7 +24,10 @@ Each pass writes `binding.json` after its final status. The binding names the so
 It hashes the native outputs, input files, receipts, source snapshots, build records, statuses and per-pass event records.
 The aggregate audit rehashes every required file and checks the recorded serial order before it compares numbers.
 Native receipt digests independently cover the copied CSV, Markdown, observation JSON and archived corpus inputs.
-The controller embeds the capture pins at build time. Probe obligations come from the compiled catalogue and those pins.
+Probe obligations come from the compiled catalogue and authenticated capture pins.
+The controller reads `source-inputs-A/bench/corpus/pins.json` under the supplied evidence root, including after an artifact download.
+It checks SHA-256 `5f7a6509afb84a8269cf9e382ffa60b5255628dac9d33dece010248c480db14a` before parsing the pins.
+That digest identifies the pins at baseline `690a4cd522f3146fc04ae42d6abac684a44a422c`. Missing or different bytes produce an audit fault.
 The audit requires exactly nine npm inputs, including TypeScript, and both fixed listing inputs.
 It checks every input field, the full command list, both archived corpora and pins, listing bodies and oracles, and all twelve capture sizes.
 Listing manifest paths are relative to the evidence root. Native probe arguments and input bytes stay unchanged.

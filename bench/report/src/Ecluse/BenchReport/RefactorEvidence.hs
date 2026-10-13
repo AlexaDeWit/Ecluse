@@ -144,7 +144,7 @@ evidencePaths root kind name = do
     probeFiles <-
         if kind `elem` ["versions", "listing"]
             then do
-                inputs <- expectedProbeInputs kind
+                inputs <- expectedProbeInputs root kind
                 pure [directory </> toString (inputId input) <> extension | input <- inputs, extension <- [".json", ".rss", ".status"]]
             else pure []
     let common =

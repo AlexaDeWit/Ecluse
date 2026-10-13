@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Rebound artifacts must still satisfy the independently compiled workload obligations.
+-- | Rebound artifacts must still satisfy the independent fixed workload obligations.
 module Ecluse.BenchReport.RefactorInputControls (inputControls) where
 
 import Data.Aeson (Value (Object), toJSON, (.:))
@@ -12,7 +12,7 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.Directory (copyFile, createDirectoryIfMissing)
+import System.Directory (copyFile, createDirectoryIfMissing, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -39,9 +39,9 @@ inputControls = withSystemTempDirectory "refactor-input-controls" $ \root -> do
         copyFile path target
     auditInputs root >>= requireAccepted "valid fixed workloads"
     originals <- Map.fromList <$> traverse (\path -> (path,) <$> readFileBS (root </> path)) paths
-    versions <- expectedProbeInputs "versions"
-    listings <- expectedProbeInputs "listing"
-    sizes <- expectedCaptureSizes
+    versions <- expectedProbeInputs root "versions"
+    listings <- expectedProbeInputs root "listing"
+    sizes <- expectedCaptureSizes root
     let restore = forM_ (Map.toList originals) $ \(path, bytes) -> writeFileBS (root </> path) bytes
         check label mutation = do
             mutation
@@ -90,6 +90,9 @@ inputControls = withSystemTempDirectory "refactor-input-controls" $ \root -> do
     forM_ ["A", "B"] $ \side ->
         forM_ ["bench/corpus/pins.json", "bench/corpus/npm/typescript.full.json"] $ \path ->
             check ("altered archived input " <> toText side <> "/" <> toText path) (alter root ("source-inputs-" <> side </> path))
+    removeFile (root </> "source-inputs-A/bench/corpus/pins.json")
+    auditInputs root >>= requireRejected "missing authenticated pins"
+    restore
 
 inputMutations :: [(Text, Input -> Input)]
 inputMutations =
