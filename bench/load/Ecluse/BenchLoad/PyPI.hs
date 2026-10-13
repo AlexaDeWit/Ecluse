@@ -26,8 +26,9 @@ import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveHttp, DriveRamp), Load (Load), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Fixture (artifactBytes, fetchChecked, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (DriveBurst, DriveRamp), LoadKnobs (..), Scenario (..), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, listingWorkingSet, revalidateLoad, withListingStubs)
 import Ecluse.BenchLoad.ManagedMirror (managedMirrorScenarios)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..))
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
@@ -68,10 +69,21 @@ pypiReadDriver =
         , lrdHerd = herdScenario
         , lrdWarmUnderCold = warmUnderColdScenario
         , lrdRamp = rampScenario
-        , lrdPatternPrivate = \knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lrdPatternPrivate = lsPrivate pypiListing
         , lrdPatternPublic = \knobs bodies _artifacts -> do
             rewritten <- newIORef mempty
             pure (indexStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
+        }
+
+pypiListing :: ListingSetup
+pypiListing =
+    ListingSetup
+        { lsCopy = pypiPrivateCopy
+        , lsPrivate = \knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lsCapturePackages = id
+        , lsPreflight = preflightListings
+        , lsEvictionEntries = evictionEntries . lkCacheMaxEntries
+        , lsRevalidateError = "pypi/revalidate-not-modified: no URL to drive"
         }
 
 -- | State the effective eviction size and the limits of the service-time attribution.
@@ -87,7 +99,7 @@ pypiLoadNotes knobs =
         <> show (lkCacheMaxEntries knobs)
         <> ").\n"
   where
-    count = length (workingSet knobs)
+    count = length (listingWorkingSet pypiListing knobs)
 
 indexColdScenario :: Scenario
 indexColdScenario =
@@ -95,7 +107,7 @@ indexColdScenario =
 
 indexScenario :: Text -> Text -> Int -> Scenario
 indexScenario name description ttl =
-    scenario name description (\knobs k -> withIndexProxy knobs ttl Nothing pypiCorpusPackages cpWeight (httpTarget k))
+    scenario name description (listingLoad pypiListing ttl)
 
 -- | The PyPI parts of the private-copy scenarios.
 pypiPrivateCopy :: PrivateCopy
@@ -118,34 +130,21 @@ revalidateScenario =
     scenario
         "revalidate-not-modified"
         "GET the heaviest Simple index with a primed If-None-Match validator. The private index and admission plan remain live, but 304 avoids assembly and encoding."
-        ( \knobs k ->
-            withIndexProxy knobs longCacheTtl Nothing (take 1 pypiCorpusPackages) (const 1) $ \proxy -> \case
-                url : _ -> do
-                    etag <- primeETag url
-                    k (proxied proxy (DriveHttp (Load [("If-None-Match", etag)] [url])))
-                [] -> benchFail "pypi/revalidate-not-modified: no URL to drive"
-        )
+        (revalidateLoad pypiListing)
 
 cacheFitsScenario :: Scenario
 cacheFitsScenario =
     scenario
         "cache-fits-large"
         "GET a uniform Simple-index working set with one cache slot per project, so assembled responses fit by entry count. Full public metadata is always fetched."
-        ( \knobs k ->
-            let packages = workingSet knobs
-             in withIndexProxy knobs longCacheTtl (Just (length packages)) packages (const 1) (httpTarget k)
-        )
+        (cacheFitsLoad pypiListing)
 
 cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
     scenario
         "cache-evicts-large"
         "GET the same uniform Simple-index working set with min(configured entries, project count - 1) cache slots, forcing repeated assembly. Full public metadata is always fetched."
-        ( \knobs k -> do
-            let packages = workingSet knobs
-            entries <- either benchFail pure (evictionEntries (lkCacheMaxEntries knobs) (length packages))
-            withIndexProxy knobs longCacheTtl (Just entries) packages (const 1) (httpTarget k)
-        )
+        (cacheEvictsLoad pypiListing)
 
 data WheelSource = PrivateWheel | PublicOnboarding
 
@@ -243,33 +242,16 @@ rampScenario =
         { scenarioServiceTime = False
         }
 
-workingSet :: LoadKnobs -> [CorpusPackage]
-workingSet knobs = take (max 1 (lkWorkingSet knobs)) pypiCorpusPackages
-
-withIndexProxy :: LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (CorpusPackage -> Int) -> (ProxyProcess -> [Text] -> IO a) -> IO a
-withIndexProxy knobs ttl entries packages weight body =
-    withUnprimedIndexProxy knobs ttl entries packages (weightedMix weight indexUrl packages) $ \proxy urls -> do
-        for_ (ordNub urls) $ \url -> do
-            index <- checkedIndex url
-            let filenames = map ifFilename (siFiles index)
-            unless (wheelFilename (siName index) `elem` filenames && length filenames > 1) $
-                benchFail ("pypi index preflight did not merge public files and the private overlay: " <> url)
-        body proxy urls
+preflightListings :: [Text] -> IO ()
+preflightListings urls =
+    for_ (ordNub urls) $ \url -> do
+        index <- checkedIndex url
+        let filenames = map ifFilename (siFiles index)
+        unless (wheelFilename (siName index) `elem` filenames && length filenames > 1) $
+            benchFail ("pypi index preflight did not merge public files and the private overlay: " <> url)
 
 withUnprimedIndexProxy :: LoadKnobs -> Int -> Maybe Int -> [CorpusPackage] -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
-withUnprimedIndexProxy knobs ttl entries packages mix body = do
-    captures <- loadCorpusBodies packages
-    rewritten <- newIORef mempty
-    let latency = lkUpstreamLatencyMicros knobs
-    withProxyOverStubs
-        PyPI
-        knobs
-        ttl
-        entries
-        (wheelStub latency (artifactBytes (lkPayloadBytes knobs)))
-        (indexStub rewritten latency captures)
-        mix
-        body
+withUnprimedIndexProxy = withListingStubs pypiListing
 
 pypiMountBase :: Text
 pypiMountBase = "https://bench.proxy/pypi"

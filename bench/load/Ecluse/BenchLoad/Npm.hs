@@ -29,8 +29,9 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Contract.Driver (LoadReadDriver (..), readLoadContract)
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, httpTarget, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, weightedMix, withProxyOverStubs)
-import Ecluse.BenchLoad.Harness (Driver (..), Load (Load), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, httpTarget, longCacheTtl, selfHosted, weightedMix, withProxyOverStubs)
+import Ecluse.BenchLoad.Harness (Driver (..), LoadKnobs (..), Scenario (..), Target (Target), UpstreamFixture, proxied, scenario, urlLoad)
+import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, cacheFitsLoad, listingLoad, revalidateLoad, withListingStubs)
 import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (saProxyPath))
 import Ecluse.BenchLoad.PatternScenario (loadPins, selectArtifacts)
 import Ecluse.BenchLoad.PrivateCopy (PrivateCopy (..))
@@ -102,10 +103,21 @@ npmReadDriver =
         , lrdHerd = herdScenario
         , lrdWarmUnderCold = warmUnderColdScenario
         , lrdRamp = rampScenario
-        , lrdPatternPrivate = \knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lrdPatternPrivate = lsPrivate npmListing
         , lrdPatternPublic = \knobs bodies artifacts -> do
             rewritten <- newIORef mempty
             pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies artifacts)
+        }
+
+npmListing :: ListingSetup
+npmListing =
+    ListingSetup
+        { lsCopy = npmPrivateCopy
+        , lsPrivate = \knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs))
+        , lsCapturePackages = const corpusPackages
+        , lsPreflight = const pass
+        , lsEvictionEntries = \knobs _ -> Right (lkCacheMaxEntries knobs)
+        , lsRevalidateError = "revalidate-not-modified: no URL to drive"
         }
 
 mergeScenario :: Scenario
@@ -113,7 +125,7 @@ mergeScenario =
     scenario
         "merge-cold"
         "GET /npm/{pkg} over the weighted corpus with public cache TTL 0. Concurrent public misses share one fetch and decode. Every request reads private metadata, merges, filters, rewrites URLs, and serialises."
-        (\knobs k -> withNpmProxy knobs 0 Nothing serveMix (httpTarget k))
+        (listingLoad npmListing 0)
 
 -- | The npm parts of the private-copy scenarios.
 npmPrivateCopy :: PrivateCopy
@@ -136,37 +148,28 @@ assembledHitScenario =
     scenario
         "assembled-response-hit"
         "GET /npm/{pkg} over the weighted corpus with retained assembled responses. Each request fetches full public and private metadata, except overlapping public reads share active work."
-        (\knobs k -> withNpmProxy knobs longCacheTtl Nothing serveMix (httpTarget k))
+        (listingLoad npmListing longCacheTtl)
 
 revalidateScenario :: Scenario
 revalidateScenario =
     scenario
         "revalidate-not-modified"
         "GET the heaviest corpus packument with a primed If-None-Match validator. Each request reads private metadata and computes the plan, then returns 304 without assembly or encoding."
-        ( \knobs k ->
-            withNpmProxy knobs longCacheTtl Nothing (uniformMix (take 1 (workingSet knobs))) $ \proxy -> \case
-                url : _ -> do
-                    etag <- primeETag url
-                    k (proxied proxy (DriveHttp (Load [("If-None-Match", etag)] [url])))
-                [] -> benchFail "revalidate-not-modified: no URL to drive"
-        )
+        (revalidateLoad npmListing)
 
 cacheFitsScenario :: Scenario
 cacheFitsScenario =
     scenario
         "cache-fits-large"
         "GET a uniform corpus working set with enough assembled-response slots for every project. Full public metadata is always fetched. Compare with cache-evicts-large for assembly reuse."
-        ( \knobs k ->
-            let pkgs = workingSet knobs
-             in withNpmProxy knobs longCacheTtl (Just (length pkgs)) (uniformMix pkgs) (httpTarget k)
-        )
+        (cacheFitsLoad npmListing)
 
 cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
     scenario
         "cache-evicts-large"
         "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated assembly. Full public metadata is always fetched."
-        (\knobs k -> withNpmProxy knobs longCacheTtl (Just (lkCacheMaxEntries knobs)) (uniformMix (workingSet knobs)) (httpTarget k))
+        (cacheEvictsLoad npmListing)
 
 tarballScenario :: Scenario
 tarballScenario =
@@ -256,20 +259,7 @@ rampScenario =
         }
 
 withNpmProxy :: LoadKnobs -> Int -> Maybe Int -> (Int -> [Text]) -> (ProxyProcess -> [Text] -> IO a) -> IO a
-withNpmProxy knobs ttl maxEntries mkMix body = do
-    bodies <- loadCorpusBodies corpusPackages
-    rewritten <- newIORef mempty
-    let bytes = artifactBytes (lkPayloadBytes knobs)
-        latency = lkUpstreamLatencyMicros knobs
-    withProxyOverStubs
-        Npm
-        knobs
-        ttl
-        maxEntries
-        (privateOverlayStub latency bytes)
-        (corpusPublicStub rewritten latency bodies Map.empty)
-        mkMix
-        body
+withNpmProxy knobs ttl maxEntries = withListingStubs npmListing knobs ttl maxEntries corpusPackages
 
 packageUrl :: Int -> Text -> Text
 packageUrl port name = localhost port <> "/npm/" <> name
@@ -277,15 +267,9 @@ packageUrl port name = localhost port <> "/npm/" <> name
 serveMix :: Int -> [Text]
 serveMix = weightedMix cpWeight packageUrl corpusPackages
 
-uniformMix :: [CorpusPackage] -> Int -> [Text]
-uniformMix pkgs port = map (packageUrl port . cpName) pkgs
-
 tarballMix :: Int -> [Text]
 tarballMix port =
     concatMap (\cp -> replicate (cpWeight cp) (localhost port <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpPackage cp) <> "-9999.0.2.tgz")) corpusPackages
-
-workingSet :: LoadKnobs -> [CorpusPackage]
-workingSet knobs = take (max 1 (lkWorkingSet knobs)) corpusPackages
 
 workerScenario :: Scenario
 workerScenario =
