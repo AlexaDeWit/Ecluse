@@ -5,5 +5,5 @@
 +            delayed <- newEmptyMVar
 +            withAsync (takeMVar delayed >> holding ba 100 (pure ())) $ \waiter -> do
 +                timeout 10_000 (atomically (weightedAdmissionWaiting (baCore ba) >>= check . (== 1))) `shouldReturn` Nothing
-+                tryReadMVar release `shouldReturn` Nothing
++                (isNothing <$> tryReadMVar release) `shouldReturn` True
 +                putMVar delayed ()
