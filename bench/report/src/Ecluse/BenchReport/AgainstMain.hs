@@ -40,7 +40,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
-import Ecluse.BenchReport.Markdown (fixed)
+import Ecluse.Report.Markdown (signedPercent)
 
 -- | The run on @main@ whose results a report is compared with.
 data Origin = Origin
@@ -118,15 +118,6 @@ percentChange :: Double -> Double -> Maybe Double
 percentChange onMain here
     | onMain > 0 = Just ((here - onMain) / onMain * 100)
     | otherwise = Nothing
-
--- | A change to one decimal place with its sign. A change that rounds to zero carries none.
-signedPercent :: Double -> Text
-signedPercent percent
-    | magnitude == fixed 1 0 = magnitude <> "%"
-    | percent > 0 = "+" <> magnitude <> "%"
-    | otherwise = "-" <> magnitude <> "%"
-  where
-    magnitude = fixed 1 (abs percent)
 
 -- | How the changes of one set of rows spread.
 data Spread = Spread
@@ -235,7 +226,7 @@ renderAgainstMain report baseline current =
                 Right onMain -> ["Compared with " <> originLink origin <> ".", ""] <> reportBody report onMain here <> reportNotes report
 
 noBaseline :: Missing -> [Text]
-noBaseline missing = ["**No baseline.** " <> renderMissing missing, "", "Nothing is compared, and the job does not fail on it.", ""]
+noBaseline missing = ["**No baseline.** " <> renderMissing missing, "", "The fetch step's log names the artifact and the run. Nothing is compared, and the job does not fail on it.", ""]
 
 -- | The note every comparison carries: a repeat of the run keeps the same run on @main@.
 sharedBaselineNote :: Text
