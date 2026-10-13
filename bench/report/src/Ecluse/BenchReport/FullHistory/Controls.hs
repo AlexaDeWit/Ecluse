@@ -67,7 +67,7 @@ mutations =
         , "trusted source bytes differ"
         , \root -> do
             let path = root </> "source-A.tar.gz"
-            bytes <- GZip.decompress <$> LBS.readFile path
+            bytes <- GZip.decompress . LBS.fromStrict <$> readFileBS path
             LBS.writeFile path (GZip.compress (bytes <> "changed source"))
         )
     , ("altered literal inventory", "trusted source bytes differ", rewrite "overlay/expected-tree.txt" (T.replace "selective decode" "renamed decode"))
