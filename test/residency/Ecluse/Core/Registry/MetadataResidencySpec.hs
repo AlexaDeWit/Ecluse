@@ -22,19 +22,21 @@ import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName, readCapture)
 
 -- | Every corpus capture, measured in a fresh child process and collected in this one.
 spec :: Spec
 spec = describe "metadata read evaluation" $ forM_ packages $ \package -> do
-    it (toString (cpName package) <> " retains the same at weak head as fully forced") $
+    it (toString (cpName package) <> " retains the same at weak head as fully forced") $ do
+        void (readCapture package)
         measureInChild Mode.Evaluation package >>= \case
             Left failure -> expectationFailure failure
             Right result -> do
                 report package result
                 abs (forcing result) `shouldSatisfy` (<= allowance)
 
-    it (toString (cpName package) <> " releases the served document while its typed view is held") $
+    it (toString (cpName package) <> " releases the served document while its typed view is held") $ do
+        void (readCapture package)
         bracket (detach package) (\(typed, _, _) -> freeStablePtr typed) $ \(typed, document, keys) -> do
             length keys `shouldSatisfy` (> 2)
             ((performMajorGC >> alive keys) `finally` freeStablePtr document) `shouldReturn` length keys

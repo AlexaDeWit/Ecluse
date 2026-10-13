@@ -82,6 +82,7 @@ import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisByt
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
@@ -389,7 +390,7 @@ prepareListingRender ecosystem sources = do
 -- | Write a merge's rewritten documents under the directory, and return both documents' paths.
 writeMergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
 writeMergeDocuments shape directory package = do
-    (private, public) <- BS.readFile (cpPath package) >>= either fail pure . captureDocuments shape package
+    (private, public) <- Corpus.readCapture package >>= either fail pure . captureDocuments shape package
     (,) <$> place "private.json" private <*> place "public.json" public
   where
     place file = \case

@@ -17,7 +17,7 @@ import Data.Universe.Class (universe)
 import GHC.Conc (getNumProcessors)
 import Test.Hspec
 import UnliftIO.Async (pooledMapConcurrentlyN)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (evaluate, tryAny)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
@@ -35,8 +35,9 @@ import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Corpus (CaptureRecord (crPin), CorpusPackage (cpPackage, cpPath), FilePin (fpBytes, fpSha256), cpName, readCaptureRecords)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName, readCapture)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
+import Ecluse.Test.Package (hexSha256Of)
 
 -- | Reject unauthenticated captures, failed retention or release, and listings that outgrow admission charges.
 spec :: Spec
@@ -234,12 +235,10 @@ chargeFactors = fmap (metadataChargeFactors . adapterMetadata) . adapterFor
 
 authenticate :: CorpusPackage -> IO (Int, Text)
 authenticate package = do
-    records <- readCaptureRecords (pkgEcosystem (cpPackage package)) >>= either fail pure
-    record <- maybe (fail ("bench/corpus/pins.json records no capture for " <> toString (cpName package))) pure (Map.lookup (cpName package) records)
-    bytes <- BS.readFile (cpPath package)
-    fromIntegral (BS.length bytes) `shouldBe` fpBytes (crPin record)
-    (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` fpSha256 (crPin record)
-    pure (fromIntegral (fpBytes (crPin record)), fpSha256 (crPin record))
+    bytes <- readCapture package
+    size <- evaluate (BS.length bytes)
+    digest <- evaluate (hexSha256Of bytes)
+    pure (size, digest)
 
 report :: CorpusPackage -> Text -> Shape -> Measurement -> IO ()
 report package digest shape result = do
