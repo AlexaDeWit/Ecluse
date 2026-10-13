@@ -4,10 +4,10 @@
 -            runLeases world keepsEveryLease batch $ \leased -> do
 +            renewalEntered <- newEmptyMVar
 +            renewalRelease <- newEmptyMVar
-+            let delayedAnswer state receipt = do
++            let delayedAnswer leaseWorld receipt = do
 +                    void (tryPutMVar renewalEntered ())
 +                    readMVar renewalRelease
-+                    keepsEveryLease state receipt
++                    keepsEveryLease leaseWorld receipt
 +            runLeases world delayedAnswer batch $ \leased -> do
 @@ -77,0 +84,4 @@
 +                    takeMVar renewalEntered
