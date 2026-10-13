@@ -44,6 +44,8 @@ case "$suite" in
       ./core/src/Ecluse/Core/Registry/Npm/Route.hs
       ./core/src/Ecluse/Core/Registry/PyPI/Route.hs
       ./core/src/Ecluse/Core/Security.hs
+      ./core/src/Ecluse/Core/Server/Admission.hs
+      ./core/src/Ecluse/Core/Server/Admission/Bytes.hs
       ./core/src/Ecluse/Core/Server/Pipeline.hs
       ./core/src/Ecluse/Core/Worker.hs
       # Pure handle and error types. Remove when this module gains executable logic.

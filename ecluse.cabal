@@ -283,9 +283,11 @@ library ecluse-core
     Ecluse.Core.Server.Cache.VersionWeight.Fields
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Internal
     Ecluse.Core.Server.Admission.Brake
     Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
+    Ecluse.Core.Server.Admission.Bytes.Internal
     Ecluse.Core.Server.Admission.Meter
     Ecluse.Core.Server.Admission.Types
     Ecluse.Core.Server.Admission.Weighted
@@ -1127,10 +1129,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.LimitsSpec
     Ecluse.Core.Server.Admission.BrakeSpec
     Ecluse.Core.Server.Admission.BudgetSpec
-    Ecluse.Core.Server.Admission.BytesSpec
+    Ecluse.Core.Server.Admission.Bytes.InternalSpec
     Ecluse.Core.Server.Admission.MeterSpec
     Ecluse.Core.Server.AcceptSpec
-    Ecluse.Core.Server.AdmissionSpec
+    Ecluse.Core.Server.Admission.InternalSpec
     Ecluse.Core.Server.Cache.BackendSpec
     Ecluse.Core.Server.Cache.Backend.LocalSpec
     Ecluse.Core.Server.Cache.Backend.Local.InternalSpec
