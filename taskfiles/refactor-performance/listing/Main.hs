@@ -68,7 +68,7 @@ measureListing :: [Text] -> Int -> IO ByteString -> IO (HeapSample, Bool, Int, I
 measureListing expected size next = do
     started <- getMonotonicTimeNSec
     streamed <- readListing (MetadataBodyLimit size) next >>= either (fail . toString) pure
-    names <- either (fail . toString . show) pure (streamValue streamed)
+    names <- either (fail . show) pure (streamValue streamed)
     void (evaluate (sum (map (T.length . renderPackageName) names)))
     finished <- getMonotonicTimeNSec
     (held, valid) <- bracket (newStablePtr names) freeStablePtr $ \root -> do
