@@ -12,12 +12,12 @@ import UnliftIO (cancel, mapConcurrently, throwIO, timeout, tryAny, wait, withAs
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Server.Admission.Internal (
-    ServeAdmission,
+    ServeAdmission (..),
     newServeAdmission,
     newServeAdmissionTuned,
-    serveAdmissionWaiting,
     withServeAdmission,
  )
+import Ecluse.Core.Server.Admission.Weighted (weightedAdmissionWaiting)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpServeAdmissionInFlight, mpServeAdmissionQueued))
 import Ecluse.Test.Port (noopMetricsPort)
 
@@ -44,7 +44,7 @@ withOneSlot admission body = do
         wait holder `shouldReturn` Just ()
 
 awaitWaiters :: ServeAdmission -> Int -> IO ()
-awaitWaiters admission count = atomically (serveAdmissionWaiting admission >>= check . (== count))
+awaitWaiters (ServeAdmission core) count = atomically (weightedAdmissionWaiting core >>= check . (== count))
 
 spec :: Spec
 spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withServeAdmission -- brief-wait admission" $ do

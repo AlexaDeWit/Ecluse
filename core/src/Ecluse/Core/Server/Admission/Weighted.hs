@@ -63,7 +63,7 @@ data Gate = Admitted | Queued | Refused
 doorDecision :: WeightedAdmission -> Int -> STM Gate
 doorDecision wa weight = do
     available <- readTVar (waAvailable wa)
-    waiting <- readTVar (waWaiting wa)
+    waiting <- weightedAdmissionWaiting wa
     if available >= weight && waiting == 0
         then writeTVar (waAvailable wa) (available - weight) $> Admitted
         else

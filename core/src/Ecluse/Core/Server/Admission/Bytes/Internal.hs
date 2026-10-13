@@ -4,13 +4,12 @@
 
 -- | Byte-weighted admission over the shared weighted controller.
 module Ecluse.Core.Server.Admission.Bytes.Internal (
-    ByteAdmission,
+    ByteAdmission (..),
     newByteAdmission,
     withByteAdmission,
 
     -- * Internals exported for testing
     newByteAdmissionTuned,
-    byteAdmissionWaiting,
 ) where
 
 import UnliftIO (MonadUnliftIO)
@@ -20,7 +19,6 @@ import Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
     admissionWaitMicros,
     newWeightedAdmission,
-    weightedAdmissionWaiting,
     withWeightedAdmission,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -60,7 +58,3 @@ withByteAdmission metrics ba rawWeight =
             , onShed = mpPublishBodyShed metrics
             , onInFlightDelta = mpPublishBodyInFlightBytes metrics
             }
-
--- | Observe committed waiters for deterministic coordination.
-byteAdmissionWaiting :: ByteAdmission -> STM Int
-byteAdmissionWaiting ba = weightedAdmissionWaiting (baCore ba)

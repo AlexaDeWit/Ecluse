@@ -12,12 +12,12 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Server.Admission.Bytes.Internal (
-    ByteAdmission,
-    byteAdmissionWaiting,
+    ByteAdmission (..),
     newByteAdmission,
     newByteAdmissionTuned,
     withByteAdmission,
  )
+import Ecluse.Core.Server.Admission.Weighted (weightedAdmissionWaiting)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublishBodyInFlightBytes, mpPublishBodyShed))
 import Ecluse.Test.Port (noopMetricsPort)
 
@@ -76,7 +76,7 @@ spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withByt
         withAsync (holding ba 100 (putMVar entered () >> takeMVar release)) $ \holder -> do
             takeMVar entered
             withAsync (holding ba 100 (pure ())) $ \waiter -> do
-                atomically (byteAdmissionWaiting ba >>= check . (== 1))
+                atomically (weightedAdmissionWaiting (baCore ba) >>= check . (== 1))
                 cancel holder
                 wait waiter `shouldReturn` Just ()
         holding ba 100 (pure ()) `shouldReturn` Just ()

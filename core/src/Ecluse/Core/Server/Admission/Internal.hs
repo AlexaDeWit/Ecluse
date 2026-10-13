@@ -4,13 +4,12 @@
 
 -- | Unit-slot admission over the shared weighted controller.
 module Ecluse.Core.Server.Admission.Internal (
-    ServeAdmission,
+    ServeAdmission (..),
     newServeAdmission,
     withServeAdmission,
 
     -- * Internals exported for testing
     newServeAdmissionTuned,
-    serveAdmissionWaiting,
 ) where
 
 import Control.Exception (ErrorCall (ErrorCall))
@@ -21,7 +20,6 @@ import Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
     admissionWaitMicros,
     newWeightedAdmission,
-    weightedAdmissionWaiting,
     withWeightedAdmission,
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -54,7 +52,3 @@ withServeAdmission metrics (ServeAdmission core) =
             , onShed = pure ()
             , onInFlightDelta = mpServeAdmissionInFlight metrics
             }
-
--- | Observe committed waiters for deterministic coordination.
-serveAdmissionWaiting :: ServeAdmission -> STM Int
-serveAdmissionWaiting (ServeAdmission core) = weightedAdmissionWaiting core
