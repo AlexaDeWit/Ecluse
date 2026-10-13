@@ -16,6 +16,7 @@ import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
 import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
 import Ecluse.BenchReport.AllocationDiagnostic qualified as AllocationDiagnostic
+import Ecluse.BenchReport.AllocationDiagnostic.Controls qualified as AllocationDiagnosticControls
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.RefactorComparison qualified as Comparison
@@ -26,11 +27,12 @@ import Ecluse.BenchReport.RefactorInputs qualified as ComparisonInputs
 main :: IO ()
 main =
     getArgs >>= \case
-        ["allocation-diagnostic-controls"] -> AllocationDiagnostic.controls
+        ["allocation-diagnostic-controls", root] -> AllocationDiagnosticControls.controls root
         ["allocation-diagnostic-build", root, build, source] -> AllocationDiagnostic.recordBuild root (toText build) (toText source)
         ["allocation-diagnostic-conditions", root, passName] -> AllocationDiagnostic.writeConditions root (toText passName)
         ["allocation-diagnostic-bind", root, passName] -> AllocationDiagnostic.bindPass root (toText passName)
-        ["allocation-diagnostic-audit", root] -> AllocationDiagnostic.audit root
+        ["allocation-diagnostic-run-bind", root] -> AllocationDiagnostic.bindRun root
+        ["allocation-diagnostic-audit", root, runId, attempt] -> AllocationDiagnostic.audit root (toText runId) (toText attempt)
         ["comparison-inputs", root] -> ComparisonInputs.prepareInputs root
         ["comparison-pass-conditions", root, kind, passName] -> ComparisonEvidence.writePassConditions root (toText kind) (toText passName)
         ["comparison-bind", root, kind, passName] -> ComparisonEvidence.recordBinding root (toText kind) (toText passName)

@@ -93,15 +93,32 @@ The controller never subtracts overhead from React data or accepted measurements
 ## Evidence and audit
 
 The artifact includes original source archives, inputs, dependency sources, overlay files, actual executables, build plans, options and commands.
-Build and pass bindings hash archived files. Before/after snapshots check live binaries, source identities, inputs, lock files, plans and dependency files.
+Build, pass and run bindings require fixed inventories before checking file digests.
+The inventories do not come from supplied binding maps or directory contents.
+They include source archives, the full controller overlay, executables, commands, control results and all required snapshots.
+The final run binding also covers the complete order log and every child binding. Before/after snapshots check live binaries, source identities, inputs, lock files, plans and dependency files.
 The controller validates the native dependency's source and the overlay's local build selection.
 Other external plan entries must match after removing directory metadata. The local Ecluse component graph can differ between A and B.
 
 The audit requires exactly twelve named passes in the prescribed serial order.
 Each pass needs exactly the selected CSV row, zero native and outer statuses, matched identities and exact commands.
+The audit receives the expected CI run and attempt as separate command arguments.
+Coherent evidence from another run fails even when its worker file and pass declarations agree.
 Recorded passes need one measurement thread, bounded signed/unsigned fields, a complete doubling sequence and exact estimator reconstruction.
 Missing, duplicated, failed or timed-out evidence fails the audit. Native allocation estimates and raw batch records remain untouched.
-Remote negative controls exercise absent, duplicated, reordered and oversized batch records, invalid counters and mismatched estimates.
+Remote controls call the complete audit with a small valid evidence fixture and an explicit trusted fixture run and attempt.
+The fixture copies the authenticated dependency files. Small opaque payloads represent executables, source archives and capture bytes.
+These payloads test byte identity and evidence relationships. They do not claim to be executable builds or native capture measurements.
+Each semantic mutation refreshes otherwise valid digests so an earlier digest mismatch cannot hide the intended check.
+The control requires only the expected fault messages. It restores every original byte and requires the complete audit to pass again.
+
+Controls cover source, binary, worker, coherent stale runs, attempts, modes, commands, dependencies and inputs.
+They also cover missing, duplicate and reordered passes, CSV selection, timeouts, native failures and separate artifact or binding-entry omissions.
+Batch controls retain absent, duplicated, reordered and oversized sequences, mismatched estimates and signed counter bounds.
+They also reject reversed time/global counters and unsigned values above `maxBound :: Word64`.
+
+`AllocationDiagnostic.Inventory` owns obligations. `Batches` owns raw-counter validation. `Fixture` and `Controls` own the remote proof tests.
+This split keeps the audit and fixture setup separate. It changes no benchmark body, dependency patch, counter order or accepted limit.
 
 `observations.tsv` retains every native estimate. `empty-overhead.tsv` keeps the four empty controls separate.
 No full-suite acceptance receipt is generated or reused.

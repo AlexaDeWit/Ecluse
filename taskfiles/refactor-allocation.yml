@@ -5,7 +5,7 @@ vars:
   BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
   CANDIDATE: ab5f4af6e55b90ae79392f3d10a9505295f1239f
   REACT_ROW: 'All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).react (large).selective decode'
-  DIAGNOSTIC_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs taskfiles/refactor-allocation/Diagnostic.hs
+  DIAGNOSTIC_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic/*.hs taskfiles/refactor-allocation/Diagnostic.hs
 tasks:
   run:
     desc: Run the temporary React allocation diagnostic on one ARM64 worker
@@ -25,12 +25,16 @@ tasks:
         git archive '{{.BASELINE}}' | gzip > '{{.EVIDENCE}}/source-A.tar.gz'
         git archive '{{.CANDIDATE}}' | gzip > '{{.EVIDENCE}}/source-B.tar.gz'
         cp -a taskfiles/refactor-allocation '{{.EVIDENCE}}/overlay'
-      - cabal build exe:bench-report
+        cp taskfiles/refactor-allocation.yml '{{.EVIDENCE}}/overlay/controller-task.yml'
+        cp .github/workflows/bench.yml '{{.EVIDENCE}}/overlay/controller-workflow.yml'
+      - "printf '%s\\n' cabal build exe:bench-report > '{{.EVIDENCE}}/controller-command.txt'"
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/controller-build.status' '{{.EVIDENCE}}/controller-build.log' cabal build exe:bench-report
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/controller-build.status'
       - cabal list-bin exe:bench-report > '{{.EVIDENCE}}/reporter-path.txt'
       - cp "$(cat '{{.EVIDENCE}}/reporter-path.txt')" '{{.EVIDENCE}}/bench-report'
-      - bash scripts/process-capture.sh '{{.EVIDENCE}}/controls.status' '{{.EVIDENCE}}/controls.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-controls
-      - bash scripts/process-status.sh '{{.EVIDENCE}}/controls.status'
       - task: dependency
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/controls.status' '{{.EVIDENCE}}/controls.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-controls '{{.EVIDENCE}}'
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/controls.status'
       - task: prepare
         vars: {SIDE: A, VARIANT: C}
       - task: prepare
@@ -66,7 +70,8 @@ tasks:
         vars: {SIDE: B, VARIANT: I, PASS: O-B-native, MODE: empty-native}
       - task: record-pass
         vars: {SIDE: B, VARIANT: I, PASS: O-B-record, MODE: empty-record}
-      - bash scripts/process-capture.sh '{{.EVIDENCE}}/audit.status' '{{.EVIDENCE}}/audit.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-audit '{{.EVIDENCE}}'
+      - '"{{.EVIDENCE}}/bench-report" allocation-diagnostic-run-bind "{{.EVIDENCE}}"'
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/audit.status' '{{.EVIDENCE}}/audit.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-audit '{{.EVIDENCE}}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
       - bash scripts/process-status.sh '{{.EVIDENCE}}/audit.status'
 
   dependency:
@@ -107,6 +112,7 @@ tasks:
     dir: '{{.SOURCE_DIR}}'
     cmds:
       - git diff --exit-code HEAD
+      - "printf '%s\\n' cabal build bench:ecluse-bench --enable-optimization=1 --disable-profiling > '{{.BUILD_DIR}}/command.txt'"
       - cabal build bench:ecluse-bench --enable-optimization=1 --disable-profiling
       - cabal list-bin bench:ecluse-bench > '{{.BUILD_DIR}}/binary-path.txt'
       - cp "$(cat '{{.BUILD_DIR}}/binary-path.txt')" '{{.BUILD_DIR}}/ecluse-bench'
@@ -177,7 +183,7 @@ tasks:
     desc: Check only the temporary diagnostic source and workflow wiring
     cmds:
       - fourmolu --mode check {{.DIAGNOSTIC_HASKELL}}
-      - hlint bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs taskfiles/refactor-allocation/Diagnostic.hs
+      - hlint bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic/*.hs taskfiles/refactor-allocation/Diagnostic.hs
       - actionlint .github/workflows/bench.yml
       - zizmor .github/workflows/bench.yml
       - bash scripts/ci-runner-policy.sh

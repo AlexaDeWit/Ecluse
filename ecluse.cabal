@@ -2148,6 +2148,10 @@ library ecluse-bench-report
     Ecluse.BenchReport.PerformanceReceipt
     Ecluse.BenchReport.RefactorComparison
     Ecluse.BenchReport.AllocationDiagnostic
+    Ecluse.BenchReport.AllocationDiagnostic.Batches
+    Ecluse.BenchReport.AllocationDiagnostic.Controls
+    Ecluse.BenchReport.AllocationDiagnostic.Fixture
+    Ecluse.BenchReport.AllocationDiagnostic.Inventory
     Ecluse.BenchReport.RefactorEvidence
     Ecluse.BenchReport.RefactorEvidenceControls
     Ecluse.BenchReport.RefactorFiles
