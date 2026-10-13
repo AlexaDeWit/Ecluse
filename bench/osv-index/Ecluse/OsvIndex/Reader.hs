@@ -205,7 +205,7 @@ readerBatch mode eco db selection output = do
 measureReader :: Mode -> Ecosystem -> FilePath -> [Selected] -> IO QueryReport
 measureReader mode eco db selected = do
     connections <- newIORef (0 :: Int)
-    let opened use = withServedArtifact eco db $ \_ reader -> modifyIORef' connections (+ 1) >> use (cveDbLookup reader)
+    let opened use = withServedArtifact eco db $ \_ openedDatabase -> modifyIORef' connections (+ 1) >> use (cveDbLookup openedDatabase)
     operations <- case mode of
         Reused -> opened (reusedOperations eco selected)
         Fresh -> freshOperations eco selected opened

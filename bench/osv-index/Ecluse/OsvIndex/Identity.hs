@@ -115,11 +115,11 @@ checkSourceDelta root tracked = do
 
 checkPins :: FilePath -> [FileIdentity] -> IO [Text]
 checkPins root inputs = do
-    remote <- fmap concat $ forM pins $ \(name, bytes, etag, identityHeader, identity) -> do
+    remote <- fmap concat $ forM pins $ \(name, bytes, etag, identityHeader, pinnedSourceVersion) -> do
         headers <- readUtf8File (root </> "inputs" </> (name <> ".headers"))
         let parsed = Map.fromList [(T.toLower (T.strip key), T.strip (T.drop 1 value)) | line <- T.lines headers, let (key, value) = T.breakOn ":" line, not (T.null value)]
             actual = [fiBytes file | file <- inputs, fiPath file == "inputs" </> name]
-        pure ["remote pin differs: " <> toText name | actual /= [bytes] || Map.lookup "content-length" parsed /= Just (show bytes) || fmap (T.dropAround (== '"')) (Map.lookup "etag" parsed) /= Just etag || Map.lookup identityHeader parsed /= Just identity]
+        pure ["remote pin differs: " <> toText name | actual /= [bytes] || Map.lookup "content-length" parsed /= Just (show bytes) || fmap (T.dropAround (== '"')) (Map.lookup "etag" parsed) /= Just etag || Map.lookup identityHeader parsed /= Just pinnedSourceVersion]
     corpus <- fmap concat $ forM [NpmCorpus, PyPICorpus] $ \input -> do
         bytes <- corpusAdvisories (caseEco input)
         let prefix = caseName input
