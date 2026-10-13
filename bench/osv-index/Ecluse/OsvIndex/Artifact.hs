@@ -25,6 +25,7 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (Only, fromOnly), Query (Query), fold_, query, query_, withConnection)
 import System.Directory (getFileSize)
 
+import Ecluse.OsvIndex.Audit (readUtf8File)
 import Ecluse.OsvIndex.Contract (Selected (..), SelectionRole (..))
 import Ecluse.Test.Contract.Manifest (digestFile, failRunner, jsonLine, readJsonFile, writeJsonFile)
 import Ecluse.Test.Osv (RangeRow)
@@ -169,7 +170,7 @@ selectArtifact db corpusName = do
     ranked <- forM [(Median, n `div` 2), (P95, 95 * n `div` 100), (Maximum, n - 1)] $ \(role, index) ->
         maybe (failRunner "the selection requires a nonempty artifact") (pure . uncurry (Selected role)) (counts !!? index)
     let packages = [named Absent absentName, named Corpus corpusName] <> ranked
-    source <- readFileText "core/src/Ecluse/Core/Cve/Internal.hs"
+    source <- readUtf8File "core/src/Ecluse/Core/Cve/Internal.hs"
     let sqlLines = [(number, line) | (number, line) <- zip [1 :: Int ..] (T.lines source), "SELECT DISTINCT package_name FROM" `T.isInfixOf` line || "SELECT cve_id, introduced_version, fixed_version," `T.isInfixOf` line]
     unless (length sqlLines == 2) (failRunner "production SQL extraction did not find exactly two reader queries")
     plans <- withConnection db $ \conn -> forM sqlLines $ \(number, line) -> do

@@ -50,7 +50,7 @@ auditExperiment root = do
     withBinaryFile (root </> "samples.jsonl") WriteMode $ \handle -> for_ (zip expectedTrials samples) $ \(trial, observed) ->
         BS.hPut handle (jsonLine (object ["trial" .= trial, "rawDirectory" .= trialDirectory trial, "observation" .= fmap sampleValue observed]))
     writeJsonFile (root </> "audit.json") (object ["complete" .= null faults, "faults" .= faults, "observed" .= length measured, "required" .= length expectedTrials, "compilation" .= compileSummaries measured, "queries" .= querySummaries measured])
-    writeFileText
+    writeUtf8File
         (root </> "summary.md")
         ( T.unlines
             (["# Range-index experiment", "", if null faults then "All independent obligations hold." else "The experiment is incomplete. No removal recommendation is supported.", "", "Native wall and CPU measurements exclude identity hashing. Whole-child resource measurements include identity verification and fixture memory.", "Fresh operations include reader acceptance, operation and close. Reused operations share one accepted connection per batch.", "The OS page cache is uncontrolled. No cold-disk claim is supported.", "Review raw failures, adverse samples and spread before deciding removal or retention. A compatible reduction keeps the epoch and requires issue #1234's migration override.", "", "Qualification faults:"] <> ["- " <> faultScope fault <> ": " <> faultDetail fault | fault <- faults])
@@ -58,7 +58,7 @@ auditExperiment root = do
     unless (null faults) (failRunner "experiment audit failed")
 
 requiredControls :: [Text]
-requiredControls = ["valid-query", "empty-query", "missing-query", "duplicate-query", "wrong-query-mode", "wrong-connection-count", "duplicate-package-roles", "valid-reader", "empty-reader", "missing-reader-row", "duplicate-reader-row", "wrong-reader-verdict", "missing-reader-end", "valid-binding", "wrong-identity", "valid-sequence", "missing-event", "duplicate-event", "wrong-order", "actual-mode-lifetimes", "valid-query-counts", "wrong-query-counts", "missing-evidence", "malformed-evidence", "wrong-input-identity", "valid-native", "wrong-command", "wrong-native-sequence"]
+requiredControls = ["valid-query", "empty-query", "missing-query", "duplicate-query", "wrong-query-mode", "wrong-connection-count", "duplicate-package-roles", "valid-reader", "empty-reader", "missing-reader-row", "duplicate-reader-row", "wrong-reader-verdict", "missing-reader-end", "valid-binding", "wrong-identity", "valid-sequence", "missing-event", "duplicate-event", "wrong-order", "actual-mode-lifetimes", "valid-query-counts", "wrong-query-counts", "missing-evidence", "malformed-evidence", "malformed-utf8", "wrong-input-identity", "valid-native", "wrong-command", "wrong-native-sequence"]
 
 auditCase :: Audit -> FilePath -> Case -> IO CaseEvidence
 auditCase audit root input = do
@@ -173,7 +173,7 @@ nativeFaults root trial sequenceNumber journal resource native = [label | (label
 
 checkStatus :: Audit -> FilePath -> IO ()
 checkStatus audit path = do
-    value <- attempt audit (toText path) (T.strip <$> readFileText path)
+    value <- attempt audit (toText path) (T.strip <$> readUtf8File path)
     recordFaults audit (toText path) ["nonzero or missing process status" | value /= Just "0"]
 
 sampleValue :: Sample -> Value

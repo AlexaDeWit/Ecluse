@@ -15,7 +15,7 @@ import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import System.Process (readProcess)
 
-import Ecluse.OsvIndex.Audit (decodeJson)
+import Ecluse.OsvIndex.Audit (decodeJson, readUtf8File)
 import Ecluse.OsvIndex.Contract
 import Ecluse.OsvIndex.Native (executionIdentity, fileIdentity)
 import Ecluse.Test.Contract.Manifest (digest, digestFile, failRunner, writeJsonFile)
@@ -24,7 +24,7 @@ import Ecluse.Test.Corpus.Advisories (AdvisoryInputs (..), corpusAdvisories)
 -- | Establish the complete fixed inventory before any sample starts.
 writeManifest :: FilePath -> IO ()
 writeManifest root = do
-    tracked <- T.lines <$> readFileText (root </> "sources/tracked.txt")
+    tracked <- T.lines <$> readUtf8File (root </> "sources/tracked.txt")
     variants <- forM [A, B] $ \variant -> do
         files <- traverse (fileIdentity (root </> "sources" </> variantName variant) . toString) tracked
         let path = variantName variant <> "-source-files.json"
@@ -65,7 +65,7 @@ identityFaults root manifest = do
     processors <- getNumProcessors
     ghcrts <- lookupEnv "GHCRTS"
     sqlite <- withConnection ":memory:" (\conn -> map fromOnly <$> (query_ conn "SELECT sqlite_version()" :: IO [Only Text]))
-    recordedTracked <- map toString . T.lines <$> readFileText (root </> "sources/tracked.txt")
+    recordedTracked <- map toString . T.lines <$> readUtf8File (root </> "sources/tracked.txt")
     variantFaults <- fmap concat $ forM [A, B] $ \variant -> do
         actualFiles <- traverse (fileIdentity (root </> "sources" </> variantName variant)) tracked
         recordedFiles <- decodeJson (root </> (variantName variant <> "-source-files.json"))
@@ -99,16 +99,16 @@ checkSourceDelta root tracked = do
     signedFiles <- traverse (fileIdentity ".") tracked
     aFiles <- traverse (fileIdentity (root </> "sources/A")) tracked
     bFiles <- traverse (fileIdentity (root </> "sources/B")) tracked
-    a <- readFileText (root </> "sources/A" </> compilerFile)
-    b <- readFileText (root </> "sources/B" </> compilerFile)
-    actualPatch <- readFileText (root </> "sources/source-diff.patch")
+    a <- readUtf8File (root </> "sources/A" </> compilerFile)
+    b <- readUtf8File (root </> "sources/B" </> compilerFile)
+    actualPatch <- readUtf8File (root </> "sources/source-diff.patch")
     let different = [fiPath x | (x, y) <- zip aFiles bFiles, x /= y]
         linesA = T.lines a
         expectedB = T.unlines (filter (/= indexLine) linesA)
-    pure
+    pure $
         ["A source differs from the signed checkout" | aFiles /= signedFiles]
-        <> ["B source delta differs from the single candidate index line" | different /= [compilerFile] || length (filter (== indexLine) linesA) /= 1 || b /= expectedB]
-        <> ["source patch does not identify the single removed index" | filter (T.isPrefixOf "-") (drop 2 (T.lines actualPatch)) /= ["-" <> indexLine] || any (T.isPrefixOf "+") (drop 2 (T.lines actualPatch))]
+            <> ["B source delta differs from the single candidate index line" | different /= [compilerFile] || length (filter (== indexLine) linesA) /= 1 || b /= expectedB]
+            <> ["source patch does not identify the single removed index" | filter (T.isPrefixOf "-") (drop 2 (T.lines actualPatch)) /= ["-" <> indexLine] || any (T.isPrefixOf "+") (drop 2 (T.lines actualPatch))]
   where
     compilerFile = "core/src/Ecluse/Core/Osv/Compile.hs"
     indexLine = "    execute_ conn \"CREATE UNIQUE INDEX uq_ranges_segment ON package_vulnerability_ranges(package_name, cve_id, introduced_version, fixed_version, last_affected_version)\""
@@ -116,7 +116,7 @@ checkSourceDelta root tracked = do
 checkPins :: FilePath -> [FileIdentity] -> IO [Text]
 checkPins root inputs = do
     remote <- fmap concat $ forM pins $ \(name, bytes, etag, identityHeader, identity) -> do
-        headers <- readFileText (root </> "inputs" </> (name <> ".headers"))
+        headers <- readUtf8File (root </> "inputs" </> (name <> ".headers"))
         let parsed = Map.fromList [(T.toLower (T.strip key), T.strip (T.drop 1 value)) | line <- T.lines headers, let (key, value) = T.breakOn ":" line, not (T.null value)]
             actual = [fiBytes file | file <- inputs, fiPath file == "inputs" </> name]
         pure ["remote pin differs: " <> toText name | actual /= [bytes] || Map.lookup "content-length" parsed /= Just (show bytes) || fmap (T.dropAround (== '"')) (Map.lookup "etag" parsed) /= Just etag || Map.lookup identityHeader parsed /= Just identity]

@@ -3,11 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Accumulate qualification faults before writing a failed audit.
-module Ecluse.OsvIndex.Audit (Audit, Fault (..), newAudit, recordFaults, attempt, decodeJson, decodeLines, auditFaults) where
+module Ecluse.OsvIndex.Audit (Audit, Fault (..), newAudit, recordFaults, attempt, decodeJson, decodeLines, readUtf8File, writeUtf8File, auditFaults) where
 
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict')
 import Data.ByteString qualified as BS
+import Data.Text.Encoding qualified as TE
 import UnliftIO.Exception (throwIO, tryAny)
+
+import Ecluse.Test.Contract.Manifest (writeArtifactFile)
 
 -- | A fault keeps its evidence scope when later checks also fail.
 data Fault = Fault {faultScope :: Text, faultDetail :: Text}
@@ -50,3 +53,11 @@ decodeBytes = either (throwIO . EvidenceFailure . toText) pure . eitherDecodeStr
 -- | Return faults in qualification order.
 auditFaults :: Audit -> IO [Fault]
 auditFaults (Audit ref) = readIORef ref
+
+-- | Decode inside the IO action so the audit captures malformed UTF-8 as a failure.
+readUtf8File :: FilePath -> IO Text
+readUtf8File path = BS.readFile path >>= either throwIO pure . TE.decodeUtf8'
+
+-- | Write artifact text as UTF-8 independently of the runner's locale.
+writeUtf8File :: FilePath -> Text -> IO ()
+writeUtf8File path = writeArtifactFile path . TE.encodeUtf8

@@ -5,13 +5,14 @@
 -- | Adversarial qualification fixtures and a tiny actual connection-lifetime control.
 module Ecluse.OsvIndex.Controls (runControls) where
 
+import Data.ByteString qualified as BS
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.OsvIndex.Audit (attempt, auditFaults, decodeJson, newAudit)
+import Ecluse.OsvIndex.Audit (attempt, auditFaults, decodeJson, newAudit, readUtf8File, writeUtf8File)
 import Ecluse.OsvIndex.Contract
 import Ecluse.OsvIndex.Evidence (nativeFaults)
 import Ecluse.OsvIndex.Reader
@@ -28,12 +29,14 @@ runControls root = do
         fresh <- measureReader Fresh Npm path selected
         audit <- newAudit
         missing <- attempt audit "missing" (decodeJson (directory </> "absent.json") :: IO QueryReport)
-        writeFileText (directory </> "malformed.json") "{"
+        writeUtf8File (directory </> "malformed.json") "{"
         malformed <- attempt audit "malformed" (decodeJson (directory </> "malformed.json") :: IO QueryReport)
+        BS.writeFile (directory </> "malformed-utf8.txt") (BS.pack [0xff])
+        malformedUtf8 <- attempt audit "malformed UTF-8" (readUtf8File (directory </> "malformed-utf8.txt"))
         faults <- auditFaults audit
-        pure [("actual-mode-lifetimes", null (queryFaults Reused selected reused) && null (queryFaults Fresh selected fresh) && qrConnections reused == 1 && qrConnections fresh > 1), ("missing-evidence", isNothing missing && length faults == 2), ("malformed-evidence", isNothing malformed && length faults == 2)]
-    let observations = pureControls <> fromRight [("actual-mode-lifetimes", False), ("missing-evidence", False), ("malformed-evidence", False)] runtime
-    for_ (leftToMaybe runtime) (writeFileText (root </> "controls-error.txt") . show)
+        pure [("actual-mode-lifetimes", null (queryFaults Reused selected reused) && null (queryFaults Fresh selected fresh) && qrConnections reused == 1 && qrConnections fresh > 1), ("missing-evidence", isNothing missing && length faults == 3), ("malformed-evidence", isNothing malformed && length faults == 3), ("malformed-utf8", isNothing malformedUtf8 && length faults == 3)]
+    let observations = pureControls <> fromRight [("actual-mode-lifetimes", False), ("missing-evidence", False), ("malformed-evidence", False), ("malformed-utf8", False)] runtime
+    for_ (leftToMaybe runtime) (writeUtf8File (root </> "controls-error.txt") . show)
     writeJsonFile (root </> "controls.json") observations
     unless (all snd observations) (failRunner "adversarial audit control failed")
 
