@@ -16,6 +16,8 @@ The controller requires all 343 ordered benchmark names, 20 native receipts, 48 
 Fixed and prepared benchmark allocations allow 1 KiB in either direction. Production reads allow 0.1% in either direction.
 Current single-version benchmark rows use the production reader. The allocation gate keeps its distinct single-version allowance of 1 KiB.
 Full allocation medians allow 0.1%. ARM64 live-byte figures allow 1 KiB. Residency preparation allocation can change.
+The nine pure cache key-construction rows use the fixed-subject 1 KiB allowance.
+Residency `preparationMaxLive` also uses the 1 KiB allowance. R9 source-probe peaks remain informational.
 Mutable cache rows remain unclassified diagnostics. Each row requires review regardless of its delta.
 The report records that scope limit and makes no universal parity claim.
 Timing and process peak RSS remain informational. Every signed delta stays visible, including reductions outside a tolerance.

@@ -14,7 +14,7 @@ import Data.Text.Encoding qualified as TE
 import System.FilePath ((</>))
 import UnliftIO.Exception (tryAny)
 
-import Ecluse.BenchReport (BenchRow (..), parseCsv)
+import Ecluse.BenchReport (BenchRow (..), parseCsv, splitName)
 import Ecluse.BenchReport.Markdown (hasColumns, records, tableHeading, tables)
 import Ecluse.BenchReport.Performance (allocationRequiredRows)
 import Ecluse.BenchReport.RefactorFiles (readComparisonText, writeComparisonText)
@@ -50,7 +50,7 @@ auditMetrics root = do
             T.unlines ("scope\tkind\tbefore-pass\tafter-pass\trow\tmetric\tbefore\tafter\tdelta\trule\tresult" : map fst rows)
         forM_ [("lower", "-"), ("higher", "+")] $ \(direction, sign) ->
             writeComparisonText (root </> toString (kind <> "-" <> direction <> "-allocation.tsv")) $
-                T.unlines [line | (line, _) <- rows, let fields = T.splitOn "\t" line, fields !!? 5 `elem` map Just ["allocated", "preparationAllocated"], maybe False (T.isPrefixOf sign) (fields !!? 8)]
+                T.unlines [line | (line, _) <- rows, let fields = T.splitOn "\t" line, (fields !!? 5) `elem` map Just ["allocated", "preparationAllocated"], maybe False (T.isPrefixOf sign) (fields !!? 8)]
         pure ([], [line | (line, failed) <- rows, failed])
 
 passes :: Text -> [Text]
@@ -101,6 +101,7 @@ benchmark row = do
   where
     name = rowGroup row <> "." <> rowBench row
     rule
+        | "cache maintenance.key construction." `T.isPrefixOf` name = WithinKiB
         | "cache maintenance." `T.isPrefixOf` name = UnclassifiedCache
         | any (`T.isInfixOf` name) [".cold production reads (per package).", ".single-version metadata (per package)."] = WithinPermille
         | ".wire+project (per package)." `T.isInfixOf` name && ".full metadata projection" `T.isSuffixOf` name = WithinPermille
@@ -148,7 +149,7 @@ documentRetention sizes package record peaks = do
     pure [Metric "document_live_bytes" (round (ratio * fromInteger size)) WithinKiB]
 
 measurement :: Object -> Parser [Metric]
-measurement record = sequence [metric record key rule | (key, rule) <- [("wireBytes", Exact), ("versions", Exact), ("baselineLive", WithinKiB), ("heldLive", WithinKiB), ("releasedLive", WithinKiB), ("preparationAllocated", Inform), ("preparationMaxLive", Inform)]]
+measurement record = sequence [metric record key rule | (key, rule) <- [("wireBytes", Exact), ("versions", Exact), ("baselineLive", WithinKiB), ("heldLive", WithinKiB), ("releasedLive", WithinKiB), ("preparationAllocated", Inform), ("preparationMaxLive", WithinKiB)]]
 
 metric :: Object -> Text -> Rule -> Parser Metric
 metric record key rule = do
@@ -243,7 +244,8 @@ isFinite value = not (isNaN value || isInfinite value)
 
 -- | Missing observations and both signs of each fixed tolerance must remain failures.
 metricControls :: IO ()
-metricControls =
+metricControls = do
+    cacheKeyControls
     require $
         ["KiB tolerance control failed" | any (violates WithinKiB 5000) [3976, 6024] || not (all (violates WithinKiB 5000) [3975, 6025])]
             <> ["per-mille tolerance control failed" | any (violates WithinPermille 100000) [99900, 100100] || not (all (violates WithinPermille 100000) [99899, 100101])]
@@ -258,13 +260,41 @@ metricControls =
             <> ["missing version observation accepted" | Object members <- [versionFixture], key <- KeyMap.keys members, isRight (parseEither (sourceMetrics "versions" fixtureInput) (Object (KeyMap.delete key members)))]
             <> ["mismatched version input accepted" | isRight (parseEither (sourceMetrics "versions" fixtureInput{inputDigest = "different"}) versionFixture)]
             <> ["document retention breach omitted" | not documentControl]
+            <> ["preparation peak breach omitted" | not (measurementControl (measurementFixture 500 1125) ["preparationMaxLive"])]
+            <> ["preparation allocation incorrectly gated" | not (measurementControl (measurementFixture 1525 100) [])]
+            <> ["source probe peak incorrectly gated" | not (sourceControl (measurementFixture 500 1125) [])]
+            <> ["source probe allocation gate changed" | not (sourceControl (measurementFixture 501 100) ["preparationAllocated"])]
   where
     fixtureInput = Input "small" "unused" "small" "" "digest" "oracle" 100
     fixture = object ["status" .= ("ok" :: Text), "sha256" .= ("digest" :: Text), "oracleSha256" .= ("oracle" :: Text), "architecture" .= ("aarch64" :: Text), "capabilities" .= (1 :: Int), "wireBytes" .= (100 :: Int), "packages" .= (20 :: Int), "allocated" .= (50 :: Int), "retained" .= (10 :: Int), "released" .= (0 :: Int), "peak" .= (500 :: Int), "read_project_ns" .= (200 :: Int)]
-    versionFixture = object ["status" .= ("ok" :: Text), "sha256" .= ("digest" :: Text), "package" .= ("small" :: Text), "selected_version" .= ("" :: Text), "ecosystem" .= ("npm" :: Text), "path" .= ("unused" :: Text), "mode" .= ("StreamedVersions" :: Text), "body_limit" .= (134217728 :: Int), "chunk_bytes" .= (32768 :: Int), "read_project_ns" .= (200 :: Int), "measurement" .= object ["wireBytes" .= (100 :: Int), "versions" .= (2 :: Int), "baselineLive" .= (50 :: Int), "heldLive" .= (60 :: Int), "releasedLive" .= (50 :: Int), "preparationAllocated" .= (500 :: Int), "preparationMaxLive" .= (100 :: Int)]]
+    versionFixture = versionWith (measurementFixture 500 100)
+    versionWith held = object ["status" .= ("ok" :: Text), "sha256" .= ("digest" :: Text), "package" .= ("small" :: Text), "selected_version" .= ("" :: Text), "ecosystem" .= ("npm" :: Text), "path" .= ("unused" :: Text), "mode" .= ("StreamedVersions" :: Text), "body_limit" .= (134217728 :: Int), "chunk_bytes" .= (32768 :: Int), "read_project_ns" .= (200 :: Int), "measurement" .= held]
+    measurementFixture :: Integer -> Integer -> Value
+    measurementFixture allocated peak = object ["wireBytes" .= (100 :: Int), "versions" .= (2 :: Int), "baselineLive" .= (50 :: Int), "heldLive" .= (60 :: Int), "releasedLive" .= (50 :: Int), "preparationAllocated" .= allocated, "preparationMaxLive" .= peak]
+    measurementControl = changedMetrics (withObject "measurement control" measurement) (measurementFixture 500 100)
+    sourceControl after = changedMetrics (sourceMetrics "versions" fixtureInput) versionFixture (versionWith after)
+    changedMetrics parse before after expected = case traverse (parseEither parse) [before, after] of
+        Right [left, right] -> failedMetrics left right == expected
+        _ -> False
+    failedMetrics before after = [name | (Metric name a rule, Metric _ b _) <- zip before after, violates rule a b]
     documentControl = case traverse (residency (Map.singleton "control" 1000) . ("metadata-listing " <>) . TE.decodeUtf8 . jsonLine . listingFixture) [2, 3.025] of
         Right [[Observation _ before], [Observation _ after]] ->
-            [name | (Metric name a rule, Metric _ b _) <- zip before after, violates rule a b] == ["document_live_bytes"]
+            failedMetrics before after == ["document_live_bytes"]
         _ -> False
     listingFixture :: Double -> Value
     listingFixture ratio = object ["package" .= ("control" :: Text), "document_per_source_byte" .= ratio, "peaks" .= object [fromString (toString key) .= (value :: Integer) | (key, value) <- [("listingSourceBytes" :: Text, 1000), ("listingBasisBytes", 1000), ("listingServedBytes", 100), ("listingBaseline", 100), ("listingReadPeak", 1000), ("listingEntryLive", 900), ("listingPeak", 1100)]]]
+
+cacheKeyControls :: IO ()
+cacheKeyControls = do
+    manifest <- T.lines <$> readComparisonText "taskfiles/refactor-performance/expected-rows.txt"
+    let expected = ["cache maintenance.key construction." <> kind <> ": " <> label | label <- ["npm name", "scoped npm name", "PyPI name"], kind <- ["full key", "selected-version key", "assembled key"]]
+        names = filter ("cache maintenance.key construction." `T.isPrefixOf`) manifest
+    require (auditExactIds "fixed cache key" expected names)
+    baseline <- traverse (example 4096) names
+    require ["fixed cache key classified incorrectly" | Observation _ metrics <- baseline, Metric "allocated" _ rule <- metrics, rule /= WithinKiB]
+    forM_ [(3071, 9), (3072, 0), (5120, 0), (5121, 9)] $ \(allocated, expectedBreaches) -> do
+        candidate <- traverse (example allocated) names
+        compared <- comparePasses "benchmark" ("A1", baseline) ("B1", candidate)
+        require ["fixed cache key tolerance control failed" | length (filter snd compared) /= expectedBreaches]
+  where
+    example allocated name = let (groupName, leaf) = splitName name in benchmark (BenchRow groupName leaf 1 0 (Just allocated) (Just 0) (Just 0))

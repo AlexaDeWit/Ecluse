@@ -43,6 +43,7 @@ inputControls = withSystemTempDirectory "refactor-input-controls" $ \root -> do
     listings <- expectedProbeInputs root "listing"
     sizes <- expectedCaptureSizes root
     let restore = forM_ (Map.toList originals) $ \(path, bytes) -> writeFileBS (root </> path) bytes
+        check :: Text -> IO () -> IO ()
         check label mutation = do
             mutation
             hashes <- Map.fromList <$> traverse (\path -> (path,) <$> digestFile (root </> path)) paths
