@@ -2,7 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Core.SupervisionSpec (spec) where
+-- | Supervision delay, logging, and fault propagation contracts.
+module Ecluse.Core.Supervision.InternalSpec (spec) where
 
 import Control.Retry (simulatePolicy)
 import Data.Text qualified as T
@@ -12,13 +13,14 @@ import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Supervision (
+import Ecluse.Core.Supervision.Internal (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backoffMicros,
     delayListPolicy,
     superviseLoop,
+    superviseLoopWithDelay,
     transientPolicy,
  )
 import Ecluse.Test.Log (runJsonLog, runQuietKatip)
@@ -83,17 +85,11 @@ spec = do
             attempts <- readIORef calls
             attempts `shouldSatisfy` (>= 3)
 
-        it "a completed step resets the backoff (alternating fault and success stays at the base delay)" $ do
-            -- Without a reset on the successful steps, about 15 faults would pace at 1ms, 2ms, 4ms
-            -- up to the 8ms cap and miss the window. With the reset every retry waits only the 1ms
-            -- base.
-            calls <- newIORef (0 :: Int)
-            let step = do
-                    n <- atomicModifyIORef' calls (\k -> (k + 1, k + 1))
-                    when (odd n) (throwIO (StepFault "odd blip"))
-            _ <- timeout 300_000 (runQuietKatip (superviseLoop (fastPolicy (const Transient)) step))
-            attempts <- readIORef calls
-            attempts `shouldSatisfy` (>= 30)
+        it "requests the base delay again after a successful step" $
+            requestedDelays [False, True, False] `shouldReturn` [1_000, 1_000]
+
+        it "doubles consecutive fault delays up to the cap" $
+            requestedDelays (replicate 6 False) `shouldReturn` [1_000, 2_000, 4_000, 8_000, 8_000, 8_000]
 
         it "rethrows a permanent fault after one attempt (fail up, no retry)" $ do
             calls <- newIORef (0 :: Int)
@@ -155,3 +151,25 @@ spec = do
             case outcome of
                 Left _cancelled -> pass
                 Right v -> absurd v
+
+requestedDelays :: [Bool] -> IO [Int]
+requestedDelays outcomes = do
+    remaining <- newIORef outcomes
+    delays <- newIORef []
+    let step = do
+            next <- atomicModifyIORef' remaining $ \case
+                [] -> ([], Nothing)
+                value : rest -> (rest, Just value)
+            case next of
+                Nothing -> throwIO (StepFault "finished")
+                Just False -> throwIO (StepFault "transient")
+                Just True -> pure ()
+        classify fault = case fromException fault of
+            Just (StepFault "finished") -> Permanent
+            _ -> Transient
+        recordDelay micros = atomicModifyIORef' delays (\seen -> (micros : seen, ()))
+    outcome <- try (runQuietKatip (superviseLoopWithDelay recordDelay (fastPolicy classify) step))
+    case outcome of
+        Left fault -> fault `shouldBe` StepFault "finished"
+        Right value -> absurd value
+    reverse <$> readIORef delays

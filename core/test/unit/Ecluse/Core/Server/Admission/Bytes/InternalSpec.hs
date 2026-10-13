@@ -2,18 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Core.Server.Admission.BytesSpec (spec) where
+-- | Byte admission state, cancellation, and metric contracts.
+module Ecluse.Core.Server.Admission.Bytes.InternalSpec (spec) where
 
+import Control.Concurrent.STM (check)
 import Test.Hspec
-import UnliftIO (async, cancel, mapConcurrently, wait)
+import UnliftIO (cancel, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Server.Admission.Bytes (
-    ByteAdmission,
+import Ecluse.Core.Server.Admission.Bytes.Internal (
+    ByteAdmission (..),
+    newByteAdmission,
     newByteAdmissionTuned,
     withByteAdmission,
  )
+import Ecluse.Core.Server.Admission.Weighted (weightedAdmissionWaiting)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpPublishBodyInFlightBytes, mpPublishBodyShed))
 import Ecluse.Test.Port (noopMetricsPort)
 
@@ -32,9 +36,9 @@ holding :: ByteAdmission -> Int -> IO a -> IO (Maybe a)
 holding = withByteAdmission noopMetricsPort
 
 spec :: Spec
-spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
+spec = around_ (timeout 10_000_000 >=> (`shouldBe` Just ())) $ describe "withByteAdmission (the aggregate body-byte admission)" $ do
     it "admits weights that fit and sheds a weight the capacity cannot hold within the wait" $ do
-        ba <- newBudget 100
+        ba <- newByteAdmission 100
         holding ba 60 (pure ("held" :: Text)) `shouldReturn` Just "held"
         -- Each call releases its weight on completion, so a second large weight fits.
         holding ba 90 (pure ("held" :: Text)) `shouldReturn` Just "held"
@@ -66,13 +70,15 @@ spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
         holding ba 100 (pure ()) `shouldReturn` Just ()
 
     it "returns the weight when the holder is cancelled, unblocking a waiter" $ do
-        ba <- newBudget 100
+        ba <- newByteAdmissionTuned 100 8 5_000_000
         release <- newEmptyMVar
-        holder <- async (holding ba 100 (takeMVar release))
-        -- Let the holder take the whole capacity, then cancel it mid-hold.
-        threadDelay 10_000
-        cancel holder
-        -- The full capacity is back: an immediate full-weight acquire admits.
+        entered <- newEmptyMVar
+        withAsync (holding ba 100 (putMVar entered () >> takeMVar release)) $ \holder -> do
+            takeMVar entered
+            withAsync (holding ba 100 (pure ())) $ \waiter -> do
+                atomically (weightedAdmissionWaiting (baCore ba) >>= check . (== 1))
+                cancel holder
+                wait waiter `shouldReturn` Just ()
         holding ba 100 (pure ()) `shouldReturn` Just ()
 
     it "returns the weight on a synchronous throw inside the held action" $ do
@@ -86,13 +92,13 @@ spec = describe "withByteAdmission (the aggregate body-byte admission)" $ do
         let port = noopMetricsPort{mpPublishBodyShed = atomicModifyIORef' sheds (\n -> (n + 1, ()))}
         ba <- newByteAdmissionTuned 10 0 50_000
         release <- newEmptyMVar
-        holder <- async (withByteAdmission port ba 10 (takeMVar release))
-        threadDelay 10_000
-        -- The capacity is held and the room is zero: an arrival sheds at the door.
-        withByteAdmission port ba 1 (pure ()) `shouldReturn` Nothing
-        readIORef sheds `shouldReturn` (1 :: Int)
-        putMVar release ()
-        wait holder >>= (`shouldBe` Just ())
+        entered <- newEmptyMVar
+        withAsync (withByteAdmission port ba 10 (putMVar entered () >> takeMVar release)) $ \holder -> do
+            takeMVar entered
+            withByteAdmission port ba 1 (pure ()) `shouldReturn` Nothing
+            readIORef sheds `shouldReturn` (1 :: Int)
+            putMVar release ()
+            wait holder `shouldReturn` Just ()
 
     it "clamps an oversized weight to the capacity rather than deadlocking" $ do
         ba <- newBudget 10

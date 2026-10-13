@@ -2,17 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The weighted door\/wait\/shed admission core behind serve admission
-("Ecluse.Core.Server.Admission") and byte-weighted publish admission
-("Ecluse.Core.Server.Admission.Bytes").
-
-A handle caps the aggregate weight held at once and keeps a bounded room of waiters. Capacity
-is taken directly only when the room is empty, so a newcomer never jumps a non-empty room,
-though wake order within the room is not FIFO. The wait budget equals the shed path's
-@Retry-After: 1@ hint, so nothing is refused faster than the client was told to wait.
+{- | Shared weighted admission for serve slots and publish bytes.
+A bounded waiting room prevents newcomers from bypassing queued requests. Wake order is not FIFO.
 -}
 module Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
+    weightedAdmissionWaiting,
     newWeightedAdmission,
     withWeightedAdmission,
     AdmissionObservers (..),
@@ -24,9 +19,7 @@ import GHC.Conc (registerDelay)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
-{- | The bounded handle's mutable state and its tuning. The constructor stays hidden so only
-the checked acquire, wait, and release operations can mutate it.
--}
+-- | Capacity and waiting-room state. Only the controller can mutate these fields.
 data WeightedAdmission = WeightedAdmission
     { waAvailable :: TVar Int
     , waWaiting :: TVar Int
@@ -34,33 +27,21 @@ data WeightedAdmission = WeightedAdmission
     , waWaitMicros :: Int
     }
 
-{- | The metric hooks the door\/wait\/release bracket calls. The shared machine owns no
-telemetry vocabulary, so each instance records under its own signals.
--}
+-- | Admission observers, independent of the telemetry vocabulary.
 data AdmissionObservers = AdmissionObservers
     { onQueued :: IO ()
-    {- ^ A request that had to wait cleared the wait and is now admitted. Serve
-    admission records its queued metric here. Byte admission does nothing.
-    -}
+    -- ^ Runs after a queued request acquires capacity, not when it registers.
     , onShed :: IO ()
-    {- ^ The request was shed: refused at a full door, or its wait outlived the
-    budget. Byte admission records its shed metric here. Serve admission is silent.
-    -}
+    -- ^ Records a refusal at the door or an expired wait.
     , onInFlightDelta :: Int -> IO ()
-    {- ^ Move the in-flight gauge by the signed weight. Both calls run under the
-    acquire mask, so the gauge is paired on every path.
-    -}
+    -- ^ Records signed weight under the acquisition mask.
     }
 
-{- | The wait budget (microseconds) before a busy acquisition is shed, deliberately equal to
-the shed path's @Retry-After: 1@ hint, so nothing is refused faster than the client was told.
--}
+-- | Wait one second, matching the shed response Retry-After hint.
 admissionWaitMicros :: Int
 admissionWaitMicros = 1_000_000
 
-{- | Allocate a handle over a capacity, a waiter-room bound, and a wait budget (microseconds).
-The capacity is verbatim, the wrapper owning that policy, and the other two floor at zero.
--}
+-- | Keep capacity verbatim and clamp the room and microsecond wait budget at zero.
 newWeightedAdmission :: Int -> Int -> Int -> IO WeightedAdmission
 newWeightedAdmission capacity room waitMicros = do
     available <- newTVarIO capacity
@@ -82,7 +63,7 @@ data Gate = Admitted | Queued | Refused
 doorDecision :: WeightedAdmission -> Int -> STM Gate
 doorDecision wa weight = do
     available <- readTVar (waAvailable wa)
-    waiting <- readTVar (waWaiting wa)
+    waiting <- weightedAdmissionWaiting wa
     if available >= weight && waiting == 0
         then writeTVar (waAvailable wa) (available - weight) $> Admitted
         else
@@ -101,9 +82,7 @@ acquireOrExpire wa weight deadline = do
             expired <- readTVar deadline
             if expired then pure False else retry
 
-{- | Run an action holding the given weight. 'Nothing' is a shed, at a full room or an expired
-wait. The weight is used as given, and released on every exit path, cancellation included.
--}
+-- | Hold the supplied weight through the action. Refusal or expiry returns Nothing.
 
 -- Inlined with its arm helpers so each wrapper's literal observers vanish at the call site.
 {-# INLINE withWeightedAdmission #-}
@@ -173,3 +152,7 @@ releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission ->
 releaseWeight obs wa weight =
     liftIO (onInFlightDelta obs (negate weight))
         `UE.finally` atomically (modifyTVar' (waAvailable wa) (+ weight))
+
+-- | Observe committed waiting-room occupancy without changing admission state.
+weightedAdmissionWaiting :: WeightedAdmission -> STM Int
+weightedAdmissionWaiting = readTVar . waWaiting
