@@ -136,6 +136,7 @@ integrationObligations =
         [ "integration/egress/native-001"
         , "integration/egress/native-002"
         , "integration/egress/native-003"
+        , "integration/egress/native-004"
         ]
     , required
         "integration/origin"
