@@ -71,7 +71,8 @@ writeConditions root name = do
     worker <- digestFile (root </> "worker.txt")
     buildDigest <- digestFile (root </> "build-" <> toString build </> "binding.json")
     controller <- digestFile (root </> "controller.txt")
-    let declared = Map.fromList [("schema", "1"), ("scope", "focused diagnostic, not acceptance"), ("row", reactRow), ("pass", name), ("build", build), ("mode", mode), ("source", sourceFor build), ("run", run), ("attempt", attempt), ("worker", worker), ("buildBinding", buildDigest), ("controller", controller), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")]
+    let declared :: Map Text Text
+        declared = Map.fromList [("schema", "1"), ("scope", "focused diagnostic, not acceptance"), ("row", reactRow), ("pass", name), ("build", build), ("mode", mode), ("source", sourceFor build), ("run", run), ("attempt", attempt), ("worker", worker), ("buildBinding", buildDigest), ("controller", controller), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")]
     writeJsonFile (root </> toString name </> "conditions.json") declared
 
 -- | Bind the complete pass inventory without assigning an acceptance verdict.
@@ -221,6 +222,7 @@ auditPlans root = do
         actual <- externalPlan build
         requireDiagnostic (actual == native) ("external dependency plan differs: " <> build)
   where
+    externalPlan :: Text -> IO [Value]
     externalPlan build = do
         plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
         units <- either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Value])
