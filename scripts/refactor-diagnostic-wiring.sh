@@ -108,14 +108,27 @@ summarise() {
   summary_count=$((summary_count + 1))
 }
 
-if [ "$namespace" = FULL_DIAG_ ]; then
+verify_full_guard() {
   awk '
-    /task: prepare/ {builds++}
-    /bench-report" full-history-plans/ {if (builds != 4 || launched) exit 1; guarded=1}
-    /task: record-pass/ {if (!guarded) exit 1; launched=1}
+    /^[[:space:]]*-[[:space:]]+task:[[:space:]]+prepare[[:space:]]*$/ {builds++}
+    /^[[:space:]]*-[[:space:]]+[\047]?"[^"]*\/bench-report"[[:space:]]+full-history-plans([[:space:]]|$)/ {if (builds != 4 || launched) exit 1; guarded=1}
+    /^[[:space:]]*-[[:space:]]+task:[[:space:]]+record-pass[[:space:]]*$/ {if (!guarded) exit 1; launched=1}
     END {if (!guarded || !launched) exit 1}
-  ' taskfiles/refactor-full-history.yml || fail 'full plan guard does not precede every measured launch'
+  ' "$1"
+}
+
+if [ "$namespace" = FULL_DIAG_ ]; then
+  verify_full_guard taskfiles/refactor-full-history.yml || fail 'full plan guard does not precede every measured launch'
+  awk '
+    /^[[:space:]]*-[[:space:]]+/ && /bench-report" full-history-plans/ {sub(/^      /, "      # ")}
+    {print}
+  ' taskfiles/refactor-full-history.yml > "$report_root/commented-plan-guard.yml"
+  if verify_full_guard "$report_root/commented-plan-guard.yml"; then
+    fail 'commented-out full plan command passed the schedule guard'
+  fi
+  verify_full_guard taskfiles/refactor-full-history.yml || fail 'restored full plan schedule differs'
 fi
+
 task --summary ${diagnostic_target}:run > "$report_root/default-run.txt"
 verify_summary "$report_root/default-run.txt" '' '' '' ''
 summary_count=$((summary_count + 1))
