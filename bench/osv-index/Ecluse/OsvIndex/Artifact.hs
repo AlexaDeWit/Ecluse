@@ -25,6 +25,7 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (Only, fromOnly), Query (Query), fold_, query, query_, withConnection)
 import System.Directory (getFileSize)
 
+import Ecluse.Core.Security.Authority (HostPort (hpHost, hpPort), hostPortAddress)
 import Ecluse.OsvIndex.Audit (readUtf8File)
 import Ecluse.OsvIndex.Contract (Selected (..), SelectionRole (..))
 import Ecluse.Test.Contract.Manifest (digestFile, failRunner, jsonLine, readJsonFile, writeJsonFile)
@@ -105,29 +106,41 @@ snapshotFaults a b =
     [ label
     | (label, equal) <-
         [ ("typed row multiset differs", (snRows a, snRowsDigest a) == (snRows b, snRowsDigest b))
-        , ("semantic metadata differs", normalMetadata a == normalMetadata b)
+        , ("semantic metadata differs", isJust metadataA && metadataA == metadataB)
         , ("schema differs beyond candidate index", normalSchema a == normalSchema b)
         , ("schema epoch differs", snEpoch a == snEpoch b)
         , ("integrity check failed", snIntegrity a == ["ok"] && snIntegrity b == ["ok"])
         , ("required lookup index missing", all required [a, b])
-        , ("unexpected source URL metadata", all validSource [a, b])
+        , ("unexpected source metadata", isJust metadataA && isJust metadataB)
         , ("empty range table", snRows a > 0 && snRows b > 0)
         ]
     , not equal
     ]
   where
-    normalMetadata = Map.mapWithKey normalise . Map.delete "built_at" . snMetadata
-    normalise key value
-        | key `elem` drop 1 exclusions = normalUrl value
-        | otherwise = value
+    metadataA = normalMetadata (snMetadata a)
+    metadataB = normalMetadata (snMetadata b)
     normalSchema = filter (\(_, name, _) -> name /= "uq_ranges_segment") . snSchema
     required s = all (`elem` [name | (kind, name, _) <- snSchema s, kind == "index"]) ["idx_package_name", "idx_package_fixed"]
-    validSource s = all (T.isPrefixOf "http://127.0.0.1:" . snd) (filter ((`elem` drop 1 exclusions) . fst) (Map.toList (snMetadata s)))
 
-normalUrl :: Text -> Text
-normalUrl value = case T.stripPrefix "http://127.0.0.1:" value of
-    Just rest -> "http://127.0.0.1:<port>" <> T.dropWhile (/= '/') rest
-    Nothing -> value
+-- Preserve every key. Only the build time value and validated stub ports can differ.
+normalMetadata :: Map Text Text -> Maybe (Map Text Text)
+normalMetadata metadata = do
+    guard (Map.member "built_at" metadata)
+    normalised <- traverse (normalSourcePair metadata) [("source_url", "osv_source"), ("epss_source_url", "epss_source")]
+    pure (Map.union (Map.fromList (concat normalised)) (Map.insert "built_at" "<compilation-time>" metadata))
+
+normalSourcePair :: Map Text Text -> (Text, Text) -> Maybe [(Text, Text)]
+normalSourcePair metadata (authorityKey, urlKey) = do
+    bareAuthority <- Map.lookup authorityKey metadata
+    fullUrl <- Map.lookup urlKey metadata
+    parsed <- hostPortAddress bareAuthority
+    guard (hpHost parsed == "127.0.0.1")
+    guard (bareAuthority == hpHost parsed <> ":" <> show (hpPort parsed))
+    afterScheme <- T.stripPrefix "http://" fullUrl
+    let (urlAuthority, sourcePath) = T.breakOn "/" afterScheme
+        normalAuthority = hpHost parsed <> ":<port>"
+    guard (urlAuthority == bareAuthority && not (T.null sourcePath))
+    pure [(authorityKey, normalAuthority), (urlKey, "http://" <> normalAuthority <> sourcePath)]
 
 -- | Each selected role keeps its own SQL-plan observation.
 data PlanObservation = PlanObservation {poRole :: Maybe SelectionRole, poName :: Maybe Text, poPlan :: [(Int, Int, Int, Text)]}

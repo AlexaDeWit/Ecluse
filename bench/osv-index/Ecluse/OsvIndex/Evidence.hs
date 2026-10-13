@@ -58,7 +58,7 @@ auditExperiment root = do
     unless (null faults) (failRunner "experiment audit failed")
 
 requiredControls :: [Text]
-requiredControls = ["valid-query", "empty-query", "missing-query", "duplicate-query", "wrong-query-mode", "wrong-connection-count", "duplicate-package-roles", "valid-reader", "empty-reader", "missing-reader-row", "duplicate-reader-row", "wrong-reader-verdict", "missing-reader-end", "valid-binding", "wrong-identity", "valid-sequence", "missing-event", "duplicate-event", "wrong-order", "actual-mode-lifetimes", "valid-query-counts", "wrong-query-counts", "missing-evidence", "malformed-evidence", "malformed-utf8", "wrong-input-identity", "valid-native", "wrong-command", "wrong-native-sequence"]
+requiredControls = ["valid-query", "empty-query", "missing-query", "duplicate-query", "wrong-query-mode", "wrong-connection-count", "duplicate-package-roles", "valid-reader", "empty-reader", "missing-reader-row", "duplicate-reader-row", "wrong-reader-verdict", "missing-reader-end", "valid-binding", "wrong-identity", "valid-sequence", "missing-event", "duplicate-event", "wrong-order", "actual-mode-lifetimes", "valid-query-counts", "wrong-query-counts", "missing-evidence", "malformed-evidence", "malformed-utf8", "wrong-input-identity", "valid-native", "wrong-command", "wrong-native-sequence", "metadata-self", "metadata-port-change", "metadata-build-time", "metadata-host-change", "metadata-path-change", "metadata-scheme-change", "metadata-missing-field", "metadata-missing-required-self", "metadata-inconsistent-pair", "metadata-invalid-port", "metadata-authority-field-form", "metadata-url-field-form", "metadata-other-values"]
 
 auditCase :: Audit -> FilePath -> Case -> IO CaseEvidence
 auditCase audit root input = do

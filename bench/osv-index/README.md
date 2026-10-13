@@ -43,8 +43,10 @@ Native wall and total CPU measurements exclude identity hashing. Haskell owns th
 checks, hashes, manifests, qualification and summaries.
 
 Typed sorted rows retain NULLs, scores and duplicate copies. Every sample compares with
-its case's A warm-up. Metadata comparisons exclude `built_at` and normalise only the port
-in the four loopback source URL fields. Full original values remain in the snapshots.
+its case's A warm-up. Metadata comparisons exclude only the `built_at` value and validated ephemeral ports.
+The two authority fields must match their paired full URLs before normalisation.
+All keys, hosts, schemes, paths and other values remain significant. Full original values
+remain in the snapshots. The controls include an unchanged snapshot from the rejected run.
 Schema comparisons allow only the candidate index. The audit recomputes both selections,
 fan-out counts and exact production SQL plans from the retained databases.
 

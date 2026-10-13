@@ -6,12 +6,15 @@
 module Ecluse.OsvIndex.Controls (runControls) where
 
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.OsvIndex.Artifact (ArtifactComparison (coFaults), Snapshot (snMetadata), makeComparison)
 import Ecluse.OsvIndex.Audit (attempt, auditFaults, decodeJson, newAudit, readUtf8File, writeUtf8File)
 import Ecluse.OsvIndex.Contract
 import Ecluse.OsvIndex.Evidence (nativeFaults)
@@ -34,8 +37,9 @@ runControls root = do
         BS.writeFile (directory </> "malformed-utf8.txt") (BS.pack [0xff])
         malformedUtf8 <- attempt audit "malformed UTF-8" (readUtf8File (directory </> "malformed-utf8.txt"))
         faults <- auditFaults audit
-        pure [("actual-mode-lifetimes", null (queryFaults Reused selected reused) && null (queryFaults Fresh selected fresh) && qrConnections reused == 1 && qrConnections fresh > 1), ("missing-evidence", isNothing missing && length faults == 3), ("malformed-evidence", isNothing malformed && length faults == 3), ("malformed-utf8", isNothing malformedUtf8 && length faults == 3)]
-    let observations = pureControls <> fromRight [("actual-mode-lifetimes", False), ("missing-evidence", False), ("malformed-evidence", False), ("malformed-utf8", False)] runtime
+        captured <- decodeJson "bench/osv-index/fixtures/captured-npm-snapshot.json"
+        pure $ metadataControls captured <> [("actual-mode-lifetimes", null (queryFaults Reused selected reused) && null (queryFaults Fresh selected fresh) && qrConnections reused == 1 && qrConnections fresh > 1), ("missing-evidence", isNothing missing && length faults == 3), ("malformed-evidence", isNothing malformed && length faults == 3), ("malformed-utf8", isNothing malformedUtf8 && length faults == 3)]
+    let observations = pureControls <> fromRight ([("actual-mode-lifetimes", False), ("missing-evidence", False), ("malformed-evidence", False), ("malformed-utf8", False)] <> [(name, False) | name <- metadataControlNames]) runtime
     for_ (leftToMaybe runtime) (writeUtf8File (root </> "controls-error.txt") . show)
     writeJsonFile (root </> "controls.json") observations
     unless (all snd observations) (failRunner "adversarial audit control failed")
@@ -91,3 +95,45 @@ pureControls =
     resource = Resource (trialCommand "control" trial) 0 3e-9 0 0 1 0 3
     native = Native binding 1 (Event 1 trial Started 1 time) (Event 1 trial Finished 2 time) 1 [FileIdentity (trialDirectory trial </> "db/artifact.db") 1 "artifact"] Nothing
     binding = Binding trial (Execution "source" "run" "attempt" "ARM64") "manifest" (FileIdentity "bin/A" 1 "binary") [] ["control"] 1 Nothing
+
+metadataControlNames :: [Text]
+metadataControlNames = ["metadata-self", "metadata-port-change", "metadata-build-time", "metadata-host-change", "metadata-path-change", "metadata-scheme-change", "metadata-missing-field", "metadata-missing-required-self", "metadata-inconsistent-pair", "metadata-invalid-port", "metadata-authority-field-form", "metadata-url-field-form", "metadata-other-values"]
+
+metadataControls :: Snapshot -> [(Text, Bool)]
+metadataControls captured =
+    [ ("metadata-self", accepts captured captured)
+    , ("metadata-port-change", accepts captured (withPorts "51001" "51002"))
+    , ("metadata-build-time", accepts captured (updated [("built_at", "2026-10-14T00:00:00Z")]))
+    , ("metadata-host-change", rejects (changed sourceKeys (T.replace "127.0.0.1" "127.0.0.2")))
+    , ("metadata-path-change", all (rejects . (\key -> changed [key] (<> "/changed"))) urlKeys)
+    , ("metadata-scheme-change", all (rejects . (\key -> changed [key] (T.replace "http://" "https://"))) urlKeys)
+    , ("metadata-missing-field", all (rejects . without) (Map.keys original))
+    , ("metadata-missing-required-self", all (invalidSelf . without) requiredKeys)
+    , ("metadata-inconsistent-pair", all (invalidSelf . (\key -> updated [(key, "127.0.0.1:51001")])) authorityKeys)
+    , ("metadata-invalid-port", all invalidSelf ([withPorts port "51002" | port <- invalidPorts] <> [withPorts "51001" port | port <- invalidPorts]))
+    , ("metadata-authority-field-form", all (invalidSelf . (\key -> changed [key] ("http://" <>))) authorityKeys)
+    , ("metadata-url-field-form", all invalidSelf [updated [(urlKey, prefix <> bare)] | (authorityKey, urlKey) <- sourcePairs, Just bare <- [Map.lookup authorityKey original], prefix <- ["", "http://"]])
+    , ("metadata-other-values", not (null otherKeys) && all (rejects . (\key -> changed [key] (<> "changed"))) otherKeys && rejects (updated [("extra-metadata-control", "present")]))
+    ]
+  where
+    original = snMetadata captured
+    sourcePairs = [("source_url", "osv_source"), ("epss_source_url", "epss_source")]
+    authorityKeys = map fst sourcePairs
+    urlKeys = map snd sourcePairs
+    sourceKeys = authorityKeys <> urlKeys
+    requiredKeys = "built_at" : sourceKeys
+    otherKeys = filter (`notElem` requiredKeys) (Map.keys original)
+    invalidPorts = ["", "0", "65536", "01000", "not-a-port", "-1", " 51001", "51001 "]
+    accepts a b = null (coFaults (makeComparison a b))
+    rejects = not . accepts captured
+    invalidSelf candidate = not (accepts candidate candidate)
+    updated fields = captured{snMetadata = Map.union (Map.fromList fields) original}
+    changed keys transform = captured{snMetadata = Map.mapWithKey (\key value -> if key `elem` keys then transform value else value) original}
+    without key = captured{snMetadata = Map.delete key original}
+    withPorts osvPort epssPort =
+        updated
+            [ ("source_url", "127.0.0.1:" <> osvPort)
+            , ("osv_source", "http://127.0.0.1:" <> osvPort <> "/all.zip")
+            , ("epss_source_url", "127.0.0.1:" <> epssPort)
+            , ("epss_source", "http://127.0.0.1:" <> epssPort <> "/epss_scores-current.csv.gz")
+            ]
