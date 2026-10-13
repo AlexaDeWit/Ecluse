@@ -6,6 +6,7 @@
 module Ecluse.OsvIndex.Identity (writeManifest, identityFaults, currentBinding) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Database.SQLite.Simple (Only (fromOnly), query_, withConnection)
@@ -52,7 +53,7 @@ identityFaults :: FilePath -> Manifest -> IO [Text]
 identityFaults root manifest = do
     execution <- executionIdentity
     headCommit <- T.strip . toText <$> readProcess "git" ["rev-parse", "HEAD"] ""
-    tracked <- lines <$> readProcess "git" ["ls-tree", "-r", "--name-only", "HEAD"] ""
+    tracked <- List.lines <$> readProcess "git" ["ls-tree", "-r", "--name-only", "HEAD"] ""
     sourceDiff <- readProcess "git" ["diff", toString productionBase, "HEAD", "--", "core", "runtime", "src", "cabal.project", "cabal.project.freeze", "flake.lock", "bench/corpus"] ""
     workingDiff <- readProcess "git" ["diff", "HEAD", "--"] ""
     actualInputNames <- map ("inputs" </>) <$> listDirectory (root </> "inputs")

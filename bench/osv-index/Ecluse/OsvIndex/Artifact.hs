@@ -5,7 +5,7 @@
 -- | SQLite evidence for the temporary range-index experiment.
 module Ecluse.OsvIndex.Artifact (
     Snapshot (..),
-    Comparison (..),
+    ArtifactComparison (..),
     Selection (..),
     QueryPlan (..),
     PlanObservation (..),
@@ -77,11 +77,11 @@ pragma :: Connection -> Query -> IO [Int]
 pragma conn statement = map fromOnly <$> query_ conn statement
 
 -- | Keep both complete snapshots beside the semantic outcome.
-data Comparison = Comparison {coFaults :: [Text], coExclusions :: [Text], coA :: Snapshot, coB :: Snapshot}
+data ArtifactComparison = ArtifactComparison {coFaults :: [Text], coExclusions :: [Text], coA :: Snapshot, coB :: Snapshot}
     deriving stock (Eq, Show, Generic)
 
-instance FromJSON Comparison
-instance ToJSON Comparison
+instance FromJSON ArtifactComparison
+instance ToJSON ArtifactComparison
 
 -- | Refuse every difference except the candidate index and listed compilation provenance.
 compareSnapshots :: FilePath -> FilePath -> FilePath -> IO ()
@@ -93,8 +93,8 @@ compareSnapshots left right output = do
     unless (null (coFaults comparison)) (failRunner (T.unlines (coFaults comparison)))
 
 -- | The auditor recomputes this result instead of trusting a reported fault list.
-makeComparison :: Snapshot -> Snapshot -> Comparison
-makeComparison a b = Comparison (snapshotFaults a b) exclusions a b
+makeComparison :: Snapshot -> Snapshot -> ArtifactComparison
+makeComparison a b = ArtifactComparison (snapshotFaults a b) exclusions a b
 
 exclusions :: [Text]
 exclusions = ["built_at", "source_url", "epss_source_url", "osv_source", "epss_source"]
