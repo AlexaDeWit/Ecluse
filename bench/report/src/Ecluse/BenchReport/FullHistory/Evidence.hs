@@ -146,5 +146,5 @@ fixtureOutputs root (Pass name build mode) = do
   where
     write file = writeComparisonText (root </> toString name </> file)
     console path = case reverse (zip [0 :: Int ..] (T.splitOn "." path)) of
-        (depth, leaf) : groups -> [T.replicate (index * 2) " " <> group | (index, group) <- reverse groups] <> [T.replicate (depth * 2) " " <> leaf <> ": OK"]
+        (depth, leaf) : groups -> [T.replicate (index * 2) " " <> parentName | (index, parentName) <- reverse groups] <> [T.replicate (depth * 2) " " <> leaf <> ": OK"]
         [] -> []
