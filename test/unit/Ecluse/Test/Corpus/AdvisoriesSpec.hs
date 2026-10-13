@@ -104,8 +104,9 @@ spec = do
                 `shouldReturn` Left "the capture typing_extensions differs from its lookup key typing-extensions"
 
     describe "shippedPolicy" $
-        it "is the shared policy config/default.yaml ships" $
-            shippedPolicy `shouldMatchList` Map.elems (policyRules defaultPolicy)
+        it "is the shared policy config/default.yaml ships" $ do
+            baseline <- expectRight defaultPolicy
+            shippedPolicy `shouldMatchList` Map.elems (policyRules baseline)
 
 assertCapturedRemediation :: RuleDeps -> EvalContext -> PackageDetails -> PackageDetails -> Expectation
 assertCapturedRemediation deps ctx fixedRelease affected = do

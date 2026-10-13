@@ -6,24 +6,27 @@
 -- | Loader and mount-resolution contracts against the shipped defaults.
 module Ecluse.ConfigSpec (spec) where
 
+import Data.Aeson (Value, object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, nominalDay)
+import Data.Yaml qualified as Yaml
 import Test.Hspec
 
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, fixedNow, npmMountDoc, pubUrlEnv)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
-    ConfigError (MountMissingPrivateUpstream, PolicyErrors, PublicUrlRequired, SharedPolicyErrors),
+    ConfigError (MountMissingPrivateUpstream, ParseError, PolicyErrors, PublicUrlRequired, SharedPolicyErrors),
     Mount (mountPolicy, mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
-    PolicyError (MalformedRule, SuppressUnknownRule),
+    PolicyError (MalformedRule, MissingRuleType, SuppressUnknownRule),
     QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
     advisoryAgeLines,
     advisoryEpssLines,
+    decodeDefaultConfig,
     defaultPolicy,
     loadConfig,
     mountAdvisoryDenials,
@@ -33,6 +36,8 @@ import Ecluse.Config (
     renderConfigError,
     resolvedKeyProvenance,
  )
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
+import Ecluse.Config.Resolve (deepMerge)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
@@ -42,6 +47,7 @@ import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Test.Package (pypiVersion, thingName, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Rules (admittedBy, blockedBy, inertRuleDeps, withInstallScripts)
+import Ecluse.Test.Support (expectRight)
 
 -- | Configuration loading and operator diagnostics.
 spec :: Spec
@@ -50,14 +56,29 @@ spec = do
         it "loads as a valid, self-contained backbone with no operator overlay" $
             loadConfig [] Nothing `shouldSatisfy` isRight
 
-        it "ships exactly the expected shared baseline rules under their default names" $
-            case defaultPolicy of
-                RulePolicy rules ->
-                    Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
+        it "ships exactly the expected shared baseline rules under their default names" $ do
+            RulePolicy rules <- expectRight defaultPolicy
+            Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
-        it "applies every shared shipped rule at both phases" $
-            map ruleReach (Map.elems (policyRules defaultPolicy))
+        it "applies every shared shipped rule at both phases" $ do
+            baseline <- expectRight defaultPolicy
+            map ruleReach (Map.elems (policyRules baseline))
                 `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation]
+
+        it "returns a typed YAML refusal for malformed default bytes" $
+            decodeDefaultConfig "rules: [" `shouldSatisfy` parseRefusal "config/default.yaml is invalid YAML: "
+
+        it "parses default settings before resolving default rules" $ do
+            bytes <- defaultsWith (object ["server" .= object ["port" .= (0 :: Int)], "rules" .= ([] :: [Value])])
+            decodeDefaultConfig bytes `shouldSatisfy` parseRefusal "Configuration parse error: "
+
+        it "returns a typed parse refusal for malformed default rules" $ do
+            bytes <- defaultsWith (object ["rules" .= ([] :: [Value])])
+            decodeDefaultConfig bytes `shouldSatisfy` parseRefusal "Rules parse error: Error in $.rules: "
+
+        it "resolves default rules against the empty policy" $ do
+            bytes <- defaultsWith (object ["rules" .= object ["unresolved" .= object ["ageSeconds" .= (60 :: Int)]]])
+            decodeDefaultConfig bytes `shouldBe` Left [PolicyErrors [MissingRuleType "unresolved"]]
 
         it "pins the shipped redelivery budget to the one a directly-built backend holds" $
             -- A drift changes when deployments and test doubles retire poison messages.
@@ -407,3 +428,13 @@ decideOn :: Config -> Ecosystem -> RuleEvidence -> IO Decision
 decideOn cfg eco evidence = case Map.lookup eco (configMounts cfg) of
     Nothing -> fail ("expected an active mount: " <> show eco)
     Just mount -> prepare inertRuleDeps (mountPolicy mount) >>= \rules -> evalRules (EvalContext fixedNow Nothing) rules evidence
+
+defaultsWith :: Value -> IO ByteString
+defaultsWith override = do
+    ast <- expectRight (Yaml.decodeEither' defaultConfigBytes)
+    pure (Yaml.encode (deepMerge ast override))
+
+parseRefusal :: Text -> Either [ConfigError] a -> Bool
+parseRefusal prefix = \case
+    Left [ParseError message] -> prefix `T.isPrefixOf` message
+    _ -> False
