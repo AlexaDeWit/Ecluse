@@ -13,7 +13,7 @@ import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (cpPackage)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Ecluse.Test.Registry.Metadata.Fetch (captureChunks)
 import Ecluse.Test.Server.Transform (SelectedDepth (DecodeFailed), detailsDepth)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
@@ -28,7 +28,7 @@ benchmarks ecosystem =
             [ bench "full decode + select" (whnfAppIO fullSelect chunks)
             , bench "selective decode" (whnfAppIO (fmap (either (const DecodeFailed) detailsDepth) . ebSelective ecosystem name version) chunks)
             ]
-        | entry@(package, raw, info, _) <- ebCorpus ecosystem
+        | entry@LoadedEntry{lePackage = package, leBytes = raw, leInfo = info} <- ebCorpus ecosystem
         , (key, _) <- maybeToList (Map.lookupMax (infoVersions info))
         , let name = cpPackage package
               version = mkVersion (ebEcosystem ecosystem) key

@@ -34,7 +34,7 @@ import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Telemetry.Catalogue (MetricName (AssembledCacheResidentBytes, MetadataCacheRefused, MetadataCacheResidentBytes, SingleVersionCacheResidentBytes))
 import Ecluse.Core.Telemetry.Metrics (CacheStore (AssembledStore, FullStore, VersionStore), Label (LCacheStore), renderLabel)
-import Ecluse.Test.Corpus (CaptureRecord (crBytes, crCapturedAt), CorpusPackage (cpPackage), cpName, readCaptureRecords, readCorpusPins)
+import Ecluse.Test.Corpus (CaptureRecord (crCapturedAt, crPin), CorpusPackage (cpPackage), FilePin (fpBytes), cpName, readCaptureRecords, readCorpusPins)
 import Ecluse.Test.Registry.Metadata.Fetch (heldManifest)
 import Ecluse.Test.Server.Cache (weighCacheEntry)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
@@ -157,7 +157,7 @@ verifyCaptures :: Ecosystem -> Map Text LByteString -> IO UTCTime
 verifyCaptures ecosystem bodies = do
     records <- readCaptureRecords ecosystem >>= either (benchFail . toText) pure
     for_ (Map.toList bodies) $ \(name, body) ->
-        unless ((crBytes <$> Map.lookup name records) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
+        unless ((fpBytes . crPin <$> Map.lookup name records) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
     pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map crCapturedAt (Map.elems records))))
 
 evidence :: ProxyProcess -> IORef (Int, Int) -> Maybe Int -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
