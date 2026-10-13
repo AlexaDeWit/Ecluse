@@ -61,7 +61,6 @@ module Ecluse.Config (
     PolicyError (..),
     renderPolicyError,
     emptyPolicy,
-    defaultPolicy,
     decodeDefaultConfig,
     ConfigError (..),
     renderConfigError,
@@ -108,10 +107,6 @@ import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
-
--- | The shared rule policy from the shipped configuration, or its load refusals.
-defaultPolicy :: Either [ConfigError] RulePolicy
-defaultPolicy = snd <$> decodeDefaultConfig defaultConfigBytes
 
 -- | Decode the default backbone without resolving mounts that need an operator overlay.
 decodeDefaultConfig :: ByteString -> Either [ConfigError] (Value, RulePolicy)

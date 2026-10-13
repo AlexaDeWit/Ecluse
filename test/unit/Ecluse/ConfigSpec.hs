@@ -27,7 +27,6 @@ import Ecluse.Config (
     advisoryAgeLines,
     advisoryEpssLines,
     decodeDefaultConfig,
-    defaultPolicy,
     loadConfig,
     mountAdvisoryDenials,
     mountDatabaseRequirement,
@@ -57,11 +56,11 @@ spec = do
             loadConfig [] Nothing `shouldSatisfy` isRight
 
         it "ships exactly the expected shared baseline rules under their default names" $ do
-            RulePolicy rules <- expectRight defaultPolicy
+            (_, RulePolicy rules) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
         it "applies every shared shipped rule at both phases" $ do
-            baseline <- expectRight defaultPolicy
+            (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             map ruleReach (Map.elems (policyRules baseline))
                 `shouldBe` [AdmissionAndRevocation, AdmissionAndRevocation]
 
@@ -69,8 +68,9 @@ spec = do
             decodeDefaultConfig "rules: [" `shouldSatisfy` parseRefusal "config/default.yaml is invalid YAML: "
 
         it "parses default settings before resolving default rules" $ do
-            bytes <- defaultsWith (object ["server" .= object ["port" .= (0 :: Int)], "rules" .= ([] :: [Value])])
-            decodeDefaultConfig bytes `shouldSatisfy` parseRefusal "Configuration parse error: "
+            bytes <- defaultsWith (object ["server" .= object ["port" .= (-1 :: Int)], "rules" .= object ["unresolved" .= object ["ageSeconds" .= (60 :: Int)]]])
+            decodeDefaultConfig bytes
+                `shouldBe` Left [ParseError "Configuration parse error: Error in $.server.port: server.port must be a port in 0..65535 (0 = OS-assigned), got -1"]
 
         it "returns a typed parse refusal for malformed default rules" $ do
             bytes <- defaultsWith (object ["rules" .= ([] :: [Value])])

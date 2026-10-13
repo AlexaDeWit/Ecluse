@@ -12,7 +12,8 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 import UnliftIO.Temporary (withSystemTempDirectory)
 
-import Ecluse.Config (RulePolicy (policyRules), defaultPolicy)
+import Ecluse.Config (RulePolicy (policyRules), decodeDefaultConfig)
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveDb (cveDbLookup), CveLookup (CveLookup, cveCoveredNames))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -105,7 +106,7 @@ spec = do
 
     describe "shippedPolicy" $
         it "is the shared policy config/default.yaml ships" $ do
-            baseline <- expectRight defaultPolicy
+            (_, baseline) <- expectRight (decodeDefaultConfig defaultConfigBytes)
             shippedPolicy `shouldMatchList` Map.elems (policyRules baseline)
 
 assertCapturedRemediation :: RuleDeps -> EvalContext -> PackageDetails -> PackageDetails -> Expectation

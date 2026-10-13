@@ -14,8 +14,9 @@ import Data.Text qualified as T
 import Data.Universe.Class (Universe (universe))
 import Test.Hspec
 
-import Ecluse.Config (defaultPolicy)
+import Ecluse.Config (decodeDefaultConfig)
 import Ecluse.Config.Aeson (parseRulesPatch)
+import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Rule
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
@@ -495,7 +496,7 @@ allowLimitedToAdmission ty =
 
 resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
 resolveJson body = do
-    baseline <- first (pure . MalformedRule "<defaults>" . show) defaultPolicy
+    (_, baseline) <- first (pure . MalformedRule "<defaults>" . show) (decodeDefaultConfig defaultConfigBytes)
     resolveJsonOver baseline body
 
 resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
