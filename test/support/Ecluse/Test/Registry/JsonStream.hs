@@ -3,13 +3,14 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Pure chunk inputs for the production registry stream drivers, and checks for shared keys and texts.
-module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts) where
+module Ecluse.Test.Registry.JsonStream (parseJsonChunks, walkJsonChunks, walkWritingChunks, heldChunks, testTable, readOutcome, sharesKey, sharesString, sameTexts, namedMembers, retainedObjectOr) where
 
 import Control.Monad.ST (ST, runST)
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.HashMap.Strict qualified as HashMap
 import Data.JsonStream.Lexer (Cursor)
 import Data.JsonStream.Parser qualified as J
 import System.Mem.StableName (makeStableName)
@@ -17,7 +18,8 @@ import UnliftIO.Exception (evaluate)
 
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
 import Ecluse.Core.Registry.Json.Walk (Step, Steps, readJsonWalk, readJsonWalkST)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit, readJsonStream)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit, readJsonStream, retainedObjectWith)
+import Ecluse.Core.Registry.JsonStream.Internal (Members (NamedMembers))
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
@@ -51,9 +53,7 @@ nextChunk = state $ \case
 testTable :: [Text] -> InternTable
 testTable = newInternTable (SipKey 0x0706050403020100 0x0f0e0d0c0b0a0908)
 
-{- | What a caller acts on in a read: the refusal, or the byte count with the result or whether its
-parse error is the nesting limit. Other parse errors carry no meaning past their failure.
--}
+-- | Compare refusals, byte counts, values and the retained-depth failure class.
 readOutcome :: Either LimitError (StreamResult a) -> Either LimitError (Int, Either Bool a)
 readOutcome = fmap (\result -> (streamBytes result, first isNestingLimit (streamValue result)))
 
@@ -75,3 +75,11 @@ oneObject texts = do
 -- | Whether each pair holds one heap object twice, so the second holder adds only a pointer.
 sameTexts :: [(Text, Text)] -> IO Bool
 sameTexts pairs = and <$> traverse (\(held, other) -> oneObject [held, other]) pairs
+
+-- | Retain only the named members. The first entry for a name wins.
+namedMembers :: [(Text, J.Parser Value)] -> Members
+namedMembers entries = NamedMembers (HashMap.fromListWith (\_ earlier -> earlier) [(name, (Key.fromText name, parser)) | (name, parser) <- entries])
+
+-- | Retain an object or the supplied witness while preserving the combinator skip rules.
+retainedObjectOr :: Value -> Members -> J.Parser Value
+retainedObjectOr fallback = retainedObjectWith (pure fallback)

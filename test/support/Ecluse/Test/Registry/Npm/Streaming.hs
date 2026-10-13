@@ -8,8 +8,9 @@ module Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields) where
 import Data.Aeson (Value (Array, Null, Number, Object, String))
 import Data.JsonStream.Parser qualified as J
 
-import Ecluse.Core.Registry.JsonStream (everyMember, namedMembers, retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
+import Ecluse.Core.Registry.JsonStream (everyMember, retainedArrayWith, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
 import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField, NpmFieldOf (..), versionFields, versionListFields)
+import Ecluse.Test.Registry.JsonStream (namedMembers, retainedObjectOr)
 
 -- | Full serving data, one release, or the fields needed to recognise usable version entries.
 data NpmRead = FullRead | SelectedRead Text | VersionListRead
