@@ -7,6 +7,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      refactor_comparison:
+        description: Run the fixed issue 1565 comparison on one worker
+        type: boolean
+        default: false
 
 # One run per ref. Cancel a superseded PR run when a newer commit lands, because only
 # the latest commit's numbers matter. Never cancel a manual dispatch.
@@ -21,7 +26,40 @@ permissions:
   contents: read
 
 jobs:
+  refactor-comparison:
+    name: Temporary issue 1565 comparison
+    if: github.event_name == 'workflow_dispatch' && inputs.refactor_comparison
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 240
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout comparison controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          dist-cache: "false"
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+      - name: Build and measure both sources serially
+        run: nix develop .#ci --command task performance:comparison:run
+      - name: Upload complete and partial comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: refactor-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/refactor-comparison/evidence/
+          if-no-files-found: error
+
   bench:
+    if: github.event_name != 'workflow_dispatch' || !inputs.refactor_comparison
     name: Work-per-request benchmarks (inform-only)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60

@@ -1,4 +1,6 @@
 version: '3'
+includes:
+  comparison: refactor-performance.yml
 tasks:
   invalidate:
     cmds:
