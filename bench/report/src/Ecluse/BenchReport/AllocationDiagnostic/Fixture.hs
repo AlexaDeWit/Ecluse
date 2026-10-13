@@ -3,15 +3,16 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Small complete evidence fixtures use real pinned dependency bytes and opaque build payloads.
-module Ecluse.BenchReport.AllocationDiagnostic.Fixture (prepareFixture, refreshBindings, prepareFixtureFor, refreshBindingsFor, snapshot, restore, fixtureRun, fixtureAttempt, nativeCsv) where
+module Ecluse.BenchReport.AllocationDiagnostic.Fixture (prepareFixture, refreshBindings, prepareFixtureFor, refreshBindingsFor, mutatePlanFor, mirrorSnapshotFor, isComponent, changeComponent, snapshot, restore, fixtureRun, fixtureAttempt, nativeCsv) where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Object, Value (Array, Object), object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, listDirectory, removePathForcibly)
 import System.FilePath (takeDirectory, (</>))
 
-import Ecluse.BenchReport.AllocationDiagnostic (bindPassFor, bindRunFor, recordBuild, writeConditionsFor)
+import Ecluse.BenchReport.AllocationDiagnostic (bindPassFor, bindRunFor, recordBuildFor, writeConditionsFor)
 import Ecluse.BenchReport.AllocationDiagnostic.Inventory
 import Ecluse.BenchReport.FullHistory.Evidence qualified as Full
 import Ecluse.BenchReport.FullHistory.Trust (trustedPaths)
@@ -62,8 +63,8 @@ prepareFixtureFor recipe evidence root = do
         writeFixtureText (identityDirectory </> "binary.sha256") (binary <> "\n")
         writeFixtureText (identityDirectory </> "corpus.sha256") corpus
         writeFixtureText (identityDirectory </> "dependency.sha256") dependency
-        writeJsonFile (root </> identityDirectory </> "plan.json") (fixturePlan root build)
-        recordBuild root build (sourceFor build)
+        writeJsonFile (root </> identityDirectory </> "plan.json") (fixturePlanFor recipe root build)
+        recordBuildFor recipe root build (sourceFor build)
     withEnvOverrides [("GITHUB_RUN_ID", toString fixtureRun), ("GITHUB_RUN_ATTEMPT", toString fixtureAttempt)] $
         forM_ (scheduleFor recipe) $ \(Pass name build mode) -> do
             let directory = toString name
@@ -88,26 +89,32 @@ prepareFixtureFor recipe evidence root = do
   where
     writeFixtureText path value = createDirectoryIfMissing True (takeDirectory (root </> path)) >> writeComparisonText (root </> path) value
 
-fixturePlan :: FilePath -> Text -> Value
-fixturePlan root build = object ["install-plan" .= units]
+fixturePlanFor :: Recipe -> FilePath -> Text -> Value
+fixturePlanFor recipe root build = object ["install-plan" .= units]
   where
     instrumented = "I-" `T.isPrefixOf` build
     libraryId :: Text
     libraryId = if instrumented then "tasty-bench-0.4.1-inplace" else "native-tasty-bench"
     fitId :: Text
     fitId = if instrumented then "tasty-bench-fit-0.1.1-inplace" else "native-tasty-bench-fit"
+    externalPackages :: [Text]
+    externalPackages = ["base", "containers", "deepseq", "ghc-prim", "tasty"]
     units :: [Value]
     units =
         [ object ["id" .= ("fixture-benchmark" :: Text), "pkg-name" .= ("ecluse" :: Text), "component-name" .= ("bench:ecluse-bench" :: Text), "depends" .= [libraryId, fitId]]
-        , object (common <> selection)
+        , object (common <> selection <> fullFields)
         , fit
         , object ["id" .= ("fixture-base" :: Text), "pkg-name" .= ("base" :: Text), "component-name" .= ("lib" :: Text), "depends" .= ([] :: [Text])]
         ]
-            <> [object ["id" .= ("tasty-bench-0.4.1-inplace-bench-fibo" :: Text), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "component-name" .= ("bench:bench-fibo" :: Text), "depends" .= [libraryId]] | instrumented]
-    common = ["id" .= libraryId, "component-name" .= ("lib" :: Text), "depends" .= (["fixture-base"] :: [Text]), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "flags" .= object ["tasty" .= True]]
+            <> [object ["id" .= ("fixture-" <> package), "pkg-name" .= package, "component-name" .= ("lib" :: Text), "depends" .= ([] :: [Text])] | recipe == FullHistory, package <- filter (/= "base") externalPackages]
+            <> [object (["id" .= ("tasty-bench-0.4.1-inplace-bench-fibo" :: Text), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "component-name" .= ("bench:bench-fibo" :: Text), "depends" .= (["fixture-base" | recipe == FullHistory] <> [libraryId])] <> [field | recipe == FullHistory, field <- ["flags" .= object ["tasty" .= True]] <> selection <> fullFields]) | instrumented]
+    fullFields = [field | recipe == FullHistory, field <- ["type" .= ("configured" :: Text), "exe-depends" .= ([] :: [Text])]]
+    libraryEdges :: [Text]
+    libraryEdges = if recipe == Focused then ["fixture-base"] else ["fixture-" <> package | package <- externalPackages]
+    common = ["id" .= libraryId, "component-name" .= ("lib" :: Text), "depends" .= libraryEdges, "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "flags" .= object ["tasty" .= True]]
     selection
-        | not instrumented = ["pkg-src-sha256" .= ("315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777" :: Text), "pkg-cabal-sha256" .= ("c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84" :: Text)]
-        | otherwise = ["style" .= ("local" :: Text), "pkg-src" .= object ["path" .= (root </> "dependency/tasty-bench-0.4.1")]]
+        | not instrumented = ["pkg-src-sha256" .= ("315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777" :: Text), "pkg-cabal-sha256" .= ("c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84" :: Text)] <> [field | recipe == FullHistory, field <- ["style" .= ("global" :: Text), "pkg-src" .= object ["type" .= ("repo-tar" :: Text), "repo" .= object ["type" .= ("secure-repo" :: Text), "uri" .= ("http://hackage.haskell.org/" :: Text)]]]]
+        | otherwise = ["style" .= ("local" :: Text), "pkg-src" .= object (["path" .= (root </> "dependency/tasty-bench-0.4.1")] <> ["type" .= ("local" :: Text) | recipe == FullHistory])]
     fit :: Value
     fit =
         object
@@ -171,3 +178,33 @@ restore root files = do
     forM_ files $ \(path, bytes) -> do
         createDirectoryIfMissing True (takeDirectory (root </> path))
         writeFileBS (root </> path) bytes
+
+-- | Copy a fixture change to every scheduled before/after snapshot.
+mirrorSnapshotFor :: Recipe -> FilePath -> Text -> FilePath -> IO ()
+mirrorSnapshotFor recipe root build file =
+    forM_ [name | Pass name actual _ <- scheduleFor recipe, actual == build] $ \name ->
+        forM_ ["before", "after"] $ \phase -> copyFile (root </> "build-" <> toString build </> "identity" </> file) (root </> toString name </> phase </> file)
+
+-- | Mutate one plan and mirror it before the caller refreshes outer bindings.
+mutatePlanFor :: Recipe -> Text -> ([Value] -> [Value]) -> FilePath -> IO ()
+mutatePlanFor recipe build change root = do
+    let path = root </> "build-" <> toString build </> "identity/plan.json"
+    plan <- readJsonFile path
+    changed <- case plan of
+        Object fields -> case KeyMap.lookup "install-plan" fields of
+            Just (Array units) -> pure (Object (KeyMap.insert "install-plan" (toJSON (change (toList units))) fields))
+            _ -> fail "fixture plan lacks units"
+        _ -> fail "fixture plan is not an object"
+    writeJsonFile path changed
+    mirrorSnapshotFor recipe root build "plan.json"
+
+-- | Select a fixture component by package and component name.
+isComponent :: Text -> Text -> Value -> Bool
+isComponent package component (Object fields) = KeyMap.lookup "pkg-name" fields == Just (toJSON package) && KeyMap.lookup "component-name" fields == Just (toJSON component)
+isComponent _ _ _ = False
+
+-- | Change one selected component without changing unrelated units.
+changeComponent :: Text -> Text -> (Object -> Object) -> Value -> Value
+changeComponent package component change unit@(Object fields)
+    | isComponent package component unit = Object (change fields)
+changeComponent _ _ _ unit = unit

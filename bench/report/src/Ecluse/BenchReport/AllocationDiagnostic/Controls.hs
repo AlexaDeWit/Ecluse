@@ -5,11 +5,11 @@
 -- | Each negative control reaches the complete audit from an otherwise accepted fixture.
 module Ecluse.BenchReport.AllocationDiagnostic.Controls (controls) where
 
-import Data.Aeson (Object, Value (Array, Object), toJSON)
+import Data.Aeson (Value, toJSON)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Directory (copyFile, createDirectoryIfMissing, removeFile, renameDirectory)
+import System.Directory (createDirectoryIfMissing, removeFile, renameDirectory)
 import System.FilePath ((</>))
 import UnliftIO.Exception (finally, tryAny)
 import UnliftIO.Temporary (withSystemTempDirectory)
@@ -125,33 +125,13 @@ changeSnapshot build file value root = do
     mirrorSnapshot root build file
 
 mirrorSnapshot :: FilePath -> Text -> FilePath -> IO ()
-mirrorSnapshot root build file =
-    forM_ [name | Pass name actual _ <- schedule, actual == build] $ \name ->
-        forM_ ["before", "after"] $ \phase -> copyFile (root </> "build-" <> toString build </> "identity" </> file) (root </> toString name </> phase </> file)
+mirrorSnapshot = mirrorSnapshotFor Focused
 
 changePlan :: FilePath -> IO ()
 changePlan = mutatePlan "C-A" (map (changeComponent "tasty-bench" "lib" (KeyMap.insert "pkg-src-sha256" (toJSON ("different" :: Text)))))
 
 mutatePlan :: Text -> ([Value] -> [Value]) -> FilePath -> IO ()
-mutatePlan build change root = do
-    let path = root </> "build-" <> toString build </> "identity/plan.json"
-    plan <- readJsonFile path
-    changed <- case plan of
-        Object fields -> case KeyMap.lookup "install-plan" fields of
-            Just (Array units) -> pure (Object (KeyMap.insert "install-plan" (toJSON (change (toList units))) fields))
-            _ -> fail "fixture plan lacks units"
-        _ -> fail "fixture plan is not an object"
-    writeJsonFile path changed
-    mirrorSnapshot root build "plan.json"
-
-isComponent :: Text -> Text -> Value -> Bool
-isComponent package component (Object fields) = KeyMap.lookup "pkg-name" fields == Just (toJSON package) && KeyMap.lookup "component-name" fields == Just (toJSON component)
-isComponent _ _ _ = False
-
-changeComponent :: Text -> Text -> (Object -> Object) -> Value -> Value
-changeComponent package component change unit@(Object fields)
-    | isComponent package component unit = Object (change fields)
-changeComponent _ _ _ unit = unit
+mutatePlan = mutatePlanFor Focused
 
 omitPassEntries :: (Map FilePath Text -> Map FilePath Text) -> FilePath -> IO ()
 omitPassEntries change root = do

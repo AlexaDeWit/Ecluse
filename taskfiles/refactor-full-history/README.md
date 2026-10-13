@@ -24,6 +24,9 @@ The reporter authenticates source, dependency, configuration and corpus bytes fr
 catalogue. It requires every artifact, actual executable, plan edge, mode, command, status,
 serial event, native row, assertion outcome and marked row binding. Semantic controls refresh
 outer digests and must fail at their intended boundary before the restored fixture passes.
+The full-plan guard permits only the native library, or the marked library and bench-fibo.
+It resolves the five library edges and the two bench-fibo edges within each plan.
+The guard compares the library edges across all builds before launch and during final audit.
 The original focused recipe and its controls remain available.
 
 Earlier focused empty batches allocated 12,424-12,912 global bytes despite displayed zero

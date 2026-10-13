@@ -2152,6 +2152,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.AllocationDiagnostic.Controls
     Ecluse.BenchReport.AllocationDiagnostic.Fixture
     Ecluse.BenchReport.AllocationDiagnostic.Inventory
+    Ecluse.BenchReport.AllocationDiagnostic.Plan
     Ecluse.BenchReport.FullHistory.Catalogue
     Ecluse.BenchReport.FullHistory.Controls
     Ecluse.BenchReport.FullHistory.Evidence

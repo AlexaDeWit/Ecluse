@@ -5,6 +5,8 @@
 module Ecluse.BenchReport.FullHistory.Controls (controls) where
 
 import Codec.Compression.GZip qualified as GZip
+import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -16,6 +18,7 @@ import Ecluse.BenchReport.AllocationDiagnostic (auditFor)
 import Ecluse.BenchReport.AllocationDiagnostic.Controls qualified as Focused
 import Ecluse.BenchReport.AllocationDiagnostic.Fixture
 import Ecluse.BenchReport.AllocationDiagnostic.Inventory
+import Ecluse.BenchReport.AllocationDiagnostic.Plan (auditPlansFor)
 import Ecluse.BenchReport.RefactorFiles (readComparisonText, writeComparisonText)
 import Ecluse.Test.Contract.Manifest (digestFile, readJsonFile, writeJsonFile)
 
@@ -27,10 +30,15 @@ controls evidence = do
         prepareFixtureFor FullHistory evidence root
         accept root
         original <- snapshot root
-        forM_ mutations $ \(name, boundary, change) -> do
+        forM_ (mutations <> planMutations) $ \(name, boundary, change) -> do
             ( do
                     change root
                     refreshBindingsFor FullHistory root
+                    when ("plan: " `T.isPrefixOf` name) $ do
+                        refused <- tryAny (auditPlansFor FullHistory root)
+                        case refused of
+                            Left problem -> requireDiagnostic (boundary `T.isInfixOf` show problem) (name <> " missed the prelaunch boundary")
+                            Right () -> fail (toString (name <> " passed the prelaunch plan audit"))
                     rejected <- tryAny (auditFor FullHistory root fixtureRun fixtureAttempt)
                     requireDiagnostic (isLeft rejected) (name <> " unexpectedly passed")
                     faults <- readJsonFile (root </> "audit-faults.json") :: IO [Text]
@@ -40,7 +48,7 @@ controls evidence = do
                 `finally` restore root original
             accept root
   where
-    accept root = auditFor FullHistory root fixtureRun fixtureAttempt
+    accept root = auditPlansFor FullHistory root >> auditFor FullHistory root fixtureRun fixtureAttempt
 
 mutations :: [(Text, Text, FilePath -> IO ())]
 mutations =
@@ -90,3 +98,33 @@ changeDependency root = do
     forM_ builds $ \build -> rewrite ("build-" <> toString build </> "identity/dependency.sha256") manifest root
     forM_ (scheduleFor FullHistory) $ \(Pass name _ _) ->
         forM_ ["before", "after"] $ \phase -> rewrite (toString name </> phase </> "dependency.sha256") manifest root
+
+planMutations :: [(Text, Text, FilePath -> IO ())]
+planMutations =
+    [ ("plan: unexpected marked component", inventory, mutatePlanFor FullHistory "I-A" (<> [unexpected]))
+    , ("plan: unexpected native component", inventory, mutatePlanFor FullHistory "C-A" (<> [unexpected]))
+    , ("plan: missing marked bench-fibo", inventory, mutatePlanFor FullHistory "I-A" (filter (not . isComponent "tasty-bench" "bench:bench-fibo")))
+    , ("plan: duplicate marked bench-fibo", inventory, mutatePlanFor FullHistory "I-A" (\units -> units <> map (changeComponent "tasty-bench" "bench:bench-fibo" (KeyMap.insert "id" (toJSON ("duplicate-fibo" :: Text)))) (filter (isComponent "tasty-bench" "bench:bench-fibo") units)))
+    , ("plan: missing native library", inventory, mutatePlanFor FullHistory "C-A" (filter (not . isComponent "tasty-bench" "lib")))
+    , ("plan: duplicate native library", inventory, mutatePlanFor FullHistory "C-A" (\units -> units <> map (changeComponent "tasty-bench" "lib" (KeyMap.insert "id" (toJSON ("duplicate-lib" :: Text)))) (filter (isComponent "tasty-bench" "lib") units)))
+    , ("plan: missing library edge", "full tasty-bench library dependencies differ", component "lib" "depends" (toJSON (["fixture-base"] :: [Text])))
+    , ("plan: duplicate library edge", "full tasty-bench library dependencies differ", component "lib" "depends" (toJSON (["fixture-base", "fixture-base", "fixture-containers", "fixture-deepseq", "fixture-ghc-prim", "fixture-tasty"] :: [Text])))
+    , ("plan: changed resolved library edge", "full tasty-bench library external edges differ", mutatePlanFor FullHistory "I-A" (map (changeComponent "tasty" "lib" (KeyMap.insert "id" (toJSON ("different-tasty" :: Text))) . changeComponent "tasty-bench" "lib" (KeyMap.insert "depends" (toJSON (["fixture-base", "fixture-containers", "fixture-deepseq", "fixture-ghc-prim", "different-tasty"] :: [Text]))))))
+    , ("plan: missing bench-fibo base edge", fiboEdges, component "bench:bench-fibo" "depends" (toJSON (["tasty-bench-0.4.1-inplace"] :: [Text])))
+    , ("plan: wrong bench-fibo library edge", fiboEdges, component "bench:bench-fibo" "depends" (toJSON (["fixture-base", "wrong-library"] :: [Text])))
+    , ("plan: duplicate bench-fibo edge", fiboEdges, component "bench:bench-fibo" "depends" (toJSON (["fixture-base", "tasty-bench-0.4.1-inplace", "tasty-bench-0.4.1-inplace"] :: [Text])))
+    , ("plan: wrong bench-fibo version", "full tasty-bench component version differs", component "bench:bench-fibo" "pkg-version" (toJSON ("99.0" :: Text)))
+    , ("plan: wrong bench-fibo flags", "full tasty-bench component flags differ", component "bench:bench-fibo" "flags" (object ["tasty" .= False]))
+    , ("plan: wrong bench-fibo source", "full tasty-bench component source differs", component "bench:bench-fibo" "pkg-src" (object ["type" .= ("local" :: Text), "path" .= ("wrong-source" :: Text)]))
+    , ("plan: wrong bench-fibo style", "full tasty-bench component style differs", component "bench:bench-fibo" "style" (toJSON ("global" :: Text)))
+    , ("plan: wrong bench-fibo identity", "full tasty-bench bench-fibo identity differs", component "bench:bench-fibo" "id" (toJSON ("wrong-fibo" :: Text)))
+    , ("plan: wrong bench-fibo type", "full tasty-bench component type differs", component "bench:bench-fibo" "type" (toJSON ("pre-existing" :: Text)))
+    , ("plan: extra bench-fibo executable edge", "full tasty-bench component executable dependencies differ", component "bench:bench-fibo" "exe-depends" (toJSON (["wrong-executable"] :: [Text])))
+    , ("plan: unexpected local source digest", "full tasty-bench component source digest differs", component "bench:bench-fibo" "pkg-src-sha256" (toJSON ("wrong-digest" :: Text)))
+    ]
+  where
+    inventory = "full tasty-bench component inventory differs"
+    fiboEdges = "full tasty-bench bench-fibo dependencies differ"
+    component name key value = mutatePlanFor FullHistory "I-A" (map (changeComponent "tasty-bench" name (KeyMap.insert key value)))
+    unexpected :: Value
+    unexpected = object ["id" .= ("unexpected-tasty-unit" :: Text), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("99.0" :: Text), "component-name" .= ("exe:unexpected" :: Text), "depends" .= (["wrong-dependency"] :: [Text])]

@@ -44,6 +44,7 @@ tasks:
         vars: {FULL_DIAG_SIDE: A, FULL_DIAG_VARIANT: I}
       - task: prepare
         vars: {FULL_DIAG_SIDE: B, FULL_DIAG_VARIANT: I}
+      - '"{{.FULL_DIAG_EVIDENCE}}/bench-report" full-history-plans "{{.FULL_DIAG_EVIDENCE}}"'
       - cmp '{{.FULL_DIAG_EVIDENCE}}/build-C-A/identity/corpus.sha256' '{{.FULL_DIAG_EVIDENCE}}/build-C-B/identity/corpus.sha256'
       - cmp '{{.FULL_DIAG_EVIDENCE}}/build-C-A/identity/locks.sha256' '{{.FULL_DIAG_EVIDENCE}}/build-C-B/identity/locks.sha256'
       - cp -a '{{.FULL_DIAG_ROOT}}/source-C-A/bench/corpus' '{{.FULL_DIAG_EVIDENCE}}/inputs/'

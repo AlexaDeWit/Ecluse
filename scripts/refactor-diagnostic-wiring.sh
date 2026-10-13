@@ -108,6 +108,14 @@ summarise() {
   summary_count=$((summary_count + 1))
 }
 
+if [ "$namespace" = FULL_DIAG_ ]; then
+  awk '
+    /task: prepare/ {builds++}
+    /bench-report" full-history-plans/ {if (builds != 4 || launched) exit 1; guarded=1}
+    /task: record-pass/ {if (!guarded) exit 1; launched=1}
+    END {if (!guarded || !launched) exit 1}
+  ' taskfiles/refactor-full-history.yml || fail 'full plan guard does not precede every measured launch'
+fi
 task --summary ${diagnostic_target}:run > "$report_root/default-run.txt"
 verify_summary "$report_root/default-run.txt" '' '' '' ''
 summary_count=$((summary_count + 1))

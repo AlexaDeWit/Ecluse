@@ -6,7 +6,7 @@ module Ecluse.BenchReport.FullHistory.Trust (trustedDigest, trustedPaths) where
 
 -- | The catalogue fixes product, dependency, controller, configuration and input bytes.
 trustedDigest :: Text
-trustedDigest = "4d2119f947c7852b56abdb7f7950fb41339396a0f27b8a0d23419f5ca19935bf"
+trustedDigest = "2527daa37d2e8843b434eb8891501b4f6e86f7ee72ee180abce0b130ff2c7f7d"
 
 -- | Required trusted artifacts stay independent of supplied bindings.
 trustedPaths :: [FilePath]
