@@ -209,3 +209,122 @@ tasks:
       - task --exit-code performance:invalidate
       - task: reporter
       - '"$(cabal list-bin exe:bench-report)" receipt-load "$PERF_ARTIFACT_DIR" "$PERF_ARTIFACT_DIR/conditions.json"'
+
+  osv-index-acquire:
+    cmds:
+      - mkdir -p scratchpad/osv-index
+      - bash scripts/osv-index-acquire.sh scratchpad/osv-index/inputs
+
+  osv-index-build:
+    cmds:
+      - bash scripts/osv-index-source.sh scratchpad/osv-index/sources
+      - mkdir scratchpad/osv-index/bin
+      - for: [A, B]
+        task: osv-index-build-one
+        vars:
+          VARIANT: '{{.ITEM}}'
+      - for: [A, B]
+        cmd: bash scripts/osv-index-binary.sh 'scratchpad/osv-index/sources/{{.ITEM}}' 'scratchpad/osv-index/bin/{{.ITEM}}'
+      - scratchpad/osv-index/bin/A corpus npm scratchpad/osv-index/inputs
+      - scratchpad/osv-index/bin/A corpus pypi scratchpad/osv-index/inputs
+      - bash scripts/osv-index-conditions.sh scratchpad/osv-index/conditions.txt
+      - scratchpad/osv-index/bin/A manifest scratchpad/osv-index
+
+  osv-index-build-one:
+    dir: '{{.ROOT_DIR}}/scratchpad/osv-index/sources/{{.VARIANT}}'
+    requires:
+      vars: [VARIANT]
+    cmds:
+      - cabal build -v0 exe:osv-index-experiment --enable-optimization=1 --disable-profiling
+
+  osv-index-measure:
+    cmds:
+      - for: [npm-corpus, pypi-corpus, npm-full, pypi-full]
+        task: osv-index-case
+        vars:
+          CASE: '{{.ITEM}}'
+
+  osv-index-case:
+    requires:
+      vars: [CASE]
+    vars:
+      ECO: '{{index (splitList "-" .CASE) 0}}'
+      CAPTURE: '{{if eq .ECO "npm"}}lodash{{else}}requests{{end}}'
+      LEFT: 'scratchpad/osv-index/samples/{{.CASE}}/warm-A/db/artifact.db'
+      RIGHT: 'scratchpad/osv-index/samples/{{.CASE}}/warm-B/db/artifact.db'
+      READERS: 'scratchpad/osv-index/readers/{{.CASE}}'
+    cmds:
+      - for: [warm-A, warm-B, 1-A, 1-B, 2-B, 2-A, 3-A, 3-B, 4-B, 4-A, 5-A, 5-B, 6-B, 6-A]
+        task: osv-index-sample
+        vars:
+          CASE: '{{.CASE}}'
+          SAMPLE: '{{.ITEM}}'
+      - mkdir -p '{{.READERS}}'
+      - bash scripts/process-capture.sh '{{.READERS}}/select-A.status' '{{.READERS}}/select-A.log' scratchpad/osv-index/bin/A select '{{.LEFT}}' '{{.READERS}}/selection-A.json' '{{.CAPTURE}}'
+      - bash scripts/process-capture.sh '{{.READERS}}/select-B.status' '{{.READERS}}/select-B.log' scratchpad/osv-index/bin/B select '{{.RIGHT}}' '{{.READERS}}/selection-B.json' '{{.CAPTURE}}'
+      - bash scripts/process-capture.sh '{{.READERS}}/reader.status' '{{.READERS}}/reader.log' scratchpad/osv-index/bin/A reader-check '{{.ECO}}' '{{.LEFT}}' '{{.RIGHT}}' '{{.READERS}}/selection-A.json' '{{.READERS}}/reader.jsonl'
+      - bash scripts/process-capture.sh '{{.READERS}}/edges.status' '{{.READERS}}/edges.log' scratchpad/osv-index/bin/A edges '{{.ECO}}' '{{.LEFT}}' '{{.RIGHT}}' '{{.READERS}}/edges' '{{.READERS}}/edges.jsonl'
+      - for: [reused, fresh]
+        task: osv-index-query-mode
+        vars:
+          CASE: '{{.CASE}}'
+          MODE: '{{.ITEM}}'
+
+  osv-index-sample:
+    requires:
+      vars: [CASE, SAMPLE]
+    vars:
+      ECO: '{{index (splitList "-" .CASE) 0}}'
+      VARIANT: '{{last (splitList "-" .SAMPLE)}}'
+      EPS: '{{if hasSuffix "corpus" .CASE}}{{.ECO}}-corpus-epss.gz{{else}}epss.csv.gz{{end}}'
+      SAMPLE_DIR: 'scratchpad/osv-index/samples/{{.CASE}}/{{.SAMPLE}}'
+    cmds:
+      - mkdir -p '{{.SAMPLE_DIR}}'
+      - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/compile.status' '{{.SAMPLE_DIR}}/compile.log' python3 bench/osv-index/capture.py '{{.SAMPLE_DIR}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' compile '{{.ECO}}' 'scratchpad/osv-index/inputs/{{.CASE}}.zip' 'scratchpad/osv-index/inputs/{{.EPS}}' '{{.SAMPLE_DIR}}/db'
+      - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/inspect.status' '{{.SAMPLE_DIR}}/inspect.log' scratchpad/osv-index/bin/A inspect '{{.SAMPLE_DIR}}/db/artifact.db' '{{.SAMPLE_DIR}}/snapshot.json'
+      - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/compare.status' '{{.SAMPLE_DIR}}/compare.log' scratchpad/osv-index/bin/A compare 'scratchpad/osv-index/samples/{{.CASE}}/warm-A/snapshot.json' '{{.SAMPLE_DIR}}/snapshot.json' '{{.SAMPLE_DIR}}/comparison.json'
+      - bash scripts/osv-index-prune.sh '{{.SAMPLE_DIR}}'
+
+  osv-index-query-mode:
+    requires:
+      vars: [CASE, MODE]
+    cmds:
+      - for: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30']
+        task: osv-index-query-pair
+        vars:
+          CASE: '{{.CASE}}'
+          MODE: '{{.MODE}}'
+          BATCH: '{{.ITEM}}'
+
+  osv-index-query-pair:
+    requires:
+      vars: [CASE, MODE, BATCH]
+    vars:
+      FIRST: '{{if eq (mod (atoi .BATCH) 2) 0}}B{{else}}A{{end}}'
+      SECOND: '{{if eq .FIRST "A"}}B{{else}}A{{end}}'
+    cmds:
+      - task: osv-index-query
+        vars: {CASE: '{{.CASE}}', MODE: '{{.MODE}}', BATCH: '{{.BATCH}}', VARIANT: '{{.FIRST}}'}
+      - task: osv-index-query
+        vars: {CASE: '{{.CASE}}', MODE: '{{.MODE}}', BATCH: '{{.BATCH}}', VARIANT: '{{.SECOND}}'}
+
+  osv-index-query:
+    requires:
+      vars: [CASE, MODE, BATCH, VARIANT]
+    vars:
+      ECO: '{{index (splitList "-" .CASE) 0}}'
+      OUT: 'scratchpad/osv-index/queries/{{.CASE}}/{{.MODE}}/{{.BATCH}}-{{.VARIANT}}'
+    cmds:
+      - mkdir -p '{{.OUT}}'
+      - bash scripts/process-capture.sh '{{.OUT}}/query.status' '{{.OUT}}/query.log' python3 bench/osv-index/capture.py '{{.OUT}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' reader-batch '{{.ECO}}' 'scratchpad/osv-index/samples/{{.CASE}}/warm-{{.VARIANT}}/db/artifact.db' 'scratchpad/osv-index/readers/{{.CASE}}/selection-A.json' '{{.OUT}}/result.json'
+
+  osv-index-audit:
+    cmds:
+      - |
+        if [ -x scratchpad/osv-index/bin/A ]; then
+          scratchpad/osv-index/bin/A audit scratchpad/osv-index
+        else
+          mkdir -p scratchpad/osv-index
+          printf '%s\n' 'The experiment did not reach a built auditor. No measurement result is qualified.' > scratchpad/osv-index/summary.md
+          exit 1
+        fi

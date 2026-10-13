@@ -2199,3 +2199,28 @@ executable perf-acceptance
     , text             ^>=2.1
     , time             ^>=1.12
     , universe-base    ^>=1.1
+
+-- Temporary #1331 experiment. This component does not ship in the product image.
+executable osv-index-experiment
+  import: shared
+  import: shipped-rts
+  main-is: Main.hs
+  hs-source-dirs: bench/osv-index
+  other-modules:
+    Ecluse.OsvIndex.Artifact
+    Ecluse.OsvIndex.Evidence
+    Ecluse.OsvIndex.Reader
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-contracts
+    , aeson >=2.2 && <2.4
+    , bytestring ^>=0.12
+    , containers ^>=0.7
+    , crypton >=2.1 && <2.2
+    , directory ^>=1.3
+    , filepath ^>=1.5
+    , sqlite-simple ^>=0.4
+    , text ^>=2.1
+    , time ^>=1.12
+    , unliftio ^>=0.2
