@@ -1,0 +1,71 @@
+--- a/src/Test/Tasty/Bench.hs
++++ b/src/Test/Tasty/Bench.hs
+@@ -725,0 +726,2 @@
++import qualified Test.Tasty.Bench.Diagnostic as Diagnostic
++import qualified Test.Tasty.Bench.FullHistory as FullHistory
+@@ -1122,0 +1125,21 @@
++-- Diagnostic counter reads bracket the action. Recording follows the native final global read.
++measureRecorded :: Diagnostic.Recorder -> TimeMode -> Word64 -> Benchmarkable -> IO Measurement
++measureRecorded recorder timeMode n (Benchmarkable act) = do
++  let getTimePicoSecs' = getTimePicoSecs timeMode
++  performGC
++  startTime <- getTimePicoSecs'
++  (startAllocs, startCopied, startMaxMemInUse) <- getAllocsAndCopied
++  threadStart <- getAllocationCounter
++  act n
++  threadEnd <- getAllocationCounter
++  endTime <- getTimePicoSecs'
++  performMinorGC
++  (endAllocs, endCopied, endMaxMemInUse) <- getAllocsAndCopied
++  Diagnostic.recordBatch recorder n startTime startAllocs endTime endAllocs threadStart threadEnd
++  pure Measurement
++    { measTime = endTime - startTime
++    , measAllocs = endAllocs - startAllocs
++    , measCopied = endCopied - startCopied
++    , measMaxMem = max endMaxMemInUse startMaxMemInUse
++    }
++
+@@ -1130 +1153,11 @@
+-measureUntil _ timeMode _ (RelStDev targetRelStDev) b
++measureUntil = measureUntilWith measure
++
++measureUntilWith
++    :: (TimeMode -> Word64 -> Benchmarkable -> IO Measurement)
++    -> (Progress -> IO ())
++    -> TimeMode
++    -> Timeout
++    -> RelStDev
++    -> Benchmarkable
++    -> IO Estimate
++measureUntilWith measureBatch _ timeMode _ (RelStDev targetRelStDev) b
+@@ -1132 +1165 @@
+-  t1 <- measure timeMode 1 b
++  t1 <- measureBatch timeMode 1 b
+@@ -1134 +1167 @@
+-measureUntil yieldProgress timeMode timeout (RelStDev targetRelStDev) b = do
++measureUntilWith measureBatch yieldProgress timeMode timeout (RelStDev targetRelStDev) b = do
+@@ -1138 +1171 @@
+-    measure' = measure timeMode
++    measure' = measureBatch timeMode
+@@ -1210 +1243,4 @@
+-      est <- measureUntil yieldProgress timeMode (lookupOption opts) (lookupOption opts) b
++          native = measureUntil yieldProgress timeMode (lookupOption opts) (lookupOption opts) b
++          marked = FullHistory.withMarkedRecorder $ \recorder ->
++            measureUntilWith (maybe measure measureRecorded recorder) yieldProgress timeMode (lookupOption opts) (lookupOption opts) b
++      est <- if FullHistory.isMarked (lookupOption opts) then marked else native
+@@ -1336 +1372,2 @@
+-  let b = testGroup "All" bs
++  let original = testGroup "All" bs
++      b = mapLeafBenchmarks (\path leaf -> if path == FullHistory.reactPath then localOption FullHistory.Marked leaf else leaf) original
+@@ -1343,0 +1381,6 @@
++  let names tree = map (intercalate "." . foldr (:) []) (testNameSeqs opts'' tree)
++      marks = foldTestTree trivialFold
++        { foldSingle = \localOpts _ _ -> [FullHistory.isMarked (lookupOption localOpts)]
++        , foldGroup = const $ const concat
++        } opts'' b
++  FullHistory.preflight (names original) (names b) (length (filter id marks))
+--- a/tasty-bench.cabal
++++ b/tasty-bench.cabal
+@@ -42,0 +43,2 @@
++  other-modules:    Test.Tasty.Bench.Diagnostic
++                    Test.Tasty.Bench.FullHistory

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Small complete evidence fixtures use real pinned dependency bytes and opaque build payloads.
-module Ecluse.BenchReport.AllocationDiagnostic.Fixture (prepareFixture, refreshBindings, snapshot, restore, fixtureRun, fixtureAttempt, nativeCsv) where
+module Ecluse.BenchReport.AllocationDiagnostic.Fixture (prepareFixture, refreshBindings, prepareFixtureFor, refreshBindingsFor, snapshot, restore, fixtureRun, fixtureAttempt, nativeCsv) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.Map.Strict qualified as Map
@@ -11,8 +11,10 @@ import Data.Text qualified as T
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, listDirectory, removePathForcibly)
 import System.FilePath (takeDirectory, (</>))
 
-import Ecluse.BenchReport.AllocationDiagnostic (bindPass, bindRun, recordBuild, writeConditions)
+import Ecluse.BenchReport.AllocationDiagnostic (bindPassFor, bindRunFor, recordBuild, writeConditionsFor)
 import Ecluse.BenchReport.AllocationDiagnostic.Inventory
+import Ecluse.BenchReport.FullHistory.Evidence qualified as Full
+import Ecluse.BenchReport.FullHistory.Trust (trustedPaths)
 import Ecluse.BenchReport.RefactorEvidence (Binding (..))
 import Ecluse.BenchReport.RefactorFiles (writeComparisonText)
 import Ecluse.Test.Contract.Manifest (digestFile, readJsonFile, writeJsonFile)
@@ -32,15 +34,23 @@ nativeCsv label = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory\n\""
 
 -- | Populate every obligation and call production writers to bind an initially valid fixture.
 prepareFixture :: FilePath -> FilePath -> IO ()
-prepareFixture evidence root = do
-    forM_ runPaths $ \path -> writeFixtureText path ("fixture: " <> toText path <> "\n")
-    forM_ dependencyFiles $ \path -> copyFile (evidence </> "dependency" </> path) (root </> "dependency" </> path)
-    forM_ overlayFiles $ \path -> copyFile (evidence </> "overlay" </> path) (root </> "overlay" </> path)
+prepareFixture = prepareFixtureFor Focused
+
+-- | Both fixed recipes exercise their real inventory and qualification functions.
+prepareFixtureFor :: Recipe -> FilePath -> FilePath -> IO ()
+prepareFixtureFor recipe evidence root = do
+    forM_ (runPathsFor recipe) $ \path -> writeFixtureText path ("fixture: " <> toText path <> "\n")
+    forM_ (dependencyFilesFor recipe) $ \path -> copyFile (evidence </> "dependency" </> path) (root </> "dependency" </> path)
+    forM_ (overlayFilesFor recipe) $ \path -> copyFile (evidence </> "overlay" </> path) (root </> "overlay" </> path)
+    when (recipe == FullHistory) $ do
+        trusted <- readJsonFile (evidence </> "overlay/trusted.json") :: IO (Map FilePath Text)
+        forM_ (Map.keys trusted) $ \path -> copyFile (evidence </> path) (root </> path)
     writeFixtureText "worker.txt" ("run=" <> fixtureRun <> "\nattempt=" <> fixtureAttempt <> "\nrunner=fixture\n")
     writeFixtureText "controller-command.txt" "cabal\nbuild\nexe:bench-report\n"
     forM_ ["controls.status", "controller-build.status"] $ \path -> writeFixtureText path "0\n"
-    corpus <- checksumLines root "inputs" "bench/" inputFiles
-    dependency <- checksumLines root "dependency" "./" dependencyFiles
+    let corpusPaths = if recipe == Focused then inputFiles else [toString relative | path <- trustedPaths, Just relative <- [T.stripPrefix "inputs/" (toText path)]]
+    corpus <- checksumLines root "inputs" "bench/" corpusPaths
+    dependency <- checksumLines root "dependency" "./" (dependencyFilesFor recipe)
     forM_ builds $ \build -> do
         let directory = "build-" <> toString build
             identityDirectory = directory </> "identity"
@@ -55,20 +65,26 @@ prepareFixture evidence root = do
         writeJsonFile (root </> identityDirectory </> "plan.json") (fixturePlan root build)
         recordBuild root build (sourceFor build)
     withEnvOverrides [("GITHUB_RUN_ID", toString fixtureRun), ("GITHUB_RUN_ATTEMPT", toString fixtureAttempt)] $
-        forM_ schedule $ \(Pass name build mode) -> do
+        forM_ (scheduleFor recipe) $ \(Pass name build mode) -> do
             let directory = toString name
                 executable = toText (root </> "build-" <> toString build </> "ecluse-bench")
             forM_ ["before", "after"] $ \phase -> forM_ identityFiles $ \file ->
                 copyFile (root </> "build-" <> toString build </> "identity" </> file) (root </> directory </> phase </> file)
-            writeConditions root name
+            writeConditionsFor recipe root name
             writeFixtureText (directory </> "native.csv") (nativeCsv reactRow)
-            writeFixtureText (directory </> "command.txt") (T.unlines [executable, "--csv", toText (root </> directory </> "native.csv"), "--stdev", "10", "-p", "$0 == \"" <> reactRow <> "\"", "+RTS", "-T", "-RTS"])
-            writeFixtureText (directory </> "environment.txt") (T.unlines ["ECLUSE_BATCH_MODE=" <> mode, "ECLUSE_BATCH_OUTPUT=" <> toText (root </> directory </> "batches.csv"), "GHCRTS=", "timeout=600", "kill-after=30"])
+            let selection = ["-p", "$0 == \"" <> reactRow <> "\""]
+            writeFixtureText (directory </> "command.txt") (T.unlines ([executable, "--csv", toText (root </> directory </> "native.csv"), "--stdev", "10"] <> [argument | recipe == Focused, argument <- selection] <> ["+RTS", "-T", "-RTS"]))
+            writeFixtureText (directory </> "environment.txt") (T.unlines (["ECLUSE_BATCH_MODE=" <> mode, "ECLUSE_BATCH_OUTPUT=" <> toText (root </> directory </> "batches.csv")] <> ["ECLUSE_FULL_OUTPUT=" <> toText (root </> directory) | recipe == FullHistory] <> ["GHCRTS=", if recipe == Focused then "timeout=600" else "timeout=1800", "kill-after=30"]))
             forM_ ["native.status", "measure.status"] $ \path -> writeFixtureText (directory </> path) "0\n"
             when (mode `elem` ["record", "empty-record"]) (writeFixtureText (directory </> "batches.csv") batchFixture)
-            bindPass root name
-    writeFixtureText "order.txt" (T.unlines (concatMap (\(Pass name _ _) -> ["0 start " <> name, "1 end " <> name]) schedule))
-    bindRun root
+            when (recipe == FullHistory) $ do
+                Full.fixtureOutputs root (Pass name build mode)
+                when (mode == "record") (writeFixtureText (directory </> "batches.csv") (T.replace "0,1,0,0,10," "0,1,0,0,10000000000," (T.replace "1,2,10,100,30," "1,2,10000000000,100,30000000000," batchFixture)))
+            bindPassFor recipe root name
+    let events = concat [[stamp (2 * index) <> " start " <> name, stamp (2 * index + 1) <> " end " <> name] | (index, Pass name _ _) <- zip [0 :: Int ..] (scheduleFor recipe)]
+        stamp index = "2026-10-13T00:00:" <> (if index < 10 then "0" else "") <> show index <> "+00:00"
+    writeFixtureText "order.txt" (if recipe == Focused then T.unlines (concatMap (\(Pass name _ _) -> ["0 start " <> name, "1 end " <> name]) schedule) else T.unlines events)
+    bindRunFor recipe root
   where
     writeFixtureText path value = createDirectoryIfMissing True (takeDirectory (root </> path)) >> writeComparisonText (root </> path) value
 
@@ -119,18 +135,22 @@ batchFixture = T.unlines ["sequence,n,startTimePs,startGlobalBytes,endTimePs,end
 
 -- | Refresh digests after a semantic mutation without repairing the mutated declaration.
 refreshBindings :: FilePath -> IO ()
-refreshBindings root = do
+refreshBindings = refreshBindingsFor Focused
+
+-- | Rehash full semantic mutations without repairing altered declarations.
+refreshBindingsFor :: Recipe -> FilePath -> IO ()
+refreshBindingsFor recipe root = do
     forM_ builds $ \build -> do
         let path = "build-" <> toString build </> "binding.json"
         existing <- readJsonFile (root </> path)
         bindingFor root (bindingContext existing) (buildPaths build) >>= writeJsonFile (root </> path)
-    forM_ schedule $ \(Pass name build _) -> do
+    forM_ (scheduleFor recipe) $ \(Pass name build _) -> do
         let path = toString name </> "conditions.json"
         declared <- readJsonFile (root </> path)
         checksum <- digestFile (root </> "build-" <> toString build </> "binding.json")
         writeJsonFile (root </> path) (Map.insert "buildBinding" checksum (declared :: Map Text Text))
-        bindPass root name
-    bindRun root
+        bindPassFor recipe root name
+    bindRunFor recipe root
 
 -- | Keep a byte snapshot so each mutation starts from exactly the same accepted evidence.
 snapshot :: FilePath -> IO [(FilePath, ByteString)]

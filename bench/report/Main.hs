@@ -17,6 +17,9 @@ import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
 import Ecluse.BenchReport.AllocationDiagnostic qualified as AllocationDiagnostic
 import Ecluse.BenchReport.AllocationDiagnostic.Controls qualified as AllocationDiagnosticControls
+import Ecluse.BenchReport.AllocationDiagnostic.Inventory (Recipe (FullHistory))
+import Ecluse.BenchReport.FullHistory.Controls qualified as FullControls
+import Ecluse.BenchReport.FullHistory.Evidence qualified as FullEvidence
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.RefactorComparison qualified as Comparison
@@ -27,6 +30,17 @@ import Ecluse.BenchReport.RefactorInputs qualified as ComparisonInputs
 main :: IO ()
 main =
     getArgs >>= \case
+        ["full-history-source-audit", root, worker, controller] -> do
+            FullEvidence.auditInvocation root (toText worker) (toText controller)
+            FullEvidence.auditSources root
+        ["full-history-controls", root] -> FullControls.controls root
+        ["full-history-build", root, build, source] -> AllocationDiagnostic.recordBuild root (toText build) (toText source)
+        ["full-history-conditions", root, passName] -> AllocationDiagnostic.writeConditionsFor FullHistory root (toText passName)
+        ["full-history-bind", root, passName] -> AllocationDiagnostic.bindPassFor FullHistory root (toText passName)
+        ["full-history-run-bind", root] -> AllocationDiagnostic.bindRunFor FullHistory root
+        ["full-history-audit", root, runId, attempt, worker, controller] -> do
+            FullEvidence.auditInvocation root (toText worker) (toText controller)
+            AllocationDiagnostic.auditFor FullHistory root (toText runId) (toText attempt)
         ["allocation-diagnostic-controls", root] -> AllocationDiagnosticControls.controls root
         ["allocation-diagnostic-build", root, build, source] -> AllocationDiagnostic.recordBuild root (toText build) (toText source)
         ["allocation-diagnostic-conditions", root, passName] -> AllocationDiagnostic.writeConditions root (toText passName)

@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Bind focused React diagnostics without issuing full-suite acceptance receipts.
-module Ecluse.BenchReport.AllocationDiagnostic (recordBuild, writeConditions, bindPass, bindRun, audit) where
+-- | Bind fixed React diagnostics without issuing full-suite acceptance receipts.
+module Ecluse.BenchReport.AllocationDiagnostic (recordBuild, writeConditions, bindPass, bindRun, audit, writeConditionsFor, bindPassFor, bindRunFor, auditFor) where
 
 import Data.Aeson (Object, Value (Object), object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -14,12 +14,29 @@ import System.Directory (doesFileExist, listDirectory)
 import System.FilePath (isAbsolute, splitDirectories, (</>))
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv, splitName)
-import Ecluse.BenchReport.AllocationDiagnostic.Batches (auditBatches)
+import Ecluse.BenchReport.AllocationDiagnostic.Batches (auditBatches, auditFullBatch)
 import Ecluse.BenchReport.AllocationDiagnostic.Inventory
+import Ecluse.BenchReport.FullHistory.Evidence qualified as Full
 import Ecluse.BenchReport.RefactorEvidence (Binding (..))
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
 import Ecluse.Test.Contract.Manifest (digestFile, readJsonFile, writeJsonFile)
 import Ecluse.Test.Contract.Result (auditExactIds)
+
+-- | Keep the qualified focused entrypoints fixed.
+writeConditions :: FilePath -> Text -> IO ()
+writeConditions = writeConditionsFor Focused
+
+-- | Bind the qualified focused recipe.
+bindPass :: FilePath -> Text -> IO ()
+bindPass = bindPassFor Focused
+
+-- | Seal the qualified focused recipe.
+bindRun :: FilePath -> IO ()
+bindRun = bindRunFor Focused
+
+-- | Audit the qualified focused recipe.
+audit :: FilePath -> Text -> Text -> IO ()
+audit = auditFor Focused
 
 -- | Refuse an unexpected source or dependency before any measurement starts.
 recordBuild :: FilePath -> Text -> Text -> IO ()
@@ -61,39 +78,39 @@ tarDigest :: Text
 tarDigest = "315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777"
 
 -- | Declare the exact row, mode and archived build before launching its process.
-writeConditions :: FilePath -> Text -> IO ()
-writeConditions root name = do
-    Pass _ build mode <- passFor name
+writeConditionsFor :: Recipe -> FilePath -> Text -> IO ()
+writeConditionsFor recipe root name = do
+    Pass _ build mode <- passForRecipe recipe name
     run <- lookupEnv "GITHUB_RUN_ID" >>= maybe (fail "missing run identity") (pure . toText)
     attempt <- lookupEnv "GITHUB_RUN_ATTEMPT" >>= maybe (fail "missing attempt identity") (pure . toText)
     worker <- digestFile (root </> "worker.txt")
     buildDigest <- digestFile (root </> "build-" <> toString build </> "binding.json")
     controller <- digestFile (root </> "controller.txt")
     let declared :: Map Text Text
-        declared = Map.fromList [("schema", "1"), ("scope", "focused diagnostic, not acceptance"), ("row", reactRow), ("pass", name), ("build", build), ("mode", mode), ("source", sourceFor build), ("run", run), ("attempt", attempt), ("worker", worker), ("buildBinding", buildDigest), ("controller", controller), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")]
+        declared = Map.fromList [("schema", "1"), ("scope", scopeFor recipe), ("row", reactRow), ("pass", name), ("build", build), ("mode", mode), ("source", sourceFor build), ("run", run), ("attempt", attempt), ("worker", worker), ("buildBinding", buildDigest), ("controller", controller), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")]
     writeJsonFile (root </> toString name </> "conditions.json") declared
 
 -- | Bind the complete pass inventory without assigning an acceptance verdict.
-bindPass :: FilePath -> Text -> IO ()
-bindPass root name = do
-    scheduled <- passFor name
+bindPassFor :: Recipe -> FilePath -> Text -> IO ()
+bindPassFor recipe root name = do
+    scheduled <- passForRecipe recipe name
     declared <- readJsonFile (root </> toString name </> "conditions.json")
-    bindingFor root declared (passPaths scheduled) >>= writeJsonFile (root </> toString name </> "binding.json")
+    bindingFor root declared (ordNub (passPathsFor recipe scheduled)) >>= writeJsonFile (root </> toString name </> "binding.json")
 
 -- | Seal the complete run after all serial passes finish.
-bindRun :: FilePath -> IO ()
-bindRun root = runContext root >>= \declared -> bindingFor root declared runPaths >>= writeJsonFile (root </> "binding.json")
+bindRunFor :: Recipe -> FilePath -> IO ()
+bindRunFor recipe root = runContextFor recipe root >>= \declared -> bindingFor root declared (runPathsFor recipe) >>= writeJsonFile (root </> "binding.json")
 
-runContext :: FilePath -> IO (Map Text Text)
-runContext root = do
+runContextFor :: Recipe -> FilePath -> IO (Map Text Text)
+runContextFor recipe root = do
     controller <- digestFile (root </> "controller.txt")
     worker <- digestFile (root </> "worker.txt")
-    pure (Map.fromList [("scope", "focused diagnostic, not acceptance"), ("controller", controller), ("worker", worker)])
+    pure (Map.fromList [("scope", scopeFor recipe), ("controller", controller), ("worker", worker)])
 
-auditRun :: FilePath -> IO ()
-auditRun root = do
-    binding <- auditBinding root "binding.json" runPaths
-    expected <- runContext root
+auditRunFor :: Recipe -> FilePath -> IO ()
+auditRunFor recipe root = do
+    binding <- auditBinding root "binding.json" (runPathsFor recipe)
+    expected <- runContextFor recipe root
     requireDiagnostic (bindingContext binding == expected) "run binding context differs"
     status <- T.strip <$> readComparisonText (root </> "controller-build.status")
     requireDiagnostic (status == "0") "controller build failed"
@@ -101,16 +118,16 @@ auditRun root = do
     requireDiagnostic (command == ["cabal", "build", "exe:bench-report"]) "controller build command differs"
 
 -- | Audit complete evidence against independently supplied CI run and attempt identities.
-audit :: FilePath -> Text -> Text -> IO ()
-audit root expectedRun expectedAttempt = do
-    run <- captureProblems (auditRun root >> pure [])
+auditFor :: Recipe -> FilePath -> Text -> Text -> IO ()
+auditFor recipe root expectedRun expectedAttempt = do
+    run <- captureProblems (auditRunFor recipe root >> pure [])
     buildFaults <- concat <$> traverse (captureProblems . auditBuild root) builds
-    passes <- concat <$> traverse (captureProblems . auditPass root expectedRun expectedAttempt) schedule
-    other <- captureProblems (auditOrder root >> auditDependency root >> auditPlans root >> auditInputs root >> pure [])
+    passes <- concat <$> traverse (captureProblems . auditPassFor recipe root expectedRun expectedAttempt) (scheduleFor recipe)
+    other <- captureProblems (auditOrderFor recipe root >> auditDependencyFor recipe root >> auditPlans root >> auditInputs root >> when (recipe == FullHistory) (Full.auditTrusted root) >> pure [])
     let faults = run <> buildFaults <> passes <> other
     writeJsonFile (root </> "audit-faults.json") faults
-    when (null faults) (writeObservations root)
-    writeComparisonText (root </> "scope.txt") "Focused React diagnostics only. Original full startup remains. Preceding benchmark history differs. Empty controls quantify overhead without subtraction. No acceptance receipt or tolerance is implied.\n"
+    when (null faults) (if recipe == Focused then writeObservationsFor recipe root else Full.writeObservations root)
+    writeComparisonText (root </> "scope.txt") (if recipe == Focused then "Focused React diagnostics only. Original full startup remains. Preceding benchmark history differs. Empty controls quantify overhead without subtraction. No acceptance receipt or tolerance is implied.\n" else "Full-history React diagnostics only. CSV order is presentation order. Marker controls include setup and compiled-overlay effects. No acceptance receipt, tolerance or overhead subtraction is implied.\n")
     requireDiagnostic (null faults) (T.unlines faults)
 
 auditBinding :: FilePath -> FilePath -> [FilePath] -> IO Binding
@@ -146,11 +163,11 @@ auditBuild root build = do
     checkPlan root build
     pure []
 
-auditPass :: FilePath -> Text -> Text -> Pass -> IO [Text]
-auditPass root expectedRun expectedAttempt scheduled@(Pass name build mode) = do
+auditPassFor :: Recipe -> FilePath -> Text -> Text -> Pass -> IO [Text]
+auditPassFor recipe root expectedRun expectedAttempt scheduled@(Pass name build mode) = do
     let directory = toString name
         buildDirectory = "build-" <> toString build
-    binding <- auditBinding root (directory </> "binding.json") (passPaths scheduled)
+    binding <- auditBinding root (directory </> "binding.json") (ordNub (passPathsFor recipe scheduled))
     declared <- readJsonFile (root </> directory </> "conditions.json")
     requireDiagnostic (bindingContext binding == declared) "pass declaration differs from binding"
     forM_ [("row", reactRow), ("pass", name), ("build", build), ("mode", mode), ("source", sourceFor build)] $ \(key, expected) ->
@@ -165,14 +182,15 @@ auditPass root expectedRun expectedAttempt scheduled@(Pass name build mode) = do
     forM_ ["run", "attempt"] $ \key -> do
         let values = mapMaybe (T.stripPrefix (key <> "=")) workerFields
         requireDiagnostic (values == maybeToList (Map.lookup key declared) && length values == 1) "run or attempt differs"
-    forM_ [("scope", "focused diagnostic, not acceptance"), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")] $ \(key, value) ->
+    forM_ [("scope", scopeFor recipe), ("rts", "-T"), ("stdev", "10"), ("optimisation", "-O1"), ("profiling", "off")] $ \(key, value) ->
         requireDiagnostic (Map.lookup key declared == Just value) ("measurement condition differs: " <> key)
     command <- T.lines <$> readComparisonText (root </> directory </> "command.txt")
     executable <- T.strip <$> readComparisonText (root </> buildDirectory </> "binary-path.txt")
-    let expectedCommand = [executable, "--csv", toText (root </> directory </> "native.csv"), "--stdev", "10", "-p", "$0 == \"" <> reactRow <> "\"", "+RTS", "-T", "-RTS"]
+    let selection = ["-p", "$0 == \"" <> reactRow <> "\""]
+        expectedCommand = [executable, "--csv", toText (root </> directory </> "native.csv"), "--stdev", "10"] <> [argument | recipe == Focused, argument <- selection] <> ["+RTS", "-T", "-RTS"]
     requireDiagnostic (command == expectedCommand) "native command differs"
     environment <- T.lines <$> readComparisonText (root </> directory </> "environment.txt")
-    requireDiagnostic (environment == ["ECLUSE_BATCH_MODE=" <> mode, "ECLUSE_BATCH_OUTPUT=" <> toText (root </> directory </> "batches.csv"), "GHCRTS=", "timeout=600", "kill-after=30"]) "native environment differs"
+    requireDiagnostic (environment == ["ECLUSE_BATCH_MODE=" <> mode, "ECLUSE_BATCH_OUTPUT=" <> toText (root </> directory </> "batches.csv")] <> ["ECLUSE_FULL_OUTPUT=" <> toText (root </> directory) | recipe == FullHistory] <> ["GHCRTS=", if recipe == Focused then "timeout=600" else "timeout=1800", "kill-after=30"]) "native environment differs"
     forM_ ["native.status", "measure.status"] $ \file -> do
         status <- T.strip <$> readComparisonText (root </> directory </> file)
         requireDiagnostic (status == "0") ("failed native or outer status: " <> name)
@@ -182,29 +200,34 @@ auditPass root expectedRun expectedAttempt scheduled@(Pass name build mode) = do
             actual <- digestFile (root </> directory </> phase </> file)
             requireDiagnostic (actual == expected) ("pass identity changed: " <> name <> "/" <> toText file)
     csv <- readComparisonText (root </> directory </> "native.csv") >>= either (fail . toString) pure . parseCsv
-    row <- case csv of
-        [value] | (rowGroup value, rowBench value) == splitName reactRow -> pure value
+    when (recipe == FullHistory) (Full.auditOutcomes root scheduled csv)
+    row <- case [value | value <- csv, (rowGroup value, rowBench value) == splitName reactRow] of
+        [value] | recipe == FullHistory || length csv == 1 -> pure value
         _ -> fail "native CSV must contain exactly the React row"
     requireDiagnostic (isJust (rowAllocatedBytes row)) "native allocation is missing"
     if mode `elem` ["record", "empty-record"]
-        then auditBatches root directory row
+        then do
+            auditBatches root directory row
+            when (recipe == FullHistory) (auditFullBatch root directory row)
         else do
             exists <- doesFileExist (root </> directory </> "batches.csv")
             requireDiagnostic (not exists) "unexpected batch records for native accounting"
     pure []
 
-auditOrder :: FilePath -> IO ()
-auditOrder root = do
+auditOrderFor :: Recipe -> FilePath -> IO ()
+auditOrderFor recipe root = do
     events <- map T.words . T.lines <$> readComparisonText (root </> "order.txt")
     let actual = [wordsAfterTime | _ : wordsAfterTime <- events]
-        expected = concatMap (\(Pass name _ _) -> [["start", name], ["end", name]]) schedule
+        expected = concatMap (\(Pass name _ _) -> [["start", name], ["end", name]]) (scheduleFor recipe)
+    let timestamps = [timestamp | timestamp : _ <- events]
     requireDiagnostic (actual == expected && length events == length expected) "serial pass order differs"
+    when (recipe == FullHistory) (Full.auditTimes timestamps)
     entries <- listDirectory root
-    let passNames = filter (\name -> any (`T.isPrefixOf` toText name) ["C-", "I-", "O-"]) entries
-    requireDiagnostic (sort passNames == sort [toString name | Pass name _ _ <- schedule]) "pass inventory differs"
+    let passNames = filter (\name -> any (`T.isPrefixOf` toText name) ["C-", "I-", if recipe == Focused then "O-" else "M-"]) entries
+    requireDiagnostic (sort passNames == sort [toString name | Pass name _ _ <- scheduleFor recipe]) "pass inventory differs"
 
-auditDependency :: FilePath -> IO ()
-auditDependency root = do
+auditDependencyFor :: Recipe -> FilePath -> IO ()
+auditDependencyFor recipe root = do
     status <- T.strip <$> readComparisonText (root </> "controls.status")
     requireDiagnostic (status == "0") "negative controls failed"
     tar <- digestFile (root </> "dependency/tasty-bench-0.4.1.tar.gz")
@@ -305,9 +328,9 @@ auditManifest manifest prefix archive = do
             requireDiagnostic (actual == expected) ("archived file differs: " <> path)
         _ -> fail "invalid file digest manifest"
 
-writeObservations :: FilePath -> IO ()
-writeObservations root = do
-    observations <- forM schedule $ \(Pass name _ mode) -> do
+writeObservationsFor :: Recipe -> FilePath -> IO ()
+writeObservationsFor recipe root = do
+    observations <- forM (scheduleFor recipe) $ \(Pass name _ mode) -> do
         rows <- readComparisonText (root </> toString name </> "native.csv") >>= either (fail . toString) pure . parseCsv
         case rows of
             [row] -> pure (name, mode, row)

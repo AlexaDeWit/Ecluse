@@ -2,6 +2,7 @@ version: '3'
 includes:
   comparison: refactor-performance.yml
   allocation-diagnostics: refactor-allocation.yml
+  full-history-diagnostic: refactor-full-history.yml
 tasks:
   invalidate:
     cmds:

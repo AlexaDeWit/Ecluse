@@ -4,6 +4,15 @@
 
 -- | Fixed evidence obligations for the temporary allocation diagnostic.
 module Ecluse.BenchReport.AllocationDiagnostic.Inventory (
+    Recipe (..),
+    scheduleFor,
+    overlayFilesFor,
+    dependencyFilesFor,
+    sharedPathsFor,
+    passPathsFor,
+    runPathsFor,
+    passForRecipe,
+    scopeFor,
     Pass (..),
     schedule,
     builds,
@@ -28,9 +37,23 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.FilePath ((</>))
 
+import Ecluse.BenchReport.FullHistory.Trust (trustedPaths)
 import Ecluse.BenchReport.RefactorEvidence (Binding (Binding))
 import Ecluse.Test.Contract.Manifest (digestFile)
 import Ecluse.Test.Corpus (corpusPackages, cpPath, pypiCorpusPackages)
+
+-- | Two fixed diagnostic recipes share provenance checks.
+data Recipe = Focused | FullHistory deriving stock (Eq)
+
+-- | The full suite uses original controls, shared marker controls and recorded repeats.
+scheduleFor :: Recipe -> [Pass]
+scheduleFor Focused = schedule
+scheduleFor FullHistory = [Pass "C-A1" "C-A" "native", Pass "C-B1" "C-B" "native", Pass "M-B1" "I-B" "marker-only", Pass "M-A1" "I-A" "marker-only", Pass "I-A1" "I-A" "record", Pass "I-B1" "I-B" "record", Pass "I-B2" "I-B" "record", Pass "I-A2" "I-A" "record"]
+
+-- | Neither recipe authorises a full-suite acceptance receipt.
+scopeFor :: Recipe -> Text
+scopeFor Focused = "focused diagnostic, not acceptance"
+scopeFor FullHistory = "full-history diagnostic, not acceptance"
 
 -- | A fixed pass names its build and distinguishes real work from empty controls.
 data Pass = Pass Text Text Text
@@ -130,3 +153,32 @@ bindingFor root declared paths = Binding 1 declared . Map.fromList <$> traverse 
 -- | Refuse one named diagnostic proof failure.
 requireDiagnostic :: Bool -> Text -> IO ()
 requireDiagnostic condition problem = unless condition (fail (toString problem))
+
+-- | Each recipe carries its own fixed dependency patch and literal inventories.
+overlayFilesFor :: Recipe -> [FilePath]
+overlayFilesFor Focused = overlayFiles
+overlayFilesFor FullHistory = overlayFiles <> ["FullHistory.hs", "expected-tree.txt", "expected-csv.txt", "trusted.json", "source-audit.status", "source-audit.log"]
+
+-- | Full-history marking adds one private dependency module.
+dependencyFilesFor :: Recipe -> [FilePath]
+dependencyFilesFor Focused = dependencyFiles
+dependencyFilesFor FullHistory = dependencyFiles <> ["tasty-bench-0.4.1/src/Test/Tasty/Bench/FullHistory.hs"]
+
+-- | Mandatory inventories never come from the observed binding map.
+sharedPathsFor :: Recipe -> [FilePath]
+sharedPathsFor Focused = sharedPaths
+sharedPathsFor FullHistory = ordNub (["controller-source.tar.gz"] <> trustedPaths <> sharedPaths <> map ("overlay" </>) (drop (length overlayFiles) (overlayFilesFor FullHistory)) <> ["dependency/tasty-bench-0.4.1/src/Test/Tasty/Bench/FullHistory.hs"])
+
+-- | Marked launches retain both traversals and the exact provider row binding.
+passPathsFor :: Recipe -> Pass -> [FilePath]
+passPathsFor Focused scheduled = passPaths scheduled
+passPathsFor FullHistory scheduled@(Pass name build _) = ordNub (passPaths scheduled <> sharedPathsFor FullHistory <> [toString name </> file | "I-" `T.isPrefixOf` build, file <- ["tree-before.txt", "tree-after.txt", "mark.txt", "row-binding.txt", "precision.txt"]])
+
+-- | The full run seals exactly its eight launches and four builds.
+runPathsFor :: Recipe -> [FilePath]
+runPathsFor Focused = runPaths
+runPathsFor FullHistory = ordNub (sharedPathsFor FullHistory <> ["order.txt"] <> concatMap buildPaths builds <> concatMap (passPathsFor FullHistory) (scheduleFor FullHistory) <> ["build-" <> toString build </> "binding.json" | build <- builds] <> [toString name </> "binding.json" | Pass name _ _ <- scheduleFor FullHistory])
+
+-- | Refuse launches outside the selected fixed recipe.
+passForRecipe :: Recipe -> Text -> IO Pass
+passForRecipe recipe name = maybe (fail "unknown diagnostic pass") pure (find (\(Pass key _ _) -> name == key) (scheduleFor recipe))

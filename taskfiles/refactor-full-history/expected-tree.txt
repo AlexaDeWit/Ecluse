@@ -1,0 +1,361 @@
+All.ecluse-core (work-per-request).ecosystem: npm.route.match.mixed requests
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).lodash (medium).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).lodash (medium).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).request (medium).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).request (medium).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).react (large).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).react (large).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@babel/core (large).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@babel/core (large).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).typescript (large).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).typescript (large).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).express (large).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).express (large).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@aws-sdk/client-s3 (heavy).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@aws-sdk/client-s3 (heavy).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).webpack (heavy).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).webpack (heavy).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@types/node (heavy).version identifiers
+All.ecluse-core (work-per-request).ecosystem: npm.wire+project (per package).@types/node (heavy).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).lodash (medium).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).lodash (medium).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).request (medium).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).request (medium).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).react (large).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).react (large).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@babel/core (large).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@babel/core (large).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).typescript (large).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).typescript (large).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).express (large).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).express (large).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@aws-sdk/client-s3 (heavy).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@aws-sdk/client-s3 (heavy).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).webpack (heavy).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).webpack (heavy).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@types/node (heavy).full decode + select
+All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).@types/node (heavy).selective decode
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).lodash (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).request (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).@babel/core (large)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).express (large)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).@aws-sdk/client-s3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).webpack (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.version (parse + order + latest, per package).@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.lodash (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.request (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.@babel/core (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.express (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.@aws-sdk/client-s3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.webpack (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules.evalRules.scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.lodash (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.request (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.@babel/core (large)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.express (large)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.@aws-sdk/client-s3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.webpack (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.package.mergePackuments.scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).lodash (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).request (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).@babel/core (large)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).express (large)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).@aws-sdk/client-s3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).webpack (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.lodash (medium).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.lodash (medium).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.request (medium).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.request (medium).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.react (large).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.react (large).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@babel/core (large).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@babel/core (large).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.typescript (large).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.typescript (large).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.express (large).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.express (large).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@aws-sdk/client-s3 (heavy).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@aws-sdk/client-s3 (heavy).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.webpack (heavy).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.webpack (heavy).one
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@types/node (heavy).all
+All.ecluse-core (work-per-request).ecosystem: npm.serve (filter + merge-assemble).prepared npm assembly.@types/node (heavy).one
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.boundedRead (8 MiB body, 64 KiB chunks)
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.lodash (medium).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.lodash (medium).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.lodash (medium).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.request (medium).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.request (medium).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.request (medium).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.react (large).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.react (large).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.react (large).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@babel/core (large).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@babel/core (large).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@babel/core (large).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.typescript (large).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.typescript (large).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.typescript (large).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.express (large).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.express (large).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.express (large).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@aws-sdk/client-s3 (heavy).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.webpack (heavy).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.webpack (heavy).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.webpack (heavy).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@types/node (heavy).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@types/node (heavy).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.@types/node (heavy).artifact locations
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.checkNestingDepth (synthetic / 100000)
+All.ecluse-core (work-per-request).ecosystem: npm.security guards.checkVersionCount (synthetic / 2000)
+All.ecluse-core (work-per-request).ecosystem: pypi.route.match.mixed requests
+All.ecluse-core (work-per-request).ecosystem: pypi.route.match.normal sdist
+All.ecluse-core (work-per-request).ecosystem: pypi.route.match.normal wheel
+All.ecluse-core (work-per-request).ecosystem: pypi.route.match.malformed filename separators
+All.ecluse-core (work-per-request).ecosystem: pypi.route.match.valid filename separators
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).requests (medium).version identifiers
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).requests (medium).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).numpy (large).version identifiers
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).numpy (large).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).boto3 (heavy).version identifiers
+All.ecluse-core (work-per-request).ecosystem: pypi.wire+project (per package).boto3 (heavy).full metadata projection
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).requests (medium).full decode + select
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).requests (medium).selective decode
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).numpy (large).full decode + select
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).numpy (large).selective decode
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).boto3 (heavy).full decode + select
+All.ecluse-core (work-per-request).ecosystem: pypi.single-version metadata (per package).boto3 (heavy).selective decode
+All.ecluse-core (work-per-request).ecosystem: pypi.version (parse + order + latest, per package).requests (medium)
+All.ecluse-core (work-per-request).ecosystem: pypi.version (parse + order + latest, per package).numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.version (parse + order + latest, per package).boto3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules.evalRules.requests (medium)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules.evalRules.numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules.evalRules.boto3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules.evalRules.scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: pypi.package.mergePackuments.requests (medium)
+All.ecluse-core (work-per-request).ecosystem: pypi.package.mergePackuments.numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.package.mergePackuments.boto3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: pypi.package.mergePackuments.scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).requests (medium)
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).boto3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).scales linearly in version count
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).retained envelope and files.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).retained envelope and files.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 0, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 1, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 8, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 64, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.requests (medium).envelope fields 512, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).retained envelope and files.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).retained envelope and files.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 0, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 1, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 8, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 64, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.numpy (large).envelope fields 512, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).retained envelope and files.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).retained envelope and files.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 0, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 1, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 8, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 64, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 0.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 0.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 1.previous encoder
+All.ecluse-core (work-per-request).ecosystem: pypi.serve (filter + merge-assemble).prepared PyPI encoding.boto3 (heavy).envelope fields 512, files 1.direct pairs
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.boundedRead (8 MiB body, 64 KiB chunks)
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.requests (medium).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.requests (medium).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.requests (medium).artifact locations
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.numpy (large).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.numpy (large).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.numpy (large).artifact locations
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.boto3 (heavy).checkNestingDepth
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.boto3 (heavy).checkVersionCount
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.boto3 (heavy).artifact locations
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.checkNestingDepth (synthetic / 100000)
+All.ecluse-core (work-per-request).ecosystem: pypi.security guards.checkVersionCount (synthetic / 2000)
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).lodash (medium).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).lodash (medium).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).request (medium).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).request (medium).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).react (large).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).react (large).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@babel/core (large).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@babel/core (large).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).typescript (large).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).typescript (large).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).express (large).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).express (large).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@aws-sdk/client-s3 (heavy).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@aws-sdk/client-s3 (heavy).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).webpack (heavy).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).webpack (heavy).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@types/node (heavy).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: npm.cold production reads (per package).@types/node (heavy).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).requests (medium).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).requests (medium).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).numpy (large).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).numpy (large).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).boto3 (heavy).default cap 134217728 bytes: success.full document
+All.ecluse-core (work-per-request).ecosystem: pypi.cold production reads (per package).boto3 (heavy).default cap 134217728 bytes: success.selected version
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).lodash (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).request (medium)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).@babel/core (large)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).express (large)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).@aws-sdk/client-s3 (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).webpack (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.source digest (32 KiB chunks).@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: pypi.source digest (32 KiB chunks).requests (medium)
+All.ecluse-core (work-per-request).ecosystem: pypi.source digest (32 KiB chunks).numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.source digest (32 KiB chunks).boto3 (heavy)
+All.ecluse-core (work-per-request).packed served form (full read and listing render).lodash (medium).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).lodash (medium).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).lodash (medium).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).request (medium).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).request (medium).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).request (medium).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).react (large).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).react (large).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).react (large).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@babel/core (large).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@babel/core (large).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@babel/core (large).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).typescript (large).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).typescript (large).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).typescript (large).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).express (large).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).express (large).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).express (large).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@aws-sdk/client-s3 (heavy).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).webpack (heavy).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).webpack (heavy).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).webpack (heavy).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@types/node (heavy).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@types/node (heavy).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).@types/node (heavy).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).requests (medium).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).requests (medium).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).requests (medium).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).numpy (large).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).numpy (large).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).numpy (large).listing render, as served
+All.ecluse-core (work-per-request).packed served form (full read and listing render).boto3 (heavy).full read, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).boto3 (heavy).listing render, aeson's tree
+All.ecluse-core (work-per-request).packed served form (full read and listing render).boto3 (heavy).listing render, as served
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy without a database.@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).shipped policy over corpus advisories.@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.react (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).all advisory rules over corpus advisories.@types/node (heavy)
+All.ecluse-core (work-per-request).ecosystem: npm.rules with an advisory database (per package).all advisory rules over synthetic advisories.typescript (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules with an advisory database (per package).shipped policy without a database.numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules with an advisory database (per package).shipped policy over corpus advisories.numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules with an advisory database (per package).all advisory rules over corpus advisories.numpy (large)
+All.ecluse-core (work-per-request).ecosystem: pypi.rules with an advisory database (per package).all advisory rules over synthetic advisories.numpy (large)
+All.ecluse-core (work-per-request).stream (pump flush strategy).4096B chunks.flush-each (shipped)
+All.ecluse-core (work-per-request).stream (pump flush strategy).4096B chunks.flush-threshold-64k
+All.ecluse-core (work-per-request).stream (pump flush strategy).4096B chunks.flush-end-only
+All.ecluse-core (work-per-request).stream (pump flush strategy).16384B chunks.flush-each (shipped)
+All.ecluse-core (work-per-request).stream (pump flush strategy).16384B chunks.flush-threshold-64k
+All.ecluse-core (work-per-request).stream (pump flush strategy).16384B chunks.flush-end-only
+All.ecluse-core (work-per-request).stream (pump flush strategy).65536B chunks.flush-each (shipped)
+All.ecluse-core (work-per-request).stream (pump flush strategy).65536B chunks.flush-threshold-64k
+All.ecluse-core (work-per-request).stream (pump flush strategy).65536B chunks.flush-end-only
+All.ecluse-core (work-per-request).cache maintenance.100000 resolutions without retention
+All.ecluse-core (work-per-request).cache maintenance.key construction.full key: npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.selected-version key: npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.assembled key: npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.full key: scoped npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.selected-version key: scoped npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.assembled key: scoped npm name
+All.ecluse-core (work-per-request).cache maintenance.key construction.full key: PyPI name
+All.ecluse-core (work-per-request).cache maintenance.key construction.selected-version key: PyPI name
+All.ecluse-core (work-per-request).cache maintenance.key construction.assembled key: PyPI name
+All.ecluse-core (work-per-request).cache maintenance.256.cold fill
+All.ecluse-core (work-per-request).cache maintenance.256.eligible-store churn
+All.ecluse-core (work-per-request).cache maintenance.256.100000 hot hits
+All.ecluse-core (work-per-request).cache maintenance.1024.cold fill
+All.ecluse-core (work-per-request).cache maintenance.1024.eligible-store churn
+All.ecluse-core (work-per-request).cache maintenance.1024.100000 hot hits
+All.ecluse-core (work-per-request).cache maintenance.4096.cold fill
+All.ecluse-core (work-per-request).cache maintenance.4096.eligible-store churn
+All.ecluse-core (work-per-request).cache maintenance.4096.100000 hot hits
+All.ecluse-core (work-per-request).ecosystem: pypi.managed mirror read: 1000 versions, three files per version.cold record and listing
+All.ecluse-core (work-per-request).ecosystem: pypi.managed mirror read: 1000 versions, three files per version.warm conditional 304 and listing
+All.ecluse-core (work-per-request).ecosystem: pypi.managed mirror read: 1000 versions, three files per version.cold listing then changed revision adding a file
+All.synthetic generators.npm.decodes every generated release
+All.synthetic generators.npm.projects every measured synthetic size
+All.synthetic generators.npm.selective projection agrees with the full release
+All.synthetic generators.npm.rewrites every artifact onto the proxy origin
+All.synthetic generators.npm.prepares the large wire-guard input
+All.synthetic generators.pypi.decodes every generated release
+All.synthetic generators.pypi.projects every measured synthetic size
+All.synthetic generators.pypi.selective projection agrees with the full release
+All.synthetic generators.pypi.rewrites every artifact onto the proxy origin
+All.synthetic generators.pypi.prepares the large wire-guard input
