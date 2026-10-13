@@ -8,9 +8,12 @@ The baseline stays fixed. No candidate commit is the default.
 The controller and its controls run outside both measured source trees. This branch must not merge into product development.
 
 The benchmark order is A1, A2, B1, A3, B2, B3. Allocation and both maintenance probes use A1, B1, A2, B2.
-Residency uses A1, B1. All measurements run serially on one ARM64 worker.
+Residency also uses A1, B1, A2, B2. Its report retains one A/A pair, one B/B pair and all four A/B pairs.
+All measurements run serially on one ARM64 worker.
 Every repetition remains in the artifacts. Reports compare every pair, with A/A and B/B variability separate from A/B changes.
 No pair selection, averaging, or statistical exception changes a tolerance.
+The [earlier comparison](https://github.com/AlexaDeWit/Ecluse/actions/runs/38386330799) took about 133 minutes, with each residency pass taking 14 minutes 45 seconds.
+Two more residency passes add about 29 minutes 30 seconds at that rate. The workflow cap remains 240 minutes.
 
 The controller requires all 343 ordered benchmark names, 20 native receipts, 48 allocation rows, and 144 metadata residency rows per pass.
 Fixed and prepared benchmark allocations allow 1 KiB in either direction. Production reads allow 0.1% in either direction.

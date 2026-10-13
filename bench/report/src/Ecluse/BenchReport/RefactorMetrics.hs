@@ -44,7 +44,7 @@ auditMetrics root = do
   where
     readKind kind = traverse (\passName -> (passName,) <$> readPass root kind passName) (passes kind)
     compareKind kind measured = do
-        let pairs = [(left, right) | (i, left) <- zip [0 :: Int ..] measured, (j, right) <- zip [0 ..] measured, i < j]
+        let pairs = comparisonPairs measured
         rows <- concat <$> traverse (uncurry (comparePasses kind)) pairs
         writeComparisonText (root </> toString kind <> "-comparison.tsv") $
             T.unlines ("scope\tkind\tbefore-pass\tafter-pass\trow\tmetric\tbefore\tafter\tdelta\trule\tresult" : map fst rows)
@@ -55,8 +55,10 @@ auditMetrics root = do
 
 passes :: Text -> [Text]
 passes "benchmark" = ["A1", "A2", "A3", "B1", "B2", "B3"]
-passes "residency" = ["A1", "B1"]
 passes _ = ["A1", "A2", "B1", "B2"]
+
+comparisonPairs :: [a] -> [(a, a)]
+comparisonPairs values = [(left, right) | (i, left) <- zip [0 :: Int ..] values, (j, right) <- zip [0 ..] values, i < j]
 
 readPass :: FilePath -> Text -> Text -> IO [Observation]
 readPass root kind passName = do
@@ -246,6 +248,7 @@ isFinite value = not (isNaN value || isInfinite value)
 metricControls :: IO ()
 metricControls = do
     cacheKeyControls
+    residencyPassControls
     require $
         ["KiB tolerance control failed" | any (violates WithinKiB 5000) [3976, 6024] || not (all (violates WithinKiB 5000) [3975, 6025])]
             <> ["per-mille tolerance control failed" | any (violates WithinPermille 100000) [99900, 100100] || not (all (violates WithinPermille 100000) [99899, 100101])]
@@ -298,3 +301,11 @@ cacheKeyControls = do
         require ["fixed cache key tolerance control failed" | length (filter snd compared) /= expectedBreaches]
   where
     example allocated name = let (groupName, leaf) = splitName name in benchmark (BenchRow groupName leaf 1 0 (Just allocated) (Just 0) (Just 0))
+
+residencyPassControls :: IO ()
+residencyPassControls = do
+    let expected = ["A1", "A2", "B1", "B2"]
+        actual = passes "residency"
+        pairs = [("A1", "A2"), ("A1", "B1"), ("A1", "B2"), ("A2", "B1"), ("A2", "B2"), ("B1", "B2")]
+    require (auditExactIds "residency pass" expected actual <> ["residency comparison pairs differ" | comparisonPairs actual /= pairs])
+    forM_ expected $ \missing -> require ["missing residency pass accepted" | null (auditExactIds "residency pass" expected (filter (/= missing) actual))]

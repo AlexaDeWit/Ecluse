@@ -44,7 +44,7 @@ passSchedule :: [(Text, Text)]
 passSchedule =
     [("benchmark", name) | name <- ["A1", "A2", "B1", "A3", "B2", "B3"]]
         <> [("allocation", name) | name <- ["A1", "B1", "A2", "B2"]]
-        <> [("residency", name) | name <- ["A1", "B1"]]
+        <> [("residency", name) | name <- ["A1", "B1", "A2", "B2"]]
         <> [(kind, name) | kind <- ["versions", "listing"], name <- ["A1", "B1", "A2", "B2"]]
 
 -- | Task writes these declarations before starting the measured process.

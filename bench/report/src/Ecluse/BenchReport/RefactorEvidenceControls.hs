@@ -17,7 +17,7 @@ import Ecluse.BenchReport.RefactorEvidence (Binding (..), bindingFaults, nativeR
 import Ecluse.BenchReport.RefactorFiles (readComparisonText)
 import Ecluse.Test.Contract.Manifest (digest)
 import Ecluse.Test.Contract.Performance (NativeOutcome (NativePassed), NativePerformance (..), PerformanceReceipt (..))
-import Ecluse.Test.Contract.Result (ExecutionIdentity (..))
+import Ecluse.Test.Contract.Result (ExecutionIdentity (..), auditExactIds)
 
 -- | Missing files, changed identities and complete stale native results must fail before numeric comparison.
 evidenceControls :: FilePath -> IO ()
@@ -65,6 +65,14 @@ evidenceControls manifest = withSystemTempDirectory "refactor-evidence-controls"
     requireRejected "missing order event" (orderProblems (drop 1 (concat events)) events)
     requireRejected "reversed order" (orderProblems (reverse (concat events)) events)
     requireRejected "missing pass events" (orderProblems (concat (drop 1 events)) (drop 1 events))
+    let residencyPasses = [name | (kind, name) <- passSchedule, kind == "residency"]
+        expectedResidency = ["A1", "B1", "A2", "B2"]
+        receiptPasses = [(kind, name) | (kind, name) <- passSchedule, kind `elem` ["benchmark", "allocation"]]
+    requireAccepted "four serial residency passes" (auditExactIds "residency pass" expectedResidency residencyPasses <> ["residency order differs" | residencyPasses /= expectedResidency])
+    requireAccepted "twenty canonical receipts" ["canonical receipt count differs" | 2 * length receiptPasses /= 20]
+    forM_ expectedResidency $ \missing -> do
+        let remaining = [entry | (passIdentity, entry) <- zip passSchedule events, passIdentity /= ("residency", missing)]
+        requireRejected ("missing residency events " <> missing) (orderProblems (concat remaining) remaining)
 
 -- | A positive control must reach the audit without any fault.
 requireAccepted :: Text -> [Text] -> IO ()

@@ -63,6 +63,10 @@ tasks:
       - task: record-pass
         vars: {SIDE: B, KIND: residency, PASS: B1}
       - task: record-pass
+        vars: {SIDE: A, KIND: residency, PASS: A2}
+      - task: record-pass
+        vars: {SIDE: B, KIND: residency, PASS: B2}
+      - task: record-pass
         vars: {SIDE: A, KIND: versions, PASS: A1}
       - task: record-pass
         vars: {SIDE: B, KIND: versions, PASS: B1}
@@ -95,7 +99,7 @@ tasks:
           '{{.EVIDENCE}}/comparison-audit.status' \
           '{{.EVIDENCE}}'/benchmark-{A1,A2,B1,A3,B2,B3}/pass.status \
           '{{.EVIDENCE}}'/allocation-{A1,B1,A2,B2}/pass.status \
-          '{{.EVIDENCE}}'/residency-{A1,B1}/pass.status \
+          '{{.EVIDENCE}}'/residency-{A1,B1,A2,B2}/pass.status \
           '{{.EVIDENCE}}'/{versions,listing}-{A1,B1,A2,B2}/pass.status
 
   controller:
