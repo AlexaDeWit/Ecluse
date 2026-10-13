@@ -2150,6 +2150,8 @@ library ecluse-bench-report
     Ecluse.BenchReport.RefactorEvidence
     Ecluse.BenchReport.RefactorEvidenceControls
     Ecluse.BenchReport.RefactorFiles
+    Ecluse.BenchReport.RefactorInputAudit
+    Ecluse.BenchReport.RefactorInputControls
     Ecluse.BenchReport.RefactorInputs
     Ecluse.BenchReport.RefactorMetrics
   build-depends:

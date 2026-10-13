@@ -21,6 +21,7 @@ import Data.Text qualified as T
 import System.FilePath (isAbsolute, splitDirectories, takeFileName, (</>))
 
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText)
+import Ecluse.BenchReport.RefactorInputAudit (auditInputs, expectedProbeInputs)
 import Ecluse.BenchReport.RefactorInputs (Input (..))
 import Ecluse.Test.Contract.Manifest (digest, digestFile, jsonLine, readJsonFile, writeJsonFile)
 import Ecluse.Test.Contract.Performance (PerformanceReceipt (prArtifacts, prSubject))
@@ -85,6 +86,7 @@ recordBinding root kind name = do
 -- | Rehash artifacts, compare snapshots and validate the entire recorded execution before reading measurements.
 verifyEvidence :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> IO [Text]
 verifyEvidence root runId attempt baseline baselineTree candidate candidateTree = do
+    inputFaults <- auditInputs root
     runFaults <- captureProblems $ do
         run <- readJsonFile (root </> "run.json")
         let expected = Map.fromList [("run", runId), ("attempt", attempt), ("sourceA", baseline), ("treeA", baselineTree), ("sourceB", candidate), ("treeB", candidateTree), ("architecture", "aarch64")]
@@ -109,7 +111,7 @@ verifyEvidence root runId attempt baseline baselineTree candidate candidateTree 
         pure (map ((kind <> "-" <> name <> ": ") <>) (bound <> snapshots))
     orderFaults <- captureProblems (checkOrder root)
     sharedFaults <- captureProblems $ concat <$> traverse (equalFile root "build-A" "build-B") ["locks.sha256", "corpus.sha256", "toolchain.txt"]
-    pure (runFaults <> concat faults <> orderFaults <> sharedFaults)
+    pure (inputFaults <> runFaults <> concat faults <> orderFaults <> sharedFaults)
 
 -- | Reject changed, missing or unbound files and stale execution declarations.
 bindingFaults :: FilePath -> Map Text Text -> [FilePath] -> Binding -> IO [Text]
@@ -142,7 +144,7 @@ evidencePaths root kind name = do
     probeFiles <-
         if kind `elem` ["versions", "listing"]
             then do
-                inputs <- readJsonFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json")
+                inputs <- expectedProbeInputs kind
                 pure [directory </> toString (inputId input) <> extension | input <- inputs, extension <- [".json", ".rss", ".status"]]
             else pure []
     let common =

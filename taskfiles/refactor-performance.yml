@@ -4,7 +4,7 @@ vars:
   BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
   CANDIDATE: '{{env "REFRACTOR_CANDIDATE"}}'
   EVIDENCE: '{{.COMPARISON_ROOT}}/evidence'
-  COMPARISON_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs bench/report/src/Ecluse/BenchReport/RefactorInputs.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs bench/report/src/Ecluse/BenchReport/RefactorFiles.hs bench/report/src/Ecluse/BenchReport/RefactorEvidence.hs bench/report/src/Ecluse/BenchReport/RefactorEvidenceControls.hs taskfiles/refactor-performance/listing/Main.hs taskfiles/refactor-performance/listing/Before.hs taskfiles/refactor-performance/listing/After.hs
+  COMPARISON_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorComparison.hs bench/report/src/Ecluse/BenchReport/RefactorInputs.hs bench/report/src/Ecluse/BenchReport/RefactorInputAudit.hs bench/report/src/Ecluse/BenchReport/RefactorInputControls.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs bench/report/src/Ecluse/BenchReport/RefactorFiles.hs bench/report/src/Ecluse/BenchReport/RefactorEvidence.hs bench/report/src/Ecluse/BenchReport/RefactorEvidenceControls.hs taskfiles/refactor-performance/listing/Main.hs taskfiles/refactor-performance/listing/Before.hs taskfiles/refactor-performance/listing/After.hs
 tasks:
   run:
     desc: Run the temporary issue 1565 comparison on one ARM64 worker

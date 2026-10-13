@@ -16,6 +16,7 @@ import Ecluse.BenchReport.PerformanceCommand (compileObligation)
 import Ecluse.BenchReport.RefactorEvidence (passSchedule, receiptArtifactFaults, verifyEvidence)
 import Ecluse.BenchReport.RefactorEvidenceControls (evidenceControls)
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
+import Ecluse.BenchReport.RefactorInputControls (inputControls)
 import Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls)
 import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Performance
@@ -109,6 +110,7 @@ controls manifest = do
     metricControls
     nativeControls
     evidenceControls manifest
+    inputControls
     let header = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory\n"
         row = "\"All.group.quoted, \"\"name\"\"\",1,0,2,0,3\n"
         expected = ["group.quoted, \"name\""]

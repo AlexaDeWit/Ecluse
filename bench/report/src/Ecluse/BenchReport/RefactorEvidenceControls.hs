@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | File controls exercise the same digest and identity checks used by the aggregate audit.
-module Ecluse.BenchReport.RefactorEvidenceControls (evidenceControls) where
+module Ecluse.BenchReport.RefactorEvidenceControls (evidenceControls, requireAccepted, requireRejected) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -66,8 +66,10 @@ evidenceControls manifest = withSystemTempDirectory "refactor-evidence-controls"
     requireRejected "reversed order" (orderProblems (reverse (concat events)) events)
     requireRejected "missing pass events" (orderProblems (concat (drop 1 events)) (drop 1 events))
 
+-- | A positive control must reach the audit without any fault.
 requireAccepted :: Text -> [Text] -> IO ()
 requireAccepted label faults = unless (null faults) (fail (toString (label <> " rejected: " <> T.unlines faults)))
 
+-- | A negative control must produce an audit fault, independently of numeric tolerances.
 requireRejected :: Text -> [Text] -> IO ()
 requireRejected label faults = when (null faults) (fail (toString (label <> " accepted")))

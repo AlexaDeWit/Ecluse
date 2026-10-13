@@ -24,6 +24,10 @@ Each pass writes `binding.json` after its final status. The binding names the so
 It hashes the native outputs, input files, receipts, source snapshots, build records, statuses and per-pass event records.
 The aggregate audit rehashes every required file and checks the recorded serial order before it compares numbers.
 Native receipt digests independently cover the copied CSV, Markdown, observation JSON and archived corpus inputs.
+The controller embeds the capture pins at build time. Probe obligations come from the compiled catalogue and those pins.
+The audit requires exactly nine npm inputs, including TypeScript, and both fixed listing inputs.
+It checks every input field, the full command list, both archived corpora and pins, listing bodies and oracles, and all twelve capture sizes.
+Listing manifest paths are relative to the evidence root. Native probe arguments and input bytes stay unchanged.
 Missing or changed evidence blocks numeric qualification. The archive retains the available raw output.
 Artifact paths in bindings are relative to the archive root. The archive records binary digests, rather than distributing the executables.
 Those digests come from the recorder's live hashes before and after each pass. They do not provide an independent build attestation.
@@ -46,3 +50,4 @@ The custom probe executable is an overlaid build. The native benchmark and exist
 Failed reads, builds and audits retain their statuses and available output. A completed report alone does not establish performance parity.
 Remote controls remove or alter each recorded artifact class and replace a complete 343-row CSV with stale values.
 The native receipt check also rejects that stale CSV after the control regenerates its outer binding.
+Workload controls regenerate matching outer bindings before rejecting empty, omitted, duplicate or altered inputs and capture sizes.

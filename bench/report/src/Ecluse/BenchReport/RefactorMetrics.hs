@@ -18,6 +18,7 @@ import Ecluse.BenchReport (BenchRow (..), parseCsv)
 import Ecluse.BenchReport.Markdown (hasColumns, records, tableHeading, tables)
 import Ecluse.BenchReport.Performance (allocationRequiredRows)
 import Ecluse.BenchReport.RefactorFiles (readComparisonText, writeComparisonText)
+import Ecluse.BenchReport.RefactorInputAudit (expectedCaptureSizes, expectedProbeInputs)
 import Ecluse.BenchReport.RefactorInputs (Input (..))
 import Ecluse.Test.Contract.Manifest (jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Result (auditExactIds)
@@ -67,12 +68,12 @@ readPass root kind passName = do
             traverse benchmark rows
         "allocation" -> readComparisonText (directory </> "perf-allocation-report.md") >>= either (fail . toString) pure . allocation
         "residency" -> do
-            sizes <- readJsonFile (root </> "inputs/capture-sizes.json")
+            sizes <- expectedCaptureSizes
             readComparisonText (directory </> "measure.log") >>= either (fail . toString) pure . residency sizes
         _ -> do
-            inputs <- readJsonFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json")
+            inputs <- expectedProbeInputs kind
             traverse (sourceObservation directory kind) inputs
-    expected <- expectedIds root kind
+    expected <- expectedIds kind
     require (auditExactIds "measurement" expected (map observationId observations))
     require ["empty metrics: " <> name | Observation name metrics <- observations, null metrics]
     pure observations
@@ -80,12 +81,12 @@ readPass root kind passName = do
 observationId :: Observation -> Text
 observationId (Observation name _) = name
 
-expectedIds :: FilePath -> Text -> IO [Text]
-expectedIds root = \case
+expectedIds :: Text -> IO [Text]
+expectedIds = \case
     "benchmark" -> T.lines <$> readComparisonText "taskfiles/refactor-performance/expected-rows.txt"
     "allocation" -> pure (concatMap (uncurry allocationRequiredRows) catalogues)
     "residency" -> pure [kind <> "/" <> name <> "/" <> shape | (_, names) <- catalogues, name <- names, (kind, shapes) <- residencyShapes, shape <- shapes]
-    kind -> map inputId <$> (readJsonFile (root </> "inputs" </> if kind == "versions" then "versions.json" else "listings.json") :: IO [Input])
+    kind -> map inputId <$> expectedProbeInputs kind
 
 catalogues :: [(Text, [Text])]
 catalogues = [("npm", map cpName corpusPackages), ("pypi", map cpName pypiCorpusPackages)]
