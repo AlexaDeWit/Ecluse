@@ -59,3 +59,44 @@ Failed reads, builds and audits retain their statuses and available output. A co
 Remote controls remove or alter each recorded artifact class and replace a complete 343-row CSV with stale values.
 The native receipt check also rejects that stale CSV after the control regenerates its outer binding.
 Workload controls regenerate matching outer bindings before rejecting empty, omitted, duplicate or altered inputs and capture sizes.
+
+## Supplementary three-probe residency diagnostic
+
+The temporary `performance:residency-diagnostics:run` task measures aws-sdk-client-s3
+HeavyBase, webpack Shared and lodash PublishOrder. It uses native sources
+`690a4cd522f3146fc04ae42d6abac684a44a422c` and
+`ab5f4af6e55b90ae79392f3d10a9505295f1239f`. A1, B1, A2 and B2 each run the
+three native children in that order on one ARM64 worker.
+
+Two private helper checkouts change only `test/residency/Main.hs`. They call
+`writeMergeDocuments` from each exact source. The eight calls archive both
+returned byte sequences, paths, byte counts and SHA-256 digests. The controller
+requires identical bytes within and between sources before measurement.
+Webpack uses its authenticated committed capture. No input is re-encoded.
+
+The native checkouts stay clean. All builds and input generation finish before
+the first child. Each child keeps its original argv and RTS options. The audit
+checks mandatory artifacts, exact helper overlays, source and tree identities,
+build plans, executable bytes, toolchains, corpus pins, worker identity,
+externally supplied CI run and attempt, commands, statuses and timestamps.
+Snapshots and live input hashes surround each child.
+
+The report retains all six signed pairs per probe. Source, basis and served
+byte fields stay exact. The original live-field rule allows 1024 bytes.
+Preparation allocation remains informational. Adverse rows stay visible.
+This supplementary campaign does not establish whole-suite parity, replace
+acceptance or waive a native breach. R9b listing recovery is separately qualified.
+Archived evidence does not attest the worker or prove the absence of other host
+processes. The isolated serial recipe records the controller's scheduling.
+
+Setup has four builds. Allow about 25-35 minutes with similar caches, then
+10 minutes for helpers and children initially. Each child has a 10-minute limit.
+The workflow retains its 240-minute hard cap and uploads partial evidence.
+Per-child costs remain unverified until CI runs this campaign.
+
+Use the mutually exclusive `residency_diagnostic` dispatch input on
+`measure/refactor-residency-diagnostic`. Shared hosts permit static checks only.
+The static controls inspect the real Task include tree, poison sibling variables,
+check exact nested snapshots and confine previews to a scratch fixture.
+The runtime controls exercise the complete audit, refresh outer digests for
+semantic mutations and require a restored positive fixture.

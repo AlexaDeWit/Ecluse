@@ -2,6 +2,7 @@ version: '3'
 includes:
   comparison: refactor-performance.yml
   allocation-diagnostics: refactor-allocation.yml
+  residency-diagnostics: refactor-residency-diagnostic.yml
 tasks:
   invalidate:
     cmds:

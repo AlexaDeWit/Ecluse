@@ -22,11 +22,21 @@ import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.RefactorComparison qualified as Comparison
 import Ecluse.BenchReport.RefactorEvidence qualified as ComparisonEvidence
 import Ecluse.BenchReport.RefactorInputs qualified as ComparisonInputs
+import Ecluse.BenchReport.RefactorResidencyDiagnostic qualified as ResidencyDiagnostic
+import Ecluse.BenchReport.RefactorResidencyDiagnostic.Controls qualified as ResidencyDiagnosticControls
+import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inputs qualified as ResidencyDiagnosticInputs
 
 -- | Route report and diagnostic commands without changing measured product code.
 main :: IO ()
 main =
     getArgs >>= \case
+        ["residency-diagnostic-controls"] -> ResidencyDiagnosticControls.controls
+        ["residency-diagnostic-captures", root] -> ResidencyDiagnosticInputs.captureFaults root >>= \faults -> unless (null faults) (die (toString (unlines faults)))
+        ["residency-diagnostic-register", root, passName, probe] -> ResidencyDiagnosticInputs.registerInputs root (toText passName) (toText probe)
+        ["residency-diagnostic-inputs", root] -> ResidencyDiagnostic.qualifyInputs root
+        ["residency-diagnostic-conditions", root, passName, probe] -> ResidencyDiagnostic.writeConditions root (toText passName) (toText probe)
+        ["residency-diagnostic-bind", root] -> ResidencyDiagnostic.bindRun root
+        ["residency-diagnostic-audit", root, runId, attempt] -> ResidencyDiagnostic.audit root (toText runId) (toText attempt)
         ["allocation-diagnostic-controls", root] -> AllocationDiagnosticControls.controls root
         ["allocation-diagnostic-build", root, build, source] -> AllocationDiagnostic.recordBuild root (toText build) (toText source)
         ["allocation-diagnostic-conditions", root, passName] -> AllocationDiagnostic.writeConditions root (toText passName)
@@ -95,7 +105,7 @@ publish output = do
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
 
--- Lenient UTF-8, and a described failure instead of a throw, so an unreadable file becomes a note in the output.
+-- An unreadable file becomes a report note.
 readTextFile :: FilePath -> IO (Either Text Text)
 readTextFile path = do
     result <- Exception.try (readFileBS path)
