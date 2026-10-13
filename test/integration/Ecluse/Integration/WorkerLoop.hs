@@ -12,6 +12,7 @@ module Ecluse.Integration.WorkerLoop (
     -- * Fixtures the loop runs against
     withMirrorTarget,
     observeAcknowledgement,
+    observeDeadLetter,
     mirrorPoliciesAt,
     mirrorPoliciesUnderAt,
     newQueueEnv,
@@ -27,7 +28,7 @@ import UnliftIO (timeout)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Package (Hash)
-import Ecluse.Core.Queue (MirrorQueue (ack))
+import Ecluse.Core.Queue (MirrorQueue (ack, deadLetter))
 import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintCredential, ptTracing), newMirrorPublish)
@@ -49,9 +50,7 @@ import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped, mirrorPolic
 runLoopUntil :: WorkerPolicies -> Env -> IO Bool -> IO ()
 runLoopUntil policies env = runUntil loopHardTimeout 200_000 (runWorker policies env)
 
-{- | Run the supervised worker for a fixed wall-clock window, then cancel it. For a case
-asserting a negative, where no positive condition exists to wait on.
--}
+-- | Use a fixed cancellation window only when no positive completion signal exists.
 runLoopFor :: WorkerPolicies -> Env -> Int -> IO ()
 runLoopFor policies env micros = void (timeout micros (runWorker policies env))
 
@@ -76,6 +75,12 @@ observeAcknowledgement queue = do
                     pure result
                 }
     pure (observed, readIORef acknowledged)
+
+-- | Observe successful terminal disposition after the real queue operation completes.
+observeDeadLetter :: MirrorQueue -> IO (MirrorQueue, IO Bool)
+observeDeadLetter queue = do
+    (observed, disposed) <- observeAcknowledgement queue{ack = deadLetter queue}
+    pure (queue{deadLetter = ack observed}, disposed)
 
 -- | Accepted native publication documents become visible to subsequent inventory probes.
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
@@ -120,9 +125,7 @@ newPublishAt mirrorUrl = do
             MirrorTransport
                 { ptManager = manager
                 , ptMintCredential = pure (Just (bareCredential (mkSecret "test-token")))
-                , -- The mount's plan-resolved response bound on the probe (production
-                  -- threads 'pdLimits'). The default here, since no override is set.
-                  ptLimits = defaultLimits
+                , ptLimits = defaultLimits
                 , ptTracing = passthroughTracingPort
                 }
     pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) (loopbackRegistryUrl mirrorUrl) npmPublishCodec)

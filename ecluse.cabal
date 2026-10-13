@@ -1555,7 +1555,6 @@ test-suite ecluse-integration
     Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
     Ecluse.Core.Server.Pipeline.SharedIntegrationSpec
     Ecluse.Core.Server.Pipeline.TarballIntegrationSpec
-    Ecluse.Core.Server.PipelineIntegrationSpec
     Ecluse.Core.Worker.LoopIntegrationSpec
     Ecluse.Integration.Collector
     Ecluse.Integration.Ministack
