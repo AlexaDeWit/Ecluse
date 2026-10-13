@@ -41,6 +41,9 @@ spec = do
     describe "streamError" $ do
         it "maps malformed JSON" $
             streamError defaultLimits (ParseError "unusable metadata") `shouldBe` MetadataUndecodable
+        it "does not classify a nesting message with extra context as a depth refusal" $
+            for_ ["prefix: " <> nestingLimit, nestingLimit <> " suffix"] $ \message ->
+                streamError defaultLimits (ParseError message) `shouldBe` MetadataUndecodable
         it "retains the configured depth ceiling" $
             streamError defaultLimits{maxNestingDepth = 3} (ParseError nestingLimit)
                 `shouldBe` MetadataBoundExceeded (TooDeeplyNested 3)

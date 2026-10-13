@@ -21,7 +21,14 @@ import Ecluse.Test.Support (expectRight)
 
 -- | Verify retained-depth boundaries, source size and response cancellation.
 spec :: Spec
-spec = readSpec
+spec = do
+    describe "isNestingLimit" $ do
+        it "recognises the retained-depth failure" $
+            isNestingLimit (ParseError "retained JSON nesting limit") `shouldBe` True
+        it "rejects other failures, including a nesting message with extra context" $
+            for_ ["", "invalid JSON", "prefix: " <> nestingLimit, nestingLimit <> " suffix"] $ \message ->
+                isNestingLimit (ParseError message) `shouldBe` False
+    readSpec
 
 readSpec :: Spec
 readSpec = describe "readJsonStream" $ do

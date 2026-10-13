@@ -41,6 +41,7 @@ projectionResult = \case
 
 -- | Translate incremental parser bounds without requiring validity of skipped data.
 streamError :: Limits -> ParseError -> MetadataError
-streamError limits err
-    | isNestingLimit err = MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
-    | otherwise = MetadataUndecodable
+streamError limits err =
+    if isNestingLimit err
+        then MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
+        else MetadataUndecodable

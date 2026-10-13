@@ -117,7 +117,7 @@ isNestingLimit (ParseError message) = message == nestingLimit
 -- | Charge the parsed value's own level, including empty containers. Children need one less level.
 withinRetainedDepth :: Int -> J.Parser a -> J.Parser a
 withinRetainedDepth budget parser
-    | budget <= 0 = J.mapWithFailure (const (Left (toString nestingLimit))) (pure ())
+    | budget <= 0 = J.mapWithFailure (\() -> Left (toString nestingLimit)) (pure ())
     | otherwise = parser
 
 {- | Which members of an object are retained, with what parser, and under which key. Every object
