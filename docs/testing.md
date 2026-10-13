@@ -828,6 +828,8 @@ Preparation, subject runs, and the execution audit all gate.
 Each ecosystem job also audits its report against the core unit, runtime unit and integration
 plans and reports from the same workflow attempt. The audit checks compiled plans, required laws,
 execution status, source, architecture, run identity, and the E2E image identity where it applies.
+A partial retry can retain a previous attempt's E2E plan, which artifact consumers reject with `run identity mismatch`.
+Rerun the complete workflow so artifact plans, reports and consumers share the new attempt identity.
 The existing change classifier alone permits a documentation-only omission.
 The audit runs after failed subjects and rejects missing artifacts or execution results.
 Cancellation stops an obsolete workflow's pending subject and completeness audit jobs.
