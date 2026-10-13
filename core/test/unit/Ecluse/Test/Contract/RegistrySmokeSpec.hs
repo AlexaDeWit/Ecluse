@@ -8,7 +8,7 @@ module Ecluse.Test.Contract.RegistrySmokeSpec (spec) where
 import Control.Exception (AsyncException (ThreadKilled))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldThrow)
 import Test.Hspec.Core.Spec qualified as Hspec
 import UnliftIO.Exception (fromException, throwIO)
 
@@ -44,11 +44,9 @@ spec = describe "liveMetadata" $ do
         liveMetadata "expected" (throwIO ThreadKilled) `shouldThrow` (== ThreadKilled)
     it "fails malformed JSON from the production read" $ do
         result <- readBody defaultLimits "{ not json"
-        result
-            `shouldSatisfy` ( \case
-                                Left MetadataUndecodable -> True
-                                _ -> False
-                            )
+        case result of
+            Left fault -> fault `shouldBe` MetadataUndecodable
+            Right _ -> expectationFailure "expected malformed JSON to fail decoding"
         liveMetadata expectedName (pure result) `shouldThrow` isFailureException
     it "fails a name mismatch from the production read" $
         do
@@ -56,12 +54,9 @@ spec = describe "liveMetadata" $ do
                 different = encodeUtf8 (T.replace expectedName "different" (decodeUtf8 body))
             _ <- liveMetadata expectedName (readBody defaultLimits body)
             result <- readBody defaultLimits different
-            result
-                `shouldSatisfy` ( \case
-                                    Left (MetadataNameMismatch "different") -> True
-                                    _ -> False
-                                )
-
+            case result of
+                Left fault -> fault `shouldBe` MetadataNameMismatch "different"
+                Right _ -> expectationFailure "expected the package name mismatch refusal"
             liveMetadata expectedName (pure result) `shouldThrow` isFailureException
     for_
         [ ("body bytes", defaultLimits{maxMetadataBytes = 1}, MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1))))
