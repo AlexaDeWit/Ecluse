@@ -20,29 +20,31 @@ chmod +x "$work/bin/cabal"
 
 # Exercise the workflow's Task entry point while keeping Cabal reads deterministic.
 gate() {
+  : > "$work/output"
   PATH="$work/bin:$PATH" INPUT_TAG="$1" REF_NAME="$2" TEST_CABAL_VERSION="$3" \
-    task --dir "$here/.." release-validate-version
+    GITHUB_OUTPUT="$work/output" task --dir "$here/.." release-validate-version > "$work/task.log" 2>&1
 }
 
 gate_accepts() {
-  local input="$1" ref="$2" cabal="$3" tag="$4" output expected
-  expected="$(printf 'image-tag=%s\ngit-tag=%s' "${tag#v}" "$tag")"
-  if output="$(gate "$input" "$ref" "$cabal" 2>"$work/error")" && [ "$output" = "$expected" ]; then
+  local input="$1" ref="$2" cabal="$3" tag="$4"
+  printf 'image-tag=%s\ngit-tag=%s\n' "${tag#v}" "$tag" > "$work/expected"
+  if gate "$input" "$ref" "$cabal" && cmp -s "$work/output" "$work/expected"; then
     printf 'ok   - gate accepts %q / %q\n' "$input" "$ref"
   else
-    printf 'FAIL - gate output for %q / %q: %q\n' "$input" "$ref" "$output"
-    cat "$work/error"
+    printf 'FAIL - gate output for %q / %q\n' "$input" "$ref"
+    cat "$work/task.log" "$work/output"
     fail=1
   fi
 }
 
 gate_rejects() {
-  local input="$1" ref="$2" cabal="$3" output
-  if output="$(gate "$input" "$ref" "$cabal" 2>"$work/error")"; then
+  local input="$1" ref="$2" cabal="$3"
+  if gate "$input" "$ref" "$cabal"; then
     printf 'FAIL - gate accepted %q / %q\n' "$input" "$ref"
     fail=1
-  elif [ -n "$output" ]; then
-    printf 'FAIL - gate emitted outputs after rejecting %q / %q: %q\n' "$input" "$ref" "$output"
+  elif [ -s "$work/output" ]; then
+    printf 'FAIL - gate emitted outputs after rejecting %q / %q\n' "$input" "$ref"
+    cat "$work/output"
     fail=1
   else
     printf 'ok   - gate rejects %q / %q without outputs\n' "$input" "$ref"
@@ -88,37 +90,41 @@ rejects() {
   fi
 }
 
-accepts "0.2.0" "v0.2.0" "0.2.0"
-accepts "v0.2.0" "v0.2.0" "0.2.0"
-accepts "10.20.30" "v10.20.30" "10.20.30"
-accepts "0.2.0-rc.1" "v0.2.0-rc.1" "0.2.0"
-accepts "v0.2.0-rc.12" "v0.2.0-rc.12" "0.2.0"
+for github_actions in false true; do
+  export GITHUB_ACTIONS="$github_actions"
+  printf 'GITHUB_ACTIONS=%s\n' "$GITHUB_ACTIONS"
+  accepts "0.2.0" "v0.2.0" "0.2.0"
+  accepts "v0.2.0" "v0.2.0" "0.2.0"
+  accepts "10.20.30" "v10.20.30" "10.20.30"
+  accepts "0.2.0-rc.1" "v0.2.0-rc.1" "0.2.0"
+  accepts "v0.2.0-rc.12" "v0.2.0-rc.12" "0.2.0"
 
-rejects "" "empty"
-rejects "0.2" "two components"
-rejects "0.2.0.1" "four components"
-rejects "v" "prefix only"
-rejects "vv0.2.0" "doubled prefix"
-rejects "0.2.0-rc" "rc without a number"
-rejects "0.2.0-rc.1.2" "rc with two numbers"
-rejects "0.2.0-beta.1" "unsupported prerelease name"
-rejects "0.2.0 " "trailing space"
-rejects "1.0.0-rc.1-rc.2" "two rc suffixes"
-rejects "a.b.c" "non-numeric"
-rejects "0.2.0;whoami" "shell metacharacter"
-rejects "01.02.03" "leading zeros"
-rejects "V0.2.0" "uppercase prefix"
-rejects " 0.2.0" "leading space"
-rejects "$(printf '0.2.0\nrm -rf /')" "embedded newline"
+  rejects "" "empty"
+  rejects "0.2" "two components"
+  rejects "0.2.0.1" "four components"
+  rejects "v" "prefix only"
+  rejects "vv0.2.0" "doubled prefix"
+  rejects "0.2.0-rc" "rc without a number"
+  rejects "0.2.0-rc.1.2" "rc with two numbers"
+  rejects "0.2.0-beta.1" "unsupported prerelease name"
+  rejects "0.2.0 " "trailing space"
+  rejects "1.0.0-rc.1-rc.2" "two rc suffixes"
+  rejects "a.b.c" "non-numeric"
+  rejects "0.2.0;whoami" "shell metacharacter"
+  rejects "01.02.03" "leading zeros"
+  rejects "V0.2.0" "uppercase prefix"
+  rejects " 0.2.0" "leading space"
+  rejects "$(printf '0.2.0\nrm -rf /')" "embedded newline"
 
-rejects "0.2.0-rc.01" "leading zero in candidate number"
-rejects "0.2.0+build.1" "build metadata"
-rejects $'0.2.0\ngit-tag=v9.9.9' "output injection"
+  rejects "0.2.0-rc.01" "leading zero in candidate number"
+  rejects "0.2.0+build.1" "build metadata"
+  rejects $'0.2.0\ngit-tag=v9.9.9' "output injection"
 
-gate_rejects "v0.2.0" "v0.2.0" 0.3.0
-gate_rejects "v0.2.0-rc.1" "v0.2.0" 0.3.0
-gate_rejects "invalid-dispatch" "v0.2.0" 0.2.0
-gate_accepts "v0.2.0-rc.1" "v9.9.9" 0.2.0 v0.2.0-rc.1
-TEST_CABAL_FAILURE=1 gate_rejects "v0.2.0" "" 0.2.0
+  gate_rejects "v0.2.0" "v0.2.0" 0.3.0
+  gate_rejects "v0.2.0-rc.1" "v0.2.0" 0.3.0
+  gate_rejects "invalid-dispatch" "v0.2.0" 0.2.0
+  gate_accepts "v0.2.0-rc.1" "v9.9.9" 0.2.0 v0.2.0-rc.1
+  TEST_CABAL_FAILURE=1 gate_rejects "v0.2.0" "" 0.2.0
+done
 
 exit "$fail"

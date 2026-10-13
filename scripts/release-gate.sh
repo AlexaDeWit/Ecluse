@@ -15,4 +15,4 @@ if [ "$release_cabal_version" != "$1" ]; then
   printf "Release base '%s' != ecluse.cabal version '%s'\n" "$release_cabal_version" "$1" >&2
   exit 1
 fi
-printf 'image-tag=%s\ngit-tag=%s\n' "${release_tag#v}" "$release_tag"
+printf 'image-tag=%s\ngit-tag=%s\n' "${release_tag#v}" "$release_tag" >> "$2"

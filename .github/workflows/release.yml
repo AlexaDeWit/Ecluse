@@ -41,7 +41,7 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
           INPUT_TAG: ${{ inputs.tag }}
-        run: nix develop .#ci --command task release-validate-version >> "$GITHUB_OUTPUT"
+        run: nix develop .#ci --command task release-validate-version
 
   build:
     needs: verify-version
