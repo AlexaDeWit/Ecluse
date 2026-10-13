@@ -5,7 +5,7 @@
 -- | Each negative control reaches the complete audit from an otherwise accepted fixture.
 module Ecluse.BenchReport.AllocationDiagnostic.Controls (controls) where
 
-import Data.Aeson (Value (Array, Object), toJSON)
+import Data.Aeson (Object, Value (Array, Object), toJSON)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -65,6 +65,14 @@ mutations =
     , semantic "build command" ["build command differs"] (writeFixtureText "build-C-A/command.txt" "different build\n")
     , semantic "controller command" ["controller build command differs"] (writeFixtureText "controller-command.txt" "different controller build\n")
     , semantic "dependency source identity" ["native tasty-bench source differs"] changePlan
+    , semantic "missing benchmark library" ["missing or duplicate plan component: tasty-bench/lib"] (mutatePlan "I-A" (filter (not . isComponent "tasty-bench" "lib")))
+    , semantic "duplicate benchmark library" ["missing or duplicate plan component: tasty-bench/lib"] (mutatePlan "I-A" (\units -> units <> filter (isComponent "tasty-bench" "lib") units))
+    , semantic "missing benchmark component" ["missing or duplicate plan component: ecluse/bench:ecluse-bench"] (mutatePlan "I-A" (filter (not . isComponent "ecluse" "bench:ecluse-bench")))
+    , semantic "wrong benchmark library edge" ["benchmark does not use exact tasty-bench library"] (mutatePlan "I-A" (map (changeComponent "ecluse" "bench:ecluse-bench" (KeyMap.insert "depends" (toJSON (["tasty-bench-0.4.1-inplace-bench-fibo", "tasty-bench-fit-0.1.1-inplace"] :: [Text]))))))
+    , semantic "duplicate benchmark library edge" ["benchmark does not use exact tasty-bench library"] (mutatePlan "I-A" (map (changeComponent "ecluse" "bench:ecluse-bench" (KeyMap.insert "depends" (toJSON (["tasty-bench-0.4.1-inplace", "tasty-bench-0.4.1-inplace", "tasty-bench-fit-0.1.1-inplace"] :: [Text]))))))
+    , semantic "fit source identity" ["tasty-bench-fit source differs"] (mutatePlan "I-A" (map (changeComponent "tasty-bench-fit" "lib" (KeyMap.insert "pkg-src-sha256" (toJSON ("different" :: Text))))))
+    , semantic "fit unrelated dependency" ["external dependency plan differs: I-A"] (mutatePlan "I-A" (map (changeComponent "tasty-bench-fit" "lib" (KeyMap.insert "depends" (toJSON (["different-base", "tasty-bench-0.4.1-inplace"] :: [Text]))))))
+    , semantic "fit wrong overlay edge" ["tasty-bench-fit does not use exact tasty-bench library"] (mutatePlan "I-A" (map (changeComponent "tasty-bench-fit" "lib" (KeyMap.insert "depends" (toJSON (["fixture-base", "wrong-library"] :: [Text]))))))
     , semantic "dependency archive identity" ["upstream archive hash differs"] (writeFixtureText "dependency/tasty-bench-0.4.1.tar.gz" "different archive\n")
     , semantic "input identity" ["archived file differs: bench/corpus/pins.json"] (writeFixtureText "inputs/corpus/pins.json" "different input\n")
     , Mutation "missing pass" ["required artifact missing: C-A1/", "C-A1/binding.json", "pass inventory differs"] (\root -> renameDirectory (root </> "C-A1") (root </> "absent-pass"))
@@ -122,19 +130,28 @@ mirrorSnapshot root build file =
         forM_ ["before", "after"] $ \phase -> copyFile (root </> "build-" <> toString build </> "identity" </> file) (root </> toString name </> phase </> file)
 
 changePlan :: FilePath -> IO ()
-changePlan root = do
-    let path = root </> "build-C-A/identity/plan.json"
+changePlan = mutatePlan "C-A" (map (changeComponent "tasty-bench" "lib" (KeyMap.insert "pkg-src-sha256" (toJSON ("different" :: Text)))))
+
+mutatePlan :: Text -> ([Value] -> [Value]) -> FilePath -> IO ()
+mutatePlan build change root = do
+    let path = root </> "build-" <> toString build </> "identity/plan.json"
     plan <- readJsonFile path
     changed <- case plan of
         Object fields -> case KeyMap.lookup "install-plan" fields of
-            Just (Array units) -> pure (Object (KeyMap.insert "install-plan" (Array (fmap changeUnit units)) fields))
+            Just (Array units) -> pure (Object (KeyMap.insert "install-plan" (toJSON (change (toList units))) fields))
             _ -> fail "fixture plan lacks units"
         _ -> fail "fixture plan is not an object"
     writeJsonFile path changed
-    mirrorSnapshot root "C-A" "plan.json"
-  where
-    changeUnit (Object fields) = Object (KeyMap.insert "pkg-src-sha256" (toJSON ("different" :: Text)) fields)
-    changeUnit other = other
+    mirrorSnapshot root build "plan.json"
+
+isComponent :: Text -> Text -> Value -> Bool
+isComponent package component (Object fields) = KeyMap.lookup "pkg-name" fields == Just (toJSON package) && KeyMap.lookup "component-name" fields == Just (toJSON component)
+isComponent _ _ _ = False
+
+changeComponent :: Text -> Text -> (Object -> Object) -> Value -> Value
+changeComponent package component change unit@(Object fields)
+    | isComponent package component unit = Object (change fields)
+changeComponent _ _ _ unit = unit
 
 omitPassEntries :: (Map FilePath Text -> Map FilePath Text) -> FilePath -> IO ()
 omitPassEntries change root = do

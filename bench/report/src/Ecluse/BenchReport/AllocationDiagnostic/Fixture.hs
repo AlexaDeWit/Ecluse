@@ -73,12 +73,39 @@ prepareFixture evidence root = do
     writeFixtureText path value = createDirectoryIfMissing True (takeDirectory (root </> path)) >> writeComparisonText (root </> path) value
 
 fixturePlan :: FilePath -> Text -> Value
-fixturePlan root build = object ["install-plan" .= [object (common <> selection)]]
+fixturePlan root build = object ["install-plan" .= units]
   where
-    common = ["pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "flags" .= object ["tasty" .= True]]
+    instrumented = "I-" `T.isPrefixOf` build
+    libraryId :: Text
+    libraryId = if instrumented then "tasty-bench-0.4.1-inplace" else "native-tasty-bench"
+    fitId :: Text
+    fitId = if instrumented then "tasty-bench-fit-0.1.1-inplace" else "native-tasty-bench-fit"
+    units :: [Value]
+    units =
+        [ object ["id" .= ("fixture-benchmark" :: Text), "pkg-name" .= ("ecluse" :: Text), "component-name" .= ("bench:ecluse-bench" :: Text), "depends" .= [libraryId, fitId]]
+        , object (common <> selection)
+        , fit
+        , object ["id" .= ("fixture-base" :: Text), "pkg-name" .= ("base" :: Text), "component-name" .= ("lib" :: Text), "depends" .= ([] :: [Text])]
+        ]
+            <> [object ["id" .= ("tasty-bench-0.4.1-inplace-bench-fibo" :: Text), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "component-name" .= ("bench:bench-fibo" :: Text), "depends" .= [libraryId]] | instrumented]
+    common = ["id" .= libraryId, "component-name" .= ("lib" :: Text), "depends" .= (["fixture-base"] :: [Text]), "pkg-name" .= ("tasty-bench" :: Text), "pkg-version" .= ("0.4.1" :: Text), "flags" .= object ["tasty" .= True]]
     selection
-        | "C-" `T.isPrefixOf` build = ["pkg-src-sha256" .= ("315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777" :: Text), "pkg-cabal-sha256" .= ("c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84" :: Text)]
+        | not instrumented = ["pkg-src-sha256" .= ("315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777" :: Text), "pkg-cabal-sha256" .= ("c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84" :: Text)]
         | otherwise = ["style" .= ("local" :: Text), "pkg-src" .= object ["path" .= (root </> "dependency/tasty-bench-0.4.1")]]
+    fit :: Value
+    fit =
+        object
+            [ "id" .= fitId
+            , "pkg-name" .= ("tasty-bench-fit" :: Text)
+            , "pkg-version" .= ("0.1.1" :: Text)
+            , "component-name" .= ("lib" :: Text)
+            , "flags" .= object ["debug" .= False]
+            , "style" .= (if instrumented then "inplace" else "global" :: Text)
+            , "pkg-src" .= object ["type" .= ("repo-tar" :: Text), "repo" .= object ["type" .= ("secure-repo" :: Text), "uri" .= ("http://hackage.haskell.org/" :: Text)]]
+            , "pkg-src-sha256" .= ("3b26a892b3080be7d0298862a85d3fb116cabf6e3508ad912354cb7247162ef4" :: Text)
+            , "pkg-cabal-sha256" .= ("762cb6ee6da109f9c36d3e3a0835ccdac356939c9733a0dc501ddf24102615d2" :: Text)
+            , "depends" .= ["fixture-base", libraryId]
+            ]
 
 checksumLines :: FilePath -> FilePath -> Text -> [FilePath] -> IO Text
 checksumLines root directory prefix paths = T.unlines <$> traverse line paths

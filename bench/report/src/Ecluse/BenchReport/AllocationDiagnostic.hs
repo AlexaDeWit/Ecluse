@@ -5,7 +5,7 @@
 -- | Bind focused React diagnostics without issuing full-suite acceptance receipts.
 module Ecluse.BenchReport.AllocationDiagnostic (recordBuild, writeConditions, bindPass, bindRun, audit) where
 
-import Data.Aeson (Value (Object), object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (Object, Value (Object), object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
@@ -38,23 +38,21 @@ recordBuild root build source = do
 
 checkPlan :: FilePath -> Text -> IO ()
 checkPlan root build = do
-    plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
-    units <- either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Value])
-    let matches = [unit | Object unit <- units, KeyMap.lookup "pkg-name" unit == Just (toJSON ("tasty-bench" :: Text))]
-    case matches of
-        [unit] -> do
-            requireDiagnostic (KeyMap.lookup "pkg-version" unit == Just (toJSON ("0.4.1" :: Text))) "tasty-bench version differs"
-            requireDiagnostic (KeyMap.lookup "flags" unit == Just (object ["tasty" .= True])) "tasty-bench flags differ"
-            if "C-" `T.isPrefixOf` build
-                then do
-                    requireDiagnostic (KeyMap.lookup "pkg-src-sha256" unit == Just (toJSON tarDigest)) "native tasty-bench source differs"
-                    requireDiagnostic (KeyMap.lookup "pkg-cabal-sha256" unit == Just (toJSON cabalDigest)) "native tasty-bench Cabal revision differs"
-                else do
-                    requireDiagnostic (KeyMap.lookup "style" unit == Just (toJSON ("local" :: Text))) "diagnostic tasty-bench is not local"
-                    case KeyMap.lookup "pkg-src" unit of
-                        Just (Object origin) -> requireDiagnostic (KeyMap.lookup "path" origin == Just (toJSON (root </> "dependency/tasty-bench-0.4.1"))) "overlay source path differs"
-                        _ -> fail "overlay source identity is missing"
-        _ -> fail "missing or duplicate tasty-bench dependency"
+    units <- readPlanUnits root build
+    (benchmark, unit) <- benchmarkLibrary units
+    fit <- fitLibrary units benchmark unit
+    validateFit build fit
+    requireDiagnostic (KeyMap.lookup "pkg-version" unit == Just (toJSON ("0.4.1" :: Text))) "tasty-bench version differs"
+    requireDiagnostic (KeyMap.lookup "flags" unit == Just (object ["tasty" .= True])) "tasty-bench flags differ"
+    if "C-" `T.isPrefixOf` build
+        then do
+            requireDiagnostic (KeyMap.lookup "pkg-src-sha256" unit == Just (toJSON tarDigest)) "native tasty-bench source differs"
+            requireDiagnostic (KeyMap.lookup "pkg-cabal-sha256" unit == Just (toJSON cabalDigest)) "native tasty-bench Cabal revision differs"
+        else do
+            requireDiagnostic (KeyMap.lookup "style" unit == Just (toJSON ("local" :: Text))) "diagnostic tasty-bench is not local"
+            case KeyMap.lookup "pkg-src" unit of
+                Just (Object origin) -> requireDiagnostic (KeyMap.lookup "path" origin == Just (toJSON (root </> "dependency/tasty-bench-0.4.1"))) "overlay source path differs"
+                _ -> fail "overlay source identity is missing"
 
 cabalDigest :: Text
 cabalDigest = "c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84"
@@ -224,9 +222,74 @@ auditPlans root = do
   where
     externalPlan :: Text -> IO [Value]
     externalPlan build = do
-        plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
-        units <- either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Value])
-        pure [Object (foldr KeyMap.delete unit ["pkg-src", "dist-dir", "build-info"]) | Object unit <- units, KeyMap.lookup "pkg-name" unit `notElem` map (Just . toJSON) (["ecluse", "tasty-bench"] :: [Text])]
+        units <- readPlanUnits root build
+        (benchmark, library) <- benchmarkLibrary units
+        fit <- fitLibrary units benchmark library
+        libraryId <- unitId library
+        fitId <- unitId fit
+        validateFit build fit
+        traverse (normaliseExternal libraryId fitId) [unit | unit <- units, KeyMap.lookup "pkg-name" unit `notElem` map (Just . toJSON) (["ecluse", "tasty-bench"] :: [Text])]
+
+readPlanUnits :: FilePath -> Text -> IO [Object]
+readPlanUnits root build = do
+    plan <- readJsonFile (root </> "build-" <> toString build </> "identity/plan.json")
+    either fail pure (parseEither (withObject "plan" (.: "install-plan")) plan :: Either String [Object])
+
+uniqueComponent :: Text -> Text -> [Object] -> IO Object
+uniqueComponent package component units = case [unit | unit <- units, KeyMap.lookup "pkg-name" unit == Just (toJSON package), KeyMap.lookup "component-name" unit == Just (toJSON component)] of
+    [unit] -> pure unit
+    _ -> fail (toString ("missing or duplicate plan component: " <> package <> "/" <> component))
+
+benchmarkLibrary :: [Object] -> IO (Object, Object)
+benchmarkLibrary units = do
+    benchmark <- uniqueComponent "ecluse" "bench:ecluse-bench" units
+    library <- uniqueComponent "tasty-bench" "lib" units
+    identifiers <- traverse unitId units
+    requireDiagnostic (length identifiers == length (ordNub identifiers)) "duplicate plan unit identifier"
+    requireDependency "benchmark does not use exact tasty-bench library" benchmark library
+    pure (benchmark, library)
+
+fitLibrary :: [Object] -> Object -> Object -> IO Object
+fitLibrary units benchmark library = do
+    fit <- uniqueComponent "tasty-bench-fit" "lib" units
+    requireDependency "benchmark does not use exact tasty-bench-fit library" benchmark fit
+    requireDependency "tasty-bench-fit does not use exact tasty-bench library" fit library
+    pure fit
+
+unitId :: Object -> IO Text
+unitId unit = either fail pure (parseEither (.: "id") unit)
+
+unitDependencies :: Object -> IO [Text]
+unitDependencies unit = either fail pure (parseEither (.: "depends") unit)
+
+requireDependency :: Text -> Object -> Object -> IO ()
+requireDependency problem consumer library = do
+    dependencies <- unitDependencies consumer
+    libraryId <- unitId library
+    requireDiagnostic (length (filter (== libraryId) dependencies) == 1) problem
+
+validateFit :: Text -> Object -> IO ()
+validateFit build unit = do
+    let expectedStyle :: Text
+        expectedStyle = if "C-" `T.isPrefixOf` build then "global" else "inplace"
+    requireDiagnostic (KeyMap.lookup "style" unit == Just (toJSON expectedStyle)) "tasty-bench-fit build style differs"
+    requireDiagnostic (KeyMap.lookup "pkg-version" unit == Just (toJSON ("0.1.1" :: Text))) "tasty-bench-fit version differs"
+    requireDiagnostic (KeyMap.lookup "flags" unit == Just (object ["debug" .= False])) "tasty-bench-fit flags differ"
+    requireDiagnostic (KeyMap.lookup "pkg-src-sha256" unit == Just (toJSON ("3b26a892b3080be7d0298862a85d3fb116cabf6e3508ad912354cb7247162ef4" :: Text))) "tasty-bench-fit source differs"
+    requireDiagnostic (KeyMap.lookup "pkg-cabal-sha256" unit == Just (toJSON ("762cb6ee6da109f9c36d3e3a0835ccdac356939c9733a0dc501ddf24102615d2" :: Text))) "tasty-bench-fit Cabal revision differs"
+
+normaliseExternal :: Text -> Text -> Object -> IO Value
+normaliseExternal libraryId fitId unit = do
+    identifier <- unitId unit
+    let comparable = foldr KeyMap.delete unit ["pkg-src", "dist-dir", "build-info"]
+    if identifier /= fitId
+        then pure (Object comparable)
+        else do
+            dependencies <- unitDependencies unit
+            source <- maybe (fail "tasty-bench-fit source record is missing") pure (KeyMap.lookup "pkg-src" unit)
+            let stableDependencies = map (\dependency -> if dependency == libraryId then "diagnostic:tasty-bench:lib" else dependency) dependencies
+                normalised = KeyMap.insert "pkg-src" source (KeyMap.insert "depends" (toJSON stableDependencies) (foldr KeyMap.delete comparable ["id", "style"]))
+            pure (Object normalised)
 
 auditInputs :: FilePath -> IO ()
 auditInputs root = auditManifest (root </> "build-C-A/identity/corpus.sha256") "bench/" (root </> "inputs")

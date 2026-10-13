@@ -98,7 +98,14 @@ The inventories do not come from supplied binding maps or directory contents.
 They include source archives, the full controller overlay, executables, commands, control results and all required snapshots.
 The final run binding also covers the complete order log and every child binding. Before/after snapshots check live binaries, source identities, inputs, lock files, plans and dependency files.
 The controller validates the native dependency's source and the overlay's local build selection.
-Other external plan entries must match after removing directory metadata. The local Ecluse component graph can differ between A and B.
+The plan must contain one `ecluse-bench` component and one tasty-bench library, with exactly one dependency edge between them.
+The separate upstream `bench-fibo` component does not count as a second library. Duplicate libraries or a different selected unit fail.
+The same checks bind the benchmark's tasty-bench-fit library to the selected tasty-bench library.
+
+The overlay rebuilds tasty-bench-fit from its unchanged pinned source. Its unit ID, global/inplace style and tasty-bench dependency ID therefore differ.
+Only those demonstrated fit-library substitutions are normalised. Its source archive, Cabal revision, version and flags remain pinned.
+Its repository source and every unrelated dependency remain in the equality comparison. All other external units retain the original equality check.
+The local Ecluse component graph can differ between A and B.
 
 The audit requires exactly twelve named passes in the prescribed serial order.
 Each pass needs exactly the selected CSV row, zero native and outer statuses, matched identities and exact commands.
