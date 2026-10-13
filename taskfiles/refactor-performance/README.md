@@ -79,7 +79,20 @@ the first child. Each child keeps its original argv and RTS options. The audit
 checks mandatory artifacts, exact helper overlays, source and tree identities,
 build plans, executable bytes, toolchains, corpus pins, worker identity,
 externally supplied CI run and attempt, commands, statuses and timestamps.
-Snapshots and live input hashes surround each child.
+Snapshots and live input hashes surround each child. Native stdout and stderr
+remain separate, including successful children that print diagnostics.
+
+Source archives use `git -c tar.umask=0000 archive --format=tar SOURCE`.
+The controller authenticates fixed uncompressed archive hashes and all four
+configuration files against each exact source. Both plans require the native
+residency component, its matching checkout, GHC 9.10.3, Cabal 3.16.1.0,
+Linux/aarch64 and the original flags. External dependency comparisons retain
+identities, hashes and flags while removing only source-specific paths.
+
+Build qualification finishes before input generation. Full preparation
+qualification finishes before the first child. Live helper hashes must match
+the archived build before and after every call. Corpus and lock inventories
+must qualify before the audit reads their recorded paths.
 
 The report retains all six signed pairs per probe. Source, basis and served
 byte fields stay exact. The original live-field rule allows 1024 bytes.

@@ -18,6 +18,10 @@ module Ecluse.BenchReport.RefactorResidencyDiagnostic.Inventory (
     childFiles,
     generatedFiles,
     inventory,
+    authenticatedCorpus,
+    configurationDigests,
+    archiveDigest,
+    sourceArchiveCommand,
     nativeBuildArguments,
     nativeArguments,
     helperArguments,
@@ -28,7 +32,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.FilePath (takeDirectory, (</>))
 
-import Ecluse.BenchReport.RefactorEvidence (checksums, identityFiles)
+import Ecluse.BenchReport.RefactorEvidence (checksums, identityFiles, safePath)
+import Ecluse.Test.Contract.Manifest (digestFile)
 
 -- | Each probe fixes its package, committed capture, shape and native command.
 data Probe = Probe
@@ -85,7 +90,7 @@ helperFiles = ["source.txt", "plan.json", "toolchain.txt", "overlay.patch", "Mai
 
 -- | Snapshots and live input hashes surround every child.
 childFiles :: [FilePath]
-childFiles = ["conditions.json", "command.txt", "environment.txt", "native.status", "native.json", "events.txt", "inputs-before.sha256", "inputs-after.sha256"] <> [phase </> path | phase <- ["before", "after"], path <- identityFiles]
+childFiles = ["conditions.json", "command.txt", "environment.txt", "native.status", "native.json", "native.stderr", "events.txt", "inputs-before.sha256", "inputs-after.sha256"] <> [phase </> path | phase <- ["before", "after"], path <- identityFiles]
 
 -- | Preserve both original returned byte sequences, even when one names a committed capture.
 generatedFiles :: [FilePath]
@@ -94,15 +99,43 @@ generatedFiles = ["command.txt", "status", "returned.txt", "manifest.json", "pri
 -- | The mandatory inventory comes from the fixed schedule and native corpus identity.
 inventory :: FilePath -> IO [FilePath]
 inventory root = do
-    corpus <- checksums (root </> "build-A/corpus.sha256")
+    corpus <- authenticatedCorpus (root </> "build-A/corpus.sha256")
     pure $
-        ["controller.txt", "worker.txt", "run.json", "bench-report", "controller-command.txt", "controller-build.status", "controller-build.log", "controls.status", "controls.log", "capture-check.status", "capture-check.log", "generation-check.status", "generation-check.log", "setup-order.txt", "order.txt", "overlay/Main.hs", "overlay/controller-task.yml", "overlay/controller-workflow.yml"]
-            <> ["source-" <> side <> ".tar.gz" | side <- ["A", "B"]]
+        ["controller.txt", "worker.txt", "run.json", "bench-report", "controller-command.txt", "controller-build.status", "controller-build.log", "controls.status", "controls.log", "capture-check.status", "capture-check.log", "build-check.status", "build-check.log", "generation-check.status", "generation-check.log", "setup-order.txt", "order.txt", "overlay/Main.hs", "overlay/controller-task.yml", "overlay/controller-workflow.yml"]
+            <> ["source-" <> side <> file | side <- ["A", "B"], file <- [".tar", ".archive-command.txt"]]
+            <> ["source-configs-" <> toString side </> path | side <- ["A", "B"], path <- Map.keys (configurationDigests side)]
             <> ["build-" <> side </> path | side <- ["A", "B"], path <- identityFiles <> ["status", "output.txt", "command.txt", "binary-path.txt", "ecluse-residency"] <> ["config" </> file | file <- ["ecluse.cabal", "cabal.project", "cabal.project.freeze", "flake.lock"]]]
             <> ["source-inputs-" <> side </> path | side <- ["A", "B"], path <- "acceptance/criteria.json" : Map.keys corpus]
             <> ["helper-build-" <> side </> path | side <- ["A", "B"], path <- helperFiles]
             <> [generationDirectory name probe </> file | name <- passes, probe <- merges, file <- generatedFiles]
             <> [childDirectory name probe </> file | (name, probe) <- schedule, file <- childFiles]
+
+-- | Corpus keys are usable only after the fixed manifest digest and containment checks pass.
+authenticatedCorpus :: FilePath -> IO (Map FilePath Text)
+authenticatedCorpus path = do
+    sha <- digestFile path
+    requireDiagnostic (sha == "a097a7911f1b37337a7c89100d604cae8116acfc0ecb0b76f4eac349bd2b9a44") "native corpus inventory differs from exact sources"
+    corpus <- checksums path
+    requireDiagnostic (all safePath (Map.keys corpus)) "corpus path escapes archive"
+    pure corpus
+
+-- | Configuration hashes come from the two fixed committed source snapshots.
+configurationDigests :: Text -> Map FilePath Text
+configurationDigests side =
+    Map.fromList
+        [ ("ecluse.cabal", if sideOf side == "A" then "9177fd8f3a65778598cd59ee33bcd7a41c6c67c98bef4509327baf33c22e48b7" else "2be4f4f84329f91f8082e6c55a0ae25a4196111e717cf31e38a0fad3af312a5a")
+        , ("cabal.project", "7b3247e7cffb268b0e4e47383f61e38fc1c4821a8c4e50cff2dfd96457f81aa3")
+        , ("cabal.project.freeze", "fdb39a3ea1116e2582ef4c530a82b43d424a880cc887b24a1bbfdaf28a9a5066")
+        , ("flake.lock", "65554a62ff8df207dca72782f36dfbe2c3681292ee886bc8ba85fecd16a0f15b")
+        ]
+
+-- | Uncompressed tar identities use an explicit format and tar.umask.
+archiveDigest :: Text -> Text
+archiveDigest side = if sideOf side == "A" then "b701376daf89350b618a498060f9e3d55e27baf4a17a19a2e9aff0dbff83a612" else "60ecb4c6c24d72de199cdfa8d04aebd52d7658faa6fbbc7e53e3af11f8463fbd"
+
+-- | Retain the exact deterministic source archive command as evidence.
+sourceArchiveCommand :: Text -> [Text]
+sourceArchiveCommand side = ["git", "-c", "tar.umask=0000", "archive", "--format=tar", sourceFor side]
 
 -- | Record every forwarded variable in the reused native build invocation.
 nativeBuildArguments :: FilePath -> Text -> [Text]

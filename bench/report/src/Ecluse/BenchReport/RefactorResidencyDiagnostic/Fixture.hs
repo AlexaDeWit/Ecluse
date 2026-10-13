@@ -17,23 +17,25 @@ import Ecluse.BenchReport.RefactorFiles (readComparisonText, writeComparisonText
 import Ecluse.BenchReport.RefactorResidencyDiagnostic (bindRun, writeConditions)
 import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inputs (Generated (..), expectedLiveHashes)
 import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inventory
+import Ecluse.BenchReport.RefactorResidencyDiagnostic.Plans (fixturePlan, planBinaryPath, toolchainText)
 import Ecluse.Test.Contract.Manifest (digest, digestFile, readJsonFile, writeJsonFile)
 
 -- | The positive fixture supplies every required build, generation and child artifact.
-prepareFixture :: FilePath -> IO ()
-prepareFixture root = do
+prepareFixture :: FilePath -> FilePath -> IO ()
+prepareFixture seedEvidence root = do
     let seed = "taskfiles/refactor-performance/merge-inputs"
         put path value = createDirectoryIfMissing True (takeDirectory (root </> path)) >> writeComparisonText (root </> path) value
         stamp :: Int -> Text
         stamp = T.justifyRight 4 '0' . show
         events index kind name = [stamp (2 * index) <> " start " <> kind <> " " <> name, stamp (2 * index + 1) <> " end " <> kind <> " " <> name <> " status=0"]
-        identity :: Text -> Map FilePath Text
-        identity side = Map.fromList [("source.txt", T.unlines [sourceFor side, treeFor side]), ("locks.sha256", ""), ("plan.json", "{}\n"), ("plan.sha256", digest "{}\n" <> "  dist-newstyle/cache/plan.json\n"), ("executables.sha256", T.unlines [digest (encodeUtf8 (side <> target)) <> "  /fixture/" <> target | target <- ["bench-report", "ecluse-bench", "perf-acceptance", "ecluse-residency"]]), ("toolchain.txt", "fixture GHC and Cabal\n")]
+        snapshots :: Text -> Map FilePath Text
+        snapshots side = Map.fromList [("source.txt", T.unlines [sourceFor side, treeFor side]), ("locks.sha256", ""), ("executables.sha256", T.unlines [digest (encodeUtf8 (side <> target)) <> "  " <> toText (if target == "ecluse-residency" then planBinaryPath (takeDirectory root </> "source-" <> toString side) else takeDirectory root </> "source-" <> toString side </> toString target) | target <- ["bench-report", "ecluse-bench", "perf-acceptance", "ecluse-residency"]]), ("toolchain.txt", toolchainText)]
+    createDirectoryIfMissing True root
     put "controller.txt" (T.unlines (replicate 2 (T.replicate 40 "c")))
     put "worker.txt" "run=run-7\nattempt=2\nrunner=fixture\nimage=fixture\naarch64\n"
     writeJsonFile (root </> "run.json") (Map.fromList [("run", "run-7"), ("attempt", "2"), ("runner", "fixture"), ("image", "fixture"), ("architecture", "aarch64"), ("controllerSource", T.replicate 40 "c"), ("controllerTree", T.replicate 40 "c"), ("sourceA", sourceFor "A"), ("treeA", treeFor "A"), ("sourceB", sourceFor "B"), ("treeB", treeFor "B")] :: Map Text Text)
-    forM_ ["controller-build.status", "controls.status", "capture-check.status", "generation-check.status"] (`put` "0\n")
-    forM_ ["controller-build.log", "controls.log", "capture-check.log", "generation-check.log", "bench-report", "overlay/controller-task.yml", "overlay/controller-workflow.yml", "source-A.tar.gz", "source-B.tar.gz"] (`put` "fixture\n")
+    forM_ ["controller-build.status", "controls.status", "capture-check.status", "build-check.status", "generation-check.status"] (`put` "0\n")
+    forM_ ["controller-build.log", "controls.log", "capture-check.log", "build-check.log", "generation-check.log", "bench-report", "overlay/controller-task.yml", "overlay/controller-workflow.yml"] (`put` "fixture\n")
     put "controller-command.txt" "cabal\nbuild\nexe:bench-report\n"
     createDirectoryIfMissing True (root </> "overlay")
     copyFile (seed </> "Main.hs") (root </> "overlay/Main.hs")
@@ -42,26 +44,35 @@ prepareFixture root = do
     forM_ ["A", "B"] $ \side -> do
         let build = "build-" <> toString side
             helper = "helper-build-" <> toString side
-        forM_ (Map.toList (identity side)) $ \(path, value) -> put (build </> path) value
+        forM_ (Map.toList (snapshots side)) $ \(path, value) -> put (build </> path) value
         copyFile (seed </> "expected-corpus.sha256") (root </> build </> "corpus.sha256")
         forM_ (Map.keys corpus) $ \path -> do
             createDirectoryIfMissing True (takeDirectory (root </> "source-inputs-" <> toString side </> path))
             copyFile path (root </> "source-inputs-" <> toString side </> path)
         put ("source-inputs-" <> toString side </> "acceptance/criteria.json") "fixture criteria\n"
         forM_ [build, helper] $ \directory -> do
-            forM_ ["ecluse.cabal", "cabal.project", "cabal.project.freeze", "flake.lock"] $ \path -> put (directory </> "config" </> path) "fixture config\n"
+            forM_ (Map.keys (configurationDigests side)) $ \path -> do
+                createDirectoryIfMissing True (root </> directory </> "config")
+                copyFile (seedEvidence </> "source-configs-" <> toString side </> path) (root </> directory </> "config" </> path)
             put (directory </> "status") "0\n"
             put (directory </> "output.txt") "fixture build\n"
-        put (build </> "locks.sha256") (T.unlines [digest "fixture config\n" <> "  " <> path | path <- ["cabal.project", "cabal.project.freeze", "flake.lock"]])
+        createDirectoryIfMissing True (root </> "source-configs-" <> toString side)
+        forM_ (Map.keys (configurationDigests side)) $ \path -> copyFile (seedEvidence </> "source-configs-" <> toString side </> path) (root </> "source-configs-" <> toString side </> path)
+        copyFile (seedEvidence </> "source-" <> toString side <> ".tar") (root </> "source-" <> toString side <> ".tar")
+        put ("source-" <> toString side <> ".archive-command.txt") (T.unlines (sourceArchiveCommand side))
+        put (build </> "locks.sha256") (T.unlines [sha <> "  " <> toText path | (path, sha) <- Map.toList (Map.delete "ecluse.cabal" (configurationDigests side))])
+        writeJsonFile (root </> build </> "plan.json") (fixturePlan (takeDirectory root </> "source-" <> toString side))
+        nativePlanSha <- digestFile (root </> build </> "plan.json")
+        put (build </> "plan.sha256") (nativePlanSha <> "  dist-newstyle/cache/plan.json\n")
         put (build </> "command.txt") (T.unlines (nativeBuildArguments root side))
-        put (build </> "binary-path.txt") ("/fixture/" <> side <> "/ecluse-residency\n")
+        put (build </> "binary-path.txt") (toText (planBinaryPath (takeDirectory root </> "source-" <> toString side)) <> "\n")
         put (build </> "ecluse-residency") (side <> "ecluse-residency")
         forM_ ["source.txt", "toolchain.txt"] $ \path -> copyFile (root </> build </> path) (root </> helper </> path)
-        put (helper </> "plan.json") "{\"fixture-helper\":true}\n"
+        writeJsonFile (root </> helper </> "plan.json") (fixturePlan (takeDirectory root </> "helper-" <> toString side))
         put (helper </> "command.txt") "cabal\nbuild\ntest:ecluse-residency\n"
-        put (helper </> "executable.txt") ("/fixture/helper-" <> side <> "/ecluse-residency\n")
+        put (helper </> "executable.txt") (toText (planBinaryPath (takeDirectory root </> "helper-" <> toString side)) <> "\n")
         put (helper </> "ecluse-residency") ("helper-" <> side)
-        put (helper </> "executable.sha256") (digest (encodeUtf8 ("helper-" <> side)) <> "  /fixture/helper-" <> side <> "/ecluse-residency\n")
+        put (helper </> "executable.sha256") (digest (encodeUtf8 ("helper-" <> side)) <> "  " <> toText (planBinaryPath (takeDirectory root </> "helper-" <> toString side)) <> "\n")
         copyFile (seed </> "Main.hs") (root </> helper </> "Main.hs")
         overlay <- maybe (fail "missing exact helper overlay fixture") pure (Map.lookup side overlays)
         put (helper </> "overlay.patch") overlay
@@ -98,6 +109,7 @@ prepareFixture root = do
         put (directory </> "command.txt") (T.unlines (executable : nativeArguments probe returned))
         put (directory </> "environment.txt") "GHCRTS=\nscheduling=serial\ntimeout=600\nkill-after=30\n"
         put (directory </> "native.status") "0\n"
+        put (directory </> "native.stderr") "retained diagnostic\n"
         forM_ ["before", "after"] $ \phase -> forM_ identityFiles $ \file -> do
             createDirectoryIfMissing True (root </> directory </> phase)
             copyFile (root </> build </> file) (root </> directory </> phase </> file)

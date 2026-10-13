@@ -76,10 +76,21 @@ for pass_name in A1 B1 A2 B2; do
       if grep -Fq -- '-A128k' "$report_root/measure-$pass_name-$probe.txt"; then fail 'Shared inherits merge RTS'; fi
     else
       summary "generate-$pass_name-$probe" generate "$side" "$pass_name" "$probe" ''
+      for phase in before after; do
+        grep -Fq "cmp '$evidence_root/helper-build-$side/executable.sha256' '$evidence_root/generate-$pass_name-$probe/helper-$phase.sha256'" "$report_root/generate-$pass_name-$probe.txt" || fail 'live helper hash check is missing'
+      done
       grep -Fq 'args=(--metadata-merge-probe "${inputs[@]}" +RTS -F1 -A128k -RTS' "$report_root/measure-$pass_name-$probe.txt" || fail 'merge argv differs'
     fi
   done
 done
+
+build_gate="$(awk '/residency-diagnostic-builds/ {print NR; exit}' "$report_root/run.txt.commands")"
+first_helper="$(awk '/Task: performance:residency-diagnostics:generate/ {print NR; exit}' "$report_root/run.txt.commands")"
+preparation_gate="$(awk '/residency-diagnostic-inputs/ {print NR; exit}' "$report_root/run.txt.commands")"
+first_child="$(awk '/Task: performance:residency-diagnostics:record-child/ {print NR; exit}' "$report_root/run.txt.commands")"
+[ -n "$build_gate" ] && [ -n "$first_helper" ] && [ "$build_gate" -lt "$first_helper" ] || fail 'build preflight does not precede generation'
+[ -n "$preparation_gate" ] && [ -n "$first_child" ] && [ "$preparation_gate" -lt "$first_child" ] || fail 'preparation preflight does not precede measurements'
+grep -Fq -- "--stderr '$evidence_root/child-A1-s3-heavy/native.stderr' timeout" "$report_root/measure-A1-s3-heavy.txt" || fail 'native stderr is not separate'
 
 [ "$(grep -Fc ' - Task: performance:residency-diagnostics:record-child' "$report_root/run.txt")" = 12 ] || fail 'child schedule differs'
 [ "$(grep -Fc ' - Task: performance:residency-diagnostics:generate' "$report_root/run.txt")" = 8 ] || fail 'helper schedule differs'

@@ -2148,6 +2148,8 @@ library ecluse-bench-report
     Ecluse.BenchReport.PerformanceReceipt
     Ecluse.BenchReport.BuildPlan
     Ecluse.BenchReport.RefactorResidencyDiagnostic
+    Ecluse.BenchReport.RefactorResidencyDiagnostic.Builds
+    Ecluse.BenchReport.RefactorResidencyDiagnostic.Plans
     Ecluse.BenchReport.RefactorResidencyDiagnostic.Inventory
     Ecluse.BenchReport.RefactorResidencyDiagnostic.Inputs
     Ecluse.BenchReport.RefactorResidencyDiagnostic.Controls

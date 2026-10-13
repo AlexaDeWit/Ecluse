@@ -2,12 +2,18 @@
 # Preserve process failures and stop descendants before publishing a cancellation status.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-work="$(mktemp -d)"
+mkdir -p scratchpad
+work="$(mktemp -d scratchpad/process-capture.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 export TEST_CAPTURE_WORK="$work"
 bash "$here/process-capture.sh" "$work/status" "$work/output" bash -c 'echo current; exit 7'
 [ "$(cat "$work/status")" = 7 ]
 [ "$(cat "$work/output")" = current ]
+bash "$here/process-capture.sh" "$work/split.status" "$work/native.json" --stderr "$work/native.stderr" \
+  bash -c 'printf "{\"status\":\"ok\"}\n"; printf "retained diagnostic\n" >&2'
+[ "$(cat "$work/split.status")" = 0 ]
+[ "$(cat "$work/native.json")" = '{"status":"ok"}' ]
+[ "$(cat "$work/native.stderr")" = 'retained diagnostic' ]
 cat > "$work/child" <<'CHILD'
 #!/usr/bin/env bash
 trap '' TERM

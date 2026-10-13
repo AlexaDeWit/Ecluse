@@ -7,6 +7,8 @@ module Ecluse.BenchReport.RefactorResidencyDiagnostic (
     writeConditions,
     bindRun,
     qualifyInputs,
+    qualifyBuilds,
+    preparationFaults,
     auditFaults,
     audit,
 ) where
@@ -15,17 +17,18 @@ import Data.Aeson (Value (Object), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import System.FilePath ((</>))
+import UnliftIO.Exception (tryAny)
 
-import Ecluse.BenchReport.RefactorEvidence (Binding, bindingFaults, checksums, contextForTarget, equalFile, executableDigests, identityFiles, orderProblemsFor, required, writeBinding, zeroStatus)
+import Ecluse.BenchReport.RefactorEvidence (Binding, bindingFaults, checksums, contextForTarget, equalFile, identityFiles, orderProblemsFor, required, writeBinding, zeroStatus)
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
 import Ecluse.BenchReport.RefactorInputAudit (expectedProbeInputs)
 import Ecluse.BenchReport.RefactorInputs (Input (..))
 import Ecluse.BenchReport.RefactorMetrics (Observation, comparePasses, comparisonPairs, observationId, residency)
+import Ecluse.BenchReport.RefactorResidencyDiagnostic.Builds (auditBuilds)
 import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inputs
 import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inventory
-import Ecluse.Test.Contract.Manifest (digest, digestFile, jsonLine, readJsonFile, writeJsonFile)
+import Ecluse.Test.Contract.Manifest (digestFile, jsonLine, readJsonFile, writeJsonFile)
 import Ecluse.Test.Contract.Result (auditExactIds)
 
 context :: FilePath -> Text -> Probe -> IO (Map Text Text)
@@ -55,9 +58,21 @@ bindRun root = do
 -- | A mismatched generated corpus stops the campaign before any measured child starts.
 qualifyInputs :: FilePath -> IO ()
 qualifyInputs root = do
-    faults <- matchedInputs root
+    faults <- preparationFaults root
     writeJsonFile (root </> "generated-input-faults.json") faults
     requireDiagnostic (null faults) (T.unlines faults)
+
+-- | Exact builds and configurations must qualify before any helper call starts.
+qualifyBuilds :: FilePath -> IO ()
+qualifyBuilds root = auditBuilds root >>= \faults -> requireDiagnostic (null faults) (T.unlines faults)
+
+-- | No measured child is needed to qualify completed preparation.
+preparationFaults :: FilePath -> IO [Text]
+preparationFaults root = do
+    builds <- auditBuilds root
+    inputs <- captureProblems (matchedInputs root)
+    generations <- concat <$> traverse (\(name, probe) -> captureProblems (auditGeneration root name probe)) [(name, probe) | name <- passes, probe <- merges]
+    pure (builds <> inputs <> generations)
 
 -- | Complete evidence qualification takes externally supplied CI run and attempt identities.
 auditFaults :: FilePath -> Text -> Text -> IO [Text]
@@ -78,79 +93,15 @@ auditFaults root runId attempt = do
                 <> ["controller identity differs" | controller /= controllerExpected || any (\value -> T.length value /= 40 || not (T.all (`elem` ("0123456789abcdef" :: String)) value)) controller]
                 <> ["worker identity differs" | T.null runner || T.null image || not ("aarch64" `T.isInfixOf` T.unlines worker) || any (\field -> length (filter (== field) worker) /= 1) ["run=" <> runId, "attempt=" <> attempt, "runner=" <> runner, "image=" <> image]]
             )
-    inputs <- captureProblems (matchedInputs root)
-    builds <- concat <$> traverse (captureProblems . auditBuild root) ["A", "B"]
-    generations <- concat <$> traverse (\(name, probe) -> captureProblems (auditGeneration root name probe)) [(name, probe) | name <- passes, probe <- merges]
+    preparation <- preparationFaults root
     children <- concat <$> traverse (\(name, probe) -> captureProblems (auditChild root name probe)) schedule
     order <- captureProblems (auditOrder root)
     shared <- captureProblems $ do
         equality <- concat <$> traverse (equalFile root "build-A" "build-B") ["locks.sha256", "corpus.sha256", "toolchain.txt"]
-        status <- concat <$> traverse (zeroStatus root) ["controller-build.status", "controls.status", "capture-check.status", "generation-check.status"]
+        status <- concat <$> traverse (zeroStatus root) ["controller-build.status", "controls.status", "capture-check.status", "build-check.status", "generation-check.status"]
         command <- T.lines <$> readComparisonText (root </> "controller-command.txt")
         pure (equality <> status <> ["controller command differs" | command /= ["cabal", "build", "exe:bench-report"]])
-    pure (run <> inputs <> builds <> generations <> children <> order <> shared)
-
-auditBuild :: FilePath -> Text -> IO [Text]
-auditBuild root side = do
-    let build = "build-" <> toString side
-        helper = "helper-build-" <> toString side
-    nativeSource <- T.lines <$> readComparisonText (root </> build </> "source.txt")
-    helperSource <- T.lines <$> readComparisonText (root </> helper </> "source.txt")
-    nativeDigests <- executableDigests (root </> build </> "executables.sha256")
-    helperDigests <- executableDigests (root </> helper </> "executable.sha256")
-    nativeBinary <- digestFile (root </> build </> "ecluse-residency")
-    helperBinary <- digestFile (root </> helper </> "ecluse-residency")
-    overlay <- readComparisonText (root </> helper </> "overlay.patch")
-    mainDigest <- digestFile (root </> helper </> "Main.hs")
-    corpusManifest <- digestFile (root </> build </> "corpus.sha256")
-    let overlayDigest = digest (TE.encodeUtf8 (T.unlines (filter (not . T.isPrefixOf "index ") (T.lines overlay))))
-        expectedOverlay = if side == "A" then "0a388db3d3c5745d86aaf7546713f2af4956206888ba0bfe7966a8ba107de148" else "1d9bc15a64e600aa1f53780427caf29284f3f83fc31f835a5bcf9c9f8bbf4c79"
-    sameHelper <- equalFile root "overlay" helper "Main.hs"
-    config <- concat <$> sequence [equalFile root build helper ("config" </> file) | file <- ["ecluse.cabal", "cabal.project", "cabal.project.freeze", "flake.lock"]]
-    toolchain <- equalFile root build helper "toolchain.txt"
-    plan <- digestFile (root </> build </> "plan.json")
-    planRecord <- checksums (root </> build </> "plan.sha256")
-    locks <- checksums (root </> build </> "locks.sha256")
-    corpus <- checksums (root </> build </> "corpus.sha256")
-    corpusFaults <-
-        concat
-            <$> forM
-                (Map.toList corpus)
-                ( \(path, expected) -> do
-                    actual <- digestFile (root </> "source-inputs-" <> toString side </> path)
-                    pure ["archived corpus hash differs" | actual /= expected]
-                )
-    lockFaults <-
-        concat
-            <$> forM
-                (Map.toList locks)
-                ( \(path, expected) -> do
-                    actual <- digestFile (root </> build </> "config" </> path)
-                    pure ["dependency lock hash differs" | actual /= expected]
-                )
-    status <- concat <$> traverse (zeroStatus root . (</> "status")) [build, helper]
-    commands <- forM [(build, nativeBuildArguments root side), (helper, ["cabal", "build", "test:ecluse-residency"])] $ \(directory, expected) -> do
-        actual <- T.lines <$> readComparisonText (root </> directory </> "command.txt")
-        pure ["build command differs: " <> toText directory | actual /= expected]
-    pure
-        ( ["helper entrypoint differs from controller contract" | mainDigest /= "c9d9d3c16a99f35be31fca40a36d6e527b45163382253f631b1aa65df38b7392"]
-            <> ["helper overlay differs from exact product Main" | overlayDigest /= expectedOverlay]
-            <> ["native corpus inventory differs from exact sources" | corpusManifest /= "a097a7911f1b37337a7c89100d604cae8116acfc0ecb0b76f4eac349bd2b9a44"]
-            <> sameHelper
-            <> config
-            <> toolchain
-            <> corpusFaults
-            <> lockFaults
-            <> status
-            <> concat commands
-            <> ["native or helper source differs" | nativeSource /= [sourceFor side, treeFor side] || helperSource /= nativeSource]
-            <> ["native executable differs" | Map.lookup "ecluse-residency" nativeDigests /= Just nativeBinary]
-            <> auditExactIds "native binary" ["bench-report", "ecluse-bench", "perf-acceptance", "ecluse-residency"] (map toText (Map.keys nativeDigests))
-            <> ["helper executable differs" | helperDigests /= Map.singleton "ecluse-residency" helperBinary]
-            <> ["native build plan hash differs" | planRecord /= Map.singleton "dist-newstyle/cache/plan.json" plan]
-            <> auditExactIds "dependency lock" ["flake.lock", "cabal.project", "cabal.project.freeze"] (map toText (Map.keys locks))
-            <> ["helper overlay changes another file" | filter (T.isPrefixOf "diff --git ") (T.lines overlay) /= ["diff --git a/test/residency/Main.hs b/test/residency/Main.hs"]]
-        )
+    pure (run <> preparation <> children <> order <> shared)
 
 auditGeneration :: FilePath -> Text -> Probe -> IO [Text]
 auditGeneration root name probe = do
@@ -158,13 +109,13 @@ auditGeneration root name probe = do
         helper = "helper-build-" <> toString (sideOf name)
     executable <- T.strip <$> readComparisonText (root </> helper </> "executable.txt")
     command <- T.lines <$> readComparisonText (root </> directory </> "command.txt")
-    hashes <- executableDigests (root </> helper </> "executable.sha256")
+    hashes <- checksums (root </> helper </> "executable.sha256")
     binaries <-
         concat
             <$> forM
                 ["helper-before.sha256", "helper-after.sha256"]
                 ( \file -> do
-                    actual <- executableDigests (root </> directory </> file)
+                    actual <- checksums (root </> directory </> file)
                     pure ["helper changed during generation" | actual /= hashes]
                 )
     overlays <-
@@ -216,7 +167,8 @@ observationName probe = (if probeShape probe == "Shared" then "metadata-residenc
 
 readObservation :: FilePath -> Text -> Probe -> IO [Observation]
 readObservation root name probe = do
-    raw <- readJsonFile (root </> childDirectory name probe </> "native.json") :: IO Value
+    decoded <- tryAny (readJsonFile (root </> childDirectory name probe </> "native.json") :: IO Value)
+    raw <- either (const (fail "native child must contain exactly one observation")) pure decoded
     expectedSource <-
         if probeShape probe == "Shared"
             then do

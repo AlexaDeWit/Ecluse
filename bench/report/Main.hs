@@ -30,8 +30,9 @@ import Ecluse.BenchReport.RefactorResidencyDiagnostic.Inputs qualified as Reside
 main :: IO ()
 main =
     getArgs >>= \case
-        ["residency-diagnostic-controls"] -> ResidencyDiagnosticControls.controls
+        ["residency-diagnostic-controls", root] -> ResidencyDiagnosticControls.controls root
         ["residency-diagnostic-captures", root] -> ResidencyDiagnosticInputs.captureFaults root >>= \faults -> unless (null faults) (die (toString (unlines faults)))
+        ["residency-diagnostic-builds", root] -> ResidencyDiagnostic.qualifyBuilds root
         ["residency-diagnostic-register", root, passName, probe] -> ResidencyDiagnosticInputs.registerInputs root (toText passName) (toText probe)
         ["residency-diagnostic-inputs", root] -> ResidencyDiagnostic.qualifyInputs root
         ["residency-diagnostic-conditions", root, passName, probe] -> ResidencyDiagnostic.writeConditions root (toText passName) (toText probe)

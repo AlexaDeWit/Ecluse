@@ -19,9 +19,9 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Directory (copyFile)
-import System.FilePath (isAbsolute, normalise, takeDirectory, (</>))
+import System.FilePath (isAbsolute, takeDirectory, (</>))
 
-import Ecluse.BenchReport.RefactorEvidence (executableDigests)
+import Ecluse.BenchReport.RefactorEvidence (checksums, executableDigests)
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText)
 import Ecluse.BenchReport.RefactorInputAudit (expectedProbeInputs)
 import Ecluse.BenchReport.RefactorInputs (Input (..))
@@ -61,12 +61,17 @@ registerInputs root name identifier = do
         helperDirectory = takeDirectory root </> "helper-" <> toString side
     returned <- T.lines <$> readComparisonText (root </> directory </> "returned.txt")
     requireDiagnostic (length returned == 2) "helper must return exactly two paths"
-    binaries <- executableDigests (root </> "helper-build-" <> toString side </> "executable.sha256")
+    binaries <- executableDigests (root </> directory </> "helper-before.sha256")
+    recorded <- checksums (root </> "helper-build-" <> toString side </> "executable.sha256")
+    forM_ ["helper-before.sha256", "helper-after.sha256"] $ \file -> do
+        actual <- checksums (root </> directory </> file)
+        requireDiagnostic (actual == recorded) "helper changed during generation"
     binary <- maybe (fail "missing helper binary") pure (Map.lookup "ecluse-residency" binaries)
     records <- forM (zip ["private", "public"] returned) $ \(role, path) -> do
         let original = toString path
             live = if isAbsolute original then original else helperDirectory </> original
             archive = directory </> toString role <> ".json"
+        requireDiagnostic (original `elem` [probePath probe, root </> directory </> "live" </> toString role <> ".json"]) "returned input path escapes fixed generation paths"
         bytes <- BS.readFile live
         copyFile live (root </> directory </> toString role <> ".original")
         copyFile live (root </> archive)
@@ -117,7 +122,7 @@ auditGenerated root name probe = do
                         ( ["generated input bytes differ: " <> toText archive | original /= bytes || BS.length original /= generatedBytes record || digest original /= generatedSha256 record]
                             <> ["generated shape or package differs" | generatedShape record /= probeShape probe || generatedPackage record /= probePackage probe]
                             <> ["generated helper source differs" | generatedSource record /= sourceFor side || Map.lookup "ecluse-residency" binary /= Just (generatedHelper record)]
-                            <> ["generated path or archive differs" | generatedArchive record /= archive || normalise (generatedOriginal record) `notElem` map normalise allowed]
+                            <> ["generated path or archive differs" | generatedArchive record /= archive || generatedOriginal record `notElem` allowed]
                         )
                 )
     pure

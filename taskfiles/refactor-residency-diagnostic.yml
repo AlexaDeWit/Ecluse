@@ -4,7 +4,7 @@ vars:
   RES_DIAG_EVIDENCE: '{{.RES_DIAG_ROOT}}/evidence'
   RES_DIAG_BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
   RES_DIAG_CANDIDATE: ab5f4af6e55b90ae79392f3d10a9505295f1239f
-  RES_DIAG_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/RefactorResidencyDiagnostic.hs bench/report/src/Ecluse/BenchReport/RefactorResidencyDiagnostic/*.hs bench/report/src/Ecluse/BenchReport/RefactorEvidence.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs taskfiles/refactor-performance/merge-inputs/Main.hs
+  RES_DIAG_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/BuildPlan.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs bench/report/src/Ecluse/BenchReport/RefactorResidencyDiagnostic.hs bench/report/src/Ecluse/BenchReport/RefactorResidencyDiagnostic/*.hs bench/report/src/Ecluse/BenchReport/RefactorEvidence.hs bench/report/src/Ecluse/BenchReport/RefactorMetrics.hs taskfiles/refactor-performance/merge-inputs/Main.hs
 tasks:
   run:
     desc: Run the temporary three-probe residency diagnostic on one ARM64 worker
@@ -23,8 +23,17 @@ tasks:
         printf '%s\n' "run=$GITHUB_RUN_ID" "attempt=$GITHUB_RUN_ATTEMPT" "runner=$RUNNER_NAME" "image=${ImageVersion:-unknown}" > '{{.RES_DIAG_EVIDENCE}}/worker.txt'
         uname -a >> '{{.RES_DIAG_EVIDENCE}}/worker.txt'
         lscpu >> '{{.RES_DIAG_EVIDENCE}}/worker.txt'
-        git archive '{{.RES_DIAG_BASELINE}}' | gzip > '{{.RES_DIAG_EVIDENCE}}/source-A.tar.gz'
-        git archive '{{.RES_DIAG_CANDIDATE}}' | gzip > '{{.RES_DIAG_EVIDENCE}}/source-B.tar.gz'
+        git -c tar.umask=0000 archive --format=tar '{{.RES_DIAG_BASELINE}}' > '{{.RES_DIAG_EVIDENCE}}/source-A.tar'
+        git -c tar.umask=0000 archive --format=tar '{{.RES_DIAG_CANDIDATE}}' > '{{.RES_DIAG_EVIDENCE}}/source-B.tar'
+        for side in A B; do
+          source='{{.RES_DIAG_BASELINE}}'
+          [ "$side" != B ] || source='{{.RES_DIAG_CANDIDATE}}'
+          printf '%s\n' git -c tar.umask=0000 archive --format=tar "$source" > "{{.RES_DIAG_EVIDENCE}}/source-$side.archive-command.txt"
+          mkdir -p "{{.RES_DIAG_EVIDENCE}}/source-configs-$side"
+          for file in ecluse.cabal cabal.project cabal.project.freeze flake.lock; do
+            git show "$source:$file" > "{{.RES_DIAG_EVIDENCE}}/source-configs-$side/$file"
+          done
+        done
         cp taskfiles/refactor-performance/merge-inputs/Main.hs '{{.RES_DIAG_EVIDENCE}}/overlay/Main.hs'
         cp taskfiles/refactor-residency-diagnostic.yml '{{.RES_DIAG_EVIDENCE}}/overlay/controller-task.yml'
         cp .github/workflows/bench.yml '{{.RES_DIAG_EVIDENCE}}/overlay/controller-workflow.yml'
@@ -38,7 +47,7 @@ tasks:
           controllerSource="$(git rev-parse HEAD)" controllerTree="$(git rev-parse HEAD^{tree})" \
           sourceA='{{.RES_DIAG_BASELINE}}' treeA="$(git rev-parse '{{.RES_DIAG_BASELINE}}^{tree}')" \
           sourceB='{{.RES_DIAG_CANDIDATE}}' treeB="$(git rev-parse '{{.RES_DIAG_CANDIDATE}}^{tree}')"
-      - bash scripts/process-capture.sh '{{.RES_DIAG_EVIDENCE}}/controls.status' '{{.RES_DIAG_EVIDENCE}}/controls.log' '{{.RES_DIAG_EVIDENCE}}/bench-report' residency-diagnostic-controls
+      - bash scripts/process-capture.sh '{{.RES_DIAG_EVIDENCE}}/controls.status' '{{.RES_DIAG_EVIDENCE}}/controls.log' '{{.RES_DIAG_EVIDENCE}}/bench-report' residency-diagnostic-controls '{{.RES_DIAG_EVIDENCE}}'
       - bash scripts/process-status.sh '{{.RES_DIAG_EVIDENCE}}/controls.status'
       - task: prepare-native
         vars: {RES_DIAG_SIDE: A}
@@ -48,6 +57,8 @@ tasks:
         vars: {RES_DIAG_SIDE: A}
       - task: prepare-helper
         vars: {RES_DIAG_SIDE: B}
+      - bash scripts/process-capture.sh '{{.RES_DIAG_EVIDENCE}}/build-check.status' '{{.RES_DIAG_EVIDENCE}}/build-check.log' '{{.RES_DIAG_EVIDENCE}}/bench-report' residency-diagnostic-builds '{{.RES_DIAG_EVIDENCE}}'
+      - bash scripts/process-status.sh '{{.RES_DIAG_EVIDENCE}}/build-check.status'
       - bash scripts/process-capture.sh '{{.RES_DIAG_EVIDENCE}}/capture-check.status' '{{.RES_DIAG_EVIDENCE}}/capture-check.log' '{{.RES_DIAG_EVIDENCE}}/bench-report' residency-diagnostic-captures '{{.RES_DIAG_EVIDENCE}}'
       - bash scripts/process-status.sh '{{.RES_DIAG_EVIDENCE}}/capture-check.status'
       - task: generate
@@ -165,12 +176,14 @@ tasks:
         args=('{{.RES_DIAG_SHAPE}}' '{{.RES_DIAG_CORPUS}}' '{{.RES_DIAG_GENERATE_DIR}}/live')
         printf '%s\n' "$executable" "${args[@]}" > '{{.RES_DIAG_GENERATE_DIR}}/command.txt'
         sha256sum "$executable" > '{{.RES_DIAG_GENERATE_DIR}}/helper-before.sha256'
+        cmp '{{.RES_DIAG_HELPER_BUILD}}/executable.sha256' '{{.RES_DIAG_GENERATE_DIR}}/helper-before.sha256'
         git diff --binary HEAD > '{{.RES_DIAG_GENERATE_DIR}}/overlay-before.patch'
         cmp '{{.RES_DIAG_HELPER_BUILD}}/overlay.patch' '{{.RES_DIAG_GENERATE_DIR}}/overlay-before.patch'
         printf '%s start setup generate-{{.RES_DIAG_PASS}}-{{.RES_DIAG_PROBE}}\n' "$(date --iso-8601=ns)" | tee -a '{{.RES_DIAG_GENERATE_DIR}}/events.txt' >> '{{.RES_DIAG_EVIDENCE}}/setup-order.txt'
         bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.RES_DIAG_GENERATE_DIR}}/status' '{{.RES_DIAG_GENERATE_DIR}}/returned.txt' "$executable" "${args[@]}"
         printf '%s end setup generate-{{.RES_DIAG_PASS}}-{{.RES_DIAG_PROBE}} status=%s\n' "$(date --iso-8601=ns)" "$(cat '{{.RES_DIAG_GENERATE_DIR}}/status')" | tee -a '{{.RES_DIAG_GENERATE_DIR}}/events.txt' >> '{{.RES_DIAG_EVIDENCE}}/setup-order.txt'
         sha256sum "$executable" > '{{.RES_DIAG_GENERATE_DIR}}/helper-after.sha256'
+        cmp '{{.RES_DIAG_HELPER_BUILD}}/executable.sha256' '{{.RES_DIAG_GENERATE_DIR}}/helper-after.sha256'
         git diff --binary HEAD > '{{.RES_DIAG_GENERATE_DIR}}/overlay-after.patch'
         bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.RES_DIAG_GENERATE_DIR}}/status'
       - "'{{.RES_DIAG_EVIDENCE}}/bench-report' residency-diagnostic-register '{{.RES_DIAG_EVIDENCE}}' '{{.RES_DIAG_PASS}}' '{{.RES_DIAG_PROBE}}'"
@@ -212,7 +225,7 @@ tasks:
         printf '%s\n' "GHCRTS=${GHCRTS:-}" scheduling=serial timeout=600 kill-after=30 > '{{.RES_DIAG_CHILD_DIR}}/environment.txt'
         sha256sum "${inputs[@]}" > '{{.RES_DIAG_CHILD_DIR}}/inputs-before.sha256'
         printf '%s start child {{.RES_DIAG_PASS}}-{{.RES_DIAG_PROBE}}\n' "$(date --iso-8601=ns)" | tee -a '{{.RES_DIAG_CHILD_DIR}}/events.txt' >> '{{.RES_DIAG_EVIDENCE}}/order.txt'
-        bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.RES_DIAG_CHILD_DIR}}/native.status' '{{.RES_DIAG_CHILD_DIR}}/native.json' timeout --signal=TERM --kill-after=30s 10m "$executable" "${args[@]}"
+        bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.RES_DIAG_CHILD_DIR}}/native.status' '{{.RES_DIAG_CHILD_DIR}}/native.json' --stderr '{{.RES_DIAG_CHILD_DIR}}/native.stderr' timeout --signal=TERM --kill-after=30s 10m "$executable" "${args[@]}"
         printf '%s end child {{.RES_DIAG_PASS}}-{{.RES_DIAG_PROBE}} status=%s\n' "$(date --iso-8601=ns)" "$(cat '{{.RES_DIAG_CHILD_DIR}}/native.status')" | tee -a '{{.RES_DIAG_CHILD_DIR}}/events.txt' >> '{{.RES_DIAG_EVIDENCE}}/order.txt'
         sha256sum "${inputs[@]}" > '{{.RES_DIAG_CHILD_DIR}}/inputs-after.sha256'
 
@@ -227,5 +240,6 @@ tasks:
       - actionlint .github/workflows/bench.yml
       - zizmor .github/workflows/bench.yml
       - bash scripts/ci-runner-policy.sh
-      - shellcheck --severity=warning scripts/refactor-residency-wiring.test.sh scripts/refactor-wiring-support.sh scripts/refactor-allocation-wiring.test.sh
+      - shellcheck --severity=warning scripts/refactor-residency-wiring.test.sh scripts/refactor-wiring-support.sh scripts/refactor-allocation-wiring.test.sh scripts/process-capture.sh scripts/process-capture.test.sh
+      - bash scripts/process-capture.test.sh
       - bash scripts/refactor-residency-wiring.test.sh
