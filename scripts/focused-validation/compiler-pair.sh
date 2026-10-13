@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Start separately built compiler suites and release them after both create a directory.
 set -euo pipefail
 left="${1:?left checkout}"

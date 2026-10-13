@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Apply one reviewed patch only to its exact source blobs on a disposable runner.
 set -euo pipefail
 patch="${1:?patch path}"

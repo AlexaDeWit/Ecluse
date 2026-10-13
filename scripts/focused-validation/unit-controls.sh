@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Count completed mandatory examples in an already passing native Hspec log.
 set -euo pipefail
 evidence="${1:?result directory}"

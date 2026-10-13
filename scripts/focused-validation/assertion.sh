@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Require executed Hspec assertions, preserving the original process status and log.
 set -euo pipefail
 directory="${1:?result directory}"

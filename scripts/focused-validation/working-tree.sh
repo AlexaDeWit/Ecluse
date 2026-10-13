@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Bind each runtime pass to the exact clean source or one recorded patch.
 set -euo pipefail
 evidence="${1:?evidence directory}"

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Restore only the recorded temporary patch and verify the original tracked source.
 set -euo pipefail
 evidence="${1:?evidence directory}"

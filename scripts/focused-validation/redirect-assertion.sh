@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Require the production redirect mutation to fail only its named runtime assertion.
 set -euo pipefail
 evidence="${1:?result directory}"

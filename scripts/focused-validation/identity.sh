@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Record the selected source and require an unchanged tracked tree.
 set -euo pipefail
 source_sha="${FOCUSED_SOURCE:?full source SHA}"

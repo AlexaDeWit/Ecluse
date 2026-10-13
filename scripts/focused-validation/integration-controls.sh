@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexandra de Wit
+#
+# SPDX-License-Identifier: MIT
+
 # Require the reviewed integration cases independently of the candidate's own catalogue.
 set -euo pipefail
 evidence="${1:?result directory}"
