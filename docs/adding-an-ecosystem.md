@@ -359,8 +359,9 @@ To calibrate them:
 
 - Add the ecosystem to the residency tier as the metadata residency row of
   [Onboarding an ecosystem](testing.md#onboarding-an-ecosystem) lists, with its own retained-heap,
-  read-peak and output limits. The tier requires a residency record for every registered adapter,
-  with non-empty captures and its own limits and envelopes.
+  read-peak and output limits. Supply an exact `Calibration` and the record's probe hooks.
+  The tier refuses a missing residency provider for a registered adapter during setup.
+  Each provider needs non-empty authenticated captures and its own limits and envelopes.
 - Read each capture's `metadata-listing` line in the output of CI's arm64 Build job. It reports the
   read peak, the held entry, the peak above the entry and the served body, each per source byte.
 - Read each capture's `metadata-merge` lines from the same job, one per merge shape. Each reports

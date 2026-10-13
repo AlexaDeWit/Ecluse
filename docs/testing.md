@@ -237,6 +237,11 @@ default flags, the typescript read's high-water equalled what it keeps, because 
 fell inside its transient. A 1 MiB nursery misses the peaks of captures under 1 MiB, which finish
 within a few collections.
 
+[ProbeMode](../test/residency/Ecluse/Core/Server/MemoryModel/ProbeMode.hs) represents the child modes
+and renders their existing arguments and RTS flags.
+[HeapSample](../test/residency/Ecluse/Core/Server/MemoryModel/HeapSample.hs) shares the GC sampling
+used by the probes. Sampling positions and cadence remain unchanged.
+
 A merged listing gets the same measurement in six shapes per capture. The child reads a trusted
 private document and a gated public one the same way, holds both, and renders their merge through
 the serving path's assembly. It reports the output basis the serving path computes. The shapes are:
@@ -291,6 +296,19 @@ The checks compare bytes with each ecosystem's charges:
   still outgrow the source, so that boundary remains npm-only.
 - A single-source listing's entry frees live bytes when it drops its served document, and the
   document's weight, expanded as a cache expands it, covers them.
+
+The residency-only [Calibration module](../test/residency/Ecluse/Core/Server/MemoryModel/Calibration.hs)
+stores exact `Rational` maxima in one `Calibration` record per ecosystem.
+`marginCharge`, `fullReadCharge`, and `regressionLimit` apply the rounding rules above.
+Production keeps its admission literals. `CalibrationResidencySpec` checks their equality with the
+derived charges and pins the retained envelopes and peak limits.
+PyPI keeps its original raw-tree envelope through the named `pypiRawLimit` exception.
+A recalibration updates the observations and the affected production literal together.
+
+Each `metadata-merge` report adds `derived_full_read_permille` and
+`full_read_headroom_per_source_byte`. These fields are informational and add no gate.
+Merged reads retain the whole-step checks above, without a per-byte read gate.
+Single-document read limits and realistic output limits retain their existing checks.
 
 #### Qualified packed integration
 
@@ -1351,6 +1369,10 @@ JSON input rather than compressed transport traffic.
 Run `task gen-bench-corpus` only for a deliberate recapture. Version pins identify workloads and do
 not limit the captured releases. Run `BENCH_CORPUS_VERIFY=1 task gen-bench-corpus` to check committed
 sizes, hashes, provenance fields, and basic document shape without network access.
+The shared `Ecluse.Test.Corpus` reader authenticates captures against `bench/corpus/pins.json`.
+It refuses a missing pin, a catalogue path mismatch, a wrong byte count, or a wrong SHA-256 digest.
+Load fixtures authenticate before proxy startup. Residency parents authenticate before probe setup,
+including preparation of merge inputs. Pin hashing stays outside measured work and child probes.
 The harness separately validates each capture through the production read driver before measurement.
 
 | Group | Capture use |
@@ -1641,7 +1663,7 @@ Keep live unavailability distinct from refused product behaviour and planned cov
 | At least one real-client install, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/InstallE2ESpec.hs) and [PyPI](../test/e2e/Ecluse/E2E/PyPI/InstallE2ESpec.hs), using the [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. An ecosystem's other end-to-end modules sit in the same directory, as [Npm/](../test/e2e/Ecluse/E2E/Npm/) shows. |
 | For an ecosystem with a mirror write, a mirror-only install compared with its control, gating in a fixed E2E subject | `test/e2e/Ecluse/E2E/<Ecosystem>/MirrorInstallE2ESpec.hs`, with its fixture graph in `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | [npm](../test/e2e/Ecluse/E2E/Npm/MirrorInstallE2ESpec.hs), as [End-to-end conformance](#end-to-end-conformance-fixed-subjects-gating) describes. [PyPI](../test/e2e/Ecluse/E2E/PyPI/MirrorInstallE2ESpec.hs) checks the complete version, public outage, restart, and file selection for a second target architecture. These target checks prove installed contents, not foreign-code execution. |
 | Walk residency, gating in `ecluse-residency` | `test/residency/Ecluse/Core/Registry/<Ecosystem>/ReaderResidencySpec.hs`, registered in `test/residency/Main.hs` | [npm](../test/residency/Ecluse/Core/Registry/Npm/ReaderResidencySpec.hs) and [PyPI](../test/residency/Ecluse/Core/Registry/PyPI/ReaderResidencySpec.hs) check that eight times more dropped input leaves the bytes a walk holds level, sampled through `Ecluse.Core.Registry.Json.WalkProbe`. |
-| Metadata residency captures and limits, gating in `ecluse-residency` | Add one `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs), with captures, retained-heap envelopes, peak limits, the entry bound and each probe hook. Give each capture a `captures.<ecosystem>` entry (`bytes`, `sha256`, `capturedAt`) in `bench/corpus/pins.json`, which the spec reads through `readCaptureRecords`. In `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge`, add its document cut and its heavy-base text | The tier checks every ecosystem with a registered adapter for a residency record, non-empty captures, positive peak limits and an envelope for each retained shape. Each record supplies the probe hooks and listing checks without generic ecosystem defaults. The same lookup excludes ecosystems without adapters, including RubyGems. Each regression limit stays below its adapter charge. The complete corpus includes a capture above 3,687,514 bytes. [Listing peaks](#listing-peaks) holds the calibration. |
+| Metadata residency captures and limits, gating in `ecluse-residency` | Add a `Residency` record through `residencyFor` in [Probe.hs](../test/residency/Ecluse/Core/Server/MemoryModel/Probe.hs). Supply authenticated captures, an exact `Calibration`, limits, envelopes, the entry bound and probe hooks. Add the document cut and heavy-base text in `Ecluse.Test.Corpus.Subset` and `Ecluse.Test.Corpus.Merge` | Setup requires a record for every registered adapter and fails by ecosystem name when one is missing. It checks non-empty captures, positive peak limits and all retained envelopes. Ecosystems without adapters remain excluded. The complete corpus needs a capture above 3,687,514 bytes. [Benchmark captures](#benchmark-captures) defines authentication. [Listing peaks](#listing-peaks) defines calibration and its checks. |
 | Read evaluation, gating in `ecluse-residency` | The same captures, and an arm for the ecosystem's served-document form in `documentKeys` in [MetadataResidencySpec.hs](../test/residency/Ecluse/Core/Registry/MetadataResidencySpec.hs) | Without that arm, the weak-pointer check of [Read evaluation](#read-evaluation) finds only the document itself and fails. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Allocation budgets | Per-package, per-leg figures in the ecosystem's section of `acceptance/criteria.json`, and osv.dev records for at least one capture under `bench/corpus/advisories/<ecosystem>/`, pinned at `advisories.records.<ecosystem>` in `bench/corpus/pins.json` | The [harness](../acceptance/app/Main.hs) measures every entry of the registered `EcosystemBench` corpus: the committed captures in the gating `captures` mode, and live npm packuments and PyPI PEP 691 Simple JSON documents in the `live` mode. Each ecosystem has its own report section. A new corpus entry needs calibrated figures before the gate passes, and the covered captures join the expected list in `Ecluse.Test.Corpus.AdvisoriesSpec`. |
