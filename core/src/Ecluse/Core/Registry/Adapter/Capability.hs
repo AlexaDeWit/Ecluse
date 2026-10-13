@@ -25,7 +25,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
     VersionDelete (..),
 ) where
 
-import Data.JsonStream.Parser qualified as J
+import Data.JsonStream.Lexer (Cursor)
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -39,6 +39,7 @@ import Ecluse.Core.Registry (
     UrlFormationError,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Json.Walk (Step)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
@@ -123,7 +124,7 @@ registry may well refuse: a listing that does not answer @200@ is the caller's f
 data StoreListing = StoreListing
     { listingRequest :: OriginClient -> Either UrlFormationError Request
     -- ^ Form the listing read against the store.
-    , listingParser :: J.Parser [PackageName]
+    , listingWalk :: Cursor -> Step [PackageName]
     -- ^ Stream names while skipping unrelated per-package metadata.
     }
 

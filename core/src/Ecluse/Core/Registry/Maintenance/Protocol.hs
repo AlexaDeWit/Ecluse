@@ -31,11 +31,11 @@ import Ecluse.Core.Registry (
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
-    StoreListing (listingParser, listingRequest),
+    StoreListing (listingRequest, listingWalk),
     VersionDelete (deleteDocumentRequest, deleteRequests),
  )
-import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
-import Ecluse.Core.Registry.Json.Walk (Step)
+import Ecluse.Core.Registry.Exchange (boundedExchange, formThen, withSuccessBody)
+import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
@@ -81,9 +81,7 @@ import Ecluse.Core.Registry.VersionList (VersionListState)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
-{- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
-and the consent an operator declared for it. Nothing here changes the store.
--}
+-- | Protocol store reads and declared consent, without deletion operations.
 data ProtocolRead = ProtocolRead
     { prOrigin :: OriginClient
     -- ^ The store's coordinates, its credential, and the bound every read is held to.
@@ -188,13 +186,10 @@ listPackages store =
     origin = prOrigin store
     fetch request =
         first storeFaultOfFetch
-            <$> boundedJsonFetch
+            <$> withSuccessBody
                 (ocManager origin)
                 (progressFloor (ocLimits origin))
-                (MetadataBodyLimit (maxMetadataBytes (ocLimits origin)))
-                (listingParser (prListing store))
-                (\_ names -> Right names)
-                []
+                (readJsonWalk (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) (listingWalk (prListing store)))
                 request
 
 listingUnavailable :: Int -> StoreFault
