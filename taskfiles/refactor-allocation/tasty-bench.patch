@@ -1,0 +1,60 @@
+--- a/src/Test/Tasty/Bench.hs
++++ b/src/Test/Tasty/Bench.hs
+@@ -725,0 +726 @@
++import qualified Test.Tasty.Bench.Diagnostic as Diagnostic
+@@ -1122,0 +1124,21 @@
++-- Diagnostic counter reads bracket the action. Recording follows the native final global read.
++measureRecorded :: Diagnostic.Recorder -> TimeMode -> Word64 -> Benchmarkable -> IO Measurement
++measureRecorded recorder timeMode n (Benchmarkable act) = do
++  let getTimePicoSecs' = getTimePicoSecs timeMode
++  performGC
++  startTime <- getTimePicoSecs'
++  (startAllocs, startCopied, startMaxMemInUse) <- getAllocsAndCopied
++  threadStart <- getAllocationCounter
++  act n
++  threadEnd <- getAllocationCounter
++  endTime <- getTimePicoSecs'
++  performMinorGC
++  (endAllocs, endCopied, endMaxMemInUse) <- getAllocsAndCopied
++  Diagnostic.recordBatch recorder n startTime startAllocs endTime endAllocs threadStart threadEnd
++  pure Measurement
++    { measTime = endTime - startTime
++    , measAllocs = endAllocs - startAllocs
++    , measCopied = endCopied - startCopied
++    , measMaxMem = max endMaxMemInUse startMaxMemInUse
++    }
++
+@@ -1130 +1152,11 @@
+-measureUntil _ timeMode _ (RelStDev targetRelStDev) b
++measureUntil = measureUntilWith measure
++
++measureUntilWith
++    :: (TimeMode -> Word64 -> Benchmarkable -> IO Measurement)
++    -> (Progress -> IO ())
++    -> TimeMode
++    -> Timeout
++    -> RelStDev
++    -> Benchmarkable
++    -> IO Estimate
++measureUntilWith measureBatch _ timeMode _ (RelStDev targetRelStDev) b
+@@ -1132 +1164 @@
+-  t1 <- measure timeMode 1 b
++  t1 <- measureBatch timeMode 1 b
+@@ -1134 +1166 @@
+-measureUntil yieldProgress timeMode timeout (RelStDev targetRelStDev) b = do
++measureUntilWith measureBatch yieldProgress timeMode timeout (RelStDev targetRelStDev) b = do
+@@ -1138 +1170 @@
+-    measure' = measure timeMode
++    measure' = measureBatch timeMode
+@@ -1208 +1240 @@
+-    1 -> do
++    1 -> Diagnostic.withRecorder $ \recorder emptyAction -> do
+@@ -1210 +1242,3 @@
+-      est <- measureUntil yieldProgress timeMode (lookupOption opts) (lookupOption opts) b
++          measureBatch = maybe measure measureRecorded recorder
++          measured = if emptyAction then whnfIO (pure ()) else b
++      est <- measureUntilWith measureBatch yieldProgress timeMode (lookupOption opts) (lookupOption opts) measured
+--- a/tasty-bench.cabal
++++ b/tasty-bench.cabal
+@@ -42,0 +43 @@
++  other-modules:    Test.Tasty.Bench.Diagnostic

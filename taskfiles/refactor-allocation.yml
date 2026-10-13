@@ -1,0 +1,184 @@
+version: '3'
+vars:
+  DIAGNOSTIC_ROOT: '{{.ROOT_DIR}}/scratchpad/refactor-allocation'
+  EVIDENCE: '{{.DIAGNOSTIC_ROOT}}/evidence'
+  BASELINE: 690a4cd522f3146fc04ae42d6abac684a44a422c
+  CANDIDATE: ab5f4af6e55b90ae79392f3d10a9505295f1239f
+  REACT_ROW: 'All.ecluse-core (work-per-request).ecosystem: npm.single-version metadata (per package).react (large).selective decode'
+  DIAGNOSTIC_HASKELL: bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs taskfiles/refactor-allocation/Diagnostic.hs
+tasks:
+  run:
+    desc: Run the temporary React allocation diagnostic on one ARM64 worker
+    preconditions:
+      - test "$(uname -m)" = aarch64
+      - test -z "${GHCRTS:-}"
+      - test ! -e '{{.DIAGNOSTIC_ROOT}}'
+      - test "$GITHUB_REF" = refs/heads/measure/refactor-allocation-diagnostics
+    cmds:
+      - mkdir -p '{{.EVIDENCE}}/dependency' '{{.EVIDENCE}}/inputs'
+      - |
+        set -euo pipefail
+        git rev-parse HEAD HEAD^{tree} > '{{.EVIDENCE}}/controller.txt'
+        printf '%s\n' "run=$GITHUB_RUN_ID" "attempt=$GITHUB_RUN_ATTEMPT" "runner=$RUNNER_NAME" "image=${ImageVersion:-unknown}" > '{{.EVIDENCE}}/worker.txt'
+        uname -a >> '{{.EVIDENCE}}/worker.txt'
+        lscpu >> '{{.EVIDENCE}}/worker.txt'
+        git archive '{{.BASELINE}}' | gzip > '{{.EVIDENCE}}/source-A.tar.gz'
+        git archive '{{.CANDIDATE}}' | gzip > '{{.EVIDENCE}}/source-B.tar.gz'
+        cp -a taskfiles/refactor-allocation '{{.EVIDENCE}}/overlay'
+      - cabal build exe:bench-report
+      - cabal list-bin exe:bench-report > '{{.EVIDENCE}}/reporter-path.txt'
+      - cp "$(cat '{{.EVIDENCE}}/reporter-path.txt')" '{{.EVIDENCE}}/bench-report'
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/controls.status' '{{.EVIDENCE}}/controls.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-controls
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/controls.status'
+      - task: dependency
+      - task: prepare
+        vars: {SIDE: A, VARIANT: C}
+      - task: prepare
+        vars: {SIDE: B, VARIANT: C}
+      - task: prepare
+        vars: {SIDE: A, VARIANT: I}
+      - task: prepare
+        vars: {SIDE: B, VARIANT: I}
+      - cmp '{{.EVIDENCE}}/build-C-A/identity/corpus.sha256' '{{.EVIDENCE}}/build-C-B/identity/corpus.sha256'
+      - cmp '{{.EVIDENCE}}/build-C-A/identity/locks.sha256' '{{.EVIDENCE}}/build-C-B/identity/locks.sha256'
+      - cp -a '{{.DIAGNOSTIC_ROOT}}/source-C-A/bench/corpus' '{{.EVIDENCE}}/inputs/'
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: C, PASS: C-A1, MODE: native}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: C, PASS: C-B1, MODE: native}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: C, PASS: C-B2, MODE: native}
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: C, PASS: C-A2, MODE: native}
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: I, PASS: I-A1, MODE: record}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: I, PASS: I-B1, MODE: record}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: I, PASS: I-B2, MODE: record}
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: I, PASS: I-A2, MODE: record}
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: I, PASS: O-A-native, MODE: empty-native}
+      - task: record-pass
+        vars: {SIDE: A, VARIANT: I, PASS: O-A-record, MODE: empty-record}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: I, PASS: O-B-native, MODE: empty-native}
+      - task: record-pass
+        vars: {SIDE: B, VARIANT: I, PASS: O-B-record, MODE: empty-record}
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/audit.status' '{{.EVIDENCE}}/audit.log' '{{.EVIDENCE}}/bench-report' allocation-diagnostic-audit '{{.EVIDENCE}}'
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/audit.status'
+
+  dependency:
+    cmds:
+      - curl --fail --location --silent --show-error https://hackage-content.haskell.org/package/tasty-bench-0.4.1/tasty-bench-0.4.1.tar.gz -o '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1.tar.gz'
+      - curl --fail --location --silent --show-error https://hackage-content.haskell.org/package/tasty-bench-0.4.1/revision/1.cabal -o '{{.EVIDENCE}}/dependency/revision-1.cabal'
+      - |
+        set -euo pipefail
+        printf '%s  %s\n' 315c77e1f0f5fddf3b8465060867bb30c6d6562867b8609afdc7f6e14e295777 '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1.tar.gz' c38a77747f14e8d26ca99869b879ee56099b04e5381a74a62255dcbab85aab84 '{{.EVIDENCE}}/dependency/revision-1.cabal' | sha256sum --check
+        tar -xzf '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1.tar.gz' -C '{{.EVIDENCE}}/dependency'
+        tr -d '\r' < '{{.EVIDENCE}}/dependency/revision-1.cabal' > '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1/tasty-bench.cabal'
+        patch --batch --fuzz=0 -d '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1' -p1 < taskfiles/refactor-allocation/tasty-bench.patch
+        mkdir -p '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1/src/Test/Tasty/Bench'
+        cp taskfiles/refactor-allocation/Diagnostic.hs '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1/src/Test/Tasty/Bench/Diagnostic.hs'
+
+  prepare:
+    vars: &diagnostic
+      SOURCE: '{{if eq .SIDE "A"}}{{.BASELINE}}{{else}}{{.CANDIDATE}}{{end}}'
+      SOURCE_DIR: '{{.DIAGNOSTIC_ROOT}}/source-{{.VARIANT}}-{{.SIDE}}'
+      BUILD_DIR: '{{.EVIDENCE}}/build-{{.VARIANT}}-{{.SIDE}}'
+      PASS_DIR: '{{.EVIDENCE}}/{{.PASS}}'
+    cmds:
+      - git worktree add --detach '{{.SOURCE_DIR}}' '{{.SOURCE}}'
+      - mkdir -p '{{.BUILD_DIR}}/config'
+      - |
+        set -euo pipefail
+        if [ '{{.VARIANT}}' = I ]; then
+          printf 'packages: %s\n' '{{.EVIDENCE}}/dependency/tasty-bench-0.4.1' > '{{.SOURCE_DIR}}/cabal.project.local'
+          cp '{{.SOURCE_DIR}}/cabal.project.local' '{{.BUILD_DIR}}/config/'
+        fi
+        cp '{{.SOURCE_DIR}}/'{ecluse.cabal,cabal.project,cabal.project.freeze,flake.lock} '{{.BUILD_DIR}}/config/'
+      - bash scripts/process-capture.sh '{{.BUILD_DIR}}/status' '{{.BUILD_DIR}}/build.log' task --exit-code performance:allocation-diagnostics:build SIDE={{.SIDE}} VARIANT={{.VARIANT}}
+      - bash scripts/process-status.sh '{{.BUILD_DIR}}/status'
+      - '"{{.EVIDENCE}}/bench-report" allocation-diagnostic-build "{{.EVIDENCE}}" "{{.VARIANT}}-{{.SIDE}}" "{{.SOURCE}}"'
+
+  build:
+    vars: *diagnostic
+    dir: '{{.SOURCE_DIR}}'
+    cmds:
+      - git diff --exit-code HEAD
+      - cabal build bench:ecluse-bench --enable-optimization=1 --disable-profiling
+      - cabal list-bin bench:ecluse-bench > '{{.BUILD_DIR}}/binary-path.txt'
+      - cp "$(cat '{{.BUILD_DIR}}/binary-path.txt')" '{{.BUILD_DIR}}/ecluse-bench'
+      - task: snapshot
+        vars: {DEST: '{{.BUILD_DIR}}/identity'}
+
+  snapshot:
+    vars: *diagnostic
+    dir: '{{.SOURCE_DIR}}'
+    cmds:
+      - mkdir '{{.DEST}}'
+      - |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = '{{.SOURCE}}'
+        git diff --exit-code HEAD
+        git rev-parse HEAD HEAD^{tree} > '{{.DEST}}/source.txt'
+        git ls-files -z bench/corpus | sort -z | xargs -0 sha256sum > '{{.DEST}}/corpus.sha256'
+        sha256sum flake.lock cabal.project cabal.project.freeze > '{{.DEST}}/locks.sha256'
+        sha256sum ecluse.cabal > '{{.DEST}}/cabal.sha256'
+        if [ '{{.VARIANT}}' = I ]; then
+          sha256sum cabal.project.local > '{{.DEST}}/project-local.sha256'
+        else
+          test ! -e cabal.project.local
+          printf 'none\n' > '{{.DEST}}/project-local.sha256'
+        fi
+        cp dist-newstyle/cache/plan.json '{{.DEST}}/plan.json'
+        sha256sum "$(cat '{{.BUILD_DIR}}/binary-path.txt')" | cut -d ' ' -f 1 > '{{.DEST}}/binary.sha256'
+        ghc --version > '{{.DEST}}/toolchain.txt'
+        cabal --version >> '{{.DEST}}/toolchain.txt'
+        cd '{{.EVIDENCE}}/dependency'
+        find . -type f -print0 | sort -z | xargs -0 sha256sum > '{{.DEST}}/dependency.sha256'
+
+  record-pass:
+    vars: *diagnostic
+    cmds:
+      - mkdir '{{.PASS_DIR}}'
+      - task: snapshot
+        vars: {DEST: '{{.PASS_DIR}}/before'}
+      - '"{{.EVIDENCE}}/bench-report" allocation-diagnostic-conditions "{{.EVIDENCE}}" "{{.PASS}}"'
+      - 'printf "%s start %s\n" "$(date --iso-8601=ns)" "{{.PASS}}" >> "{{.EVIDENCE}}/order.txt"'
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --exit-code performance:allocation-diagnostics:measure SIDE={{.SIDE}} VARIANT={{.VARIANT}} PASS={{.PASS}} MODE={{.MODE}}
+      - 'printf "%s end %s\n" "$(date --iso-8601=ns)" "{{.PASS}}" >> "{{.EVIDENCE}}/order.txt"'
+      - task: snapshot
+        vars: {DEST: '{{.PASS_DIR}}/after'}
+      - '"{{.EVIDENCE}}/bench-report" allocation-diagnostic-bind "{{.EVIDENCE}}" "{{.PASS}}"'
+
+  measure:
+    vars: *diagnostic
+    dir: '{{.SOURCE_DIR}}'
+    env:
+      ECLUSE_BATCH_MODE: '{{.MODE}}'
+      ECLUSE_BATCH_OUTPUT: '{{.PASS_DIR}}/batches.csv'
+    cmds:
+      - |
+        set -euo pipefail
+        executable="$(cat '{{.BUILD_DIR}}/binary-path.txt')"
+        args=(--csv '{{.PASS_DIR}}/native.csv' --stdev 10 -p '$0 == "{{.REACT_ROW}}"' +RTS -T -RTS)
+        printf '%s\n' "ECLUSE_BATCH_MODE=$ECLUSE_BATCH_MODE" "ECLUSE_BATCH_OUTPUT=$ECLUSE_BATCH_OUTPUT" "GHCRTS=${GHCRTS:-}" timeout=600 kill-after=30 > '{{.PASS_DIR}}/environment.txt'
+        printf '%s\n' "$executable" "${args[@]}" > '{{.PASS_DIR}}/command.txt'
+        bash '{{.ROOT_DIR}}/scripts/process-capture.sh' '{{.PASS_DIR}}/native.status' '{{.PASS_DIR}}/native.log' timeout --signal=TERM --kill-after=30s 10m "$executable" "${args[@]}"
+        bash '{{.ROOT_DIR}}/scripts/process-status.sh' '{{.PASS_DIR}}/native.status'
+
+  format:
+    cmds:
+      - fourmolu --mode inplace {{.DIAGNOSTIC_HASKELL}}
+
+  static:
+    desc: Check only the temporary diagnostic source and workflow wiring
+    cmds:
+      - fourmolu --mode check {{.DIAGNOSTIC_HASKELL}}
+      - hlint bench/report/Main.hs bench/report/src/Ecluse/BenchReport/AllocationDiagnostic.hs taskfiles/refactor-allocation/Diagnostic.hs
+      - actionlint .github/workflows/bench.yml
+      - zizmor .github/workflows/bench.yml
+      - bash scripts/ci-runner-policy.sh
+      - task --list-all > /dev/null

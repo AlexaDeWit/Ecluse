@@ -1,6 +1,7 @@
 version: '3'
 includes:
   comparison: refactor-performance.yml
+  allocation-diagnostics: refactor-allocation.yml
 tasks:
   invalidate:
     cmds:

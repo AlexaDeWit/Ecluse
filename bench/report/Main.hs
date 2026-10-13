@@ -15,15 +15,22 @@ import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing 
 import Ecluse.BenchReport.AgainstMain.Acceptance qualified as Acceptance
 import Ecluse.BenchReport.AgainstMain.Bench qualified as Bench
 import Ecluse.BenchReport.AgainstMain.Load qualified as Load
+import Ecluse.BenchReport.AllocationDiagnostic qualified as AllocationDiagnostic
 import Ecluse.BenchReport.PerformanceCommand qualified as Performance
 import Ecluse.BenchReport.PerformanceReceipt qualified as Receipt
 import Ecluse.BenchReport.RefactorComparison qualified as Comparison
 import Ecluse.BenchReport.RefactorEvidence qualified as ComparisonEvidence
 import Ecluse.BenchReport.RefactorInputs qualified as ComparisonInputs
 
+-- | Route report and diagnostic commands without changing measured product code.
 main :: IO ()
 main =
     getArgs >>= \case
+        ["allocation-diagnostic-controls"] -> AllocationDiagnostic.controls
+        ["allocation-diagnostic-build", root, build, source] -> AllocationDiagnostic.recordBuild root (toText build) (toText source)
+        ["allocation-diagnostic-conditions", root, passName] -> AllocationDiagnostic.writeConditions root (toText passName)
+        ["allocation-diagnostic-bind", root, passName] -> AllocationDiagnostic.bindPass root (toText passName)
+        ["allocation-diagnostic-audit", root] -> AllocationDiagnostic.audit root
         ["comparison-inputs", root] -> ComparisonInputs.prepareInputs root
         ["comparison-pass-conditions", root, kind, passName] -> ComparisonEvidence.writePassConditions root (toText kind) (toText passName)
         ["comparison-bind", root, kind, passName] -> ComparisonEvidence.recordBinding root (toText kind) (toText passName)
@@ -71,7 +78,7 @@ comparison = \case
     "load" -> Just Load.againstMain
     _ -> Nothing
 
--- The baseline directory holds the fetch's record and, when it found a run, that run's report under this report's file name.
+-- The baseline directory pairs the fetch record with the report under its original name.
 againstMain :: (Baseline Text -> Either Text Text -> Text) -> FilePath -> FilePath -> IO ()
 againstMain compareWith baselineDir reportPath = do
     record <- fetched "baseline.txt"
