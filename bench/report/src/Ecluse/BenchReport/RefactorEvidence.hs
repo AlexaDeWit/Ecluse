@@ -8,11 +8,20 @@ module Ecluse.BenchReport.RefactorEvidence (
     passSchedule,
     writePassConditions,
     recordBinding,
+    writeBinding,
+    contextForTarget,
+    identityFiles,
+    executableDigests,
+    checksums,
+    equalFile,
+    zeroStatus,
+    required,
     verifyEvidence,
     bindingFaults,
     receiptArtifactFaults,
     nativeReceiptPaths,
     orderProblems,
+    orderProblemsFor,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -53,26 +62,31 @@ writePassConditions root kind name = contextFor root kind name >>= writeJsonFile
 
 contextFor :: FilePath -> Text -> Text -> IO (Map Text Text)
 contextFor root kind name = do
-    run <- readJsonFile (root </> "run.json")
     let side = sideOf name
-    source <- required ("source" <> side) run
-    tree <- required ("tree" <> side) run
-    let build = (if kind == "listing" then "listing-build-" else "build-") <> toString side
+        build = (if kind == "listing" then "listing-build-" else "build-") <> toString side
         target = case kind of
             "benchmark" -> "ecluse-bench"
             "allocation" -> "perf-acceptance"
             _ -> "ecluse-residency"
-    binaries <- executableDigests (root </> build </> if kind == "listing" then "executable.sha256" else "executables.sha256")
-    binary <- maybe (fail "measured executable is missing") pure (Map.lookup (toString target) binaries)
-    plan <- digestFile (root </> build </> "plan.json")
-    overlay <- if kind == "listing" then digestFile (root </> build </> "overlay.patch") else pure "none"
-    worker <- digestFile (root </> "worker.txt")
-    inputs <- traverse (digestFile . (root </>) . ("inputs" </>)) ["versions.json", "listings.json", "capture-sizes.json"]
     let rts = case kind of
             "benchmark" -> "-T"
             "allocation" -> "shipped-rts, checked against native capabilities and allocationAreaBytes"
             "residency" -> "suite -T, children -T -N1, listing and merge -F1 -A128k"
             _ -> "-N1 -A4m -T"
+    contextForTarget root kind name build target (if kind == "listing" then Just (build </> "overlay.patch") else Nothing) (map ("inputs" </>) ["versions.json", "listings.json", "capture-sizes.json"]) rts
+
+-- | Supply the executable and RTS recipe explicitly for supplementary campaigns.
+contextForTarget :: FilePath -> Text -> Text -> FilePath -> Text -> Maybe FilePath -> [FilePath] -> Text -> IO (Map Text Text)
+contextForTarget root kind name build target overlayPath inputPaths rts = do
+    run <- readJsonFile (root </> "run.json")
+    source <- required ("source" <> sideOf name) run
+    tree <- required ("tree" <> sideOf name) run
+    binaries <- executableDigests (root </> build </> if isJust overlayPath then "executable.sha256" else "executables.sha256")
+    binary <- maybe (fail "measured executable is missing") pure (Map.lookup (toString target) binaries)
+    plan <- digestFile (root </> build </> "plan.json")
+    overlay <- maybe (pure "none") (digestFile . (root </>)) overlayPath
+    worker <- digestFile (root </> "worker.txt")
+    inputs <- traverse (digestFile . (root </>)) inputPaths
     pure (Map.union (Map.fromList [("source", source), ("tree", tree), ("kind", kind), ("pass", name), ("rts", rts), ("executable", target), ("executableSha256", binary), ("buildPlanSha256", plan), ("overlaySha256", overlay), ("workerSha256", worker), ("inputsSha256", digest (jsonLine inputs))]) run)
 
 -- | Seal a completed pass after its status and final build snapshot exist.
@@ -80,8 +94,14 @@ recordBinding :: FilePath -> Text -> Text -> IO ()
 recordBinding root kind name = do
     context <- contextFor root kind name
     paths <- evidencePaths root kind name
+    writeBinding root (passPath kind name </> "binding.json") context paths
+
+-- | Bind an explicit mandatory inventory with the native binding format.
+writeBinding :: FilePath -> FilePath -> Map Text Text -> [FilePath] -> IO ()
+writeBinding root destination context paths = do
+    unless (null (auditExactIds "binding input" (map toText (ordNub paths)) (map toText paths))) (fail "duplicate binding paths")
     artifacts <- Map.fromList <$> traverse (\path -> (path,) <$> digestFile (root </> path)) paths
-    writeJsonFile (root </> passPath kind name </> "binding.json") (Binding 1 context artifacts)
+    writeJsonFile (root </> destination) (Binding 1 context artifacts)
 
 -- | Rehash artifacts, compare snapshots and validate the entire recorded execution before reading measurements.
 verifyEvidence :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> IO [Text]
@@ -169,6 +189,7 @@ evidencePaths root kind name = do
                 else []
     pure (common <> native <> probeFiles <> overlay)
 
+-- | Native build snapshots use the same seven identity files.
 identityFiles :: [FilePath]
 identityFiles = ["source.txt", "corpus.sha256", "locks.sha256", "plan.json", "plan.sha256", "executables.sha256", "toolchain.txt"]
 
@@ -248,6 +269,7 @@ nativeArtifacts :: Text -> [FilePath]
 nativeArtifacts "benchmark" = ["bench-results.csv", "bench-output.txt"]
 nativeArtifacts _ = ["perf-allocation-observations.json", "perf-allocation-report.md"]
 
+-- | Reject empty, malformed or duplicate SHA-256 records.
 checksums :: FilePath -> IO (Map FilePath Text)
 checksums path = do
     entries <- traverse entry . T.lines =<< readComparisonText path
@@ -258,6 +280,7 @@ checksums path = do
         (hash, rest) | validHex 64 hash, Just name <- T.stripPrefix "  " rest, not (T.null name) -> pure (toString name, hash)
         _ -> fail "invalid checksum record"
 
+-- | Executable basenames must identify distinct binaries.
 executableDigests :: FilePath -> IO (Map FilePath Text)
 executableDigests path = do
     hashes <- checksums path
@@ -273,15 +296,20 @@ checkOrder root = do
 
 -- | Match every start and end to the fixed serial schedule and reject overlapping recorded times.
 orderProblems :: [Text] -> [[Text]] -> [Text]
-orderProblems actual perPass =
-    ["serial pass order differs" | actual /= concat perPass || length perPass /= length passSchedule || not (and (zipWith (<=) timestamps (drop 1 timestamps)))]
-        <> ["invalid pass events" | not (and (zipWith validEvents passSchedule perPass))]
+orderProblems = orderProblemsFor passSchedule
+
+-- | Apply the native timestamp checks to an explicit fixed serial schedule.
+orderProblemsFor :: [(Text, Text)] -> [Text] -> [[Text]] -> [Text]
+orderProblemsFor schedule actual perPass =
+    ["serial pass order differs" | actual /= concat perPass || length perPass /= length schedule || not (and (zipWith (<=) timestamps (drop 1 timestamps)))]
+        <> ["invalid pass events" | not (and (zipWith validEvents schedule perPass))]
   where
     validEvents (kind, name) events = case map T.words events of
         [[started, "start", startKind, startName], [ended, "end", endKind, endName, "status=0"]] -> started <= ended && (startKind, startName) == (kind, name) && (endKind, endName) == (kind, name)
         _ -> False
     timestamps = mapMaybe (listToMaybe . T.words) actual
 
+-- | Compare two archived snapshots without reading product code.
 equalFile :: FilePath -> FilePath -> FilePath -> FilePath -> IO [Text]
 equalFile root left right path = equalPath root (left </> path) (right </> path)
 
@@ -291,11 +319,13 @@ equalPath root left right = do
     after <- digestFile (root </> right)
     pure ["recorded snapshot differs: " <> toText right | before /= after]
 
+-- | Only a recorded zero exit status qualifies a command.
 zeroStatus :: FilePath -> FilePath -> IO [Text]
 zeroStatus root path = do
     value <- T.strip <$> readComparisonText (root </> path)
     pure ["recorded command failed: " <> toText path <> "=" <> value | value /= "0"]
 
+-- | Missing identity fields fail evidence qualification.
 required :: Text -> Map Text Text -> IO Text
 required key = maybe (fail ("missing run field " <> toString key)) pure . Map.lookup key
 

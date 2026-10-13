@@ -127,7 +127,7 @@ tasks:
       - mkdir -p '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/bench' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/acceptance'
       - cp -a '{{.SOURCE_DIR}}/bench/corpus' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/bench/'
       - cp '{{.SOURCE_DIR}}/acceptance/criteria.json' '{{.EVIDENCE}}/source-inputs-{{.SIDE}}/acceptance/'
-      - bash scripts/process-capture.sh '{{.EVIDENCE}}/build-{{.SIDE}}/status' '{{.EVIDENCE}}/build-{{.SIDE}}/output.txt' task --exit-code performance:comparison:build SIDE={{.SIDE}}
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/build-{{.SIDE}}/status' '{{.EVIDENCE}}/build-{{.SIDE}}/output.txt' task --exit-code performance:comparison:build SIDE={{.SIDE}} COMPARISON_ROOT='{{.COMPARISON_ROOT}}' EVIDENCE='{{.EVIDENCE}}' BASELINE='{{.BASELINE}}' CANDIDATE='{{.CANDIDATE}}' SOURCE='{{.SOURCE}}' SOURCE_DIR='{{.SOURCE_DIR}}'
       - bash scripts/process-status.sh '{{.EVIDENCE}}/build-{{.SIDE}}/status'
 
   verify-source:
@@ -151,6 +151,7 @@ tasks:
     dir: '{{.SOURCE_DIR}}'
     cmds:
       - task: verify-source
+        vars: {SIDE: '{{.SIDE}}', SOURCE: '{{.SOURCE}}', SOURCE_DIR: '{{.SOURCE_DIR}}', COMPARISON_ROOT: '{{.COMPARISON_ROOT}}', EVIDENCE: '{{.EVIDENCE}}', BASELINE: '{{.BASELINE}}', CANDIDATE: '{{.CANDIDATE}}'}
       - test ! -d dist-newstyle
       - mkdir '{{.EVIDENCE}}/build-{{.SIDE}}/config'
       - cp ecluse.cabal cabal.project cabal.project.freeze flake.lock '{{.EVIDENCE}}/build-{{.SIDE}}/config/'
@@ -159,7 +160,7 @@ tasks:
       - cabal build exe:perf-acceptance --enable-optimization=1 --disable-profiling
       - cabal build test:ecluse-residency
       - task: identity
-        vars: {IDENTITY_DIR: '{{.EVIDENCE}}/build-{{.SIDE}}'}
+        vars: {SIDE: '{{.SIDE}}', SOURCE: '{{.SOURCE}}', SOURCE_DIR: '{{.SOURCE_DIR}}', COMPARISON_ROOT: '{{.COMPARISON_ROOT}}', EVIDENCE: '{{.EVIDENCE}}', BASELINE: '{{.BASELINE}}', CANDIDATE: '{{.CANDIDATE}}', IDENTITY_DIR: '{{.EVIDENCE}}/build-{{.SIDE}}'}
 
   identity:
     vars: *comparison

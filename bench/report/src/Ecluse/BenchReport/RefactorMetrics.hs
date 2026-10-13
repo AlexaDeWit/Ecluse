@@ -3,7 +3,15 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Strict refactor tolerances preserve each repetition and every signed difference.
-module Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls) where
+module Ecluse.BenchReport.RefactorMetrics (
+    auditMetrics,
+    metricControls,
+    Observation,
+    observationId,
+    residency,
+    comparisonPairs,
+    comparePasses,
+) where
 
 import Data.Aeson (Object, Value (Object), eitherDecodeStrict', object, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -30,6 +38,7 @@ data Rule = WithinKiB | WithinPermille | UnclassifiedCache | NoRise | Exact | In
 data Metric = Metric Text Integer Rule
     deriving stock (Eq, Show)
 
+-- | Native field rules stay attached to each observation.
 data Observation = Observation Text [Metric]
     deriving stock (Eq, Show)
 
@@ -57,6 +66,7 @@ passes :: Text -> [Text]
 passes "benchmark" = ["A1", "A2", "A3", "B1", "B2", "B3"]
 passes _ = ["A1", "A2", "B1", "B2"]
 
+-- | Preserve every ordered pair without averaging observations.
 comparisonPairs :: [a] -> [(a, a)]
 comparisonPairs values = [(left, right) | (i, left) <- zip [0 :: Int ..] values, (j, right) <- zip [0 ..] values, i < j]
 
@@ -80,6 +90,7 @@ readPass root kind passName = do
     require ["empty metrics: " <> name | Observation name metrics <- observations, null metrics]
     pure observations
 
+-- | Keep the native row identity across supplementary comparisons.
 observationId :: Observation -> Text
 observationId (Observation name _) = name
 
@@ -124,6 +135,7 @@ allocation raw = traverse row [(fromMaybe "" (tableHeading table), record) | tab
     field key = maybe (Left ("missing allocation " <> key)) Right . Map.lookup key
     number key record = field key record >>= maybe (Left ("invalid allocation " <> key)) Right . readMaybe . toString
 
+-- | Apply the original field rules to authenticated native residency records.
 residency :: Map Text Integer -> Text -> Either Text [Observation]
 residency sizes raw = traverse readLine [(kind, T.drop (T.length kind + 1) line) | line <- T.lines raw, (kind, _) <- residencyShapes, (kind <> " ") `T.isPrefixOf` line]
   where
@@ -205,6 +217,7 @@ sourceMetrics kind input = withObject "maintenance source" parse
     strictAllocation (Metric key value WithinKiB) = Metric key value Inform
     strictAllocation other = other
 
+-- | Keep signed differences and the original tolerance for every field.
 comparePasses :: Text -> (Text, [Observation]) -> (Text, [Observation]) -> IO [(Text, Bool)]
 comparePasses kind (leftPass, left) (rightPass, right) = do
     require (auditExactIds "paired row" (map observationId left) (map observationId right))
