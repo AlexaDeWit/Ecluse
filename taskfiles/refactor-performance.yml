@@ -92,7 +92,14 @@ tasks:
       - test "$(git rev-parse HEAD)" = '{{.SOURCE}}'
       - test "$(git write-tree)" = "$(git rev-parse '{{.SOURCE}}^{tree}')"
       - git diff --exit-code HEAD
-      - test -z "$(git ls-files --others --exclude-standard)"
+      - |
+        set -euo pipefail
+        git ls-files --others --exclude-standard | while IFS= read -r path; do
+          case "$path" in
+            bench-results.csv|bench-output.txt|perf-allocation-report.md|perf-allocation-observations.json) ;;
+            *) printf 'Unexpected untracked file: %s\n' "$path" >&2; exit 1 ;;
+          esac
+        done
 
   build:
     vars: *comparison
@@ -137,9 +144,6 @@ tasks:
   pass:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
-    env:
-      ECLTEST_SOURCE: '{{.SOURCE}}'
-      PERF_ARTIFACT_DIR: '{{.PASS_DIR}}/receipts'
     cmds:
       - task: verify-source
       - task: identity
@@ -162,13 +166,13 @@ tasks:
     vars: *comparison
     dir: '{{.SOURCE_DIR}}'
     cmds:
-      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' task --exit-code performance:{{.KIND}}-measure RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}"
+      - bash scripts/process-capture.sh '{{.PASS_DIR}}/measure.status' '{{.PASS_DIR}}/measure.log' env ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-measure SOURCE='{{.SOURCE}}' RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
       - |
         set -euo pipefail
         outcome=failure
         if [ "$(cat '{{.PASS_DIR}}/measure.status')" = 0 ]; then outcome=success; fi
         bash scripts/process-capture.sh '{{.PASS_DIR}}/audit.status' '{{.PASS_DIR}}/audit.log' \
-          env PERF_NATIVE_OUTCOME="$outcome" task --exit-code performance:{{.KIND}}-receipt RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}"
+          env PERF_NATIVE_OUTCOME="$outcome" ECLTEST_SOURCE='{{.SOURCE}}' ECLTEST_RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" task --exit-code performance:{{.KIND}}-receipt SOURCE='{{.SOURCE}}' RUN_ID="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-{{.KIND}}-{{.PASS}}" PERF_ARTIFACT_DIR='{{.PASS_DIR}}/receipts'
       - |
         set -euo pipefail
         for path in {{if eq .KIND "benchmark"}}bench-results.csv bench-output.txt{{else}}perf-allocation-report.md perf-allocation-observations.json{{end}}; do
