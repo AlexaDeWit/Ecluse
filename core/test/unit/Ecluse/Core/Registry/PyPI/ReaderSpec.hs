@@ -43,6 +43,27 @@ spec = describe "pypiWalk" $ do
     rejectedFileSpec
     repairSpec
 
+    it "drops a member whose key runs past 64 KiB across three pieces, as json-stream does" $ do
+        let key = BS.replicate 70000 0x6b
+            body = "{\"name\":\"thing\",\"" <> key <> "\":{\"a\":1},\"files\":[],\"meta\":{\"api-version\":\"1.1\"}}"
+            chunks = [BS.take 20 body, BS.take 32768 (BS.drop 20 body), BS.drop 32788 body]
+            reading = Reading 64 FullRead Nothing True
+            bound = MetadataBodyLimit (BS.length body)
+            actual = walked reading bound chunks
+        actual `shouldBe` reference reading bound chunks
+        case actual of
+            Right (_, Right fields) -> fields `shouldContain` [EnvelopeField "meta" (object ["api-version" .= ("1.1" :: Text)])]
+            other -> expectationFailure ("large-key read did not complete: " <> show other)
+
+    it "fails a number past json-stream's digit limit across pieces, as json-stream does" $ do
+        let body = "{\"name\":" <> BS.replicate 300000 0x31 <> "}"
+            chunks = [BS.take 32768 (BS.drop offset body) | offset <- [0, 32768 .. BS.length body]]
+            reading = Reading 64 FullRead Nothing True
+            bound = MetadataBodyLimit (BS.length body)
+            actual = walked reading bound chunks
+        actual `shouldBe` reference reading bound chunks
+        fmap snd actual `shouldBe` Right (Left False)
+
     it "matches the worker oracle with the full project envelope and only the selected version files" $ do
         let metadata = object ["api-version" .= ("1.1" :: Text), "_last-serial" .= (42 :: Int), "tracks" .= (["https://upstream.test/simple/thing/"] :: [Text])]
             status = object ["status" .= ("active" :: Text)]
@@ -117,7 +138,6 @@ paritySpec = modifyMaxSuccess (const 2000) $
                                 assert (isJust coordinate)
                                 fmap fcVersionKey coordinate === selected
 
--- The rule by example, for a read of release 1.2.3 of @thing@.
 rejectedFileSpec :: Spec
 rejectedFileSpec = describe "a selected read of a file whose name rejects it" $ do
     for_ undecodable $ \(what, fault, _) -> do

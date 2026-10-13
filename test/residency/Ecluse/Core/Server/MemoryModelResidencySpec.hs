@@ -35,7 +35,7 @@ import Ecluse.Core.Server.MemoryModel.Probe (ListingPeaks (..), Measurement (..)
 import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Corpus (CaptureRecord (crBytes, crSha256), CorpusPackage (cpPackage, cpPath), cpName, readCaptureRecords)
+import Ecluse.Test.Corpus (CaptureRecord (crPin), CorpusPackage (cpPackage, cpPath), FilePin (fpBytes, fpSha256), cpName, readCaptureRecords)
 import Ecluse.Test.Corpus.Merge (MergeShape (..), realisticShape)
 
 -- | Reject unauthenticated captures, failed retention or release, and listings that outgrow admission charges.
@@ -237,9 +237,9 @@ authenticate package = do
     records <- readCaptureRecords (pkgEcosystem (cpPackage package)) >>= either fail pure
     record <- maybe (fail ("bench/corpus/pins.json records no capture for " <> toString (cpName package))) pure (Map.lookup (cpName package) records)
     bytes <- BS.readFile (cpPath package)
-    fromIntegral (BS.length bytes) `shouldBe` crBytes record
-    (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` crSha256 record
-    pure (fromIntegral (crBytes record), crSha256 record)
+    fromIntegral (BS.length bytes) `shouldBe` fpBytes (crPin record)
+    (show (hash bytes :: Digest SHA256) :: Text) `shouldBe` fpSha256 (crPin record)
+    pure (fromIntegral (fpBytes (crPin record)), fpSha256 (crPin record))
 
 report :: CorpusPackage -> Text -> Shape -> Measurement -> IO ()
 report package digest shape result = do

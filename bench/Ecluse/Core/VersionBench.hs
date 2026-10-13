@@ -14,7 +14,7 @@ import Ecluse.Bench.Corpus (entryName)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, parseVersionKey, renderVersion, selectLatest)
-import Ecluse.Test.EcosystemBench (EcosystemBench (..))
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), LoadedEntry (..))
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
 -- | Exercise the version pipeline for every projected corpus package.
@@ -23,7 +23,7 @@ benchmarks ecosystem =
     bgroup
         "version (parse + order + latest, per package)"
         [ bench (entryName entry) (whnf (versionPipelineDepth (ebEcosystem ecosystem)) (Map.keys (infoVersions info)))
-        | entry@(_, _, info, _) <- ebCorpus ecosystem
+        | entry@LoadedEntry{leInfo = info} <- ebCorpus ecosystem
         ]
 
 versionPipelineDepth :: Ecosystem -> [Text] -> Int

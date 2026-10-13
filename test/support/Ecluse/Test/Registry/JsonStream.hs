@@ -15,10 +15,9 @@ import Data.JsonStream.Parser qualified as J
 import System.Mem.StableName (makeStableName)
 import UnliftIO.Exception (evaluate)
 
-import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Json.Intern (InternTable, SipKey (SipKey), newInternTable)
-import Ecluse.Core.Registry.Json.Walk (Step, Steps, nestingLimit, readJsonWalk, readJsonWalkST)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), readJsonStream)
+import Ecluse.Core.Registry.Json.Walk (Step, Steps, readJsonWalk, readJsonWalkST)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..), isNestingLimit, readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError)
 
 -- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
@@ -56,7 +55,7 @@ testTable = newInternTable (SipKey 0x0706050403020100 0x0f0e0d0c0b0a0908)
 parse error is the nesting limit. Other parse errors carry no meaning past their failure.
 -}
 readOutcome :: Either LimitError (StreamResult a) -> Either LimitError (Int, Either Bool a)
-readOutcome = fmap (\result -> (streamBytes result, first (\(ParseError message) -> message == nestingLimit) (streamValue result)))
+readOutcome = fmap (\result -> (streamBytes result, first isNestingLimit (streamValue result)))
 
 -- | Whether at least two objects hold the member and all of them hold its key as one heap object.
 sharesKey :: Key.Key -> [Value] -> IO Bool

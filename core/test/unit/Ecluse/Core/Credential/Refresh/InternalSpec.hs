@@ -11,7 +11,7 @@ import Control.Exception (AsyncException (ThreadKilled))
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, fromGregorian)
 import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import Hedgehog (
-    Callback (Ensure, Update),
+    Callback (Ensure, Require, Update),
     Command (Command),
     FunctorB (..),
     TraversableB (..),
@@ -25,7 +25,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO (async, cancel, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, try)
+import UnliftIO.Exception (finally, throwIO, try)
 
 import Ecluse.Core.Breaker (Breaker, BreakerPhase (..), BreakerReporter (..), admit, breakerPhase, initialBreaker, noBreakerReporter, recordFailure)
 import Ecluse.Core.Credential
@@ -235,13 +235,17 @@ spec = do
                     _ <- atomicModifyIORef' mintCount (\n -> (n + 1, ()))
                     bad <- readIORef failRef
                     if bad then throwIO MintBoom else pure (tokenExpiringIn "tok-1" 1000)
-            provider <- refreshingProvider (testConfig clock mint)
-            -- From now on every mint fails.
+            failed <- newEmptyMVar
+            let reporters = noCredentialReporters{crRefreshReporter = noRefreshReporter{onRefreshFailed = \_ -> myThreadId >>= putMVar failed}}
+            provider <- refreshingProvider (testConfig clock mint){rcReporters = reporters}
             writeIORef failRef True
             setClock (addUTCTime 850 t0)
-            replicateM_ 3 (void (currentToken provider))
-            -- The background refresh really fired on top of the seeding mint, and failed.
-            waitForCount mintCount 2 `shouldReturn` True
+            _ <- currentToken provider
+            finished <- timeout 2_000_000 $ do
+                worker <- takeMVar failed
+                waitUntil (threadEnded worker) `shouldReturn` True
+            finished `shouldBe` Just ()
+            readIORef mintCount `shouldReturn` 2
             -- The failed refresh left the cached token and its expiry in place.
             tok <- currentToken provider
             unSecret (authSecret tok) `shouldBe` "tok-1"
@@ -594,6 +598,37 @@ spec = do
             csMintClaim <$> readTVarIO stateVar `shouldReturn` Just current
             atomically (decide stateVar (addUTCTime 2000 t0)) `shouldReturn` RefuseMint
 
+    describe "refresh completion observations" $
+        it "rejects a delayed start and a reported refresh whose worker still holds the claim" $ do
+            h <- newHarness t0
+            claimed <- newEmptyMVar
+            start <- newEmptyMVar
+            reported <- newEmptyMVar
+            finish <- newEmptyMVar
+            provider <-
+                harnessProviderWith
+                    (putMVar claimed () >> takeMVar start)
+                    (putMVar reported () >> takeMVar finish)
+                    h
+            writeIORef (hClock h) (addUTCTime 850 t0)
+            let exercise = do
+                    _ <- currentToken provider
+                    takeMVar claimed
+                    awaitRefreshes 10_000 h 2 `shouldReturn` False
+                    readIORef (hMintCount h) `shouldReturn` 1
+                    putMVar start ()
+                    takeMVar reported
+                    awaitRefreshes 10_000 h 2 `shouldReturn` False
+                    readIORef (hMintCount h) `shouldReturn` 2
+                    putMVar finish ()
+                    awaitRefreshes 2_000_000 h 2 `shouldReturn` True
+                releaseWorker = do
+                    void (tryPutMVar start ())
+                    void (tryPutMVar finish ())
+                    awaitRefreshes 2_000_000 h 2 `shouldReturn` True
+            result <- timeout 2_000_000 exercise `finally` releaseWorker
+            result `shouldBe` Just ()
+
     describe "refreshingProvider (model-based)" $
         it "agrees with a pure cache/clock/breaker model under random operation sequences" $
             hedgehog refreshModelProperty
@@ -737,6 +772,7 @@ data RefreshHarness = RefreshHarness
     , hNextToken :: IORef Int
     , hInFlight :: IORef Int
     , hMaxInFlight :: IORef Int
+    , hReportedWorkers :: IORef [ThreadId]
     }
 
 newHarness :: UTCTime -> IO RefreshHarness
@@ -748,10 +784,15 @@ newHarness start =
         <*> newIORef 0
         <*> newIORef 0
         <*> newIORef 0
+        <*> newIORef []
 
 harnessProvider :: RefreshHarness -> IO CredentialProvider
-harnessProvider h =
-    refreshingProvider
+harnessProvider = harnessProviderWith (pure ()) (pure ())
+
+harnessProviderWith :: IO () -> IO () -> RefreshHarness -> IO CredentialProvider
+harnessProviderWith afterClaim afterReport h =
+    refreshingProviderWith
+        afterClaim
         defaultRefreshConfig
             { rcClock = readIORef (hClock h)
             , rcJitter = pure 0
@@ -760,10 +801,14 @@ harnessProvider h =
             , rcBreakerThreshold = modelBreakerThreshold
             , rcBreakerCooldown = modelBreakerCooldown
             , rcMint = mint
+            , rcReporters = noCredentialReporters{crRefreshReporter = RefreshReporter (const report) (const report)}
             }
   where
+    report = do
+        worker <- myThreadId
+        atomicModifyIORef' (hReportedWorkers h) (\workers -> (worker : workers, ()))
+        afterReport
     mint = do
-        -- Enter the mint: bump the in-flight gauge and record the high-water mark.
         inFlight <- atomicModifyIORef' (hInFlight h) (\n -> (n + 1, n + 1))
         atomicModifyIORef' (hMaxInFlight h) (\hi -> (max hi inFlight, ()))
         _ <- atomicModifyIORef' (hMintCount h) (\n -> (n + 1, ()))
@@ -777,14 +822,14 @@ harnessProvider h =
                 leave
                 pure (tokenLiving (mintName idx) now 1000)
 
-data RequestInput (v :: Type -> Type) = RequestInput
+newtype RequestInput (v :: Type -> Type) = RequestInput Int
     deriving stock (Show)
 
 instance FunctorB RequestInput where
-    bmap _ RequestInput = RequestInput
+    bmap _ (RequestInput count) = RequestInput count
 
 instance TraversableB RequestInput where
-    btraverse _ RequestInput = pure RequestInput
+    btraverse _ (RequestInput count) = pure (RequestInput count)
 
 newtype AdvanceInput (v :: Type -> Type) = AdvanceInput NominalDiffTime
     deriving stock (Show)
@@ -823,40 +868,35 @@ setFailCommand h =
 requestCommand :: RefreshHarness -> CredentialProvider -> Command H.Gen (H.PropertyT IO) RModel
 requestCommand h provider =
     Command
-        (const (Just (pure RequestInput)))
+        (Just . pure . RequestInput . rmExpectedMints . snd . stepRequest)
         execute
-        [ Update $ \m RequestInput _out -> snd (stepRequest m)
-        , Ensure $ \beforeState _afterState RequestInput (observed, maxInFlight) -> do
+        [ Require $ \m (RequestInput expected) -> expected == rmExpectedMints (snd (stepRequest m))
+        , Update $ \m (RequestInput _) _out -> snd (stepRequest m)
+        , Ensure $ \beforeState afterState (RequestInput _) (observed, maxInFlight, mintCount) -> do
             let (expected, _) = stepRequest beforeState
             annotateShow (rmNow beforeState)
             annotateShow expected
-            -- The observed outcome (served secret or error) matches the model.
             outcomeMatches expected observed
             -- A served token is always valid at the clock it was served under
             -- (the wrapper never hands back an expired token).
             case observed of
                 Right tok -> H.assert (mTokenValid (rmNow beforeState) tok)
                 Left _ -> H.success
-            -- Single-flight: at no point did two mints overlap (high-water mark of
-            -- the in-flight gauge, captured by the harness mint, never exceeds 1).
             H.assert (maxInFlight <= 1)
-            -- Non-vacuity: a generated sequence must reach each interesting policy arm often enough
-            -- that the oracle is not silently testing only serve-cached. Percentages are per step.
+            mintCount === rmExpectedMints afterState
+            -- Coverage is per step, including the asynchronous refresh arm.
             let tag = coverTag beforeState expected
             H.cover 1 "valid-bg-refresh" (tag == "valid-bg-refresh")
             H.cover 1 "expired-mint-ok" (tag == "expired-mint-ok")
             H.cover 1 "expired-error" (tag == "expired-error")
         ]
   where
-    -- Reports the served outcome together with the single-flight high-water mark, so the
-    -- pure 'Ensure' can assert on both without touching 'IO'.
-    execute RequestInput = liftIO $ do
+    execute (RequestInput expected) = liftIO $ do
         result <- try (currentToken provider)
-        -- The settle polls for quiescence, which makes the asynchronous background refresh
-        -- deterministic under the sequential model.
-        settleQuiescent h
+        awaitRefreshes 2_000_000 h expected `shouldReturn` True
         maxInFlight <- readIORef (hMaxInFlight h)
-        pure (toObserved result, maxInFlight)
+        mintCount <- readIORef (hMintCount h)
+        pure (toObserved result, maxInFlight, mintCount)
 
     toObserved :: Either SomeException AuthToken -> Either Text AuthToken
     toObserved = first (const "error")
@@ -879,18 +919,15 @@ requestCommand h provider =
             annotateShow ("outcome mismatch" :: Text, expected, fmap (unSecret . authSecret) observed)
             H.failure
 
-settleQuiescent :: RefreshHarness -> IO ()
-settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
-  where
-    go stable lastCount = do
-        inFlight <- readIORef (hInFlight h)
-        count <- readIORef (hMintCount h)
-        if inFlight == 0 && count == lastCount
-            then
-                if stable >= 4
-                    then pure ()
-                    else threadDelay 500 >> go (stable + 1) count
-            else threadDelay 500 >> go 0 count
+-- Reporters follow the fold. Worker exit also proves the single-flight finaliser returned.
+awaitRefreshes :: Int -> RefreshHarness -> Int -> IO Bool
+awaitRefreshes budget h expected = do
+    caller <- myThreadId
+    awaitUntil budget 1_000 $ do
+        started <- readIORef (hMintCount h)
+        workers <- readIORef (hReportedWorkers h)
+        ended <- and <$> traverse threadEnded (filter (/= caller) workers)
+        pure (started >= expected && length workers >= expected - 1 && ended)
 
 refreshModelProperty :: H.PropertyT IO ()
 refreshModelProperty = do
@@ -898,7 +935,7 @@ refreshModelProperty = do
     provider <- liftIO (harnessProvider h)
     -- Construction performed exactly one mint, installing tok-0 (lives 1000s).
     seedToken <- liftIO (currentToken provider)
-    liftIO (settleQuiescent h)
+    liftIO (awaitRefreshes 2_000_000 h 1 `shouldReturn` True)
     let initial =
             RModel
                 { rmToken = seedToken

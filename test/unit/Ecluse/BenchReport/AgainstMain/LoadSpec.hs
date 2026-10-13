@@ -2,20 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The load comparison reads the report the harness renders, sets each scenario's successes,
-refusals, and latency beside those on @main@ in a section for each ecosystem, shows the
-operating point rows that differ, and never fails on a missing side.
--}
+-- | Compare rendered load reports without allocation or memory figures.
 module Ecluse.BenchReport.AgainstMain.LoadSpec (spec) where
 
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), ScenarioReport (..), defaultLoadKnobs)
+import Ecluse.BenchLoad.Exposition (summariseGauge)
+import Ecluse.BenchLoad.Harness (LoadKnobs (lkUpstreamLatencyMicros), ProxyFigures (..), ScenarioReport (..), defaultLoadKnobs)
+import Ecluse.BenchLoad.Pod (CgroupReading (..))
 import Ecluse.BenchLoad.Report (Section (..), renderLoadSaturation, renderReports, renderThrash)
 import Ecluse.BenchLoad.RtsWindow (RtsWindow (RtsWindow))
 import Ecluse.BenchLoad.Selection (fixtureSection)
 import Ecluse.BenchLoad.Support (scenarioReport, slowNetwork)
+import Ecluse.BenchLoad.Verdict (ProxyEnding (CleanShutdown))
 import Ecluse.BenchReport.AgainstMain (Baseline (Baseline, NoBaseline), Missing (DownloadFailed), Origin (Origin), sharedBaselineNote)
 import Ecluse.BenchReport.AgainstMain.Load (againstMain)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -49,6 +49,15 @@ spec = do
             report 12 (allocating hereNpm) (allocating herePyPI) `shouldNotBe` report 12 hereNpm herePyPI
             T.lines (againstMain (Baseline origin (report 178 onMainNpm onMainPyPI)) (Right (report 12 (allocating hereNpm) (allocating herePyPI))))
                 `shouldBe` rendered
+
+        it "compares no memory: proxy memory changes leave the comparison unchanged" $ do
+            let withMemory peak = map (\r -> r{srProxy = Just (proxyMemory peak)})
+                memoryReport peak = report 12 (withMemory peak hereNpm) (withMemory peak herePyPI)
+                baseline = Baseline origin (memoryReport (64 * 1024 * 1024))
+            memoryReport (128 * 1024 * 1024) `shouldSatisfy` T.isInfixOf "128.0 MiB / 1024.0 MiB"
+            memoryReport (128 * 1024 * 1024) `shouldNotBe` memoryReport (64 * 1024 * 1024)
+            againstMain baseline (Right (memoryReport (128 * 1024 * 1024)))
+                `shouldBe` againstMain baseline (Right (memoryReport (64 * 1024 * 1024)))
 
     describe "againstMain, over a report cut down to its tables" $ do
         let glance rows = T.unlines ("| scenario | successes | refusals | success p50 | success p99 | ending |" : "| --- | --: | --: | --: | --: | --- |" : rows)
@@ -119,3 +128,23 @@ ramp :: Text -> Int -> Int -> Double -> Double -> ScenarioReport
 ramp name successes refusals p50 p99 = single{srSteps = [srLoad single]}
   where
     single = scenarioReport name successes refusals p50 p99
+
+proxyMemory :: Int -> ProxyFigures
+proxyMemory peak =
+    ProxyFigures
+        { pfIdleRts = Nothing
+        , pfIdleCgroupBytes = Nothing
+        , pfCgroup = Just (CgroupReading (Just (1024 * 1024 * 1024)) (Just peak) Nothing mempty mempty mempty)
+        , pfWindowCgroup = Nothing
+        , pfWindowThrottledUsec = Nothing
+        , pfEnding = CleanShutdown
+        , pfExitedEarly = False
+        , pfStderrTail = ""
+        , pfBootLines = []
+        , pfRuleLines = []
+        , pfBootRetries = []
+        , pfInFlight = summariseGauge []
+        , pfTasks = summariseGauge []
+        , pfAdmissionSeries = []
+        , pfCacheWindow = Nothing
+        }

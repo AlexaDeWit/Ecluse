@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Cover for the worker's visibility-lease controller. The in-memory queue never expires a
-delivery, so these cases model expiry themselves: an injected clock, a deadline per receipt,
-and a second consumer that takes whatever lapsed. The clock is stepped rather than timed (see
-'withWorldClock'), so no case turns on how promptly a thread is scheduled.
--}
+-- | Lease retention and loss against a stepped clock with per-receipt expiry.
 module Ecluse.Core.Worker.LeaseSpec (spec) where
 
 import Control.Concurrent.STM (check, retry)
@@ -78,10 +74,11 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void . whileLeased held . liftIO $ do
+                outcome <- whileLeased held . liftIO $ do
                     awaitRenewals world 5
                     readTVarIO (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
+                liftIO (outcome `shouldBe` Just ())
 
         it "keeps a sibling receipt hidden while it waits its turn behind the first job" $ do
             -- A batch runs sequentially, so the last receipt waits out several windows before
@@ -90,10 +87,11 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void . whileLeased held . liftIO $ do
+                outcome <- whileLeased held . liftIO $ do
                     awaitRenewals world 8
                     readTVarIO (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
+                liftIO (outcome `shouldBe` Just ())
 
         it "renews on what is left of a window a slow poll has already spent" $ do
             -- The lease is stamped before the request, so a receive that answered late hands
@@ -102,9 +100,10 @@ spec = do
             world <- newLeaseWorld 25 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void . whileLeased held . liftIO $ do
+                outcome <- whileLeased held . liftIO $ do
                     awaitRenewals world 3
                     redeliverable world `shouldReturn` []
+                liftIO (outcome `shouldBe` Just ())
 
         it "starts no renewal task for a delivery whose backend never expires it" $ do
             -- The in-memory backend grants no lease, so the controller runs no task for it.
@@ -112,7 +111,8 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void (whileLeased held (liftIO (threadDelay settleMicros)))
+                outcome <- whileLeased held (liftIO (threadDelay settleMicros))
+                liftIO (outcome `shouldBe` Just ())
             renewalsSoFar world `shouldReturn` []
 
         it "runs one renewal task per receipt across a full batch of ten, and none besides" $ do
@@ -121,9 +121,10 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void . whileLeased held . liftIO $ do
+                outcome <- whileLeased held . liftIO $ do
                     awaitRenewals world 30
                     redeliverable world `shouldReturn` []
+                liftIO (outcome `shouldBe` Just ())
             renewed <- renewalsSoFar world
             sortNub renewed `shouldBe` sort (map show [1 :: Int .. 10])
 
@@ -228,10 +229,7 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 disposing held pass
-                -- The log is read first, because a correct controller can never add to it once
-                -- the disposition returned. Forcing virtual time on then wakes a renewal still
-                -- parked on this receipt, which must find the lease gone and end rather than ask
-                -- again, and waiting for the reap is what proves it ended.
+                -- Advance after disposition to expose a parked renewal that incorrectly survives it.
                 settled <- renewalsSoFar world
                 liftIO (advanceWorld world 120)
                 liftIO (awaitEndedTasks world 1)
@@ -289,11 +287,7 @@ twelveHours = Seconds 43_200
 window30 :: Seconds
 window30 = Seconds 30
 
-{- | A queue world that models receipt expiry, which the in-memory backend cannot. Its clock is
-__stepped, never timed__: it moves to the earliest instant any waiter is parked for, and only
-while every live renewal task is parked. A task that is slow to be scheduled therefore holds
-virtual time still rather than losing its lease to it, so a loaded runner cannot fail a case.
--}
+-- Virtual time advances only while every live renewal task is parked.
 data LeaseWorld = LeaseWorld
     { lwNow :: TVar Double
     , -- Each parked waiter and the instant it is waiting for.
@@ -350,12 +344,12 @@ worldOps world answer =
 
 renewInWorld :: LeaseWorld -> RenewalAnswer -> Text -> Seconds -> IO (Either TransportFault ())
 renewInWorld world answer receipt (Seconds window) = do
-    modifyIORef' (lwRenewals world) (receipt :)
+    atomicModifyIORef' (lwRenewals world) (\receipts -> (receipt : receipts, ()))
     answer world receipt >>= \case
         Left fault -> pure (Left fault)
         Right () -> do
             now <- readTVarIO (lwNow world)
-            Right () <$ modifyIORef' (lwVisible world) (Map.insert receipt (now + fromIntegral window))
+            Right () <$ atomicModifyIORef' (lwVisible world) (\visible -> (Map.insert receipt (now + fromIntegral window) visible, ()))
 
 {- Park the caller at its target and block there. Registering before blocking is what lets the
 stepper tell a waiter that is waiting from one that is between waits and must not be stepped
@@ -396,10 +390,7 @@ awaitStep world = do
                 writeTVar (lwNow world) earliest
         _ -> retry
 
-{- How far virtual time may run. The stepper is otherwise free to race, so a case whose work
-thread is blocked in real time would reach a virtual instant that depends on how fast the
-runner is: far enough, on a fast one, to spend a receipt's twelve-hour ceiling. Every case
-works well inside this, and nothing may rely on passing it. -}
+-- Bound virtual time so a delayed test body cannot spend the twelve-hour lease ceiling.
 worldHorizon :: Double
 worldHorizon = 1_000
 
@@ -468,18 +459,21 @@ redeliverable world = do
 -- Wait, bounded, until the controller has asked for at least this many renewals.
 awaitRenewals :: (MonadIO m) => LeaseWorld -> Int -> m ()
 awaitRenewals world wanted =
-    void (pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world)))
+    pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world))
+        >>= liftIO . (`shouldSatisfy` (>= wanted))
 
 {- Wait, bounded, until the stepper has reaped this many ended renewal tasks. A reap counts only
 a thread that has already finished, so the receipt's lease was marked dropped before it. -}
 awaitEndedTasks :: (MonadIO m) => LeaseWorld -> Int -> m ()
 awaitEndedTasks world wanted =
-    void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwEnded world)))
+    pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwEnded world))
+        >>= liftIO . (`shouldSatisfy` (>= wanted))
 
 -- Wait, bounded, until the renewals have carried the world's clock past this instant.
 awaitClock :: (MonadIO m) => LeaseWorld -> Double -> m ()
 awaitClock world wanted =
-    void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world)))
+    pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world))
+        >>= liftIO . (`shouldSatisfy` (>= wanted))
 
 -- | One delivery of the sample job, leased for a window under a ceiling from the same instant.
 delivery :: Text -> Seconds -> Seconds -> QueueMessage

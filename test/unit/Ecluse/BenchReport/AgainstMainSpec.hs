@@ -124,7 +124,7 @@ spec = do
                            , ""
                            , "**No baseline.** The fetch found no successful run on `main`."
                            , ""
-                           , "Nothing is compared, and the job does not fail on it."
+                           , "The fetch step's log names the artifact and the run. Nothing is compared, and the job does not fail on it."
                            , ""
                            ]
         it "renders every reason as a sentence of its own" $ do

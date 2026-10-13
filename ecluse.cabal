@@ -283,9 +283,11 @@ library ecluse-core
     Ecluse.Core.Server.Cache.VersionWeight.Fields
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
+    Ecluse.Core.Server.Admission.Internal
     Ecluse.Core.Server.Admission.Brake
     Ecluse.Core.Server.Admission.Budget
     Ecluse.Core.Server.Admission.Bytes
+    Ecluse.Core.Server.Admission.Bytes.Internal
     Ecluse.Core.Server.Admission.Meter
     Ecluse.Core.Server.Admission.Types
     Ecluse.Core.Server.Admission.Weighted
@@ -322,6 +324,7 @@ library ecluse-core
     Ecluse.Core.Stream
     Ecluse.Core.Strict
     Ecluse.Core.Supervision
+    Ecluse.Core.Supervision.Internal
     Ecluse.Core.Telemetry.Catalogue
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
@@ -706,6 +709,7 @@ library ecluse-site
     Ecluse.Site.OpenApi
 
   build-depends:
+    , ecluse:ecluse-report-format
     , http-media                 ^>=0.8
     , insert-ordered-containers  ^>=0.2
     , openapi3                   ^>=3.2
@@ -997,6 +1001,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Contract.RunnerSpec
     Ecluse.Test.Contract.MeasurementSpec
     Ecluse.Test.Contract.RetentionSpec
+    Ecluse.Test.CorpusSpec
     Ecluse.Test.EcosystemBenchSpec
     Ecluse.Test.EnvSpec
     Ecluse.Test.PollSpec
@@ -1128,10 +1133,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.LimitsSpec
     Ecluse.Core.Server.Admission.BrakeSpec
     Ecluse.Core.Server.Admission.BudgetSpec
-    Ecluse.Core.Server.Admission.BytesSpec
+    Ecluse.Core.Server.Admission.Bytes.InternalSpec
     Ecluse.Core.Server.Admission.MeterSpec
     Ecluse.Core.Server.AcceptSpec
-    Ecluse.Core.Server.AdmissionSpec
+    Ecluse.Core.Server.Admission.InternalSpec
     Ecluse.Core.Server.Cache.BackendSpec
     Ecluse.Core.Server.Cache.Backend.LocalSpec
     Ecluse.Core.Server.Cache.Backend.Local.InternalSpec
@@ -1166,7 +1171,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.StrictSpec
-    Ecluse.Core.SupervisionSpec
+    Ecluse.Core.Supervision.InternalSpec
     Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.Text.Iso8601Spec
@@ -1276,6 +1281,8 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
+    Ecluse.Report.MarkdownSpec
+    Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
@@ -1391,6 +1398,7 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , ecluse:ecluse-report-format
     , zlib ^>=0.7
     , amazonka ^>=2.0
     , ecluse
@@ -2006,6 +2014,7 @@ benchmark ecluse-bench
     Ecluse.Core.WireBench
 
   build-depends:
+    , ecluse:ecluse-report-format
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , aeson            >=2.2 && <2.4
@@ -2123,6 +2132,15 @@ library ecluse-bench-load
     , aeson >=2.2 && <2.4
     , universe-base ^>=1.1
 
+-- Pure rendering shared by reports and generated site pages.
+library ecluse-report-format
+  import: shared
+  hs-source-dirs: report/src
+  exposed-modules:
+    Ecluse.Report.Markdown
+    Ecluse.Report.BenchLabels
+  build-depends: text ^>=2.1
+
 -- Native report rendering and typed receipt assembly stay outside the shipped library.
 -- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
@@ -2139,6 +2157,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.PerformanceCommand
     Ecluse.BenchReport.PerformanceReceipt
   build-depends:
+    , ecluse:ecluse-report-format
     , aeson >=2.2 && <2.4
     , ecluse:ecluse-test-contracts
     , ecluse:ecluse-core
@@ -2174,6 +2193,7 @@ library ecluse-acceptance
     Ecluse.Acceptance
     Ecluse.Acceptance.Evidence
   build-depends:
+    , ecluse:ecluse-report-format
     , ecluse:ecluse-core
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12

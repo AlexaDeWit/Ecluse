@@ -8,10 +8,11 @@
 module Ecluse.Core.DigestBench (benchmarks) where
 
 import Data.ByteString qualified as BS
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 import Test.Tasty.HUnit ((@?=))
 
-import Ecluse.Bench.Corpus (LoadedEntry, entryName)
+import Ecluse.Bench.Corpus (LoadedEntry (..), entryName)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Registry.Exchange (digestingRead)
 import Ecluse.Core.Snapshot (ContentDigest)
@@ -27,10 +28,10 @@ benchmarks = traverse ecosystemGroup
 ecosystemGroup :: EcosystemBench -> IO Benchmark
 ecosystemGroup ecosystem = do
     rows <- traverse captureRow (ebCorpus ecosystem)
-    pure (bgroup ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem))) [bgroup "source digest (32 KiB chunks)" rows])
+    pure (bgroup (toString (ecosystemPrefix <> ecosystemName (ebEcosystem ecosystem))) [bgroup "source digest (32 KiB chunks)" rows])
 
 captureRow :: LoadedEntry -> IO Benchmark
-captureRow entry@(_, raw, _, _) = do
+captureRow entry@LoadedEntry{leBytes = raw} = do
     digest <- digested chunks
     digest @?= digestOf raw
     pure (bench (entryName entry) (whnfAppIO digested chunks))

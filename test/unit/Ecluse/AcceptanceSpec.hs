@@ -117,6 +117,8 @@ spec = do
 
     describe "renderCapturesReport" $ do
         let rendered = renderCapturesReport operatingPoint (assessCaptures criteriaFixture [(Npm, [measured "lodash" 1050 200, Failed "react" "refused"])])
+        it "preserves every byte of the fixed report" $
+            encodeUtf8 rendered `shouldBe` (encodeUtf8 (T.replace "<arch>" hostArch fixedCapturesReport) :: ByteString)
         it "leads with the failure and its causes" $
             rendered `shouldSatisfy` T.isInfixOf "Result: FAIL: 1 leg(s) over budget, 1 package(s) failed"
         it "shows each leg's allocation, spread, calibrated figure, change, and budget" $
@@ -258,3 +260,29 @@ calibrationJson commit runs margin =
 
 document :: Value -> [(Text, Value)] -> LByteString
 document calibrationValue sections = encode (object ["calibration" .= calibrationValue, "allocatedBytes" .= Map.fromList sections])
+
+fixedCapturesReport :: Text
+fixedCapturesReport =
+    T.unlines
+        [ "## Performance acceptance: allocation over the committed captures"
+        , ""
+        , "Result: FAIL: 1 leg(s) over budget, 1 package(s) failed"
+        , ""
+        , "- Figures: the median of 5 passes per leg, with the smallest and largest allocation beside it."
+        , "- Allocation: the bytes the measuring thread allocated, read from GHC's per-thread allocation counter."
+        , "- Time: wall-clock, for information only."
+        , "- RTS: -N4 -A64m: GHC capabilities and allocation area per capability, read from the running RTS."
+        , "- Legs: `full` reads the whole document through the production read driver over 32 KiB chunks of its held bytes, applies the rules, assembles, and serialises it. `singleVersion` reads one version through the driver's selected read and forces its artifact digests."
+        , "- Advisory legs: `fullShippedAdvisories` and `fullAllAdvisoryRules` repeat `full` with the corpus advisories in bench/corpus/advisories served, under the shipped policy and under the shipped policy with both advisory denies."
+        , "- Captures: bench/corpus, each evaluated at its capture time in bench/corpus/pins.json."
+        , "- Budgets: acceptance/criteria.json. Each budget is the figure measured on ubuntu-24.04-arm (<arch>) at abc123, plus 10%. Runs: https://example.test/runs/1."
+        , ""
+        , "### npm"
+        , ""
+        , "| Package | Versions | Leg | Allocated (bytes) | Min / max (bytes) | Calibrated (bytes) | Change | Budget (bytes) | Time (ms) | Verdict |"
+        , "|---|--:|---|--:|--:|--:|--:|--:|--:|---|"
+        , "| lodash | 10 | full | 1050 | 1049 / 1051 | 1000 | +5.0% | 1100 | 5.000 | within |"
+        , "| lodash | 10 | singleVersion | 200 | 200 / 200 | 100 | +100.0% | 110 | 1.000 | OVER by 90 bytes |"
+        , "| react | -- | -- | -- | -- | -- | -- | -- | -- | FAILED: refused |"
+        , ""
+        ]
