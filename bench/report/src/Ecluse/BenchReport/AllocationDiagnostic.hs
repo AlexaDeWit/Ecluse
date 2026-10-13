@@ -27,8 +27,8 @@ recordBuild root build source = do
     requireDiagnostic (build `elem` builds) "unknown build"
     requireDiagnostic (source == sourceFor build) "build source differs"
     let directory = "build-" <> toString build
-    identity <- readComparisonText (root </> directory </> "identity/source.txt")
-    requireDiagnostic (T.lines identity == [source, treeFor build]) "build checkout differs"
+    sourceRecord <- readComparisonText (root </> directory </> "identity/source.txt")
+    requireDiagnostic (T.lines sourceRecord == [source, treeFor build]) "build checkout differs"
     binary <- digestFile (root </> directory </> "ecluse-bench")
     live <- T.strip <$> readComparisonText (root </> directory </> "identity/binary.sha256")
     requireDiagnostic (binary == live) "archived executable differs from live executable"
@@ -139,8 +139,8 @@ auditBuild root build = do
     requireDiagnostic (status == "0") "build status failed"
     binary <- digestFile (root </> directory </> "ecluse-bench")
     requireDiagnostic (Map.lookup "binary" (bindingContext binding) == Just binary) "build binary identity differs"
-    identity <- T.lines <$> readComparisonText (root </> directory </> "identity/source.txt")
-    requireDiagnostic (identity == [sourceFor build, treeFor build]) "build source snapshot differs"
+    sourceLines <- T.lines <$> readComparisonText (root </> directory </> "identity/source.txt")
+    requireDiagnostic (sourceLines == [sourceFor build, treeFor build]) "build source snapshot differs"
     live <- T.strip <$> readComparisonText (root </> directory </> "identity/binary.sha256")
     requireDiagnostic (live == binary) "live binary identity differs"
     command <- T.lines <$> readComparisonText (root </> directory </> "command.txt")

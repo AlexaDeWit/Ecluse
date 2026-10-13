@@ -43,16 +43,16 @@ prepareFixture evidence root = do
     dependency <- checksumLines root "dependency" "./" dependencyFiles
     forM_ builds $ \build -> do
         let directory = "build-" <> toString build
-            identity = directory </> "identity"
+            identityDirectory = directory </> "identity"
         writeFixtureText (directory </> "status") "0\n"
         writeFixtureText (directory </> "command.txt") (T.unlines buildCommand)
         writeFixtureText (directory </> "binary-path.txt") (toText (root </> directory </> "ecluse-bench") <> "\n")
-        writeFixtureText (identity </> "source.txt") (T.unlines [sourceFor build, treeFor build])
+        writeFixtureText (identityDirectory </> "source.txt") (T.unlines [sourceFor build, treeFor build])
         binary <- digestFile (root </> directory </> "ecluse-bench")
-        writeFixtureText (identity </> "binary.sha256") (binary <> "\n")
-        writeFixtureText (identity </> "corpus.sha256") corpus
-        writeFixtureText (identity </> "dependency.sha256") dependency
-        writeJsonFile (root </> identity </> "plan.json") (fixturePlan root build)
+        writeFixtureText (identityDirectory </> "binary.sha256") (binary <> "\n")
+        writeFixtureText (identityDirectory </> "corpus.sha256") corpus
+        writeFixtureText (identityDirectory </> "dependency.sha256") dependency
+        writeJsonFile (root </> identityDirectory </> "plan.json") (fixturePlan root build)
         recordBuild root build (sourceFor build)
     withEnvOverrides [("GITHUB_RUN_ID", toString fixtureRun), ("GITHUB_RUN_ATTEMPT", toString fixtureAttempt)] $
         forM_ schedule $ \(Pass name build mode) -> do
