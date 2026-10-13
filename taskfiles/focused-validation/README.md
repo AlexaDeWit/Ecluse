@@ -5,6 +5,13 @@ The `focused_source` dispatch input requires the reviewed candidate's full 40-ch
 The candidate is pinned to `ab5f4af6e55b90ae79392f3d10a9505295f1239f` in `source-commit.txt`.
 Every patch also requires the original file's recorded SHA-256. A source correction requires review of any affected patch.
 
+The workflow currently invokes the fixed `remaining` entrypoint and labels its artifact `focused-remaining`.
+It runs source preflight, the core build, and clean lease, reader and queue controls before eight attempts.
+Those attempts are delayed renewal, both R1 field mutations, and the five queue mutations.
+It does not execute compiler, full integration, or earlier mutation checks. Their evidence must come from separate runs of the same source.
+The `run` entrypoint retains the complete plan. Both entrypoints share `remaining-controls` and `remaining-attempts` without duplicating assertions.
+Each entrypoint records its scope in `scope.txt`.
+
 Task owns the serial sequence. The workflow supplies one ARM runner, the pinned toolchain, and artifact upload.
 The workflow passes the candidate directory through Task's `--dir` option.
 Preflight captures its log and exit status before checking identity, source contracts, or tools.

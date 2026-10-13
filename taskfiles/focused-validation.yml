@@ -7,8 +7,10 @@ vars:
   PATCHES: '{{.FOCUSED_HARNESS}}/taskfiles/focused-validation'
 tasks:
   run:
-    desc: Temporary remote acceptance checks for the refactoring issues
+    desc: Full temporary acceptance plan for the refactoring issues
     cmds:
+      - mkdir -p "{{.EVIDENCE}}"
+      - 'printf "%s\n" "entrypoint=run" "scope=full focused acceptance plan" > "{{.EVIDENCE}}/scope.txt"'
       - task: preflight
       - task: build
       - task: controls
@@ -98,6 +100,19 @@ tasks:
           SELECTION: "logs a failure once per real fetch: coalesced followers never re-log"
           EXPECTED: "pass"
           SUITE: "core"
+      - task: remaining-attempts
+  remaining:
+    desc: Eight remaining renewal, reader and queue acceptance attempts only
+    cmds:
+      - mkdir -p "{{.EVIDENCE}}"
+      - 'printf "%s\n" "entrypoint=remaining" "scope=delayed renewal, two reader mutations, five queue mutations" "attempt-count=8" "Earlier compiler, integration and mutation evidence is separate." > "{{.EVIDENCE}}/scope.txt"'
+      - task: preflight
+      - task: core-build
+        vars: {BUILD: '{{.EVIDENCE}}/build/remaining'}
+      - task: remaining-controls
+      - task: remaining-attempts
+  remaining-attempts:
+    cmds:
       - task: perturbation
         vars:
           CASE: delayed-renewal
@@ -184,7 +199,7 @@ tasks:
       - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/build/control-status"
       - task: core-build
         vars: {BUILD: '{{.EVIDENCE}}/build/focused'}
-  controls:
+  remaining-controls:
     cmds:
       - task: core
         vars: {NAME: queue-controls, SELECTION: 'decodeJob field refusals', SEED: '800'}
@@ -205,6 +220,9 @@ tasks:
       - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/pypi-reader-control" "{{.PATCHES}}/required-pypi-reader-controls.txt"
       - task: core
         vars: {NAME: lease-control, SELECTION: Ecluse.Core.Worker.Lease, SEED: '101'}
+  controls:
+    cmds:
+      - task: remaining-controls
       - task: core
         vars: {NAME: refresh-control, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: '102'}
       - bash "{{.LEAVES}}/unit-controls.sh" "{{.EVIDENCE}}/refresh-control" "{{.PATCHES}}/required-refresh-controls.txt"

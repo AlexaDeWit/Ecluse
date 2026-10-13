@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       focused_validation:
-        description: Run temporary source-bound acceptance checks
+        description: Run the eight remaining focused attempts
         type: boolean
         default: false
       focused_source:
@@ -101,6 +101,7 @@ jobs:
           if-no-files-found: warn
 
   focused-acceptance:
+    name: Remaining focused validation (eight attempts)
     if: github.event_name == 'workflow_dispatch' && inputs.focused_validation
     permissions:
       contents: read
@@ -138,13 +139,13 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         working-directory: scratchpad/focused-source
         run: env -u IN_NIX_SHELL nix develop --command task update
-      - name: Run source-bound acceptance checks
+      - name: Run the eight remaining focused attempts
         working-directory: scratchpad/focused-source
-        run: env -u IN_NIX_SHELL nix develop --command task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "$FOCUSED_HARNESS/taskfiles/focused-validation.yml" run
+        run: env -u IN_NIX_SHELL nix develop --command task --exit-code --dir "$FOCUSED_CHECKOUT" --taskfile "$FOCUSED_HARNESS/taskfiles/focused-validation.yml" remaining
       - name: Upload partial and completed evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: focused-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: focused-remaining-${{ github.run_id }}-${{ github.run_attempt }}
           path: scratchpad/focused-evidence
           if-no-files-found: error
