@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A full metadata read is fully evaluated when it returns: held at weak head normal form, it
-retains what the fully forced result retains, and its typed view never keeps the served document alive.
--}
+-- | Full reads retain the same heap before forcing and release served documents independently of typed views.
 module Ecluse.Core.Registry.MetadataResidencySpec (spec) where
 
 import Data.Aeson (Value (Object), encode, object, (.=))
@@ -23,19 +21,22 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, npmPacked, pyp
 import Ecluse.Core.Registry.Npm.Document (PackedPackument (..))
 import Ecluse.Core.Registry.PyPI.Document (PackedSimple (..), simpleEnvelope, simpleFiles)
 import Ecluse.Core.Server.MemoryModel.Probe (Evaluated (..), measureInChild, packages, project)
-import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
+import Ecluse.Core.Server.MemoryModel.ProbeMode qualified as Mode
+import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName, readCapture)
 
 -- | Every corpus capture, measured in a fresh child process and collected in this one.
 spec :: Spec
 spec = describe "metadata read evaluation" $ forM_ packages $ \package -> do
-    it (toString (cpName package) <> " retains the same at weak head as fully forced") $
-        measureInChild ["--metadata-evaluation-probe"] package >>= \case
+    it (toString (cpName package) <> " retains the same at weak head as fully forced") $ do
+        void (readCapture package)
+        measureInChild Mode.Evaluation package >>= \case
             Left failure -> expectationFailure failure
             Right result -> do
                 report package result
                 abs (forcing result) `shouldSatisfy` (<= allowance)
 
-    it (toString (cpName package) <> " releases the served document while its typed view is held") $
+    it (toString (cpName package) <> " releases the served document while its typed view is held") $ do
+        void (readCapture package)
         bracket (detach package) (\(typed, _, _) -> freeStablePtr typed) $ \(typed, document, keys) -> do
             length keys `shouldSatisfy` (> 2)
             ((performMajorGC >> alive keys) `finally` freeStablePtr document) `shouldReturn` length keys
