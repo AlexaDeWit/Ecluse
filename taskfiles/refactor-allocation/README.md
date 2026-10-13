@@ -126,6 +126,17 @@ The native CSV and raw batch records remain the source for later analysis.
 
 ## Validation boundary
 
-`task performance:allocation-diagnostics:static` checks Haskell formatting, HLint, actionlint, Zizmor, the runner policy and Task parsing.
+`task performance:allocation-diagnostics:static` checks Haskell formatting, HLint, actionlint, Zizmor, the runner policy, shellcheck and resolved Task wiring.
+All diagnostic variables use the `ALLOC_DIAG_` prefix. Sibling includes cannot replace their source or evidence values.
+Snapshot calls forward their context explicitly because Task does not inherit variables passed to a parent call.
+
+`task performance:allocation-diagnostics:wiring-check` resolves 63 command summaries through the repository entrypoint.
+It checks default paths, fixed source IDs, all concrete build/pass contexts and hostile values in unrelated variable names.
+It also checks the sibling comparison namespace and rejects an injected `/evidence` output path.
+A copied include tree permits a complete dry-run with the original guards and a synthetic ARM64 platform response.
+Command shims refuse any target action. Task-created working directories stay inside that copied fixture.
+The check compares all 24 nested snapshot destinations and source identities with the expected serial schedule.
+It runs no build, Git worktree action, Haskell executable or measurement.
+Resolved summaries and path tables remain under `scratchpad/refactor-allocation-wiring.*`.
 Local Haskell builds, Haskell tests and performance measurements are prohibited on the shared host.
 The remote controller build and dependency overlay build therefore remain required before any measurement can qualify.
