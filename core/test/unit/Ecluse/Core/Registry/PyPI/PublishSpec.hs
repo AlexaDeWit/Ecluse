@@ -22,10 +22,11 @@ import Test.Hspec
 import Data.Aeson qualified as Aeson
 import Ecluse.Core.Credential (ClientCredential (..), mkSecret)
 import Ecluse.Core.Package (PackageInfo (infoVersions))
+import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload (inventoryFiles, inventoryPackage, inventoryVersion, verifyMirrorBytes)
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), MirrorTransport (..), PublishCodec (..), PublishPlan (..), newMirrorPublish, pmvInventory, pmvPrepareUpload, publishPrepared)
 import Ecluse.Core.Registry.PyPI.Publish (classifyPublish, pypiPublishCodec)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Security.Limits (defaultLimits)
@@ -71,6 +72,18 @@ spec = do
                 lookup "sha256_digest" fields `shouldBe` Just (encodeUtf8 (sha256 bytes))
                 lookup "requires_dist" fields `shouldBe` Just "dependency>=2; extra == 'test'"
                 map (BSL.toStrict . Wai.fileContent . snd) files `shouldBe` [bytes]
+    describe "PyPI upload preparation" $
+        for_ ["example-1-py3-none-any.whl", "example-1.zip"] $ \filename ->
+            it ("refuses verified malformed archive bytes for " <> toString filename) $ do
+                let bytes = "not an archive"
+                snapshot <- sourceSnapshotFor filename bytes
+                case pypiPublishCodec of
+                    PublishCodec{pcPrepareSource = prepareSource, pcPrepareUpload = prepareUpload} -> do
+                        (inventory, source) <- expectRight (prepareSource (unscopedPyPI "example") (pypiVersion "1") snapshot)
+                        let file = NE.head (inventoryFiles inventory)
+                        verified <- expectRight (verifyMirrorBytes file bytes)
+                        prepared <- prepareUpload defaultLimits (const (pure ())) inventory source file verified
+                        void prepared `shouldBe` Left (PublishSourceUnavailable "missing or ambiguous ZIP end record")
     describe "classifyPublish" $ do
         it "recognises duplicate filename responses but preserves unrelated 400 failures" $ do
             classifyPublish 400 "File already exists. See https://pypi.org/help/#file-name-reuse" `shouldBe` Right ()
@@ -81,15 +94,18 @@ spec = do
             classifyPublish 500 "File already exists." `shouldSatisfy` isLeft
 
 sourceSnapshot :: ByteString -> IO VersionDoc
-sourceSnapshot bytes = do
+sourceSnapshot = sourceSnapshotFor "example-1-py3-none-any.whl"
+
+sourceSnapshotFor :: Text -> ByteString -> IO VersionDoc
+sourceSnapshotFor filename bytes = do
     let index =
             object
                 [ "meta" .= object ["api-version" .= ("1.0" :: Text)]
                 , "name" .= ("example" :: Text)
                 , "files"
                     .= [ object
-                            [ "filename" .= ("example-1-py3-none-any.whl" :: Text)
-                            , "url" .= ("https://files.example.test/example-1-py3-none-any.whl" :: Text)
+                            [ "filename" .= filename
+                            , "url" .= ("https://files.example.test/" <> filename)
                             , "hashes" .= object ["sha256" .= sha256 bytes]
                             ]
                        ]

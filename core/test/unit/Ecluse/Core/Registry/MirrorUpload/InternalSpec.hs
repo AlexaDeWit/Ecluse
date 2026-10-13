@@ -13,7 +13,7 @@ import Test.Hspec
 
 import Ecluse.Core.Package (Artifact (..), Hash, HashAlg (SHA1, SHA256, SHA512, SRI), PackageDetails (..), hashAlg, hashValue, renderHashAlg)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
-import Ecluse.Core.Registry (PublishFault)
+import Ecluse.Core.Registry (PublishFault (PublishSourceUnavailable))
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (..))
 import Ecluse.Core.Registry.MirrorUpload.Internal
@@ -71,6 +71,20 @@ spec = do
 
     it "rejects ambiguous admitted source coordinates" $
         sourceInventory (wheel :| [(ArrayEntry 0, sdistName, "https://files.example/sdist", "sdist")]) `shouldSatisfy` isLeft
+
+    it "refuses a changed source digest at the admitted coordinate" $ do
+        inventory <- expectRight (sourceInventory (wheel :| []))
+        changed <- expectRight (sourceInventoryWith (const [unsafeHash SHA256 (hexSha256Of "other")]) (wheel :| []))
+        let admitted = inventoryDetails inventory
+            readData = inventoryReadData changed
+            refusal = PublishSourceUnavailable "the source file facts do not match the admitted artifact"
+        case readData of
+            PyPIMirrorRead document -> do
+                map fst (simpleFiles document) `shouldBe` [ArrayEntry 0]
+                let doc = VersionDoc admitted (Just (fst pypiSimpleCached document))
+                checkedMirrorInventory (pkgName admitted) (pkgVersion admitted) doc readData `shouldBe` Left refusal
+                restoreMirrorFragment admitted readData `shouldBe` Left refusal
+            _ -> expectationFailure "expected PyPI source fields"
 
     it "rejects a fragment carrying an undeclared source entry" $ do
         inventory <- expectRight (sourceInventory (wheel :| [sdist]))
