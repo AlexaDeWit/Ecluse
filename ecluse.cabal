@@ -709,6 +709,7 @@ library ecluse-site
     Ecluse.Site.OpenApi
 
   build-depends:
+    , ecluse:ecluse-report-format
     , http-media                 ^>=0.8
     , insert-ordered-containers  ^>=0.2
     , openapi3                   ^>=3.2
@@ -1278,6 +1279,8 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.Test.ContainersSpec
     Ecluse.Test.ExpositionSpec
+    Ecluse.Report.MarkdownSpec
+    Ecluse.Report.BenchLabelsSpec
     Ecluse.AcceptanceSpec
     Ecluse.Acceptance.EvidenceSpec
     Ecluse.BenchLoad.Advisories
@@ -1393,6 +1396,7 @@ test-suite ecluse-unit
   autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , ecluse:ecluse-report-format
     , zlib ^>=0.7
     , amazonka ^>=2.0
     , ecluse
@@ -2003,6 +2007,7 @@ benchmark ecluse-bench
     Ecluse.Core.WireBench
 
   build-depends:
+    , ecluse:ecluse-report-format
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
     , aeson            >=2.2 && <2.4
@@ -2120,6 +2125,15 @@ library ecluse-bench-load
     , aeson >=2.2 && <2.4
     , universe-base ^>=1.1
 
+-- Pure rendering shared by reports and generated site pages.
+library ecluse-report-format
+  import: shared
+  hs-source-dirs: report/src
+  exposed-modules:
+    Ecluse.Report.Markdown
+    Ecluse.Report.BenchLabels
+  build-depends: text ^>=2.1
+
 -- Native report rendering and typed receipt assembly stay outside the shipped library.
 -- The unit suite tests their independent obligations and artifact checks.
 library ecluse-bench-report
@@ -2136,6 +2150,7 @@ library ecluse-bench-report
     Ecluse.BenchReport.PerformanceCommand
     Ecluse.BenchReport.PerformanceReceipt
   build-depends:
+    , ecluse:ecluse-report-format
     , aeson >=2.2 && <2.4
     , ecluse:ecluse-test-contracts
     , ecluse:ecluse-core
@@ -2171,6 +2186,7 @@ library ecluse-acceptance
     Ecluse.Acceptance
     Ecluse.Acceptance.Evidence
   build-depends:
+    , ecluse:ecluse-report-format
     , ecluse:ecluse-core
     , aeson          >=2.2 && <2.4
     , bytestring     ^>=0.12

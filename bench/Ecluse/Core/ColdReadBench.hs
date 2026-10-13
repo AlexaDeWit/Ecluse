@@ -10,6 +10,7 @@ module Ecluse.Core.ColdReadBench (withBenchmarks) where
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (status200, status404)
 import Network.Wai (Application, rawPathInfo, responseLBS)
@@ -62,7 +63,7 @@ replayApplication responses request respond =
 ecosystemGroup :: HTTP.Manager -> EcosystemBench -> IO Benchmark
 ecosystemGroup manager ecosystem = do
     entries <- traverse (entryGroup manager ecosystem) (ebCorpus ecosystem)
-    pure (bgroup ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem))) [bgroup "cold production reads (per package)" entries])
+    pure (bgroup (toString (ecosystemPrefix <> ecosystemName (ebEcosystem ecosystem))) [bgroup "cold production reads (per package)" entries])
 
 entryGroup :: HTTP.Manager -> EcosystemBench -> LoadedEntry -> IO Benchmark
 entryGroup manager ecosystem entry@(_, raw, _, _) = do

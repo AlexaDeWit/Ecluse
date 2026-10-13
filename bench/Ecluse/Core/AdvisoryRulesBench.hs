@@ -10,6 +10,7 @@ module Ecluse.Core.AdvisoryRulesBench (withBenchmarks) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Ecluse.Report.BenchLabels (ecosystemPrefix)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (localOption)
@@ -72,7 +73,7 @@ withEcosystemGroup dir ecosystem use = case filter ((`elem` measuredPackages) . 
             checkSyntheticServed (cveDbLookup syntheticDb) heavy targets
             use
                 [ bgroup
-                    ("ecosystem: " <> toString (ecosystemName eco))
+                    (toString (ecosystemPrefix <> ecosystemName eco))
                     [ bgroup
                         "rules with an advisory database (per package)"
                         [ rows "shipped policy without a database" inertRuleDeps shippedPolicy entries

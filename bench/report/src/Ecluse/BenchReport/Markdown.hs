@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Markdown tables as the performance reports print them: the writer of one row, and a
-reader that finds each table in a report with its header and the heading above it. The
-reader takes a report that another commit rendered, so it looks columns up by header name.
--}
+-- | Parse performance report tables and re-export their shared rendering helpers.
 module Ecluse.BenchReport.Markdown (
     -- * Writing
     cells,
@@ -21,15 +18,7 @@ module Ecluse.BenchReport.Markdown (
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Numeric (showFFloat)
-
--- | One table row from its cells.
-cells :: [Text] -> Text
-cells xs = "| " <> T.intercalate " | " xs <> " |"
-
--- | A number to a fixed count of decimal places.
-fixed :: Int -> Double -> Text
-fixed places x = toText (showFFloat (Just places) x "")
+import Ecluse.Report.Markdown (cells, fixed)
 
 -- | A table as a report holds it.
 data Table = Table

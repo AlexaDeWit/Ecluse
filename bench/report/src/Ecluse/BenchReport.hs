@@ -28,6 +28,7 @@ import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
 
 import Ecluse.BenchReport.Markdown (cells, fixed)
+import Ecluse.Report.BenchLabels (ecosystemPrefix, tierPrefix)
 
 -- | A CSV row with optional GC statistics when the run enabled RTS statistics.
 data BenchRow = BenchRow
@@ -47,11 +48,6 @@ data BenchRow = BenchRow
     -- ^ The process-wide peak memory high-water mark, in bytes (megabyte-granular).
     }
     deriving stock (Eq, Show)
-
--- The tasty path prefix every bench shares: the tasty-bench root inserts plus the one
--- top-level group Main declares. Stripping it leaves only the distinguishing path.
-tierPrefix :: Text
-tierPrefix = "All.ecluse-core (work-per-request)."
 
 -- | Split the last dot-delimited component as the leaf, retaining dotted group names.
 splitName :: Text -> (Text, Text)
@@ -168,7 +164,7 @@ ecosystemSections groups = concatMap section (ordNub (map (ecosystemSection . fs
 
 -- | The ecosystem a group's path opens with, when it names one, and the path under it.
 splitEcosystem :: Text -> (Maybe Text, Text)
-splitEcosystem groupName = case T.breakOn "." <$> T.stripPrefix "ecosystem: " groupName of
+splitEcosystem groupName = case T.breakOn "." <$> T.stripPrefix ecosystemPrefix groupName of
     Just (ecosystem, under) -> (Just ecosystem, T.drop 1 under)
     Nothing -> (Nothing, groupName)
 
