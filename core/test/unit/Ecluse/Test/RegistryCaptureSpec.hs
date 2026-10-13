@@ -4,11 +4,12 @@
 
 module Ecluse.Test.RegistryCaptureSpec (spec) where
 
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (ManagerSettings (managerModifyRequest), defaultManagerSettings, newManager, parseUrlThrow)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec
-import UnliftIO.Exception (AsyncException (ThreadKilled), throwIO)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Test.RegistryCapture (

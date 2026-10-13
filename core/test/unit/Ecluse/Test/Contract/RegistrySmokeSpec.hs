@@ -5,13 +5,14 @@
 -- | Deterministic negative controls for the live metadata verdict.
 module Ecluse.Test.Contract.RegistrySmokeSpec (spec) where
 
+import Control.Exception (AsyncException (ThreadKilled))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 import Test.Hspec.Core.Spec qualified as Hspec
-import UnliftIO.Exception (AsyncException (ThreadKilled), fromException, throwIO)
+import UnliftIO.Exception (fromException, throwIO)
 
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable), transportFault)
 import Ecluse.Core.Package (PackageInfo (infoVersions), renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (..))
@@ -28,9 +29,14 @@ import Ecluse.Test.Support (expectRight)
 -- | Broken provider facts cannot pass as live protocol evidence.
 spec :: Spec
 spec = describe "liveMetadata" $ do
-    it "reports only transport unavailability as pending" $
-        liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "offline")))))
-            `shouldThrow` pending
+    for_ [TransportTimeout, TransportUnreachable] $ \cause ->
+        it ("reports " <> show cause <> " as pending") $
+            liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault cause "offline")))))
+                `shouldThrow` pending
+    for_ [TransportTls, TransportProtocol] $ \cause ->
+        it ("fails " <> show cause <> " instead of reporting an unavailable upstream") $
+            liveMetadata "expected" (pure (Left (MetadataFetch (FetchTransport (transportFault cause "request refused")))))
+                `shouldThrow` failed
     for_ [MetadataAbsent, MetadataAuthorisationFailure 401, MetadataAuthorisationFailure 403, MetadataHttpFailure 503] $ \fault ->
         it ("fails the status refusal " <> show fault) $
             liveMetadata "expected" (pure (Left fault)) `shouldThrow` failed
