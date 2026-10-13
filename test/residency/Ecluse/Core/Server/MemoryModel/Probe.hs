@@ -37,7 +37,6 @@ module Ecluse.Core.Server.MemoryModel.Probe (
 
 import Prelude hiding (universe)
 
-import Control.Concurrent (yield)
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -46,11 +45,10 @@ import Data.Text qualified as T
 import Data.Universe.Class (universe)
 import Foreign.StablePtr (StablePtr, deRefStablePtr, freeStablePtr, newStablePtr)
 import GHC.Clock (getMonotonicTimeNSec)
-import GHC.Stats (GCDetails (gcdetails_live_bytes), RTSStats (allocated_bytes, gc, max_live_bytes), getRTSStats, getRTSStatsEnabled)
+import GHC.Stats (getRTSStatsEnabled)
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO (withBinaryFile)
-import System.Mem (performMajorGC)
 import System.Process (readProcessWithExitCode)
 import UnliftIO.Exception (bracket, evaluate, throwIO)
 
@@ -77,11 +75,15 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead,
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Server.MemoryModel.Calibration
+import Ecluse.Core.Server.MemoryModel.HeapSample (HeapSample (..), sample)
+import Ecluse.Core.Server.MemoryModel.ProbeMode (ProbeMode, probeArguments)
 import Ecluse.Core.Server.Pipeline.Origin (Contribution (..))
 import Ecluse.Core.Server.Pipeline.Packument (assembleServedBody, outputBasisBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CaptureUpstream (..), CorpusPackage (cpPackage, cpPath), corpusPackages, npmCaptureUpstream, pypiCaptureUpstream, pypiCorpusPackages, syntheticProxyBase)
+import Ecluse.Test.Corpus qualified as Corpus
 import Ecluse.Test.Corpus.Merge (MergeDocument (Captured, Rewritten), MergeShape, captureDocuments)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Metadata.Fetch (captureManifest, heldBody, sourceBody)
@@ -176,13 +178,6 @@ data SingleListing = SingleListing
 instance ToJSON SingleListing
 instance FromJSON SingleListing
 
--- | Scalar counters avoid retaining the RTS statistics graph across collections.
-data HeapSample = HeapSample
-    { live :: !Word64
-    , sampleAllocated :: !Word64
-    , samplePeakLive :: !Word64
-    }
-
 -- | Use the same complete package catalogue as the performance harnesses.
 packages :: [CorpusPackage]
 packages = concatMap residencyPackages (mapMaybe residencyFor universe)
@@ -192,6 +187,7 @@ data Residency = Residency
     { residencyPackages :: [CorpusPackage]
     , residencyMetadata :: AdapterMetadata
     , residencyUpstream :: CaptureUpstream
+    , residencyCalibration :: Calibration
     , residencyEnvelope :: Shape -> Integer
     , residencyPeakLimits :: PeakLimits
     , residencyEntryBelowSource :: Bool
@@ -217,8 +213,9 @@ residencyFor = \case
                 { residencyPackages = corpusPackages
                 , residencyMetadata = adapterMetadata npmAdapter
                 , residencyUpstream = npmCaptureUpstream
-                , residencyEnvelope = \case Wire -> 1250; Raw -> 7000; Typed -> 500; Shared -> 1000
-                , residencyPeakLimits = PeakLimits 1000 1750
+                , residencyCalibration = npmCalibration
+                , residencyEnvelope = calibratedEnvelope npmCalibration (regressionLimit (rawMaximum npmCalibration))
+                , residencyPeakLimits = calibratedPeaks npmCalibration
                 , residencyEntryBelowSource = True
                 , residencyLegacyProject = parsePackageInfoFromValue
                 , residencyLegacyHeld = \info raw size digest -> HeldShared (CacheEntry info (fst npmCached raw) size digest)
@@ -231,8 +228,9 @@ residencyFor = \case
                 { residencyPackages = pypiCorpusPackages
                 , residencyMetadata = adapterMetadata pypiAdapter
                 , residencyUpstream = pypiCaptureUpstream
-                , residencyEnvelope = \case Wire -> 1250; Raw -> 7000; Typed -> 1750; Shared -> 3500
-                , residencyPeakLimits = PeakLimits 3250 1750
+                , residencyCalibration = pypiCalibration
+                , residencyEnvelope = calibratedEnvelope pypiCalibration pypiRawLimit
+                , residencyPeakLimits = calibratedPeaks pypiCalibration
                 , residencyEntryBelowSource = False
                 , residencyLegacyProject = projectSimpleIndexFromValue
                 , residencyLegacyHeld = \info raw _ _ -> HeldLegacy info raw
@@ -241,15 +239,25 @@ residencyFor = \case
                 }
     RubyGems -> Nothing
 
+calibratedEnvelope :: Calibration -> Integer -> Shape -> Integer
+calibratedEnvelope calibration rawLimit = \case
+    Wire -> regressionLimit (wireMaximum calibration)
+    Raw -> rawLimit
+    Typed -> regressionLimit (typedMaximum calibration)
+    Shared -> regressionLimit (sharedMaximum calibration)
+
+calibratedPeaks :: Calibration -> PeakLimits
+calibratedPeaks calibration = PeakLimits (regressionLimit (singleReadMaximum calibration)) (regressionLimit (outputMaximum calibration))
+
 -- | Missing residency wiring fails a probe instead of skipping its checks.
 requireResidency :: Ecosystem -> IO Residency
 requireResidency ecosystem = maybe (fail ("no metadata residency record for " <> toString (ecosystemName ecosystem))) pure (residencyFor ecosystem)
 
 -- | Measure one capture in a fresh process of this executable, on one capability with RTS statistics.
-measureInChild :: (FromJSON a) => [String] -> CorpusPackage -> IO (Either String a)
+measureInChild :: (FromJSON a) => ProbeMode -> CorpusPackage -> IO (Either String a)
 measureInChild mode package = do
     executable <- getExecutablePath
-    (status, output, errors) <- readProcessWithExitCode executable (mode <> [cpPath package, "+RTS", "-T", "-N1", "-RTS"]) ""
+    (status, output, errors) <- readProcessWithExitCode executable (probeArguments mode (cpPath package)) ""
     pure $
         if status == ExitSuccess
             then eitherDecodeStrict (encodeUtf8 (toText output))
@@ -383,7 +391,7 @@ prepareListingRender ecosystem sources = do
 -- | Write a merge's rewritten documents under the directory, and return both documents' paths.
 writeMergeDocuments :: MergeShape -> FilePath -> CorpusPackage -> IO (FilePath, FilePath)
 writeMergeDocuments shape directory package = do
-    (private, public) <- BS.readFile (cpPath package) >>= either fail pure . captureDocuments shape package
+    (private, public) <- Corpus.readCapture package >>= either fail pure . captureDocuments shape package
     (,) <$> place "private.json" private <*> place "public.json" public
   where
     place file = \case
@@ -436,16 +444,6 @@ measureRetained prepareShape = do
             , preparationAllocated = prepared - sampleAllocated before
             , preparationMaxLive = samplePeakLive held
             }
-
--- | Drop full RTSStats before another collection. Yield so closed handles can finish finalisation.
-{-# NOINLINE sample #-}
-sample :: IO HeapSample
-sample = do
-    performMajorGC
-    yield
-    performMajorGC
-    stats <- getRTSStats
-    evaluate (HeapSample (gcdetails_live_bytes (gc stats)) (allocated_bytes stats) (max_live_bytes stats))
 
 -- Dereferencing after GC makes the root's continued reachability observable.
 observe :: StablePtr Held -> IO ()
