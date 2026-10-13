@@ -228,6 +228,7 @@ tasks:
       - scratchpad/osv-index/bin/A corpus npm scratchpad/osv-index/inputs
       - scratchpad/osv-index/bin/A corpus pypi scratchpad/osv-index/inputs
       - bash scripts/osv-index-conditions.sh scratchpad/osv-index/conditions.txt
+      - scratchpad/osv-index/bin/A controls scratchpad/osv-index
       - scratchpad/osv-index/bin/A manifest scratchpad/osv-index
 
   osv-index-build-one:
@@ -274,13 +275,11 @@ tasks:
     requires:
       vars: [CASE, SAMPLE]
     vars:
-      ECO: '{{index (splitList "-" .CASE) 0}}'
       VARIANT: '{{last (splitList "-" .SAMPLE)}}'
-      EPS: '{{if hasSuffix "corpus" .CASE}}{{.ECO}}-corpus-epss.gz{{else}}epss.csv.gz{{end}}'
       SAMPLE_DIR: 'scratchpad/osv-index/samples/{{.CASE}}/{{.SAMPLE}}'
     cmds:
       - mkdir -p '{{.SAMPLE_DIR}}'
-      - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/compile.status' '{{.SAMPLE_DIR}}/compile.log' python3 bench/osv-index/capture.py '{{.SAMPLE_DIR}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' compile '{{.ECO}}' 'scratchpad/osv-index/inputs/{{.CASE}}.zip' 'scratchpad/osv-index/inputs/{{.EPS}}' '{{.SAMPLE_DIR}}/db'
+      - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/compile.status' '{{.SAMPLE_DIR}}/compile.log' python3 bench/osv-index/capture.py '{{.SAMPLE_DIR}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' compile scratchpad/osv-index '{{.CASE}}' '{{.SAMPLE}}'
       - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/inspect.status' '{{.SAMPLE_DIR}}/inspect.log' scratchpad/osv-index/bin/A inspect '{{.SAMPLE_DIR}}/db/artifact.db' '{{.SAMPLE_DIR}}/snapshot.json'
       - bash scripts/process-capture.sh '{{.SAMPLE_DIR}}/compare.status' '{{.SAMPLE_DIR}}/compare.log' scratchpad/osv-index/bin/A compare 'scratchpad/osv-index/samples/{{.CASE}}/warm-A/snapshot.json' '{{.SAMPLE_DIR}}/snapshot.json' '{{.SAMPLE_DIR}}/comparison.json'
       - bash scripts/osv-index-prune.sh '{{.SAMPLE_DIR}}'
@@ -312,11 +311,10 @@ tasks:
     requires:
       vars: [CASE, MODE, BATCH, VARIANT]
     vars:
-      ECO: '{{index (splitList "-" .CASE) 0}}'
       OUT: 'scratchpad/osv-index/queries/{{.CASE}}/{{.MODE}}/{{.BATCH}}-{{.VARIANT}}'
     cmds:
       - mkdir -p '{{.OUT}}'
-      - bash scripts/process-capture.sh '{{.OUT}}/query.status' '{{.OUT}}/query.log' python3 bench/osv-index/capture.py '{{.OUT}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' reader-batch '{{.ECO}}' 'scratchpad/osv-index/samples/{{.CASE}}/warm-{{.VARIANT}}/db/artifact.db' 'scratchpad/osv-index/readers/{{.CASE}}/selection-A.json' '{{.OUT}}/result.json'
+      - bash scripts/process-capture.sh '{{.OUT}}/query.status' '{{.OUT}}/query.log' python3 bench/osv-index/capture.py '{{.OUT}}/resource.json' 'scratchpad/osv-index/bin/{{.VARIANT}}' reader-batch scratchpad/osv-index '{{.CASE}}' '{{.MODE}}' '{{.BATCH}}' '{{.VARIANT}}'
 
   osv-index-audit:
     cmds:

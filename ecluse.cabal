@@ -2208,6 +2208,12 @@ executable osv-index-experiment
   hs-source-dirs: bench/osv-index
   other-modules:
     Ecluse.OsvIndex.Artifact
+    Ecluse.OsvIndex.Audit
+    Ecluse.OsvIndex.Contract
+    Ecluse.OsvIndex.Controls
+    Ecluse.OsvIndex.Fixtures
+    Ecluse.OsvIndex.Identity
+    Ecluse.OsvIndex.Native
     Ecluse.OsvIndex.Evidence
     Ecluse.OsvIndex.Reader
   build-depends:
@@ -2220,6 +2226,8 @@ executable osv-index-experiment
     , crypton >=2.1 && <2.2
     , directory ^>=1.3
     , filepath ^>=1.5
+    , process ^>=1.6
+    , temporary ^>=1.3
     , sqlite-simple ^>=0.4
     , text ^>=2.1
     , time ^>=1.12

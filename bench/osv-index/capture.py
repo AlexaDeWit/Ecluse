@@ -10,16 +10,19 @@ import time
 
 output = pathlib.Path(sys.argv[1])
 command = sys.argv[2:]
-start = time.monotonic()
+start_ns = time.monotonic_ns()
 status = 127
 try:
     status = subprocess.call(command)
 finally:
-    elapsed = time.monotonic() - start
+    end_ns = time.monotonic_ns()
+    elapsed = (end_ns - start_ns) / 1_000_000_000
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps({
         "command": command,
+        "startedNs": start_ns,
+        "endedNs": end_ns,
         "exitCode": status,
         "wallSeconds": elapsed,
         "userSeconds": usage.ru_utime,
