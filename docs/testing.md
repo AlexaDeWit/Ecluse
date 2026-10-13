@@ -1570,12 +1570,16 @@ obligations come with the testing pattern, beside the checklist in
 
 - **Hold each metadata walk to a reference reader.** A differential property in `ecluse-core-unit`
   compares the walk with an independent reader of the same fields, written with json-stream's
-  parser combinators. For a new ecosystem, that reader is a test oracle written for the walk. npm's
-  reference, `npmFields` in `Ecluse.Core.Registry.Npm.Streaming`, is the reader npm ran before its
-  walk. It stays production code, because `Ecluse.Core.Registry.Npm.Project.versionListParser`
-  still reads with it. PyPI's reference, `pypiFields` in `Ecluse.Test.Registry.PyPI.Streaming`, is
-  the reader PyPI ran before its walk. Where a walk skips more than its reference, as PyPI's
-  selected read does, a property of its own states the difference.
+  parser combinators. For a new ecosystem, that reader is a test oracle written for the walk.
+  npm's independent `npmFields` oracle lives in `Ecluse.Test.Registry.Npm.Streaming`.
+  `referenceVersionListParser` in `Ecluse.Test.Registry.Npm.Project` reads with that oracle.
+
+  The production `npmVersionListWalk` lives in `Ecluse.Core.Registry.Npm.VersionListReader`.
+  Its 2,000-case property compares emitted events, final inventories, byte counts, limit refusals,
+  and nesting-failure classification. PyPI's reference, `pypiFields` in
+  `Ecluse.Test.Registry.PyPI.Streaming`, is the reader PyPI ran before its walk.
+  Where a walk skips more than its reference, as PyPI's selected read does, a property states the difference.
+  PyPI supplies no version-list-only reader. Mirror state still uses production combinator readers.
 - **Give every test a counterpart in every ecosystem.** When a change adds a test, a benchmark row
   or a load scenario for one ecosystem, it adds a counterpart for each other ecosystem. This applies
   wherever the other ecosystem has the same path, even while its support is incomplete, because its

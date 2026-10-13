@@ -15,7 +15,7 @@ import Test.Hspec
 import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks, sharesKey)
+import Ecluse.Test.Registry.JsonStream (namedMembers, parseJsonChunks, sharesKey)
 import Ecluse.Test.Registry.Source (assertCancelledRead)
 import Ecluse.Test.Support (expectRight)
 

@@ -16,13 +16,14 @@ module Ecluse.Core.Registry.Publish.Internal (
     newMirrorPublish,
 ) where
 
-import Data.JsonStream.Parser qualified as J
+import Data.JsonStream.Lexer (Cursor)
 import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageInfo, PackageName)
 import Ecluse.Core.Registry (BodyOutcome, FetchFault, ParseError, PublishFault (PublishFetch), UrlFormationError)
-import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, boundedJsonFetch)
+import Ecluse.Core.Registry.Exchange (accumulatingCharge, boundedExchange, withSuccessBody)
+import Ecluse.Core.Registry.Json.Walk (Step, readJsonWalk)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError, VersionDoc)
 import Ecluse.Core.Registry.Metadata.Fetch (fetchManifest)
@@ -30,7 +31,7 @@ import Ecluse.Core.Registry.Metadata.Fetch.Types (EcosystemRead)
 import Ecluse.Core.Registry.MirrorUpload (ExpectedMirrorFile, MirrorInventory, MirrorUploadData, VerifiedArtifactBytes)
 import Ecluse.Core.Registry.Origin (OriginClient (ocChargeFullRead), originClient)
 import Ecluse.Core.Registry.Request (sealRequest)
-import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
+import Ecluse.Core.Registry.VersionList (VersionListState, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (progressFloor), maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Admission.Budget (scaleCharge)
@@ -62,7 +63,7 @@ data PublishCodec = forall source metadata. PublishCodec
     , pcTargetReadPermille :: Int
     -- ^ The adapter's existing full-read heap charge per thousand source bytes.
     , pcProbeRequest :: Text -> Maybe ClientCredential -> PackageName -> Either UrlFormationError Request
-    , pcVersionListParser :: Maybe (Limits -> J.Parser VersionListItem)
+    , pcVersionListWalk :: Maybe (Limits -> Cursor -> Step VersionListState)
     -- ^ The protocol maintenance caller uses this cheaper inventory where the adapter supplies one.
     , pcPublishRequest :: Text -> Maybe ClientCredential -> PublishPlan -> MirrorUploadData metadata -> Either PublishFault Request
     , pcPublishOutcome :: Int -> ByteString -> Either PublishFault ()
@@ -109,9 +110,9 @@ probeInventory transport target targetRead factor charge name = do
     fmap manifestInfo <$> fetchManifest targetRead (ptTracing transport) origin name
 
 -- | Read bounded version identifiers for the protocol maintenance caller.
-fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
-fetchVersionList manager limits parser request =
-    fmap (fmap versions) <$> boundedJsonFetch manager (progressFloor limits) (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
+fetchVersionList :: Manager -> Limits -> (Cursor -> Step VersionListState) -> Request -> IO (Either FetchFault (BodyOutcome (Either ParseError [Version])))
+fetchVersionList manager limits walk request =
+    fmap (fmap versions) <$> withSuccessBody manager (progressFloor limits) (readJsonWalk (MetadataBodyLimit (maxMetadataBytes limits)) walk) request
   where
     versions streamed = streamValue streamed >>= finishVersionList
 

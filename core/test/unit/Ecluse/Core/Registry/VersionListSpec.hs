@@ -9,11 +9,11 @@ import Data.ByteString qualified as BS
 import Test.Hspec
 
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Npm.Project (versionListParser)
+import Ecluse.Core.Registry.Npm.VersionListReader (npmVersionListWalk)
 import Ecluse.Core.Registry.VersionList
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions), Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.JsonStream (walkJsonChunks)
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 
 -- | Reject unusable inventory shapes without changing established empty-list semantics.
@@ -23,11 +23,9 @@ spec = describe "collectVersionList" $ do
         let body = "{\"versions\":{\"1\":null,\"1\":null,\"2\":null}}"
             limits = defaultLimits{maxVersionCount = 1}
         void
-            ( parseJsonChunks
+            ( walkJsonChunks
                 (MetadataBodyLimit (BS.length body))
-                (versionListParser limits)
-                (collectVersionList limits)
-                emptyVersionList
+                (npmVersionListWalk limits (collectVersionList limits) emptyVersionList)
                 [body]
             )
             `shouldBe` Left (TooManyVersions 2 1)

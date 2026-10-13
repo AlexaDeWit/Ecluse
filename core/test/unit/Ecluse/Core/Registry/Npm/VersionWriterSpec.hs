@@ -41,7 +41,7 @@ import Ecluse.Core.Registry.Npm.Document (PackedPackument (..), tarballHole)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
 import Ecluse.Core.Registry.Npm.Project (projectVersionEntryResult, projectVersionManifest)
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmFieldOf (..), NpmRead (FullRead), npmFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmFieldOf (..))
 import Ecluse.Core.Registry.Npm.VersionWriter
 import Ecluse.Core.Registry.Npm.Wire (Dist (..), License (..), VersionManifest (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError)
@@ -54,6 +54,7 @@ import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, genServablePackumentBytes)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks, walkWritingChunks)
 import Ecluse.Test.Registry.Npm qualified as Fixture
+import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 

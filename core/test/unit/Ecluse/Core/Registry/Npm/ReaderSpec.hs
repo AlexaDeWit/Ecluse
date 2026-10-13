@@ -16,12 +16,13 @@ import Ecluse.Core.Registry.Json.Shape (Trees (..))
 import Ecluse.Core.Registry.Json.Walk (Walked (..), pureStep)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Npm.Reader (PackumentRead (..), npmWalk, releaseUniqueFields)
-import Ecluse.Core.Registry.Npm.Streaming (NpmField, NpmRead (..), npmFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmField)
 import Ecluse.Core.Registry.Npm.StreamingProjection (TreeRead, emptyTreeRead, keepsTreeRelease, treeStep)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (TooManyVersions), defaultLimits)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Registry.JsonBytes (damaged, genChunks, genPackumentBytes, releaseKeys)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks, readOutcome, testTable, walkJsonChunks)
+import Ecluse.Test.Registry.Npm.Streaming (NpmRead (..), npmFields)
 
 -- | Every generated body reads to the same fields, refusal or failure class as json-stream's reader.
 spec :: Spec
@@ -62,9 +63,7 @@ spec = describe "npmWalk" $ do
         walked `shouldBe` reference
         walked `shouldSatisfy` either (const False) (isLeft . snd)
 
-{- | Both reads through the production projection, with its keep predicate or with every release
-kept, compared by the fields each emits.
--}
+-- The production keep predicate and an unconditional keep must preserve the same emitted fields.
 bothReads :: Bool -> Int -> Maybe Text -> Maybe Int -> [ByteString] -> (Either LimitError (Int, Either Bool [NpmField]), Either LimitError (Int, Either Bool [NpmField]))
 bothReads production depth selected cap chunks =
     ( emitted (parseJsonChunks bound (npmFields depth (maybe FullRead SelectedRead selected)) step start chunks)
