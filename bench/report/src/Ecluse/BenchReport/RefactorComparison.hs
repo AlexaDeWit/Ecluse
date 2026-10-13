@@ -8,7 +8,9 @@ module Ecluse.BenchReport.RefactorComparison (audit, controls) where
 import Data.Aeson (eitherDecodeStrict')
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import System.FilePath ((</>))
+import UnliftIO.Exception (throwIO, tryAny)
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv)
 import Ecluse.Test.Contract.Manifest (readJsonFile)
@@ -19,12 +21,12 @@ import Ecluse.Test.Contract.Result (ExecutionIdentity (..), auditExactIds)
 audit :: FilePath -> Text -> Text -> Text -> Text -> FilePath -> IO ()
 audit root runId attempt baseline candidate manifest = do
     expected <- manifestRows manifest
-    actualPaths <- T.lines <$> readFileText (root </> "receipt-paths.txt")
+    actualPaths <- T.lines <$> readComparisonText (root </> "receipt-paths.txt")
     problems <- forM schedule $ \(kind, pass) -> do
         let source = if "A" `T.isPrefixOf` pass then baseline else candidate
             identity = runId <> "-" <> attempt <> "-" <> kind <> "-" <> pass
             directory = root </> toString (kind <> "-" <> pass)
-        csvProblems <- if kind == "benchmark" then capture $ rowProblems expected <$> readFileText (directory </> "bench-results.csv") else pure []
+        csvProblems <- if kind == "benchmark" then capture $ rowProblems expected <$> readComparisonText (directory </> "bench-results.csv") else pure []
         receiptProblems <- forM subjects $ \subject -> capture $ do
             receipt <- readJsonFile (directory </> "receipts" </> toString subject </> "receipt.json")
             pure (receiptFaults (source, identity, attempt, kind, subject) receipt)
@@ -40,7 +42,7 @@ subjects = ["ecosystem-npm", "ecosystem-pypi"]
 
 manifestRows :: FilePath -> IO [Text]
 manifestRows path = do
-    names <- T.lines <$> readFileText path
+    names <- T.lines <$> readComparisonText path
     finish (["expected 343 nonempty unique manifest rows" | length names /= 343 || any T.null names] <> auditExactIds "manifest row" names names)
     pure names
 
@@ -74,6 +76,9 @@ receiptFaults (source, runId, attempt, kind, subject) receipt =
   where
     native = prNative receipt
     observations = npObservations native
+
+readComparisonText :: FilePath -> IO Text
+readComparisonText path = readFileBS path >>= either throwIO pure . TE.decodeUtf8'
 
 capture :: IO [Text] -> IO [Text]
 capture action = either (pure . show) id <$> tryAny action
