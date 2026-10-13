@@ -1,0 +1,7 @@
+--- a/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
++++ b/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
+@@ -88 +88 @@
+-            runLeases world keepsEveryLease batch $ \leased -> do
++            runLeases world (faultingFor (map (unReceiptHandle . msgReceipt) batch) refused) batch $ \leased -> do
+@@ -90,0 +91 @@
++                    neverEnds

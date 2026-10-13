@@ -1,0 +1,104 @@
+[
+  {
+    "name": "success-reset",
+    "selection": "requests the base delay again after a successful step",
+    "expected": "requests the base delay again after a successful step",
+    "suite": "core"
+  },
+  {
+    "name": "redirect",
+    "selection": "integration/egress/native-003",
+    "expected": "integration/egress/native-003",
+    "suite": "integration"
+  },
+  {
+    "name": "lease-loss-1",
+    "selection": "keeps a blocked job's own receipt hidden well past its original window",
+    "expected": "keeps a blocked job's own receipt hidden well past its original window",
+    "suite": "core"
+  },
+  {
+    "name": "lease-loss-2",
+    "selection": "keeps a sibling receipt hidden while it waits its turn behind the first job",
+    "expected": "keeps a sibling receipt hidden while it waits its turn behind the first job",
+    "suite": "core"
+  },
+  {
+    "name": "lease-loss-3",
+    "selection": "renews on what is left of a window a slow poll has already spent",
+    "expected": "renews on what is left of a window a slow poll has already spent",
+    "suite": "core"
+  },
+  {
+    "name": "lease-loss-4",
+    "selection": "runs one renewal task per receipt across a full batch of ten, and none besides",
+    "expected": "runs one renewal task per receipt across a full batch of ten, and none besides",
+    "suite": "core"
+  },
+  {
+    "name": "lease-loss-5",
+    "selection": "lets a sibling whose own renewals hold finish its job, still leased",
+    "expected": "lets a sibling whose own renewals hold finish its job, still leased",
+    "suite": "core"
+  },
+  {
+    "name": "lease-missing-renewal",
+    "selection": "keeps a blocked job's own receipt hidden well past its original window",
+    "expected": "keeps a blocked job's own receipt hidden well past its original window",
+    "suite": "core"
+  },
+  {
+    "name": "lease-missing-completion",
+    "selection": "stops renewal for good, whichever disposition the job reached",
+    "expected": "stops renewal for good, whichever disposition the job reached",
+    "suite": "core"
+  },
+  {
+    "name": "lease-missing-advance",
+    "selection": "lets a sibling whose own renewals hold finish its job, still leased",
+    "expected": "lets a sibling whose own renewals hold finish its job, still leased",
+    "suite": "core"
+  },
+  {
+    "name": "delayed-admission",
+    "selection": "queues at capacity and proceeds when a slot frees within the budget",
+    "expected": "pass",
+    "suite": "core"
+  },
+  {
+    "name": "delayed-bytes",
+    "selection": "returns the weight when the holder is cancelled, unblocking a waiter",
+    "expected": "pass",
+    "suite": "core"
+  },
+  {
+    "name": "delayed-cache",
+    "selection": "hands the leader's Left to every coalesced follower, caching nothing",
+    "expected": "pass",
+    "suite": "core"
+  },
+  {
+    "name": "delayed-metadata",
+    "selection": "logs a failure once per real fetch: coalesced followers never re-log",
+    "expected": "pass",
+    "suite": "core"
+  },
+  {
+    "name": "compiler-observe",
+    "selection": "Ecluse.Core.Osv.Compile",
+    "expected": "pass",
+    "suite": "compiler"
+  },
+  {
+    "name": "compiler-failure",
+    "selection": "fetches an OSV zip and compiles it into a named, stamped SQLite artifact",
+    "expected": "fetches an OSV zip and compiles it into a named, stamped SQLite artifact",
+    "suite": "compiler"
+  },
+  {
+    "name": "delayed-renewal",
+    "selection": "keeps a blocked job's own receipt hidden well past its original window",
+    "expected": "pass",
+    "suite": "core"
+  }
+]

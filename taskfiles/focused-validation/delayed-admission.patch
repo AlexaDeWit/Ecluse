@@ -1,0 +1,10 @@
+--- a/core/test/unit/Ecluse/Core/Server/Admission/InternalSpec.hs
++++ b/core/test/unit/Ecluse/Core/Server/Admission/InternalSpec.hs
+@@ -83,0 +84 @@
++        delayed <- newEmptyMVar
+@@ -85 +86,4 @@
+-            withAsync (admit admission (pure (7 :: Int))) $ \waiter -> do
++            withAsync (takeMVar delayed >> admit admission (pure (7 :: Int))) $ \waiter -> do
++                timeout 10_000 (awaitWaiters admission 1) `shouldReturn` Nothing
++                tryReadMVar holderGate `shouldReturn` Nothing
++                putMVar delayed ()

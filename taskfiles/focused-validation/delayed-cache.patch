@@ -1,0 +1,11 @@
+--- a/core/test/unit/Ecluse/Core/Server/Cache/StoreSpec.hs
++++ b/core/test/unit/Ecluse/Core/Server/Cache/StoreSpec.hs
+@@ -329,0 +330 @@
++                delayed <- newEmptyMVar
+@@ -337 +338 @@
+-                        (mapConcurrently (const (resolveJoining joined sf "shared-fault" failing)) [1 .. 8 :: Int])
++                        (mapConcurrently (\index -> when (index /= 1) (readMVar delayed) >> resolveJoining joined sf "shared-fault" failing) [1 .. 8 :: Int])
+@@ -339,0 +341,3 @@
++                            timeout 10_000 (takeMVar joined) `shouldReturn` Nothing
++                            tryReadMVar release `shouldReturn` Nothing
++                            putMVar delayed ()

@@ -7,6 +7,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      focused_validation:
+        description: Run temporary source-bound acceptance checks
+        type: boolean
+        default: false
+      focused_source:
+        description: Exact reviewed source SHA, required for focused validation
+        type: string
+        default: ''
 
 # One run per ref. Cancel a superseded PR run when a newer commit lands, because only
 # the latest commit's numbers matter. Never cancel a manual dispatch.
@@ -14,14 +23,13 @@ concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
-# the run's own artifact service (the runtime token), not the GITHUB_TOKEN. The baseline
-# fetch reads the runs and artifacts of main with the GITHUB_TOKEN.
+# The repository token reads source and baseline artifacts. Upload uses the run's artifact token.
 permissions:
   contents: read
 
 jobs:
   bench:
+    if: github.event_name != 'workflow_dispatch' || !inputs.focused_validation
     name: Work-per-request benchmarks (inform-only)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
@@ -62,9 +70,7 @@ jobs:
           PERF_NATIVE_OUTCOME: ${{ steps.measure.outcome }}
         run: nix develop .#ci --command task performance:benchmark-receipt
 
-      # Off main only: the runs on main are the baseline. A missing baseline renders as
-      # "no baseline". Both steps continue on error and stop after five minutes, so neither
-      # can fail or stall the job.
+      # Comparisons against main are informational. Bound their network waits to five minutes.
       - name: Fetch the latest results on main
         if: ${{ !cancelled() && github.ref != 'refs/heads/main' }}
         continue-on-error: true
@@ -93,3 +99,51 @@ jobs:
             against-main.md
             scratchpad/performance/benchmark/
           if-no-files-found: warn
+
+  focused-acceptance:
+    if: github.event_name == 'workflow_dispatch' && inputs.focused_validation
+    permissions:
+      contents: read
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 360
+    env:
+      FOCUSED_SOURCE: ${{ inputs.focused_source }}
+      FOCUSED_HARNESS: ${{ github.workspace }}
+      FOCUSED_CHECKOUT: ${{ github.workspace }}/scratchpad/focused-source
+      FOCUSED_EVIDENCE: ${{ github.workspace }}/scratchpad/focused-evidence
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout temporary harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require a fixed source
+        run: |
+          test "$GITHUB_REF" = refs/heads/measure/refactor-focused-validation
+          [[ "$FOCUSED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.focused_source }}
+          path: scratchpad/focused-source
+          persist-credentials: false
+      - name: Set up pinned toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: 'true'
+          dist-cache: 'false'
+      - name: Update the package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        working-directory: scratchpad/focused-source
+        run: env -u IN_NIX_SHELL nix develop --command task update
+      - name: Run source-bound acceptance checks
+        working-directory: scratchpad/focused-source
+        run: env -u IN_NIX_SHELL nix develop --command task --exit-code --taskfile "$FOCUSED_HARNESS/taskfiles/focused-validation.yml" run
+      - name: Upload partial and completed evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: focused-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: scratchpad/focused-evidence
+          if-no-files-found: error

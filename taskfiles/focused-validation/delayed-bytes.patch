@@ -1,0 +1,9 @@
+--- a/core/test/unit/Ecluse/Core/Server/Admission/Bytes/InternalSpec.hs
++++ b/core/test/unit/Ecluse/Core/Server/Admission/Bytes/InternalSpec.hs
+@@ -78 +78,5 @@
+-            withAsync (holding ba 100 (pure ())) $ \waiter -> do
++            delayed <- newEmptyMVar
++            withAsync (takeMVar delayed >> holding ba 100 (pure ())) $ \waiter -> do
++                timeout 10_000 (atomically (weightedAdmissionWaiting (baCore ba) >>= check . (== 1))) `shouldReturn` Nothing
++                tryReadMVar release `shouldReturn` Nothing
++                putMVar delayed ()

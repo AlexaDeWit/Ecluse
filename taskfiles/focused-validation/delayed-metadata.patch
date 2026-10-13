@@ -1,0 +1,11 @@
+--- a/core/test/unit/Ecluse/Core/Server/MetadataSpec.hs
++++ b/core/test/unit/Ecluse/Core/Server/MetadataSpec.hs
+@@ -331,0 +332 @@
++                delayed <- newEmptyMVar
+@@ -344 +345 @@
+-                        (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
++                        (mapConcurrently (\index -> when (index /= 1) (readMVar delayed) >> fetchFullManifest client name) [1 .. 8 :: Int])
+@@ -346,0 +348,3 @@
++                            timeout 10_000 (takeMVar joined) `shouldReturn` Nothing
++                            tryReadMVar release `shouldReturn` Nothing
++                            putMVar delayed ()

@@ -1,0 +1,7 @@
+--- a/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
++++ b/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
+@@ -145 +145 @@
+-            outcomes <- runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
++            outcomes <- runLeases world (faultingFor ["a", "b"] refused) batch $ \leased -> do
+@@ -152,0 +153 @@
++                    neverEnds

@@ -1,0 +1,289 @@
+version: '3'
+dir: '{{.FOCUSED_CHECKOUT}}'
+vars:
+  HARNESS: '{{.FOCUSED_HARNESS}}'
+  EVIDENCE: '{{.FOCUSED_EVIDENCE}}'
+  LEAVES: '{{.FOCUSED_HARNESS}}/scripts/focused-validation'
+  COPIES: '{{.FOCUSED_HARNESS}}/scratchpad/focused-copies'
+  PATCHES: '{{.FOCUSED_HARNESS}}/taskfiles/focused-validation'
+tasks:
+  run:
+    desc: Temporary remote acceptance checks for the refactoring issues
+    cmds:
+      - task: preflight
+      - task: build
+      - task: controls
+      - task: repetitions
+      - task: compiler
+      - task: perturbation
+        vars:
+          CASE: "success-reset"
+          SELECTION: "requests the base delay again after a successful step"
+          EXPECTED: "requests the base delay again after a successful step"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "redirect"
+          SELECTION: "integration/egress/native-003"
+          EXPECTED: "integration/egress/native-003"
+          SUITE: "integration"
+      - task: perturbation
+        vars:
+          CASE: "lease-loss-1"
+          SELECTION: "keeps a blocked job's own receipt hidden well past its original window"
+          EXPECTED: "keeps a blocked job's own receipt hidden well past its original window"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-loss-2"
+          SELECTION: "keeps a sibling receipt hidden while it waits its turn behind the first job"
+          EXPECTED: "keeps a sibling receipt hidden while it waits its turn behind the first job"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-loss-3"
+          SELECTION: "renews on what is left of a window a slow poll has already spent"
+          EXPECTED: "renews on what is left of a window a slow poll has already spent"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-loss-4"
+          SELECTION: "runs one renewal task per receipt across a full batch of ten, and none besides"
+          EXPECTED: "runs one renewal task per receipt across a full batch of ten, and none besides"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-loss-5"
+          SELECTION: "lets a sibling whose own renewals hold finish its job, still leased"
+          EXPECTED: "lets a sibling whose own renewals hold finish its job, still leased"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-missing-renewal"
+          SELECTION: "keeps a blocked job's own receipt hidden well past its original window"
+          EXPECTED: "keeps a blocked job's own receipt hidden well past its original window"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-missing-completion"
+          SELECTION: "stops renewal for good, whichever disposition the job reached"
+          EXPECTED: "stops renewal for good, whichever disposition the job reached"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "lease-missing-advance"
+          SELECTION: "lets a sibling whose own renewals hold finish its job, still leased"
+          EXPECTED: "lets a sibling whose own renewals hold finish its job, still leased"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "delayed-admission"
+          SELECTION: "queues at capacity and proceeds when a slot frees within the budget"
+          EXPECTED: "pass"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "delayed-bytes"
+          SELECTION: "returns the weight when the holder is cancelled, unblocking a waiter"
+          EXPECTED: "pass"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "delayed-cache"
+          SELECTION: "hands the leader's Left to every coalesced follower, caching nothing"
+          EXPECTED: "pass"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: "delayed-metadata"
+          SELECTION: "logs a failure once per real fetch: coalesced followers never re-log"
+          EXPECTED: "pass"
+          SUITE: "core"
+      - task: perturbation
+        vars:
+          CASE: delayed-renewal
+          SELECTION: "keeps a blocked job's own receipt hidden well past its original window"
+          EXPECTED: pass
+          SUITE: core
+  preflight:
+    cmds:
+      - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/initial"
+      - test -z "${ECLTEST_ARGUMENTS:-}"
+      - git -C "{{.HARNESS}}" rev-parse HEAD 'HEAD^{tree}' > "{{.EVIDENCE}}/harness.txt"
+      - 'printf "%s\n" "Focused core and compiler builds add -rtsopts in dist-focused. These runs are not performance evidence." > "{{.EVIDENCE}}/build-difference.txt"'
+      - for contract in "{{.PATCHES}}/"*.sha256; do sha256sum --check "$contract"; done
+      - command -v node python3 ruby
+      - docker info
+  build:
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/build/control-status" "{{.EVIDENCE}}/build/control.log" cabal build ecluse-integration ecluse-integration-manifest ecluse-integration-audit ecluse-smoke
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/build/control-status"
+      - task: core-build
+        vars: {BUILD: '{{.EVIDENCE}}/build/focused'}
+  controls:
+    cmds:
+      - task: core
+        vars: {NAME: lease-control, SELECTION: Ecluse.Core.Worker.Lease, SEED: '101'}
+      - task: core
+        vars: {NAME: refresh-control, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: '102'}
+      - task: core
+        vars: {NAME: supervision-control, SELECTION: Ecluse.Core.Supervision.Internal, SEED: '103'}
+      - task: core
+        vars: {NAME: version-control, SELECTION: Ecluse.Core.Version, SEED: '104'}
+      - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/oracle"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/oracle/status" "{{.EVIDENCE}}/oracle/run.log" timeout 180 "$(cabal list-bin ecluse-smoke)" --match regenerating --no-color
+      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/oracle" pass
+      - task: integration
+        vars: {NAME: integration-control}
+  repetitions:
+    cmds:
+      - task: core
+        vars: {NAME: repeat-201, SELECTION: Ecluse.Core.Worker.Lease, SEED: "201"}
+      - task: core
+        vars: {NAME: repeat-202, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: "202"}
+      - task: core
+        vars: {NAME: repeat-203, SELECTION: Ecluse.Core.Server.Cache.Store, SEED: "203"}
+      - task: core
+        vars: {NAME: repeat-204, SELECTION: Ecluse.Core.Server.Metadata, SEED: "204"}
+      - task: core
+        vars: {NAME: repeat-205, SELECTION: Ecluse.Core.Server.Admission.Internal, SEED: "205"}
+      - task: core
+        vars: {NAME: repeat-206, SELECTION: Ecluse.Core.Server.Admission.Bytes.Internal, SEED: "206"}
+      - task: core
+        vars: {NAME: repeat-207, SELECTION: Ecluse.Core.Worker.Lease, SEED: "207"}
+      - task: core
+        vars: {NAME: repeat-208, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: "208"}
+      - task: core
+        vars: {NAME: repeat-209, SELECTION: Ecluse.Core.Server.Cache.Store, SEED: "209"}
+      - task: core
+        vars: {NAME: repeat-210, SELECTION: Ecluse.Core.Server.Metadata, SEED: "210"}
+      - task: core
+        vars: {NAME: repeat-211, SELECTION: Ecluse.Core.Server.Admission.Internal, SEED: "211"}
+      - task: core
+        vars: {NAME: repeat-212, SELECTION: Ecluse.Core.Server.Admission.Bytes.Internal, SEED: "212"}
+      - task: core
+        vars: {NAME: repeat-213, SELECTION: Ecluse.Core.Worker.Lease, SEED: "213"}
+      - task: core
+        vars: {NAME: repeat-214, SELECTION: Ecluse.Core.Credential.Refresh.Internal, SEED: "214"}
+      - task: core
+        vars: {NAME: repeat-215, SELECTION: Ecluse.Core.Server.Cache.Store, SEED: "215"}
+      - task: core
+        vars: {NAME: repeat-216, SELECTION: Ecluse.Core.Server.Metadata, SEED: "216"}
+      - task: core
+        vars: {NAME: repeat-217, SELECTION: Ecluse.Core.Server.Admission.Internal, SEED: "217"}
+      - task: core
+        vars: {NAME: repeat-218, SELECTION: Ecluse.Core.Server.Admission.Bytes.Internal, SEED: "218"}
+  core:
+    env:
+      SELECTION: '{{.SELECTION}}'
+      SEED: '{{.SEED | default "301"}}'
+    cmds:
+      - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/{{.NAME}}"
+      - 'printf "%s\n" "$SELECTION" "$SEED" > "{{.EVIDENCE}}/{{.NAME}}/selection-and-seed.txt"'
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed "$SEED" --no-color +RTS -N1 -RTS
+      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}" pass
+  integration:
+    env:
+      ECLTEST_SOURCE: '{{.FOCUSED_SOURCE}}'
+      ECLTEST_INTEGRATION_ARTIFACT_DIR: '{{.EVIDENCE}}/{{.NAME}}/integration'
+      ECLTEST_RUN_ID: '{{.GITHUB_RUN_ID}}-{{.GITHUB_RUN_ATTEMPT}}-{{.NAME}}'
+    cmds:
+      - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/{{.NAME}}"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/status" "{{.EVIDENCE}}/{{.NAME}}/run.log" task --exit-code test-integration
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/{{.NAME}}/status"
+  perturbation:
+    vars:
+      RESULT: '{{.EVIDENCE}}/{{.CASE}}'
+    env:
+      SELECTION: '{{.SELECTION}}'
+      EXPECTED: '{{.EXPECTED}}'
+    cmds:
+      - defer: bash "{{.LEAVES}}/restore.sh" "{{.RESULT}}"
+      - bash "{{.LEAVES}}/patch.sh" "{{.PATCHES}}/{{.CASE}}.patch" "{{.RESULT}}"
+      - task: '{{.SUITE}}-build'
+        vars: {BUILD: '{{.RESULT}}/build'}
+      - bash "{{.LEAVES}}/working-tree.sh" "{{.RESULT}}/runtime" "{{.RESULT}}/applied.patch"
+      - task: '{{.SUITE}}-perturbed'
+        vars: {RESULT: '{{.RESULT}}', NAME: '{{.CASE}}', SELECTION: '{{.SELECTION}}', EXPECTED: '{{.EXPECTED}}'}
+      - bash "{{.LEAVES}}/restore.sh" "{{.RESULT}}"
+      - task: '{{.SUITE}}-build'
+        vars: {BUILD: '{{.RESULT}}/restored-build'}
+      - task: '{{.SUITE}}'
+        vars: {NAME: '{{.CASE}}-restored', SELECTION: '{{.SELECTION}}'}
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.RESULT}}/qualification-status"
+  core-build:
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.BUILD}}/status" "{{.BUILD}}/build.log" cabal build ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.BUILD}}/status"
+  integration-build:
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.BUILD}}/status" "{{.BUILD}}/build.log" cabal build ecluse-integration ecluse-integration-manifest ecluse-integration-audit
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.BUILD}}/status"
+  core-perturbed:
+    env:
+      SELECTION: '{{.SELECTION}}'
+      EXPECTED: '{{.EXPECTED}}'
+    cmds:
+      - 'printf "%s\n" "$SELECTION" 401 > "{{.RESULT}}/selection-and-seed.txt"'
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/status" "{{.RESULT}}/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match "$SELECTION" --seed 401 --no-color +RTS -N1 -RTS
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/qualification-status" "{{.RESULT}}/qualification.log" bash "{{.LEAVES}}/assertion.sh" "{{.RESULT}}" "$EXPECTED"
+  integration-perturbed:
+    env:
+      ECLTEST_SOURCE: '{{.FOCUSED_SOURCE}}'
+      ECLTEST_INTEGRATION_ARTIFACT_DIR: '{{.RESULT}}/integration'
+      ECLTEST_RUN_ID: '{{.GITHUB_RUN_ID}}-{{.GITHUB_RUN_ATTEMPT}}-{{.NAME}}'
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/status" "{{.RESULT}}/run.log" task --exit-code test-integration
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.RESULT}}/qualification-status" "{{.RESULT}}/qualification.log" bash "{{.LEAVES}}/redirect-assertion.sh" "{{.RESULT}}"
+  compiler:
+    cmds:
+      - task: compiler-copy
+        vars: {SIDE: left}
+      - task: compiler-copy
+        vars: {SIDE: right}
+      - task: compiler-round
+        vars: {PHASE: overlap, LEFT_PATCH: compiler-observe, EXPECTED: pass}
+      - task: compiler-round
+        vars: {PHASE: failed-cleanup, LEFT_PATCH: compiler-failure, EXPECTED: 'fetches an OSV zip and compiles it into a named, stamped SQLite artifact'}
+  compiler-round:
+    cmds:
+      - defer:
+          task: compiler-restore
+          vars: {SIDE: right, PATCH: compiler-observe, PHASE: '{{.PHASE}}'}
+      - defer:
+          task: compiler-restore
+          vars: {SIDE: left, PATCH: '{{.LEFT_PATCH}}', PHASE: '{{.PHASE}}'}
+      - task: compiler-apply
+        vars: {SIDE: left, PATCH: '{{.LEFT_PATCH}}', PHASE: '{{.PHASE}}'}
+      - task: compiler-apply
+        vars: {SIDE: right, PATCH: compiler-observe, PHASE: '{{.PHASE}}'}
+      - task: compiler-pair
+        vars: {NAME: 'compiler-{{.PHASE}}', EXPECTED: '{{.EXPECTED}}'}
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}/launch-status" "{{.EVIDENCE}}/compiler-{{.PHASE}}/left-qualification-status" "{{.EVIDENCE}}/compiler-{{.PHASE}}/right-qualification-status"
+  compiler-copy:
+    cmds:
+      - mkdir -p "{{.COPIES}}"
+      - git worktree add --detach "{{.COPIES}}/{{.SIDE}}" "$FOCUSED_SOURCE"
+  compiler-apply:
+    dir: '{{.COPIES}}/{{.SIDE}}'
+    cmds:
+      - bash "{{.LEAVES}}/patch.sh" "{{.PATCHES}}/{{.PATCH}}.patch" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change/build/status" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change/build/build.log" cabal build ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change/build/status"
+      - bash "{{.LEAVES}}/working-tree.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change/runtime" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change/applied.patch"
+  compiler-pair:
+    env:
+      EXPECTED: '{{.EXPECTED}}'
+    cmds:
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/launch-status" "{{.EVIDENCE}}/{{.NAME}}/launch.log" bash "{{.LEAVES}}/compiler-pair.sh" "{{.COPIES}}/left" "{{.COPIES}}/right" "{{.EVIDENCE}}/{{.NAME}}"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/left-qualification-status" "{{.EVIDENCE}}/{{.NAME}}/left-qualification.log" bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}/left" "$EXPECTED"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/{{.NAME}}/right-qualification-status" "{{.EVIDENCE}}/{{.NAME}}/right-qualification.log" bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/{{.NAME}}/right" pass
+  compiler-restore:
+    dir: '{{.COPIES}}/{{.SIDE}}'
+    cmds:
+      - bash "{{.LEAVES}}/restore.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-change"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored/build/status" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored/build/build.log" cabal build ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts
+      - bash "{{.HARNESS}}/scripts/process-status.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored/build/status"
+      - bash "{{.LEAVES}}/identity.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored"
+      - bash "{{.HARNESS}}/scripts/process-capture.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored/status" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored/run.log" timeout 180 "$(cabal list-bin ecluse-core-unit --builddir=dist-focused --ghc-options=-rtsopts)" --match Ecluse.Core.Osv.Compile --no-color +RTS -N1 -RTS
+      - bash "{{.LEAVES}}/assertion.sh" "{{.EVIDENCE}}/compiler-{{.PHASE}}-{{.SIDE}}-{{.PATCH}}-restored" pass

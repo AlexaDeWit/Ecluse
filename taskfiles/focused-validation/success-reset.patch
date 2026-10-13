@@ -1,0 +1,5 @@
+--- a/core/src/Ecluse/Core/Supervision/Internal.hs
++++ b/core/src/Ecluse/Core/Supervision/Internal.hs
+@@ -87 +87 @@
+-            Right () -> go 0
++            Right () -> go consecutiveFaults

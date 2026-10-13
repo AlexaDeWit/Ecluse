@@ -1,0 +1,7 @@
+--- a/core/src/Ecluse/Core/Registry/Npm/Request.hs
++++ b/core/src/Ecluse/Core/Registry/Npm/Request.hs
+@@ -34 +34 @@
+-    Request (decompress, method, requestBody, requestHeaders),
++    Request (decompress, method, redirectCount, requestBody, requestHeaders),
+@@ -78,0 +79 @@
++        . (\request -> request{redirectCount = 1})

@@ -1,0 +1,5 @@
+--- a/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
++++ b/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
+@@ -462 +462 @@
+-    pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world))
++    pollUntil 2_000 1_000 (>= wanted) (readIORef (lwRenewals world) $> 0)

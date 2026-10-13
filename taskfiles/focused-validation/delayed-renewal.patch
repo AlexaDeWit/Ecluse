@@ -1,0 +1,16 @@
+--- a/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
++++ b/core/test/unit/Ecluse/Core/Worker/LeaseSpec.hs
+@@ -75 +75,7 @@
+-            runLeases world keepsEveryLease batch $ \leased -> do
++            renewalEntered <- newEmptyMVar
++            renewalRelease <- newEmptyMVar
++            let delayedAnswer state receipt = do
++                    void (tryPutMVar renewalEntered ())
++                    readMVar renewalRelease
++                    keepsEveryLease state receipt
++            runLeases world delayedAnswer batch $ \leased -> do
+@@ -77,0 +84,4 @@
++                    takeMVar renewalEntered
++                    renewalsSoFar world `shouldReturn` ["a"]
++                    timeout 10_000 (awaitRenewals world 2) `shouldReturn` Nothing
++                    putMVar renewalRelease ()
