@@ -7,7 +7,7 @@ module Ecluse.BenchLoad.ListingSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
+import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError), benchFail)
 import Ecluse.BenchLoad.Harness (LoadKnobs (lkWorkingSet), defaultLoadKnobs)
 import Ecluse.BenchLoad.Listing (ListingSetup (..), cacheEvictsLoad, listingWorkingSet)
 import Ecluse.BenchLoad.Npm (npmPrivateCopy)
@@ -34,7 +34,7 @@ rejectedSetup :: PrivateCopy -> ListingSetup
 rejectedSetup copy =
     ListingSetup
         { lsCopy = copy
-        , lsPrivate = \_ _ _ -> throwIO (BenchLoadError "invalid eviction called a private stub")
+        , lsPrivate = \_ _ _ -> benchFail "invalid eviction called a private stub"
         , lsCapturePackages = map (\package -> package{cpPath = "bench/corpus/rejected-eviction-must-not-read.json"})
         , lsPreflight = const (expectationFailure "invalid eviction reached preflight")
         , lsEvictionEntries = \_ _ -> Left "rejected eviction"
