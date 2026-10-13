@@ -8,36 +8,9 @@ vars:
 tasks:
   run:
     desc: Run the temporary issue 1565 comparison on one ARM64 worker
-    preconditions:
-      - test "$(uname -m)" = aarch64
-      - test -z "${GHCRTS:-}"
-      - '[[ "$REFRACTOR_CANDIDATE" =~ ^[0-9a-f]{40}$ ]]'
-      - git cat-file -e "$REFRACTOR_CANDIDATE^{commit}"
-      - test ! -e '{{.COMPARISON_ROOT}}'
     cmds:
-      - mkdir -p '{{.EVIDENCE}}'
-      - |
-        set -euo pipefail
-        git rev-parse HEAD HEAD^{tree} > '{{.EVIDENCE}}/controller.txt'
-        printf '%s\n' "run=$GITHUB_RUN_ID" "attempt=$GITHUB_RUN_ATTEMPT" "runner=$RUNNER_NAME" "image=${ImageVersion:-unknown}" > '{{.EVIDENCE}}/worker.txt'
-        uname -a >> '{{.EVIDENCE}}/worker.txt'
-        lscpu >> '{{.EVIDENCE}}/worker.txt'
-      - task: controller
-      - '"$(cat ''{{.EVIDENCE}}/validator-path.txt'')" comparison-inputs ''{{.EVIDENCE}}/inputs'''
-      - |
-        set -euo pipefail
-        "$(cat '{{.EVIDENCE}}/validator-path.txt')" conditions '{{.EVIDENCE}}/run.json' \
-          run="$GITHUB_RUN_ID" attempt="$GITHUB_RUN_ATTEMPT" architecture="$(uname -m)" \
-          runner="$RUNNER_NAME" image="${ImageVersion:-unknown}" \
-          controllerSource="$(git rev-parse HEAD)" controllerTree="$(git rev-parse HEAD^{tree})" \
-          sourceA='{{.BASELINE}}' treeA="$(git rev-parse '{{.BASELINE}}^{tree}')" \
-          sourceB='{{.CANDIDATE}}' treeB="$(git rev-parse '{{.CANDIDATE}}^{tree}')"
-      - task: prepare
-        vars: {SIDE: A}
-      - task: prepare
-        vars: {SIDE: B}
-      - cmp '{{.EVIDENCE}}/build-A/locks.sha256' '{{.EVIDENCE}}/build-B/locks.sha256'
-      - cmp '{{.EVIDENCE}}/build-A/corpus.sha256' '{{.EVIDENCE}}/build-B/corpus.sha256'
+      - task: initialise
+        vars: {SCOPE: full}
       - task: record-pass
         vars: {SIDE: A, KIND: benchmark, PASS: A1}
       - task: record-pass
@@ -101,6 +74,68 @@ tasks:
           '{{.EVIDENCE}}'/allocation-{A1,B1,A2,B2}/pass.status \
           '{{.EVIDENCE}}'/residency-{A1,B1,A2,B2}/pass.status \
           '{{.EVIDENCE}}'/{versions,listing}-{A1,B1,A2,B2}/pass.status
+
+  listing-run:
+    desc: Run the four listing recovery passes on one ARM64 worker
+    cmds:
+      - task: initialise
+        vars: {SCOPE: listing}
+      - bash scripts/process-capture.sh '{{.EVIDENCE}}/input-audit.status' '{{.EVIDENCE}}/input-audit.log' "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-input-audit '{{.EVIDENCE}}'
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/input-audit.status'
+      - task: listing-prepare
+        vars: {SIDE: A}
+      - task: listing-prepare
+        vars: {SIDE: B}
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/listing-build-A/status' '{{.EVIDENCE}}/listing-build-B/status'
+      - task: record-pass
+        vars: {SIDE: A, KIND: listing, PASS: A1}
+      - task: record-pass
+        vars: {SIDE: B, KIND: listing, PASS: B1}
+      - task: record-pass
+        vars: {SIDE: A, KIND: listing, PASS: A2}
+      - task: record-pass
+        vars: {SIDE: B, KIND: listing, PASS: B2}
+      - |
+        set -euo pipefail
+        find '{{.EVIDENCE}}' -type f -name receipt.json -printf '%P\n' | sort > '{{.EVIDENCE}}/receipt-paths.txt'
+        bash scripts/process-capture.sh '{{.EVIDENCE}}/comparison-audit.status' '{{.EVIDENCE}}/comparison-audit.log' \
+          "$(cat '{{.EVIDENCE}}/validator-path.txt')" comparison-listing-audit '{{.EVIDENCE}}' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+          '{{.BASELINE}}' "$(git rev-parse '{{.BASELINE}}^{tree}')" '{{.CANDIDATE}}' "$(git rev-parse '{{.CANDIDATE}}^{tree}')" \
+          taskfiles/refactor-performance/expected-rows.txt
+      - bash scripts/process-status.sh '{{.EVIDENCE}}/comparison-audit.status' '{{.EVIDENCE}}'/listing-{A1,B1,A2,B2}/pass.status
+
+  initialise:
+    internal: true
+    preconditions:
+      - test "$(uname -m)" = aarch64
+      - test -z "${GHCRTS:-}"
+      - '[[ "$REFRACTOR_CANDIDATE" =~ ^[0-9a-f]{40}$ ]]'
+      - git cat-file -e "$REFRACTOR_CANDIDATE^{commit}"
+      - test ! -e '{{.COMPARISON_ROOT}}'
+    cmds:
+      - mkdir -p '{{.EVIDENCE}}'
+      - |
+        set -euo pipefail
+        git rev-parse HEAD HEAD^{tree} > '{{.EVIDENCE}}/controller.txt'
+        printf '%s\n' "run=$GITHUB_RUN_ID" "attempt=$GITHUB_RUN_ATTEMPT" "runner=$RUNNER_NAME" "image=${ImageVersion:-unknown}" > '{{.EVIDENCE}}/worker.txt'
+        uname -a >> '{{.EVIDENCE}}/worker.txt'
+        lscpu >> '{{.EVIDENCE}}/worker.txt'
+      - task: controller
+      - '"$(cat ''{{.EVIDENCE}}/validator-path.txt'')" comparison-inputs ''{{.EVIDENCE}}/inputs'''
+      - |
+        set -euo pipefail
+        "$(cat '{{.EVIDENCE}}/validator-path.txt')" conditions '{{.EVIDENCE}}/run.json' \
+          run="$GITHUB_RUN_ID" attempt="$GITHUB_RUN_ATTEMPT" architecture="$(uname -m)" scope='{{.SCOPE}}' \
+          runner="$RUNNER_NAME" image="${ImageVersion:-unknown}" \
+          controllerSource="$(git rev-parse HEAD)" controllerTree="$(git rev-parse HEAD^{tree})" \
+          sourceA='{{.BASELINE}}' treeA="$(git rev-parse '{{.BASELINE}}^{tree}')" \
+          sourceB='{{.CANDIDATE}}' treeB="$(git rev-parse '{{.CANDIDATE}}^{tree}')"
+      - task: prepare
+        vars: {SIDE: A}
+      - task: prepare
+        vars: {SIDE: B}
+      - cmp '{{.EVIDENCE}}/build-A/locks.sha256' '{{.EVIDENCE}}/build-B/locks.sha256'
+      - cmp '{{.EVIDENCE}}/build-A/corpus.sha256' '{{.EVIDENCE}}/build-B/corpus.sha256'
 
   controller:
     cmds:
@@ -353,3 +388,5 @@ tasks:
       - task --dry performance:comparison:listing-prepare SIDE=B
       - task --dry performance:comparison:versions-measure SIDE=A KIND=versions PASS=A1 SOURCE_DIR='{{.ROOT_DIR}}'
       - task --dry performance:comparison:listing-measure SIDE=B KIND=listing PASS=B1 LISTING_DIR='{{.ROOT_DIR}}'
+      - task --summary performance:comparison:listing-run
+      - task --summary performance:comparison:run

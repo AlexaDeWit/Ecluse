@@ -7,6 +7,20 @@ The manual workflow requires `refactor_comparison=true` and an exact 40-characte
 The baseline stays fixed. No candidate commit is the default.
 The controller and its controls run outside both measured source trees. This branch must not merge into product development.
 
+The separate recovery entrypoint is `task performance:comparison:listing-run`.
+Dispatch it with `refactor_listing=true`, `refactor_comparison=false`, and the same exact candidate source.
+The workflow rejects both comparison flags together. It exposes no arbitrary measurement selector.
+The recovery builds both native sources and both isolated listing overlays before any listing measurement.
+It independently checks the prepared inputs, then runs listing A1, B1, A2, B2 with the existing command, inputs and RTS options.
+Its bindings include that input check and the original source, tree, plan, binary, overlay, input and worker identities.
+The `listing` scope is explicit in the run record and every pass binding. The scoped audit requires all four passes and all six pairs.
+It accepts no benchmark or allocation receipts and cannot qualify a full comparison.
+The full entrypoint keeps its existing preparation order, complete schedule and requirement for twenty native receipts.
+
+Earlier evidence stays in its original artifact and run identity.
+In particular, the completed benchmark, allocation, residency and version passes from [run 38407772642](https://github.com/AlexaDeWit/Ecluse/actions/runs/38407772642) remain separate from a recovery run.
+A report that uses both runs must name each scope and run. It must not describe them as one run on one worker.
+
 The benchmark order is A1, A2, B1, A3, B2, B3. Allocation and both maintenance probes use A1, B1, A2, B2.
 Residency also uses A1, B1, A2, B2. Its report retains one A/A pair, one B/B pair and all four A/B pairs.
 All measurements run serially on one ARM64 worker.

@@ -25,10 +25,12 @@ main :: IO ()
 main =
     getArgs >>= \case
         ["comparison-inputs", root] -> ComparisonInputs.prepareInputs root
+        ["comparison-input-audit", root] -> Comparison.checkInputs root
         ["comparison-pass-conditions", root, kind, passName] -> ComparisonEvidence.writePassConditions root (toText kind) (toText passName)
         ["comparison-bind", root, kind, passName] -> ComparisonEvidence.recordBinding root (toText kind) (toText passName)
         ["comparison-controls", manifest] -> Comparison.controls manifest
         ["comparison-audit", root, runId, attempt, baseline, baselineTree, candidate, candidateTree, manifest] -> Comparison.audit root (toText runId) (toText attempt) (toText baseline) (toText baselineTree) (toText candidate) (toText candidateTree) manifest
+        ["comparison-listing-audit", root, runId, attempt, baseline, baselineTree, candidate, candidateTree, manifest] -> Comparison.auditListing root (toText runId) (toText attempt) (toText baseline) (toText baselineTree) (toText candidate) (toText candidateTree) manifest
         "conditions" : path : arguments -> Receipt.writeConditions path (map toText arguments)
         ["receipt-allocation", root, conditions] -> Receipt.writePerformanceReceipts "allocation" root conditions
         ["receipt-live-allocation", root, conditions] -> Receipt.writePerformanceReceipts "live-allocation" root conditions

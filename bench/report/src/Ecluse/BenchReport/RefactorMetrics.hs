@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Strict refactor tolerances preserve each repetition and every signed difference.
-module Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls) where
+module Ecluse.BenchReport.RefactorMetrics (auditMetrics, auditListingMetrics, metricControls) where
 
 import Data.Aeson (Object, Value (Object), eitherDecodeStrict', object, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -35,9 +35,19 @@ data Observation = Observation Text [Metric]
 
 -- | Publish all comparisons before returning audit faults or measured tolerance breaches.
 auditMetrics :: FilePath -> IO ([Text], [Text])
-auditMetrics root = do
-    writeComparisonText (root </> "scope-limitations.txt") "Mutable cache rows remain unclassified diagnostics. Each row requires review regardless of its delta. Checked criteria do not establish universal parity.\n"
-    outcomes <- forM ["benchmark", "allocation", "residency", "versions", "listing"] $ \kind -> do
+auditMetrics = auditKinds ["benchmark", "allocation", "residency", "versions", "listing"]
+
+-- | A recovery qualifies only the listing measurements made under its own run identity.
+auditListingMetrics :: FilePath -> IO ([Text], [Text])
+auditListingMetrics = auditKinds ["listing"]
+
+auditKinds :: [Text] -> FilePath -> IO ([Text], [Text])
+auditKinds kinds root = do
+    writeComparisonText (root </> "scope-limitations.txt") $
+        if kinds == ["listing"]
+            then "This audit covers npm package-listing measurements only. Earlier measurements retain their original run identities.\n"
+            else "Mutable cache rows remain unclassified diagnostics. Each row requires review regardless of its delta. Checked criteria do not establish universal parity.\n"
+    outcomes <- forM kinds $ \kind -> do
         result <- tryAny (readKind kind >>= compareKind kind)
         pure $ either (\problem -> ([kind <> ": " <> show problem], [])) id result
     pure (concatMap fst outcomes, concatMap snd outcomes)

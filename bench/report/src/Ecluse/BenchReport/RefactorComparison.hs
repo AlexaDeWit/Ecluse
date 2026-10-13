@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Temporary issue 1565 controls run only in the comparison controller.
-module Ecluse.BenchReport.RefactorComparison (audit, controls) where
+module Ecluse.BenchReport.RefactorComparison (audit, auditListing, checkInputs, controls) where
 
 import Data.Aeson (eitherDecodeStrict')
 import Data.Map.Strict qualified as Map
@@ -13,22 +13,35 @@ import UnliftIO.Exception (tryAny)
 
 import Ecluse.BenchReport (BenchRow (..), parseCsv)
 import Ecluse.BenchReport.PerformanceCommand (compileObligation)
-import Ecluse.BenchReport.RefactorEvidence (passSchedule, receiptArtifactFaults, verifyEvidence)
+import Ecluse.BenchReport.RefactorEvidence (ComparisonScope (..), receiptArtifactFaults, scopeName, scopeSchedule, verifyEvidence)
 import Ecluse.BenchReport.RefactorEvidenceControls (evidenceControls)
 import Ecluse.BenchReport.RefactorFiles (captureProblems, readComparisonText, writeComparisonText)
+import Ecluse.BenchReport.RefactorInputAudit (auditInputs)
 import Ecluse.BenchReport.RefactorInputControls (inputControls)
-import Ecluse.BenchReport.RefactorMetrics (auditMetrics, metricControls)
+import Ecluse.BenchReport.RefactorMetrics (auditListingMetrics, auditMetrics, metricControls)
 import Ecluse.Test.Contract.Manifest (digest, jsonLine, readJsonFile)
 import Ecluse.Test.Contract.Performance
 import Ecluse.Test.Contract.Result (ExecutionIdentity (..), auditExactIds)
 
 -- | Require the historical full row list and all twenty pass-specific receipts.
 audit :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> FilePath -> IO ()
-audit root runId attempt baseline baselineTree candidate candidateTree manifest = do
+audit = auditScope FullComparison
+
+-- | Require all four listing passes from one explicitly scoped recovery run.
+auditListing :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> FilePath -> IO ()
+auditListing = auditScope ListingComparison
+
+-- | Reject changed prepared inputs before a recovery starts its native measurements.
+checkInputs :: FilePath -> IO ()
+checkInputs root = auditInputs root >>= finish
+
+auditScope :: ComparisonScope -> FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> FilePath -> IO ()
+auditScope scope root runId attempt baseline baselineTree candidate candidateTree manifest = do
     expected <- manifestRows manifest
     pathsResult <- tryAny (T.lines <$> readComparisonText (root </> "receipt-paths.txt"))
     let actualPaths = fromRight [] pathsResult
         pathFaults = either (one . show) (const []) pathsResult
+        schedule = filter ((`elem` ["benchmark", "allocation"]) . fst) (scopeSchedule scope)
     problems <- forM schedule $ \(kind, passName) -> do
         let source = if "A" `T.isPrefixOf` passName then baseline else candidate
             passRunId = runId <> "-" <> attempt <> "-" <> kind <> "-" <> passName
@@ -44,20 +57,20 @@ audit root runId attempt baseline baselineTree candidate candidateTree manifest 
             pure (artifactFaults <> receiptFaults (source, passRunId, attempt, kind, subject) receipt <> auditPerformanceReceipts expectedIdentity attempt [obligation] [receipt] <> conditionFaults (npConditions (prNative reference)) conditions)
         pure (map ((kind <> "-" <> passName <> ": ") <>) (csvProblems <> concat receiptProblems))
     let expectedPaths = [toText (toString (kind <> "-" <> passName) </> "receipts" </> toString subject </> "receipt.json") | (kind, passName) <- schedule, subject <- subjects]
-    identityFaults <- verifyEvidence root runId attempt baseline baselineTree candidate candidateTree
+    identityFaults <- verifyEvidence scope root runId attempt baseline baselineTree candidate candidateTree
     let evidenceFaults = pathFaults <> auditExactIds "receipt path" expectedPaths actualPaths <> concat problems <> identityFaults
-    (metricFaults, breaches) <- if null evidenceFaults then auditMetrics root else pure ([], [])
+        measure = case scope of
+            FullComparison -> auditMetrics
+            ListingComparison -> auditListingMetrics
+    (metricFaults, breaches) <- if null evidenceFaults then measure root else pure ([], [])
     let faults = evidenceFaults <> metricFaults
     writeComparisonText (root </> "audit-faults.txt") (T.unlines faults)
     writeComparisonText (root </> "tolerance-breaches.tsv") (T.unlines breaches)
-    putTextLn ("Audit faults: " <> show (length faults) <> ". Measured tolerance breaches: " <> show (length breaches) <> ".")
+    putTextLn ("Scope: " <> scopeName scope <> ". Audit faults: " <> show (length faults) <> ". Measured tolerance breaches: " <> show (length breaches) <> ".")
     finish (faults <> ["measured tolerance breaches require review" | not (null breaches)])
 
 conditionFaults :: Map Text Text -> Map Text Text -> [Text]
 conditionFaults expected actual = ["probe condition differs: " <> key | (key, value) <- Map.toList expected, Map.lookup key actual /= Just value]
-
-schedule :: [(Text, Text)]
-schedule = filter ((`elem` ["benchmark", "allocation"]) . fst) passSchedule
 
 subjects :: [Text]
 subjects = ["ecosystem-npm", "ecosystem-pypi"]

@@ -5,7 +5,11 @@
 -- | Per-pass bindings keep archived observations tied to their source, build and execution.
 module Ecluse.BenchReport.RefactorEvidence (
     Binding (..),
+    ComparisonScope (..),
     passSchedule,
+    scopeSchedule,
+    scopeName,
+    scopeProblems,
     writePassConditions,
     recordBinding,
     verifyEvidence,
@@ -39,6 +43,15 @@ data Binding = Binding
 instance ToJSON Binding
 instance FromJSON Binding
 
+-- | Fixed entrypoints select either the complete comparison or the four missing listing passes.
+data ComparisonScope = FullComparison | ListingComparison
+    deriving stock (Eq, Show)
+
+-- | Scope labels remain part of the new run's identity.
+scopeName :: ComparisonScope -> Text
+scopeName FullComparison = "full"
+scopeName ListingComparison = "listing"
+
 -- | The serial order is fixed independently of available results.
 passSchedule :: [(Text, Text)]
 passSchedule =
@@ -46,6 +59,19 @@ passSchedule =
         <> [("allocation", name) | name <- ["A1", "B1", "A2", "B2"]]
         <> [("residency", name) | name <- ["A1", "B1", "A2", "B2"]]
         <> [(kind, name) | kind <- ["versions", "listing"], name <- ["A1", "B1", "A2", "B2"]]
+
+-- | A listing recovery cannot select fewer cases or borrow passes from another run.
+scopeSchedule :: ComparisonScope -> [(Text, Text)]
+scopeSchedule FullComparison = passSchedule
+scopeSchedule ListingComparison = [("listing", name) | name <- ["A1", "B1", "A2", "B2"]]
+
+-- | Older full runs have no scope field. A recovery always requires an explicit listing scope.
+scopeProblems :: ComparisonScope -> Map Text Text -> [Text]
+scopeProblems scope recorded = ["declared comparison scope differs" | not accepted]
+  where
+    accepted = case Map.lookup "scope" recorded of
+        Nothing -> scope == FullComparison
+        Just value -> value == scopeName scope
 
 -- | Task writes these declarations before starting the measured process.
 writePassConditions :: FilePath -> Text -> Text -> IO ()
@@ -84,8 +110,8 @@ recordBinding root kind name = do
     writeJsonFile (root </> passPath kind name </> "binding.json") (Binding 1 context artifacts)
 
 -- | Rehash artifacts, compare snapshots and validate the entire recorded execution before reading measurements.
-verifyEvidence :: FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> IO [Text]
-verifyEvidence root runId attempt baseline baselineTree candidate candidateTree = do
+verifyEvidence :: ComparisonScope -> FilePath -> Text -> Text -> Text -> Text -> Text -> Text -> IO [Text]
+verifyEvidence scope root runId attempt baseline baselineTree candidate candidateTree = do
     inputFaults <- auditInputs root
     runFaults <- captureProblems $ do
         run <- readJsonFile (root </> "run.json")
@@ -96,22 +122,24 @@ verifyEvidence root runId attempt baseline baselineTree candidate candidateTree 
         runner <- required "runner" run
         image <- required "image" run
         pure
-            ( ["run identity mismatch: " <> key | (key, value) <- Map.toList expected, Map.lookup key run /= Just value]
+            ( scopeProblems scope run
+                <> ["run identity mismatch: " <> key | (key, value) <- Map.toList expected, Map.lookup key run /= Just value]
                 <> ["worker run or attempt mismatch" | not (all (`elem` T.lines worker) ["run=" <> runId, "attempt=" <> attempt])]
                 <> ["worker architecture missing" | not ("aarch64" `T.isInfixOf` worker)]
                 <> ["worker identity mismatch" | T.null runner || T.null image || not (all (`elem` T.lines worker) ["runner=" <> runner, "image=" <> image])]
                 <> ["invalid controller source identity" | controller /= declaredController || not (all (validHex 40) controller)]
             )
-    faults <- forM passSchedule $ \(kind, name) -> captureProblems $ do
+    faults <- forM (scopeSchedule scope) $ \(kind, name) -> captureProblems $ do
         context <- contextFor root kind name
         paths <- evidencePaths root kind name
         binding <- readJsonFile (root </> passPath kind name </> "binding.json")
         bound <- bindingFaults root context paths binding
         snapshots <- snapshotFaults root kind name context
         pure (map ((kind <> "-" <> name <> ": ") <>) (bound <> snapshots))
-    orderFaults <- captureProblems (checkOrder root)
+    orderFaults <- captureProblems (checkOrder scope root)
+    preparationFaults <- if scope == ListingComparison then captureProblems (zeroStatus root "input-audit.status") else pure []
     sharedFaults <- captureProblems $ concat <$> traverse (equalFile root "build-A" "build-B") ["locks.sha256", "corpus.sha256", "toolchain.txt"]
-    pure (inputFaults <> runFaults <> concat faults <> orderFaults <> sharedFaults)
+    pure (inputFaults <> runFaults <> concat faults <> orderFaults <> preparationFaults <> sharedFaults)
 
 -- | Reject changed, missing or unbound files and stale execution declarations.
 bindingFaults :: FilePath -> Map Text Text -> [FilePath] -> Binding -> IO [Text]
@@ -137,6 +165,7 @@ artifactFaults root artifacts =
 
 evidencePaths :: FilePath -> Text -> Text -> IO [FilePath]
 evidencePaths root kind name = do
+    run <- readJsonFile (root </> "run.json") :: IO (Map Text Text)
     let side = toString (sideOf name)
         build = "build-" <> side
         directory = passPath kind name
@@ -149,6 +178,7 @@ evidencePaths root kind name = do
             else pure []
     let common =
             ["controller.txt", "worker.txt", "run.json", "validator.sha256", "controller-build.status", "controls.status"]
+                <> [path | Map.lookup "scope" run == Just ("listing" :: Text), path <- ["input-audit.status", "input-audit.log"]]
                 <> map ("inputs" </>) ["versions.json", "versions.tsv", "listings.json", "capture-sizes.json", "small.json", "large.json", "small.expected", "large.expected"]
                 <> map (build </>) ("status" : "output.txt" : identityFiles)
                 <> [build </> "config" </> path | path <- ["ecluse.cabal", "cabal.project", "cabal.project.freeze", "flake.lock"]]
@@ -265,18 +295,19 @@ executableDigests path = do
     unless (Map.size named == Map.size hashes) (fail "duplicate executable basename")
     pure named
 
-checkOrder :: FilePath -> IO [Text]
-checkOrder root = do
+checkOrder :: ComparisonScope -> FilePath -> IO [Text]
+checkOrder scope root = do
     actual <- T.lines <$> readComparisonText (root </> "order.txt")
-    perPass <- forM passSchedule $ \(kind, name) -> T.lines <$> readComparisonText (root </> passPath kind name </> "events.txt")
-    pure (orderProblems actual perPass)
+    perPass <- forM (scopeSchedule scope) $ \(kind, name) -> T.lines <$> readComparisonText (root </> passPath kind name </> "events.txt")
+    pure (orderProblems scope actual perPass)
 
 -- | Match every start and end to the fixed serial schedule and reject overlapping recorded times.
-orderProblems :: [Text] -> [[Text]] -> [Text]
-orderProblems actual perPass =
-    ["serial pass order differs" | actual /= concat perPass || length perPass /= length passSchedule || not (and (zipWith (<=) timestamps (drop 1 timestamps)))]
-        <> ["invalid pass events" | not (and (zipWith validEvents passSchedule perPass))]
+orderProblems :: ComparisonScope -> [Text] -> [[Text]] -> [Text]
+orderProblems scope actual perPass =
+    ["serial pass order differs" | actual /= concat perPass || length perPass /= length expected || not (and (zipWith (<=) timestamps (drop 1 timestamps)))]
+        <> ["invalid pass events" | not (and (zipWith validEvents expected perPass))]
   where
+    expected = scopeSchedule scope
     validEvents (kind, name) events = case map T.words events of
         [[started, "start", startKind, startName], [ended, "end", endKind, endName, "status=0"]] -> started <= ended && (startKind, startName) == (kind, name) && (endKind, endName) == (kind, name)
         _ -> False

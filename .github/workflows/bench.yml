@@ -12,6 +12,10 @@ on:
         description: Run the issue 1565 comparison on one worker
         type: boolean
         default: false
+      refactor_listing:
+        description: Run only the four issue 1565 listing recovery passes
+        type: boolean
+        default: false
       refactor_source:
         description: Exact 40-character candidate commit for the temporary comparison
         type: string
@@ -29,13 +33,18 @@ permissions:
 jobs:
   refactor-comparison:
     name: Temporary issue 1565 comparison
-    if: github.event_name == 'workflow_dispatch' && inputs.refactor_comparison
+    if: github.event_name == 'workflow_dispatch' && (inputs.refactor_comparison || inputs.refactor_listing)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 240
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       REFRACTOR_CANDIDATE: ${{ inputs.refactor_source }}
     steps:
+      - name: Reject conflicting comparison requests
+        if: inputs.refactor_comparison && inputs.refactor_listing
+        run: |
+          echo 'Select either the full comparison or listing recovery.' >&2
+          exit 1
       - name: Checkout comparison controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,9 +60,13 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
       - name: Build and measure both sources serially
+        if: inputs.refactor_comparison
         run: nix develop .#ci --command task performance:comparison:run
+      - name: Build both sources and run the four listing passes
+        if: inputs.refactor_listing
+        run: nix develop .#ci --command task performance:comparison:listing-run
       - name: Upload complete and partial comparison evidence
-        if: always()
+        if: always() && !(inputs.refactor_comparison && inputs.refactor_listing)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: refactor-comparison-${{ github.run_id }}-${{ github.run_attempt }}
@@ -61,7 +74,7 @@ jobs:
           if-no-files-found: error
 
   bench:
-    if: github.event_name != 'workflow_dispatch' || !inputs.refactor_comparison
+    if: github.event_name != 'workflow_dispatch' || (!inputs.refactor_comparison && !inputs.refactor_listing)
     name: Work-per-request benchmarks (inform-only)
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 60

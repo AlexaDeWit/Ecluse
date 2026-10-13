@@ -13,7 +13,7 @@ import System.FilePath (takeDirectory, (</>))
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 import Ecluse.BenchReport (parseCsv)
-import Ecluse.BenchReport.RefactorEvidence (Binding (..), bindingFaults, nativeReceiptPaths, orderProblems, passSchedule, receiptArtifactFaults)
+import Ecluse.BenchReport.RefactorEvidence (Binding (..), ComparisonScope (..), bindingFaults, nativeReceiptPaths, orderProblems, passSchedule, receiptArtifactFaults, scopeProblems, scopeSchedule)
 import Ecluse.BenchReport.RefactorFiles (readComparisonText)
 import Ecluse.Test.Contract.Manifest (digest)
 import Ecluse.Test.Contract.Performance (NativeOutcome (NativePassed), NativePerformance (..), PerformanceReceipt (..))
@@ -61,10 +61,10 @@ evidenceControls manifest = withSystemTempDirectory "refactor-evidence-controls"
     receiptArtifactFaults root "benchmark" "A1" receipt >>= requireRejected "stale native result with a regenerated outer binding"
     let events = [[stamp (2 * index) <> " start " <> kind <> " " <> name, stamp (2 * index + 1) <> " end " <> kind <> " " <> name <> " status=0"] | (index, (kind, name)) <- zip [0 :: Int ..] passSchedule]
         stamp = T.justifyRight 4 '0' . show
-    requireAccepted "valid serial order" (orderProblems (concat events) events)
-    requireRejected "missing order event" (orderProblems (drop 1 (concat events)) events)
-    requireRejected "reversed order" (orderProblems (reverse (concat events)) events)
-    requireRejected "missing pass events" (orderProblems (concat (drop 1 events)) (drop 1 events))
+    requireAccepted "valid serial order" (orderProblems FullComparison (concat events) events)
+    requireRejected "missing order event" (orderProblems FullComparison (drop 1 (concat events)) events)
+    requireRejected "reversed order" (orderProblems FullComparison (reverse (concat events)) events)
+    requireRejected "missing pass events" (orderProblems FullComparison (concat (drop 1 events)) (drop 1 events))
     let residencyPasses = [name | (kind, name) <- passSchedule, kind == "residency"]
         expectedResidency = ["A1", "B1", "A2", "B2"]
         receiptPasses = [(kind, name) | (kind, name) <- passSchedule, kind `elem` ["benchmark", "allocation"]]
@@ -72,7 +72,22 @@ evidenceControls manifest = withSystemTempDirectory "refactor-evidence-controls"
     requireAccepted "twenty canonical receipts" ["canonical receipt count differs" | 2 * length receiptPasses /= 20]
     forM_ expectedResidency $ \missing -> do
         let remaining = [entry | (passIdentity, entry) <- zip passSchedule events, passIdentity /= ("residency", missing)]
-        requireRejected ("missing residency events " <> missing) (orderProblems (concat remaining) remaining)
+        requireRejected ("missing residency events " <> missing) (orderProblems FullComparison (concat remaining) remaining)
+    let listingEvents = [entry | ((kind, _), entry) <- zip passSchedule events, kind == "listing"]
+        expectedListing = [("listing", name) | name <- ["A1", "B1", "A2", "B2"]]
+    requireAccepted "fixed listing schedule" ["listing schedule differs" | scopeSchedule ListingComparison /= expectedListing]
+    requireAccepted "listing serial order" (orderProblems ListingComparison (concat listingEvents) listingEvents)
+    requireRejected "listing events as full comparison" (orderProblems FullComparison (concat listingEvents) listingEvents)
+    requireRejected "full events as listing comparison" (orderProblems ListingComparison (concat events) events)
+    forM_ ["A1", "B1", "A2", "B2"] $ \missing -> do
+        let remaining = [entry | ((kind, name), entry) <- zip passSchedule events, kind == "listing", name /= missing]
+        requireRejected ("missing listing events " <> missing) (orderProblems ListingComparison (concat remaining) remaining)
+    requireAccepted "legacy full scope" (scopeProblems FullComparison Map.empty)
+    requireAccepted "explicit full scope" (scopeProblems FullComparison (Map.singleton "scope" "full"))
+    requireAccepted "explicit listing scope" (scopeProblems ListingComparison (Map.singleton "scope" "listing"))
+    requireRejected "missing listing scope" (scopeProblems ListingComparison Map.empty)
+    requireRejected "listing declared as full" (scopeProblems FullComparison (Map.singleton "scope" "listing"))
+    requireRejected "full declared as listing" (scopeProblems ListingComparison (Map.singleton "scope" "full"))
 
 -- | A positive control must reach the audit without any fault.
 requireAccepted :: Text -> [Text] -> IO ()
